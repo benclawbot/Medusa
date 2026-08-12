@@ -1,0 +1,115 @@
+name: Live provider dogfood
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+  pull_request:
+    paths:
+      - "scripts/live-coding-e2e.py"
+      - "scripts/live-coding-e2e.sh"
+      - "scripts/live-dogfood-report.py"
+      - "scripts/test-live-dogfood.py"
+      - "docs/LIVE-PROVIDER-DOGFOOD.md"
+      - ".github/workflows/live-provider-dogfood.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-dogfood-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Harness contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Compile and test the evidence contract
+        run: |
+          python -m py_compile scripts/live-coding-e2e.py scripts/live-dogfood-report.py scripts/test-live-dogfood.py
+          python scripts/test-live-dogfood.py
+
+  live-provider:
+    name: Live installed binary (${{ matrix.platform }})
+    needs: contract
+    if: github.event_name != 'pull_request' || github.head_ref == 'agent/555-cross-platform-dogfood'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-latest
+          - platform: macOS
+            os: macos-latest
+          - platform: Windows
+            os: windows-2022
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      LIVE_E2E_TIMEOUT_SECONDS: "1500"
+      LIVE_E2E_HEARTBEAT_SECONDS: "60"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Prepare exact dependency resolution
+        run: cargo generate-lockfile
+      - name: Install Linux containment backend
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+      - name: Require and mask the live credential
+        run: python -c "import os,sys; key=os.environ.get('MINIMAX_API_KEY',''); print('::add-mask::'+key) if key else sys.exit('MINIMAX_API_KEY is required')"
+      - name: Run bounded live product dogfood
+        run: python scripts/live-coding-e2e.py --output live-e2e-artifacts
+      - name: Upload sanitized platform evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: live-provider-${{ matrix.platform }}
+          path: live-e2e-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  report:
+    name: Exact-build dogfood report
+    needs: [contract, live-provider]
+    if: always() && needs.contract.result == 'success' && needs.live-provider.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: live-provider-*
+          path: live-provider-evidence
+      - name: Validate and publish one cross-platform report
+        run: |
+          python scripts/live-dogfood-report.py \
+            --input live-provider-evidence \
+            --json live-provider-report/report.json \
+            --markdown live-provider-report/report.md
+      - name: Upload exact-build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: live-provider-report
+          path: live-provider-report
+          if-no-files-found: error
+          retention-days: 30

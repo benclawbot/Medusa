@@ -6,24 +6,37 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+path = "src/lib_root.rs"
+
 [[bin]]
 name = "medusa-tui"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 arboard = "3.6.1"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
 hex.workspace = true
+# image 0.25.6+ moved JPEG decoding to zune-jpeg 0.5.x, which does not compile on Rust 1.88.
+image = { version = "=0.25.5", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
+medusa-protocol = { path = "../medusa-protocol" }
+medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
 serde.workspace = true
 serde_json.workspace = true
+time = { version = "0.3", features = ["formatting", "parsing"] }
 sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "forbid"
+dead_code = "allow"
+# `lib.rs` re-exports shared imports to platform-specific session modules; after the
+# event-loop optimization, `thread` is intentionally dormant on current targets.
+unused_imports = "allow"

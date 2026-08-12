@@ -1,10 +1,12 @@
-use std::{fs, sync::mpsc};
+use std::{fs, path::Path, sync::mpsc, thread};
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus, AgentUpdate};
-use medusa_protocol::EventPayload;
-use medusa_provider::{ImageSource, MessageBlock};
+use medusa_core::{CorrelationId, SessionId};
+use medusa_protocol::{Actor, EventEnvelope, EventPayload};
+use medusa_provider::{ImageSource, Message, MessageBlock, Role};
 use serde_json::json;
 use tempfile::tempdir;
+use time::OffsetDateTime;
 
 use crate::prompt::{FileAttachment, ImageAttachment, PromptAttachment};
 
@@ -13,6 +15,63 @@ use super::support::{
     model_configuration_details, tool_title,
 };
 use super::*;
+
+#[test]
+fn command_processing_does_not_wait_for_capability_discovery() {
+    use std::{
+        sync::{Arc, Mutex, mpsc},
+        thread,
+        time::Duration,
+    };
+
+    let directory = tempdir().expect("temporary directory");
+    let state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+    let (command_tx, command_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let submission = Arc::new(Mutex::new(SubmissionState::default()));
+    let (discovery_started_tx, discovery_started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+
+    let worker = thread::spawn(move || {
+        worker_loop_with_discovery(state, command_rx, event_tx, cancel, submission, move |_| {
+            discovery_started_tx
+                .send(())
+                .expect("signal discovery start");
+            release_rx.recv().expect("release discovery");
+            RuntimeEvent::Notice {
+                title: "Runtime capabilities".to_owned(),
+                details: vec!["ready".to_owned()],
+            }
+        });
+    });
+
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(RuntimeEvent::Settings { .. })
+    ));
+    discovery_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("discovery started");
+
+    command_tx
+        .send(RuntimeCommand::Slash(SlashCommand::Help))
+        .expect("send help command");
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(RuntimeEvent::Notice { title, .. }) if title == "Slash commands"
+    ));
+
+    release_tx.send(()).expect("release discovery");
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(RuntimeEvent::Notice { title, .. }) if title == "Runtime capabilities"
+    ));
+    command_tx
+        .send(RuntimeCommand::Shutdown)
+        .expect("stop worker");
+    worker.join().expect("worker joins");
+}
 
 #[test]
 fn text_prompt_becomes_user_message_block() {
@@ -70,7 +129,7 @@ fn attached_utf8_file_is_bounded_and_included() {
 }
 
 #[test]
-fn provider_usage_forwards_input_output_cache_and_model_time() {
+fn provider_usage_forwards_legacy_and_normalized_telemetry() {
     let (sender, receiver) = mpsc::channel();
     let mut state = UpdateState::new();
     forward_update(
@@ -83,7 +142,7 @@ fn provider_usage_forwards_input_output_cache_and_model_time() {
     );
     forward_update(
         &AgentUpdate::Event(EventPayload::ModelResponseReceived {
-            response_id: Some("response-1".to_owned()),
+            response_id: Some("legacy-response".to_owned()),
             usage: json!({
                 "input_tokens": 120,
                 "output_tokens": 30,
@@ -94,32 +153,48 @@ fn provider_usage_forwards_input_output_cache_and_model_time() {
         &sender,
         &mut state,
     );
-
     assert!(matches!(
-        receiver.recv().expect("usage event"),
+        receiver.recv().expect("legacy usage event"),
         RuntimeEvent::Usage {
             input_tokens: 120,
             output_tokens: 30,
             cache_read_input_tokens: 80,
             cache_creation_input_tokens: 20,
-            model_elapsed_millis,
-        } if model_elapsed_millis >= 1
+            total_tokens: 250,
+            duration_ms,
+            provenance: UsageProvenance::ProviderReported,
+            ..
+        } if duration_ms >= 1
     ));
     assert_eq!(state.current_context_tokens, 220);
 
     forward_update(
         &AgentUpdate::Event(EventPayload::ModelResponseReceived {
-            response_id: Some("unpaired-response".to_owned()),
-            usage: json!({"output_tokens": 5}),
+            response_id: Some("normalized-response".to_owned()),
+            usage: json!({
+                "turn": 2,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 2,
+                "cache_creation_input_tokens": 1,
+                "total_tokens": 18,
+                "duration_ms": 100,
+                "tokens_per_second_milli": 180_000,
+                "estimated_cost_microusd": 7,
+                "provenance": "provider_reported"
+            }),
         }),
         &sender,
         &mut state,
     );
     assert!(matches!(
-        receiver.recv().expect("unpaired usage event"),
+        receiver.recv().expect("normalized usage event"),
         RuntimeEvent::Usage {
-            output_tokens: 5,
-            model_elapsed_millis: 0,
+            total_tokens: 18,
+            duration_ms: 100,
+            tokens_per_second_milli: 180_000,
+            estimated_cost_microusd: 7,
+            provenance: UsageProvenance::ProviderReported,
             ..
         }
     ));
@@ -179,7 +254,7 @@ fn tool_call_is_shown_as_one_high_level_row() {
     assert_eq!(started.id, completed.id);
     assert_eq!(completed.title, "Read(src/lib.rs)");
     assert!(started.details.is_empty());
-    assert!(completed.details.is_empty());
+    assert_eq!(completed.details, vec!["line one", "line two"]);
 }
 
 #[test]
@@ -259,7 +334,7 @@ fn effort_command_updates_the_runtime_turn_budget() {
             effort: Some(Effort::Medium),
         },
         &sender,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .expect("set effort");
     assert_eq!(state.config.agent.max_turns, 200);
@@ -281,7 +356,7 @@ fn goal_command_is_durable_and_guides_the_next_agent_turn() {
             objective: Some("Build a responsive portfolio".to_owned()),
         },
         &sender,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .expect("set goal");
 
@@ -317,7 +392,7 @@ fn direct_skill_command_stages_validated_context_for_the_next_prompt() {
             task: None,
         },
         &sender,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .expect("load skill");
 
@@ -397,18 +472,22 @@ fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() 
 fn busy_submission_is_queued_as_a_follow_up_without_rejection() {
     let submission = Arc::new(Mutex::new(SubmissionState {
         busy: true,
-        followups: VecDeque::new(),
+        ..SubmissionState::default()
     }));
     {
         let mut state = submission.lock().expect("submission state");
-        state.followups.push_back(PromptDraft {
-            text: "also update the documentation".to_owned(),
-            ..PromptDraft::default()
+        state.followups.push_back(QueuedFollowup {
+            command_id: "followup-1".to_owned(),
+            draft: PromptDraft {
+                text: "also update the documentation".to_owned(),
+                ..PromptDraft::default()
+            },
+            durably_recorded: true,
         });
     }
     let queued = take_followups(&submission);
     assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0].text, "also update the documentation");
+    assert_eq!(queued[0].draft.text, "also update the documentation");
     assert!(submission.lock().expect("submission state").busy);
 }
 
@@ -416,8 +495,270 @@ fn busy_submission_is_queued_as_a_follow_up_without_rejection() {
 fn runtime_atomically_reopens_input_only_when_followups_are_empty() {
     let submission = Arc::new(Mutex::new(SubmissionState {
         busy: true,
-        followups: VecDeque::new(),
+        ..SubmissionState::default()
     }));
     assert!(finish_or_take_followups(&submission).is_empty());
     assert!(!submission.lock().expect("submission state").busy);
+}
+
+fn durable_runtime_session(repo: &Path) -> medusa_agent::AgentSession {
+    medusa_agent::AgentSession {
+        id: SessionId::new(),
+        objective: "runtime event coverage".to_owned(),
+        repo: repo.to_path_buf(),
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+        completed: false,
+        turn: 0,
+        plan: Vec::new(),
+        pending_question: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![MessageBlock::Text {
+                text: "runtime event coverage".to_owned(),
+            }],
+        }],
+        events: Vec::new(),
+        evidence: Vec::new(),
+        tool_artifacts: Vec::new(),
+        world_model: None,
+        approval_grants: Vec::new(),
+        approval_receipts: Vec::new(),
+        rollback_receipts: Vec::new(),
+    }
+}
+
+fn push_runtime_event(session: &mut medusa_agent::AgentSession, payload: EventPayload) {
+    let event = EventEnvelope::new(
+        u64::try_from(session.events.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+        session.id.clone(),
+        Actor::Coordinator,
+        CorrelationId::new(),
+        payload,
+        session.events.last().map(|event| event.checksum.clone()),
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .expect("event");
+    session.events.push(event);
+}
+
+#[test]
+fn queued_followups_are_rebuilt_from_canonical_events() {
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    let draft = PromptDraft {
+        text: "also update the documentation".to_owned(),
+        ..PromptDraft::default()
+    };
+    push_runtime_event(
+        &mut session,
+        EventPayload::UserFollowupQueued {
+            command_id: "followup-1".to_owned(),
+            prompt: serde_json::to_value(&draft).expect("serialize prompt"),
+        },
+    );
+
+    let restored = restore_queued_followups(&session).expect("restore queued follow-up");
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].command_id, "followup-1");
+    assert_eq!(restored[0].draft, draft);
+    assert!(restored[0].durably_recorded);
+
+    push_runtime_event(
+        &mut session,
+        EventPayload::UserFollowupDequeued {
+            command_id: "followup-1".to_owned(),
+            text: "also update the documentation".to_owned(),
+        },
+    );
+    assert!(
+        restore_queued_followups(&session)
+            .expect("restore after dequeue")
+            .is_empty()
+    );
+}
+
+#[test]
+fn terminal_controller_events_clear_recovered_followups() {
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    push_runtime_event(
+        &mut session,
+        EventPayload::UserFollowupQueued {
+            command_id: "followup-1".to_owned(),
+            prompt: serde_json::to_value(PromptDraft {
+                text: "queued".to_owned(),
+                ..PromptDraft::default()
+            })
+            .expect("serialize prompt"),
+        },
+    );
+    push_runtime_event(
+        &mut session,
+        EventPayload::RuntimeFailed {
+            message: "terminal failure".to_owned(),
+        },
+    );
+    assert!(
+        restore_queued_followups(&session)
+            .expect("restore after failure")
+            .is_empty()
+    );
+}
+
+#[test]
+fn controller_event_dispatch_commits_before_frontend_publication() {
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    let objective = session.objective.clone();
+    medusa_agent::record_session_event(
+        &mut session,
+        Actor::Coordinator,
+        EventPayload::SessionCreated { objective },
+    )
+    .expect("persist session");
+    let session_id = session.id.to_string();
+    let submission = Arc::new(Mutex::new(SubmissionState {
+        active_session_id: Some(session_id.clone()),
+        ..SubmissionState::default()
+    }));
+    let (runtime_tx, runtime_rx) = mpsc::channel();
+    let (frontend_tx, frontend_rx) = mpsc::channel();
+    let repo = directory.path().to_path_buf();
+    let dispatch_submission = Arc::clone(&submission);
+    let dispatcher = thread::spawn(move || {
+        dispatch_runtime_events(&repo, &dispatch_submission, runtime_rx, &frontend_tx);
+    });
+
+    runtime_tx
+        .send(RuntimeEvent::Team(TeamSnapshot::default()))
+        .expect("send runtime event");
+    assert!(matches!(
+        frontend_rx.recv().expect("frontend event"),
+        RuntimeEvent::Team(_)
+    ));
+    let persisted = medusa_agent::session_browser::load_session(directory.path(), &session_id)
+        .expect("load committed session");
+    assert!(matches!(
+        persisted.events.last().map(|event| &event.payload),
+        Some(EventPayload::TeamStateChanged { .. })
+    ));
+
+    drop(runtime_tx);
+    dispatcher.join().expect("dispatcher joins");
+}
+
+#[test]
+fn runtime_event_durability_classification_is_explicit() {
+    assert!(matches!(
+        RuntimeEvent::Started.durability(),
+        RuntimeEventDurability::PresentationOnly(_)
+    ));
+    assert!(matches!(
+        RuntimeEvent::AssistantText("answer".to_owned()).durability(),
+        RuntimeEventDurability::CanonicalJournal("assistant_message_recorded")
+    ));
+    assert!(matches!(
+        RuntimeEvent::TurnFinished.durability(),
+        RuntimeEventDurability::CanonicalJournal("runtime_turn_finished")
+    ));
+    assert!(matches!(
+        RuntimeEvent::Cancelled.durability(),
+        RuntimeEventDurability::SessionBoundCanonical { .. }
+    ));
+    assert!(matches!(
+        RuntimeEvent::Failed("startup".to_owned()).durability(),
+        RuntimeEventDurability::SessionBoundCanonical { .. }
+    ));
+}
+
+#[test]
+fn initial_submit_waits_for_session_acceptance_before_returning() {
+    let directory = tempdir().expect("temporary directory");
+    let submission = std::sync::Arc::new(std::sync::Mutex::new(SubmissionState::default()));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (_frontend_tx, frontend_rx) = mpsc::channel();
+    let (event_sender, _runtime_event_rx) = mpsc::channel();
+    let runtime = RuntimeController {
+        commands: command_tx,
+        events: frontend_rx,
+        cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        submission: std::sync::Arc::clone(&submission),
+        event_sender,
+        team_control: TeamControlPlane::default(),
+        repo: directory.path().to_path_buf(),
+    };
+    let worker_submission = std::sync::Arc::clone(&submission);
+    let worker = thread::spawn(move || {
+        let RuntimeCommand::Submit { draft, accepted } =
+            command_rx.recv().expect("submission command")
+        else {
+            panic!("expected submission command");
+        };
+        assert_eq!(draft.text, "start a durable session");
+        let mut state = worker_submission.lock().expect("submission state");
+        assert!(state.busy);
+        state.active_session_id = Some("session-accepted".to_owned());
+        drop(state);
+        accepted.send(()).expect("accept submission");
+    });
+
+    assert_eq!(
+        runtime
+            .submit(PromptDraft {
+                text: "start a durable session".to_owned(),
+                ..PromptDraft::default()
+            })
+            .expect("accepted submission"),
+        SubmitDisposition::Started
+    );
+    worker.join().expect("worker joins");
+    assert_eq!(
+        submission
+            .lock()
+            .expect("submission state")
+            .active_session_id
+            .as_deref(),
+        Some("session-accepted")
+    );
+}
+
+#[test]
+fn followup_fails_closed_until_a_durable_session_identity_exists() {
+    let directory = tempdir().expect("temporary directory");
+    let submission = std::sync::Arc::new(std::sync::Mutex::new(SubmissionState {
+        busy: true,
+        active_session_id: None,
+        ..SubmissionState::default()
+    }));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (_frontend_tx, frontend_rx) = mpsc::channel();
+    let (event_sender, _runtime_event_rx) = mpsc::channel();
+    let runtime = RuntimeController {
+        commands: command_tx,
+        events: frontend_rx,
+        cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        submission: std::sync::Arc::clone(&submission),
+        event_sender,
+        team_control: TeamControlPlane::default(),
+        repo: directory.path().to_path_buf(),
+    };
+
+    assert!(matches!(
+        runtime.submit(PromptDraft {
+            text: "do not acknowledge this before durability".to_owned(),
+            ..PromptDraft::default()
+        }),
+        Err(RuntimeError::Busy)
+    ));
+    assert!(command_rx.try_recv().is_err());
+    assert!(
+        submission
+            .lock()
+            .expect("submission state")
+            .followups
+            .is_empty()
+    );
 }

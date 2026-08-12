@@ -41,3 +41,25 @@
 .mini-plan, .activity-list { display: grid; gap: 8px; }.mini-plan > div { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; color: var(--muted); font-size: .76rem; }.mini-plan .completed { color: var(--green); }.mini-plan .failed { color: var(--danger); }.mini-plan .inProgress { color: var(--purple); }.mini-plan p, .activity-list p { color: var(--muted); font-size: .76rem; }
 .activity-list > div { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 8px; }.activity-list strong, .activity-list small { display: block; }.activity-list strong { font-size: .76rem; }.activity-list small { color: var(--muted); font-size: .69rem; }.activity-list .error { border-color: #fecaca; color: var(--danger); }.activity-list .done { color: var(--green); }
 @media (max-width: 1120px) { .app-shell { grid-template-columns: 220px minmax(480px,1fr); }.inspector { display: none; } }
+
+/* First-class image attachment UX */
+.image-attachment-card { display: grid; grid-template-columns: 52px minmax(0,1fr) auto; align-items: center; gap: 9px; min-width: 245px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); padding: 6px; }
+.image-attachment-card > div { min-width: 0; display: grid; gap: 2px; }
+.image-attachment-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .75rem; }
+.image-attachment-card small { color: var(--muted); font-size: .67rem; }
+.image-preview-button { position: relative; width: 52px; height: 42px; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: var(--surface-soft); }
+.image-preview-button img { width: 100%; height: 100%; object-fit: cover; }
+.image-preview-button svg { position: absolute; right: 3px; bottom: 3px; padding: 2px; border-radius: 3px; color: white; background: rgba(0,0,0,.65); }
+.remove-attachment { display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); }
+.image-compatibility { max-width: 850px; margin: 6px auto 0; padding: 7px 10px; border-radius: 7px; font-size: .72rem; }
+.image-compatibility.supported { background: rgba(34,197,94,.09); color: #166534; }
+.image-compatibility.unknown { background: rgba(59,130,246,.09); color: #1e40af; }
+.image-compatibility.unsupported { background: rgba(239,68,68,.09); color: var(--danger); }
+.composer-card.dragging-image { outline: 2px dashed var(--purple); outline-offset: 3px; }
+.image-preview-modal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: rgba(10,14,24,.78); }
+.image-preview-content { width: min(900px, 94vw); max-height: 90vh; display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 14px; border-radius: 12px; background: white; box-shadow: 0 20px 70px rgba(0,0,0,.4); }
+.image-preview-content > div { display: grid; }
+.image-preview-content small { color: var(--muted); }
+.image-preview-content > button { align-self: start; border: 0; background: transparent; }
+.image-preview-content > img { grid-column: 1 / -1; width: 100%; max-height: calc(90vh - 80px); object-fit: contain; border-radius: 8px; background: #111827; }
+.visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }

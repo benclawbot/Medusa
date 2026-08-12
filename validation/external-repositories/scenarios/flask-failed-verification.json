@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scenario_version": 1,
+  "id": "flask-failed-verification-recovery",
+  "repository": {
+    "url": "https://github.com/pallets/flask.git",
+    "commit": "36e4a824f340fdee7ed50937ba8e7f6bc7d17f81",
+    "ecosystem": "python-pytest"
+  },
+  "task": "Implement a narrowly scoped behavior change with tests. The first replayed verification result fails; diagnose it, revise the change, and only finish after the authoritative test suite passes.",
+  "expected_invariants": [
+    "a failed verification blocks completion",
+    "the failure and corrective attempt remain in the durable timeline",
+    "unrelated files are not modified"
+  ],
+  "allowed_scope": ["src/flask/**", "tests/**", "pyproject.toml"],
+  "coverage": ["failed-verification"],
+  "execution": {
+    "mode": "offline",
+    "timeout_seconds": 3600,
+    "provider": {"kind": "recording-replay", "fixture": "verification-fails-once"}
+  },
+  "acceptance": {
+    "expected_outcome": "verified-completion-after-correction",
+    "verification_commands": [["python", "-m", "pytest", "-q"]],
+    "required_evidence": ["failed-verification", "corrective-edit", "passing-verification", "repository-diff"]
+  }
+}

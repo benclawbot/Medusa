@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario": "durable_journal_tool_heavy_session",
+  "baseline_revision": "99ea5dd40bbd4fed93138e24302ec520e5985758",
+  "description": "Frozen pre-#692 committed-transition path: one event append/sync followed by one full session snapshot append/sync under a repository-global journal mutex.",
+  "baseline_append_opens_per_committed_transition": 2,
+  "baseline_file_syncs_per_committed_transition": 2,
+  "maximum_candidate_append_opens_per_committed_transition": 1,
+  "maximum_candidate_file_syncs_per_committed_transition": 1,
+  "minimum_synchronous_persistence_operation_reduction_ratio": 0.5,
+  "required_platforms": ["Linux", "macOS", "Windows"],
+  "required_suites": ["journal::tests", "journal-durability-certification", "workspace-ci"]
+}

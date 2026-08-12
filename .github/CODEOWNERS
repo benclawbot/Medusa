@@ -1,0 +1,48 @@
+# Architecture and governance
+/docs/architecture/ @benclawbot
+/docs/ARCHITECTURE.md @benclawbot
+/docs/CONTRIBUTOR-ARCHITECTURE.md @benclawbot
+/docs/CAPABILITY-CLAIMS.json @benclawbot
+/docs/CAPABILITY-EVIDENCE.md @benclawbot
+/.github/CODEOWNERS @benclawbot
+/.github/PULL_REQUEST_TEMPLATE.md @benclawbot
+/scripts/check-architecture-index.py @benclawbot
+/scripts/test-architecture-index.py @benclawbot
+/scripts/architecture-conformance.py @benclawbot
+
+# Explicit unsafe Rust and native FFI boundary
+/docs/architecture/unsafe-rust-policy.json @benclawbot
+/docs/architecture/UNSAFE-RUST-BOUNDARY.md @benclawbot
+/scripts/check-unsafe-boundary.py @benclawbot
+/scripts/test-unsafe-boundary.py @benclawbot
+/.github/workflows/unsafe-rust-boundary.yml @benclawbot
+
+# Verified release and update authority
+/release/keys/ @benclawbot
+/docs/architecture/PREBUILT-UPDATES.md @benclawbot
+/docs/architecture/decisions/0002-verified-prebuilt-updates.md @benclawbot
+/docs/RELEASE.md @benclawbot
+/docs/RELEASE-SIGNING.md @benclawbot
+/scripts/release-evidence.py @benclawbot
+/.github/workflows/verified-prebuilt-update.yml @benclawbot
+/.github/workflows/sign-release-manifest.yml @benclawbot
+
+# Foundational and production authority boundaries
+/Cargo.toml @benclawbot
+/crates/medusa-core/ @benclawbot
+/crates/medusa-protocol/ @benclawbot
+/crates/medusa-runtime/ @benclawbot
+/crates/medusa-agent/ @benclawbot
+/crates/medusa-provider/ @benclawbot
+/crates/medusa-capabilities/ @benclawbot
+/crates/medusa-workers/ @benclawbot
+/crates/medusa-process-containment/ @benclawbot
+/crates/medusa-update/ @benclawbot
+/crates/medusa-github/ @benclawbot
+/crates/medusa-browser-client/ @benclawbot
+/crates/medusa-browserd/ @benclawbot
+/crates/medusa-daemon/ @benclawbot
+/crates/medusa-cli/ @benclawbot
+/crates/medusa-tui/ @benclawbot
+/apps/medusa-desktop/ @benclawbot
+/.github/workflows/ @benclawbot

@@ -1,9 +1,5 @@
 #!/usr/bin/env node
 // Minimal Playwright bridge for medusa-browserd.
-//
-// Reads JSON requests from stdin (one per line) and writes JSON responses
-// to stdout (one per line). The Rust sidecar owns control plane concerns
-// (URL validation, ping, close); this script owns the Playwright API.
 
 import { chromium } from 'playwright';
 
@@ -15,40 +11,57 @@ const refs = new Map();
 
 async function ensurePage() {
   if (!browser) {
-    browser = await chromium.launch();
-    context = await browser.newContext();
+    const proxyServer = process.env.MEDUSA_BROWSER_PROXY;
+    if (!proxyServer) throw new Error('MEDUSA_BROWSER_PROXY is required');
+    browser = await chromium.launch({ proxy: { server: proxyServer } });
+    context = await browser.newContext({ serviceWorkers: 'block' });
+    await context.addInitScript(() => {
+      globalThis.__MEDUSA_CONSOLE_ERRORS__ = [];
+      const originalError = console.error.bind(console);
+      console.error = (...args) => {
+        globalThis.__MEDUSA_CONSOLE_ERRORS__.push(args.map(String).join(' '));
+        originalError(...args);
+      };
+      addEventListener('error', (event) => {
+        globalThis.__MEDUSA_CONSOLE_ERRORS__.push(String(event.error?.stack ?? event.message));
+      });
+      addEventListener('unhandledrejection', (event) => {
+        globalThis.__MEDUSA_CONSOLE_ERRORS__.push(String(event.reason?.stack ?? event.reason));
+      });
+    });
     page = await context.newPage();
   }
   return page;
 }
 
-function snapshotFromElement(el, depth = 0) {
-  const tag = el.tagName().toLowerCase();
-  const role = el.getAttribute('role') ?? tag;
-  const name =
-    el.getAttribute('aria-label') ??
-    el.textContent()?.trim().slice(0, 80) ??
-    '';
-  const id = el.getAttribute('data-medusa-ref');
+async function snapshotFromElement(el, depth = 0) {
+  const tag = (await el.evaluate((node) => node.tagName)).toLowerCase();
+  const role = (await el.getAttribute('role')) ?? tag;
+  const textContent = await el.textContent();
+  const name = (await el.getAttribute('aria-label')) ?? textContent?.trim().slice(0, 80) ?? '';
+  const id = await el.getAttribute('data-medusa-ref');
   let refId = null;
   if (id) {
     refId = Number.parseInt(id, 10);
   } else {
     refId = nextRefId++;
-    el.evaluate((node, value) => node.setAttribute('data-medusa-ref', String(value)), refId);
+    await el.evaluate((node, value) => node.setAttribute('data-medusa-ref', String(value)), refId);
   }
   refs.set(refId, el);
   const selector = `[data-medusa-ref="${refId}"]`;
-  const children = Array.from(el.children()).map((child) => snapshotFromElement(child, depth + 1));
+  const children = [];
+  for (const child of await el.locator(':scope > *').all()) {
+    children.push(await snapshotFromElement(child, depth + 1));
+  }
   return { refId, role, name, selector, children };
 }
 
 async function snapshot() {
   const p = await ensurePage();
   refs.clear();
-  const body = await p.$('body');
-  if (!body) return { text: '', refs: [] };
-  const tree = snapshotFromElement(body);
+  const body = p.locator('body').first();
+  if ((await body.count()) === 0) return { kind: 'snapshot', text: '', refs: [] };
+  const tree = await snapshotFromElement(body);
   const text = await p.evaluate(() => document.body.innerText);
   const flat = [];
   const flatten = (node) => {
@@ -56,7 +69,7 @@ async function snapshot() {
     node.children.forEach(flatten);
   };
   flatten(tree);
-  return { text, refs: flat };
+  return { kind: 'snapshot', text, refs: flat };
 }
 
 async function click(request) {
@@ -94,11 +107,7 @@ async function press(request) {
 async function screenshot(request) {
   const p = await ensurePage();
   const buf = await p.screenshot({ fullPage: !!request.full_page });
-  return {
-    kind: 'screenshot',
-    format: 'png',
-    bytes_base64: buf.toString('base64'),
-  };
+  return { kind: 'screenshot', format: 'png', bytes_base64: buf.toString('base64') };
 }
 
 async function evaluate(request) {
@@ -165,38 +174,24 @@ async function handleLine(line) {
     req = JSON.parse(line);
   } catch (e) {
     process.stdout.write(
-      JSON.stringify({
-        kind: 'error',
-        code: 'invalid_request',
-        message: e.message,
-      }) + '\n',
+      JSON.stringify({ kind: 'error', code: 'invalid_request', message: e.message }) + '\n',
     );
     return;
   }
   const handler = handlers[req.method];
   if (!handler) {
     process.stdout.write(
-      JSON.stringify({
-        kind: 'error',
-        code: 'unknown_method',
-        message: `unknown method: ${req.method}`,
-      }) + '\n',
+      JSON.stringify({ kind: 'error', code: 'unknown_method', message: `unknown method: ${req.method}` }) + '\n',
     );
     return;
   }
   try {
     const response = await handler(req);
     process.stdout.write(JSON.stringify(response) + '\n');
-    if (req.method === 'close') {
-      process.exit(0);
-    }
+    if (req.method === 'close') process.exit(0);
   } catch (e) {
     process.stdout.write(
-      JSON.stringify({
-        kind: 'error',
-        code: 'bridge_failure',
-        message: e.message ?? String(e),
-      }) + '\n',
+      JSON.stringify({ kind: 'error', code: 'bridge_failure', message: e.message ?? String(e) }) + '\n',
     );
   }
 }

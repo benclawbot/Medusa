@@ -2,14 +2,34 @@
 resolver = "2"
 members = [
   "crates/medusa-core",
+  "crates/medusa-evidence",
+  "crates/medusa-external-contracts",
   "crates/medusa-config",
   "crates/medusa-protocol",
   "crates/medusa-testkit",
   "crates/medusa-provider",
+  "crates/medusa-external-provider",
+  "crates/medusa-openai-realtime",
   "crates/medusa-intelligence",
+  "crates/medusa-world-model",
+  "crates/medusa-goal",
+  "crates/medusa-progress",
+  "crates/medusa-confidence",
+  "crates/medusa-failure",
+  "crates/medusa-continuation",
+  "crates/medusa-escalation",
+  "crates/medusa-process-registry",
+  "crates/medusa-skill",
+  "crates/medusa-wakeup",
+  "crates/medusa-prompt-cache",
+  "crates/medusa-mcp-cache",
+  "crates/medusa-markdown-memory",
+  "crates/medusa-memory-consolidation",
+  "crates/medusa-clearops",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
+  "crates/medusa-process-containment",
   "crates/medusa-daemon",
   "crates/medusa-runtime",
   "crates/medusa-tui",
@@ -18,7 +38,27 @@ members = [
   "crates/medusa-extensions",
   "crates/medusa-improvement",
   "crates/medusa-hardening",
+  "crates/medusa-update",
+  "crates/medusa-github",
+  "crates/medusa-external-github",
+  "crates/medusa-capabilities",
   "crates/medusa-cli",
+  "crates/medusa-context",
+  "crates/medusa-context-retrieval",
+  "crates/medusa-turn-assembly",
+  "crates/medusa-memory-writeback",
+  "crates/medusa-tool-policy",
+  "crates/medusa-tool-control",
+  "crates/medusa-multi-agent-scheduler",
+  "crates/medusa-worker-leases",
+  "crates/medusa-execution-replay",
+  "crates/medusa-runtime-supervisor",
+  "crates/medusa-execution-checkpoint",
+  "crates/medusa-time-travel",
+  "crates/medusa-transaction-coordinator",
+  "crates/medusa-recovery-coordinator",
+  "crates/medusa-review-model",
+  "crates/medusa-session-continuity",
 ]
 
 [workspace.package]
@@ -28,9 +68,22 @@ rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/benclawbot/Medusa"
 
+[workspace.metadata.medusa]
+production_execution_model = "bounded-teammates-with-worktree-isolated-mutation"
+production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> typed worktree verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence"
+orchestration_planning = "production runtime path; task contracts drive durable read-only preflight and worktree-isolated implementer execution"
+subagent_delegation = "production; bounded read-only planner and risk-reviewer teammates plus one worktree-isolated implementer contract for explicit mutation objectives"
+verification_gate = "typed-evidence-and-changed-component-authority"
+
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
+medusa-context = { path = "crates/medusa-context" }
+medusa-evidence = { path = "crates/medusa-evidence" }
+medusa-external-contracts = { path = "crates/medusa-external-contracts" }
 medusa-protocol = { path = "crates/medusa-protocol" }
+medusa-process-containment = { path = "crates/medusa-process-containment" }
+medusa-testkit = { path = "crates/medusa-testkit" }
+medusa-world-model = { path = "crates/medusa-world-model" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
@@ -43,6 +96,10 @@ getrandom = "0.4"
 proptest = "1.6"
 tempfile = "3.16"
 serial_test = "3.0"
+semver = { version = "1.0", features = ["serde"] }
+ring = "0.17.14"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

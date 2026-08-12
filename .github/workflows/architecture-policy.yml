@@ -1,0 +1,38 @@
+name: Architecture policy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-policy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  architecture-policy:
+    name: Shipped crate reachability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh dependency lock for merged graph
+        run: cargo generate-lockfile
+      - name: Exercise policy fixtures
+        run: python3 scripts/architecture-policy.py self-test
+      - name: Enforce architecture policy
+        run: |
+          python3 scripts/architecture-policy.py check \
+            --root . \
+            --policy .github/architecture-policy.json \
+            --report architecture-policy-report.md
+      - name: Publish architecture report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: architecture-policy-report
+          path: architecture-policy-report.md
+          if-no-files-found: error

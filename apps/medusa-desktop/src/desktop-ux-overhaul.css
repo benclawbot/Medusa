@@ -1,0 +1,471 @@
+/* Activity-first desktop visual system.
+   This layer intentionally overrides legacy Zeus-era styling without changing runtime contracts. */
+
+:root {
+  --medusa-canvas: #f7f7f8;
+  --medusa-panel: rgba(255, 255, 255, 0.92);
+  --medusa-panel-solid: #ffffff;
+  --medusa-border: #e7e7eb;
+  --medusa-border-strong: #d8d8df;
+  --medusa-ink: #17171a;
+  --medusa-muted: #71717a;
+  --medusa-accent: #6d4aff;
+  --medusa-accent-soft: #f0edff;
+  --medusa-success: #138a5b;
+  --medusa-warning: #b7791f;
+  --medusa-danger: #c2413a;
+  --medusa-shadow: 0 16px 48px rgba(24, 24, 27, 0.07);
+}
+
+body {
+  background: var(--medusa-canvas);
+  color: var(--medusa-ink);
+}
+
+.app-shell.medusa-shell {
+  grid-template-columns: 232px minmax(560px, 1fr) minmax(276px, 320px);
+  background: var(--medusa-canvas);
+}
+
+.sidebar,
+.inspector {
+  background: rgba(250, 250, 251, 0.88);
+  backdrop-filter: blur(20px);
+}
+
+.sidebar {
+  gap: 12px;
+  padding: 18px 12px;
+}
+
+.brand-row {
+  min-height: 38px;
+  padding: 0 6px;
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--medusa-accent);
+  background: linear-gradient(145deg, #f5f2ff, #e9e2ff);
+  box-shadow: inset 0 0 0 1px rgba(109, 74, 255, 0.12);
+}
+
+.new-session {
+  min-height: 42px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--medusa-ink);
+  box-shadow: 0 7px 18px rgba(24, 24, 27, 0.14);
+}
+
+.new-session:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.nav-list {
+  gap: 3px;
+}
+
+.nav-item {
+  min-height: 38px;
+  border-radius: 9px;
+  color: var(--medusa-muted);
+}
+
+.nav-item.active {
+  color: var(--medusa-ink);
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--medusa-border), 0 3px 10px rgba(24, 24, 27, 0.04);
+}
+
+.project-card {
+  margin-top: 4px;
+  border-top: 1px solid var(--medusa-border);
+  padding-top: 16px;
+}
+
+.project-picker {
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.security-note {
+  border-radius: 9px;
+  color: var(--medusa-muted);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.medusa-workspace {
+  background:
+    radial-gradient(circle at 50% -10%, rgba(109, 74, 255, 0.07), transparent 34%),
+    var(--medusa-panel-solid);
+}
+
+.topbar {
+  min-height: 68px;
+  padding: 0 28px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(18px);
+}
+
+.topbar h2 {
+  font-size: 1.05rem;
+}
+
+.eyebrow {
+  margin-bottom: 2px;
+  color: var(--medusa-muted);
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.runtime-state {
+  border: 1px solid var(--medusa-border);
+  border-radius: 999px;
+  background: #fff;
+  padding: 7px 11px;
+  color: var(--medusa-muted);
+  box-shadow: 0 4px 14px rgba(24, 24, 27, 0.04);
+}
+
+.status-dot.busy {
+  animation: medusa-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes medusa-pulse {
+  50% { opacity: 0.35; transform: scale(0.78); }
+}
+
+.transcript {
+  gap: 18px;
+  max-width: 900px;
+  padding: 30px 34px 26px;
+}
+
+.empty-state {
+  max-width: 540px;
+  margin: auto;
+}
+
+.empty-state h2 {
+  font-size: clamp(1.55rem, 2vw, 2.1rem);
+  letter-spacing: -0.035em;
+}
+
+.empty-state p {
+  max-width: 510px;
+  color: var(--medusa-muted);
+  font-size: 0.96rem;
+}
+
+.message {
+  max-width: 780px;
+}
+
+.message.user {
+  align-self: flex-end;
+  max-width: min(680px, 88%);
+}
+
+.message.user .message-body {
+  border: 1px solid #e7e2ff;
+  border-radius: 16px 16px 5px 16px;
+  background: var(--medusa-accent-soft);
+  padding: 12px 15px;
+}
+
+.message.assistant .message-body {
+  border: 0;
+  background: transparent;
+  padding: 3px 0 0;
+  font-size: 0.96rem;
+  line-height: 1.65;
+}
+
+.message.system {
+  align-self: center;
+  width: min(620px, 92%);
+  border: 1px solid var(--medusa-border);
+  border-radius: 10px;
+  background: #fafafa;
+  padding: 9px 12px;
+  color: var(--medusa-muted);
+}
+
+.message-heading {
+  margin-bottom: 6px;
+  color: var(--medusa-muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.message-attachments span,
+.attachment-strip > span {
+  border-radius: 999px;
+  background: #fff;
+}
+
+.thinking-row {
+  align-self: flex-start;
+  border: 1px solid var(--medusa-border);
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 13px;
+  color: var(--medusa-muted);
+  box-shadow: 0 6px 20px rgba(24, 24, 27, 0.04);
+}
+
+.thinking-row svg {
+  color: var(--medusa-accent);
+  animation: medusa-spin 1.1s linear infinite;
+}
+
+@keyframes medusa-spin { to { transform: rotate(360deg); } }
+
+.composer-wrap {
+  padding: 12px 24px 22px;
+  background: linear-gradient(to top, #fff 70%, rgba(255, 255, 255, 0));
+}
+
+.composer-card {
+  max-width: 900px;
+  margin: 0 auto;
+  border: 1px solid var(--medusa-border-strong);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: var(--medusa-shadow);
+}
+
+.composer-card:focus-within {
+  border-color: rgba(109, 74, 255, 0.48);
+  box-shadow: 0 18px 52px rgba(24, 24, 27, 0.09), 0 0 0 3px rgba(109, 74, 255, 0.08);
+}
+
+.composer-card textarea {
+  min-height: 82px;
+  padding: 16px 17px 8px;
+  font-size: 0.96rem;
+}
+
+.composer-bottom {
+  padding: 8px 10px 10px 13px;
+}
+
+.send-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--medusa-ink);
+}
+
+.send-button:disabled {
+  color: #a1a1aa;
+  background: #efeff1;
+}
+
+.cancel-button {
+  border-radius: 8px;
+}
+
+.inspector {
+  gap: 0;
+  padding: 12px;
+}
+
+.inspector-section {
+  margin: 0 0 10px;
+  border: 1px solid var(--medusa-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+  padding: 13px;
+  box-shadow: 0 5px 18px rgba(24, 24, 27, 0.025);
+}
+
+.panel-heading {
+  margin-bottom: 11px;
+  font-weight: 700;
+}
+
+.metric-grid {
+  gap: 7px;
+}
+
+.metric-grid > div {
+  border-radius: 9px;
+  background: #fafafa;
+  padding: 8px;
+}
+
+.metric-grid dt {
+  color: var(--medusa-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metric-grid dd {
+  margin-top: 2px;
+  font-weight: 650;
+}
+
+.mini-plan {
+  position: relative;
+  display: grid;
+  gap: 0;
+}
+
+.mini-plan > div {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: start;
+  min-height: 38px;
+  padding: 4px 0;
+}
+
+.mini-plan > div:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 24px;
+  bottom: -5px;
+  left: 7px;
+  width: 1px;
+  background: var(--medusa-border-strong);
+}
+
+.mini-plan .completed svg { color: var(--medusa-success); }
+.mini-plan .inProgress svg { color: var(--medusa-accent); }
+.mini-plan .failed svg { color: var(--medusa-danger); }
+
+.activity-list {
+  display: grid;
+  gap: 7px;
+}
+
+.activity-list > div {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  align-items: start;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 9px;
+  background: #fafafa;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.activity-list > div:hover {
+  border-color: var(--medusa-border);
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.activity-list > div > span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--medusa-accent);
+  box-shadow: inset 0 0 0 1px var(--medusa-border);
+}
+
+.activity-list .done > span { color: var(--medusa-success); }
+.activity-list .error > span { color: var(--medusa-danger); }
+
+.activity-list strong {
+  display: block;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.activity-list small {
+  display: block;
+  margin-top: 3px;
+  color: var(--medusa-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.standalone-panel {
+  width: min(760px, calc(100% - 48px));
+  margin: 28px auto;
+  border: 1px solid var(--medusa-border);
+  border-radius: 16px;
+  background: #fff;
+  padding: 22px;
+  box-shadow: var(--medusa-shadow);
+}
+
+.plan-row {
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.slash-menu {
+  border-radius: 12px;
+  box-shadow: var(--medusa-shadow);
+}
+
+.error-banner {
+  max-width: 900px;
+  margin: 0 auto 8px;
+  border-radius: 10px;
+}
+
+@media (max-width: 1120px) {
+  .app-shell.medusa-shell {
+    grid-template-columns: 210px minmax(500px, 1fr);
+  }
+
+  .inspector {
+    position: fixed;
+    z-index: 20;
+    top: 78px;
+    right: 14px;
+    bottom: 14px;
+    width: 304px;
+    border: 1px solid var(--medusa-border);
+    border-radius: 14px;
+    box-shadow: var(--medusa-shadow);
+    transform: translateX(calc(100% + 30px));
+    transition: transform 180ms ease;
+  }
+
+  .medusa-shell:focus-within .inspector {
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell.medusa-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar,
+  .inspector {
+    display: none;
+  }
+
+  .transcript {
+    padding-inline: 18px;
+  }
+
+  .composer-wrap {
+    padding-inline: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

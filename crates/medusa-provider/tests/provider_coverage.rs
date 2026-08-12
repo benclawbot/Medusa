@@ -190,6 +190,8 @@ fn response_blocks_usage_and_capabilities_round_trip() {
         supported_image_media_types: vec!["image/png".to_owned()],
         max_image_bytes: Some(1024),
         max_images_per_request: Some(2),
+        tool_calling: true,
+        streaming: false,
     };
     let decoded_capabilities: ProviderCapabilities = serde_json::from_value(
         serde_json::to_value(&capabilities).expect("serialize capabilities"),

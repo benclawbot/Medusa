@@ -40,8 +40,27 @@ pub struct DesktopModelConfiguration {
     pub provider: String,
     pub model: String,
     pub effort: String,
+    pub expected_revision: u64,
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRecoveryActionRequest {
+    pub recovery: serde_json::Value,
+    pub operation: String,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub confirmed_destructive_effects: bool,
+    pub repository_fingerprint_before: String,
+    pub checkpoint_integrity_verified: bool,
+    pub repository_preconditions_verified: bool,
+    #[serde(default)]
+    pub conflicting_uncommitted_paths: Vec<String>,
+    #[serde(default)]
+    pub unresolved_risks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,12 +77,22 @@ pub enum DesktopSubmitDisposition {
     rename_all_fields = "camelCase"
 )]
 pub enum DesktopRuntimeEvent {
+    RecoveryAvailable {
+        recovery: serde_json::Value,
+    },
+    RecoveryCompleted {
+        record: serde_json::Value,
+        audit_path: String,
+    },
     Started,
     AssistantText {
         text: String,
     },
     Activity {
         activity: DesktopActivity,
+    },
+    Team {
+        snapshot: medusa_runtime::TeamSnapshot,
     },
     Plan {
         steps: Vec<DesktopPlanStep>,
@@ -76,7 +105,11 @@ pub enum DesktopRuntimeEvent {
         output_tokens: u64,
         cache_read_input_tokens: u64,
         cache_creation_input_tokens: u64,
-        model_elapsed_millis: u64,
+        total_tokens: u64,
+        duration_ms: u64,
+        tokens_per_second_milli: u64,
+        estimated_cost_microusd: u64,
+        provenance: String,
     },
     Progress {
         turn: u32,
@@ -86,6 +119,13 @@ pub enum DesktopRuntimeEvent {
         effort: String,
         plan_mode: bool,
         credential_configured: bool,
+    },
+    ConfigurationChanged {
+        revision: u64,
+        active_profile: String,
+        changed_keys: Vec<String>,
+        origin: String,
+        apply_timing: String,
     },
     Notice {
         title: String,
@@ -122,6 +162,7 @@ pub enum DesktopActivityKind {
     Done,
     Error,
     Tool,
+    Progress,
     Verification,
 }
 
@@ -159,8 +200,26 @@ pub struct DesktopQuestionOption {
 impl From<RuntimeEvent> for DesktopRuntimeEvent {
     fn from(event: RuntimeEvent) -> Self {
         match event {
+            RuntimeEvent::RecoveryAvailable(recovery) => Self::RecoveryAvailable {
+                recovery: serde_json::to_value(recovery).unwrap_or_else(|error| {
+                    serde_json::json!({
+                        "health": "corrupt",
+                        "warnings": [format!("Recovery payload serialization failed: {error}")]
+                    })
+                }),
+            },
+            RuntimeEvent::RecoveryCompleted(receipt) => Self::RecoveryCompleted {
+                record: serde_json::to_value(receipt.record).unwrap_or_else(|error| {
+                    serde_json::json!({
+                        "outcome": "failedClosed",
+                        "reason": format!("Recovery receipt serialization failed: {error}")
+                    })
+                }),
+                audit_path: receipt.audit_path.to_string_lossy().into_owned(),
+            },
             RuntimeEvent::Started => Self::Started,
             RuntimeEvent::AssistantText(text) => Self::AssistantText { text },
+            RuntimeEvent::Team(snapshot) => Self::Team { snapshot },
             RuntimeEvent::Activity(activity) => Self::Activity {
                 activity: DesktopActivity {
                     id: activity.id,
@@ -169,6 +228,7 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                         RuntimeActivityKind::Done => DesktopActivityKind::Done,
                         RuntimeActivityKind::Error => DesktopActivityKind::Error,
                         RuntimeActivityKind::Tool => DesktopActivityKind::Tool,
+                        RuntimeActivityKind::Progress => DesktopActivityKind::Progress,
                         RuntimeActivityKind::Verification => DesktopActivityKind::Verification,
                     },
                     title: activity.title,
@@ -213,13 +273,21 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
-                model_elapsed_millis,
+                total_tokens,
+                duration_ms,
+                tokens_per_second_milli,
+                estimated_cost_microusd,
+                provenance,
             } => Self::Usage {
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
-                model_elapsed_millis,
+                total_tokens,
+                duration_ms,
+                tokens_per_second_milli,
+                estimated_cost_microusd,
+                provenance: format!("{provenance:?}").to_ascii_lowercase(),
             },
             RuntimeEvent::Progress { turn } => Self::Progress { turn },
             RuntimeEvent::Settings {
@@ -233,6 +301,13 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                 effort,
                 plan_mode,
                 credential_configured,
+            },
+            RuntimeEvent::ConfigurationChanged(change) => Self::ConfigurationChanged {
+                revision: change.revision,
+                active_profile: change.active_profile,
+                changed_keys: change.changed_keys,
+                origin: change.origin.label().to_owned(),
+                apply_timing: change.apply_timing.label().to_owned(),
             },
             RuntimeEvent::Notice { title, details } => Self::Notice { title, details },
             RuntimeEvent::NewSession => Self::NewSession,
@@ -248,7 +323,9 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use medusa_runtime::{RuntimeActivity, RuntimePlanStep};
+    use medusa_runtime::{
+        RuntimeActivity, RuntimePlanStep, TeamSnapshot, TeamWorkerLifecycle, TeamWorkerSnapshot,
+    };
 
     #[test]
     fn maps_plan_and_activity_events_without_tui_types() {
@@ -273,19 +350,59 @@ mod tests {
 
     #[test]
     fn serializes_runtime_event_fields_for_the_typescript_contract() {
+        let team = serde_json::to_value(DesktopRuntimeEvent::from(RuntimeEvent::Team(
+            TeamSnapshot {
+                execution_id: Some("execution-1".to_owned()),
+                active: true,
+                shutdown_requested: false,
+                sequence: 7,
+                workers: vec![TeamWorkerSnapshot {
+                    worker_id: "reviewer-1".to_owned(),
+                    role: "reviewer".to_owned(),
+                    task_id: "review".to_owned(),
+                    lifecycle: TeamWorkerLifecycle::Running,
+                    session_id: Some("session-1".to_owned()),
+                    turn: 2,
+                    last_update: "checking tests".to_owned(),
+                    queued_instructions: 1,
+                }],
+            },
+        )))
+        .expect("serialize team event");
+        assert_eq!(team["type"], "team");
+        assert_eq!(team["snapshot"]["executionId"], "execution-1");
+        assert_eq!(team["snapshot"]["shutdownRequested"], false);
+        assert_eq!(team["snapshot"]["workers"][0]["workerId"], "reviewer-1");
+        assert_eq!(team["snapshot"]["workers"][0]["taskId"], "review");
+        assert_eq!(team["snapshot"]["workers"][0]["sessionId"], "session-1");
+        assert_eq!(
+            team["snapshot"]["workers"][0]["lastUpdate"],
+            "checking tests"
+        );
+        assert_eq!(team["snapshot"]["workers"][0]["queuedInstructions"], 1);
+        assert!(team["snapshot"].get("execution_id").is_none());
+
         let usage = serde_json::to_value(DesktopRuntimeEvent::Usage {
             input_tokens: 11,
             output_tokens: 7,
             cache_read_input_tokens: 3,
             cache_creation_input_tokens: 2,
-            model_elapsed_millis: 900,
+            total_tokens: 23,
+            duration_ms: 900,
+            tokens_per_second_milli: 25_555,
+            estimated_cost_microusd: 123,
+            provenance: "providerreported".to_owned(),
         })
         .expect("serialize usage event");
         assert_eq!(usage["inputTokens"], 11);
         assert_eq!(usage["outputTokens"], 7);
         assert_eq!(usage["cacheReadInputTokens"], 3);
         assert_eq!(usage["cacheCreationInputTokens"], 2);
-        assert_eq!(usage["modelElapsedMillis"], 900);
+        assert_eq!(usage["totalTokens"], 23);
+        assert_eq!(usage["durationMs"], 900);
+        assert_eq!(usage["tokensPerSecondMilli"], 25_555);
+        assert_eq!(usage["estimatedCostMicrousd"], 123);
+        assert_eq!(usage["provenance"], "providerreported");
         assert!(usage.get("input_tokens").is_none());
 
         let settings = serde_json::to_value(DesktopRuntimeEvent::Settings {

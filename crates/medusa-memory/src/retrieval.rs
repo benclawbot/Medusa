@@ -50,6 +50,10 @@ impl MemoryEngine {
 }
 
 fn score(document: &MemoryDocument, terms: &[String]) -> i64 {
+    if terms.is_empty() {
+        return 0;
+    }
+
     let title = normalize(&document.title);
     let body = normalize(&document.body);
     let tags = document
@@ -57,7 +61,23 @@ fn score(document: &MemoryDocument, terms: &[String]) -> i64 {
         .iter()
         .map(|tag| normalize(tag))
         .collect::<Vec<_>>();
-    let mut score = i64::from(document.confidence_milli) / 10;
+    let mut match_score = 0_i64;
+    for term in terms {
+        if title.contains(term) {
+            match_score += 120;
+        }
+        if body.contains(term) {
+            match_score += 60;
+        }
+        if tags.iter().any(|tag| tag.contains(term)) {
+            match_score += 90;
+        }
+    }
+    if match_score == 0 {
+        return 0;
+    }
+
+    let mut score = match_score + i64::from(document.confidence_milli) / 10;
     score += i64::from(document.successful_reuse_count) * 25;
     score += match document.validation {
         Validation::TestVerified => 80,
@@ -65,16 +85,38 @@ fn score(document: &MemoryDocument, terms: &[String]) -> i64 {
         Validation::Observed => 60,
         _ => -500,
     };
-    for term in terms {
-        if title.contains(term) {
-            score += 120;
-        }
-        if body.contains(term) {
-            score += 60;
-        }
-        if tags.iter().any(|tag| tag.contains(term)) {
-            score += 90;
-        }
+    score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::MemoryProposal;
+
+    #[test]
+    fn unrelated_high_confidence_memory_is_not_a_search_hit() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engine = MemoryEngine::new(directory.path()).expect("engine");
+        engine
+            .commit_proposal(&MemoryProposal {
+                memory_type: "command".into(),
+                title: "Build command".into(),
+                claim: "Run cargo build from the repository root.".into(),
+                evidence: vec!["artifact://sessions/search/verification".into()],
+                confidence_milli: 950,
+                validation: Validation::TestVerified,
+                scope: Scope::Project,
+                project_id: Some("sha256:search-test".into()),
+                session_id: Some("ses-search".into()),
+                tags: vec!["rust".into()],
+            })
+            .expect("commit");
+
+        assert!(
+            engine
+                .search("unrelated deletion marker", Scope::Project, 10)
+                .expect("search")
+                .is_empty()
+        );
     }
-    if terms.is_empty() { 0 } else { score }
 }

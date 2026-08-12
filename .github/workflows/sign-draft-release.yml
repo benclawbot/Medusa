@@ -1,0 +1,265 @@
+name: Sign Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag to sign
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sign-draft-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate immutable draft release
+    runs-on: ubuntu-latest
+    environment: release-signing
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      sha: ${{ steps.validate.outputs.sha }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Validate tag and draft release
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "invalid release tag: $RELEASE_TAG" >&2
+            exit 2
+          }
+          git fetch --force --tags origin
+          git fetch --no-tags origin main
+          sha=$(git rev-list -n 1 "$RELEASE_TAG")
+          test -n "$sha"
+          git merge-base --is-ancestor "$sha" origin/main
+          is_draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)
+          test "$is_draft" = true || {
+            echo "release $RELEASE_TAG must exist and remain a draft" >&2
+            exit 2
+          }
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Sign Linux assets with Sigstore
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: release-signing
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Download Linux draft assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p signed
+          gh release download "$RELEASE_TAG" --dir signed --pattern 'medusa-*-linux*'
+          test -n "$(find signed -maxdepth 1 -type f -print -quit)"
+      - name: Sign and verify Linux assets
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          for asset in signed/medusa-*-linux*; do
+            case "$asset" in *.sig|*.pem) continue;; esac
+            cosign sign-blob --yes \
+              --output-signature "$asset.sig" \
+              --output-certificate "$asset.pem" \
+              "$asset"
+            cosign verify-blob \
+              --certificate "$asset.pem" \
+              --signature "$asset.sig" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sign-draft-release.yml@refs/heads/main$" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$asset"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-linux-${{ needs.validate.outputs.sha }}
+          path: signed
+          if-no-files-found: error
+
+  macos:
+    name: Sign and notarize macOS assets
+    needs: validate
+    runs-on: macos-latest
+    environment: release-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Require macOS signing credentials
+        shell: bash
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$CERTIFICATE"
+          test -n "$CERTIFICATE_PASSWORD"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+      - name: Download macOS draft assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p signed
+          gh release download "$RELEASE_TAG" --dir signed --pattern 'medusa-*-macos*'
+          test -f signed/medusa-desktop-macos-app.zip
+          test -f signed/medusa-desktop-macos.dmg
+      - name: Import Developer ID certificate
+        shell: bash
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/medusa-signing.keychain-db"
+          password=$(openssl rand -hex 24)
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+      - name: Sign, notarize, staple, and verify macOS application
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          ditto -x -k signed/medusa-desktop-macos-app.zip "$RUNNER_TEMP/app"
+          app=$(find "$RUNNER_TEMP/app" -maxdepth 2 -type d -name '*.app' -print -quit)
+          test -n "$app"
+          identity=$(security find-identity -v -p codesigning | awk '/Developer ID Application/ {sub(/.*"/, ""); sub(/".*/, ""); print; exit}')
+          test -n "$identity"
+          codesign --force --deep --options runtime --timestamp --sign "$identity" "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" signed/medusa-desktop-macos-app.zip
+          xcrun notarytool submit signed/medusa-desktop-macos-app.zip \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" signed/medusa-desktop-macos-app.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-macos-${{ needs.validate.outputs.sha }}
+          path: signed
+          if-no-files-found: error
+
+  windows:
+    name: Authenticode-sign Windows assets
+    needs: validate
+    runs-on: windows-2022
+    environment: release-signing
+    permissions:
+      contents: read
+    steps:
+      - name: Require Windows signing credentials
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw 'Windows signing certificate secrets are required'
+          }
+      - name: Download Windows draft assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          New-Item -ItemType Directory -Force signed | Out-Null
+          gh release download $env:RELEASE_TAG --dir signed --pattern 'medusa-*-windows*'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Import certificate, sign, and verify Windows assets
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $secure = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure | Out-Null
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          $targets = @(Get-ChildItem signed -File | Where-Object { $_.Extension -in '.exe', '.msi' })
+          if ($targets.Count -eq 0) { throw 'no Windows executable assets found' }
+          foreach ($target in $targets) {
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /a $target.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $signtool.FullName verify /pa /all /v $target.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-windows-${{ needs.validate.outputs.sha }}
+          path: signed
+          if-no-files-found: error
+
+  publish:
+    name: Replace draft assets with verified signed assets
+    needs: [validate, linux, macos, windows]
+    runs-on: ubuntu-latest
+    environment: release-signing
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: signed-*-${{ needs.validate.outputs.sha }}
+          path: signed
+          merge-multiple: true
+      - name: Refuse incomplete signing output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f signed/medusa-desktop-windows.exe
+          test -f signed/medusa-desktop-macos-app.zip
+          test -f signed/medusa-desktop-linux.deb
+          test -f signed/medusa-desktop-linux.deb.sig
+          test -f signed/medusa-desktop-linux.deb.pem
+      - name: Replace assets on the still-draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          is_draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)
+          test "$is_draft" = true
+          gh release upload "$RELEASE_TAG" signed/* --clobber

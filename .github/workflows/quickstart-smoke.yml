@@ -1,0 +1,55 @@
+name: Quickstart smoke
+
+on:
+  pull_request:
+    paths:
+      - "crates/medusa-cli/**"
+      - "docs/quickstart.md"
+      - ".github/workflows/quickstart-smoke.yml"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-quickstart:
+    name: ${{ matrix.os }} packaged quickstart
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Build packaged CLI binaries
+        run: cargo build --locked --package medusa-cli --bins
+      - name: Run deterministic quickstart
+        shell: bash
+        env:
+          OPENAI_API_KEY: quickstart-smoke-placeholder
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/target/debug:$PATH"
+          medusa quickstart --json > quickstart-report.json
+          python3 - <<'PY'
+          import json
+          with open("quickstart-report.json", encoding="utf-8") as handle:
+              report = json.load(handle)
+          assert report["schema_version"] == 1
+          assert report["success"] is True
+          assert report["task"]["bounded"] is True
+          assert report["task"]["verified"] is True
+          assert "quickstart-smoke-placeholder" not in json.dumps(report)
+          PY
+      - name: Upload quickstart evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quickstart-${{ matrix.os }}
+          path: quickstart-report.json

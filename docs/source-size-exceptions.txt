@@ -1,2 +1,0 @@
-# path|max_lines|reason
-# Remove every exception in the same PR that brings its source file below the 800-line ceiling.

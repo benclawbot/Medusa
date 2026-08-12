@@ -7,13 +7,24 @@ mod persistence;
 mod proposal;
 mod retrieval;
 mod schema;
+mod session_recall;
+mod session_recall_inbox;
+mod session_recall_lifecycle;
 mod support;
 
 pub use engine::MemoryEngine;
 pub use schema::{MemoryDocument, MemoryProposal, RetrievedMemory, Scope, Status, Validation};
+pub use session_recall::{
+    SessionComparison, SessionEvent, SessionRecallStore, SessionRecord, SessionSearchHit,
+    SessionSearchQuery, SessionWindow,
+};
+pub use session_recall_inbox::open_session_recall;
+pub use session_recall_lifecycle::delete_session_recall;
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, thread};
+
     use super::*;
 
     fn proposal(title: &str, claim: &str) -> MemoryProposal {
@@ -82,6 +93,58 @@ mod tests {
             .search("cargo test workspace", Scope::Project, 1)
             .expect("search after reuse");
         assert_eq!(reused[0].document.successful_reuse_count, 1);
+    }
+
+    #[test]
+    fn concurrent_reuse_updates_preserve_both_increments() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = Arc::new(directory.path().to_path_buf());
+        let initial = MemoryEngine::new(root.as_path()).expect("engine");
+        let committed = initial
+            .commit_proposal(&proposal("Concurrent command", "Use the verified command."))
+            .expect("commit");
+        let first_engine = MemoryEngine::new(root.as_path()).expect("first worker engine");
+        let second_engine = MemoryEngine::new(root.as_path()).expect("second worker engine");
+        let id = Arc::new(committed.id);
+
+        let first_id = Arc::clone(&id);
+        let first_worker = thread::spawn(move || {
+            first_engine.record_reuse(
+                first_id.as_str(),
+                "artifact://sessions/concurrent/verification-a",
+            )
+        });
+        let second_id = Arc::clone(&id);
+        let second_worker = thread::spawn(move || {
+            second_engine.record_reuse(
+                second_id.as_str(),
+                "artifact://sessions/concurrent/verification-b",
+            )
+        });
+        first_worker
+            .join()
+            .expect("first worker thread")
+            .expect("first reuse update");
+        second_worker
+            .join()
+            .expect("second worker thread")
+            .expect("second reuse update");
+
+        let final_engine = MemoryEngine::new(root.as_path()).expect("final engine");
+        let (_, document) = final_engine.read_by_id(id.as_str()).expect("read document");
+        assert_eq!(document.successful_reuse_count, 2);
+        assert!(
+            document
+                .sources
+                .iter()
+                .any(|source| source.ends_with("verification-a"))
+        );
+        assert!(
+            document
+                .sources
+                .iter()
+                .any(|source| source.ends_with("verification-b"))
+        );
     }
 
     #[test]

@@ -1,0 +1,78 @@
+.desktop-update-card {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  display: grid;
+  gap: 14px;
+}
+
+.desktop-update-heading {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.desktop-update-heading h3,
+.desktop-update-heading p {
+  margin: 0;
+}
+
+.desktop-update-heading p {
+  margin-top: 4px;
+  opacity: 0.7;
+  font-size: 0.88rem;
+}
+
+.desktop-update-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.desktop-update-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  font-size: 0.82rem;
+  opacity: 0.82;
+}
+
+.desktop-update-status span,
+.desktop-update-warning,
+.desktop-update-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.desktop-update-warning {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #e39b2f 12%, transparent);
+  font-size: 0.84rem;
+}
+
+.desktop-update-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.desktop-update-card > small {
+  opacity: 0.62;
+  line-height: 1.45;
+}
+
+.desktop-update-card .spin {
+  animation: desktop-update-spin 0.9s linear infinite;
+}
+
+@keyframes desktop-update-spin {
+  to { transform: rotate(360deg); }
+}

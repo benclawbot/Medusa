@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scenario_version": 1,
+  "id": "eslint-rule-maintenance",
+  "repository": {
+    "url": "https://github.com/eslint/eslint.git",
+    "commit": "a3714473feb3d2908add734d340e7755fd85e0a3",
+    "ecosystem": "javascript-npm"
+  },
+  "task": "Make a bounded rule-maintenance change, preserve unrelated behavior, and verify the focused and repository test suites.",
+  "expected_invariants": [
+    "all mutations remain inside the pinned repository",
+    "completion requires passing verification evidence",
+    "unrelated rules and fixtures remain unchanged"
+  ],
+  "allowed_scope": ["lib/rules/**", "tests/lib/rules/**", "docs/src/rules/**"],
+  "coverage": ["failed-verification"],
+  "execution": {
+    "mode": "offline",
+    "timeout_seconds": 2400,
+    "provider": {"kind": "recording-replay", "fixture": "eslint-maintenance-v1"}
+  },
+  "acceptance": {
+    "expected_outcome": "verified-completion",
+    "verification_commands": [["npm", "test"]],
+    "required_evidence": ["repository-diff", "focused-tests", "full-verification"]
+  }
+}

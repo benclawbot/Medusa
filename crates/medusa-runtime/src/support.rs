@@ -14,10 +14,15 @@ use serde_json::Value;
 
 use crate::{
     commands::{Effort, ModelConfiguration},
-    prompt::{ImageAttachment, PromptAttachment, PromptDraft},
+    prompt::{
+        ImageAttachment, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, PromptAttachment, PromptDraft,
+    },
 };
 
-use super::{RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeState};
+use super::{
+    RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeState, TurnUsage,
+    UsageProvenance,
+};
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SKILL_CONTEXT_BYTES: usize = 64_000;
@@ -48,10 +53,12 @@ pub(super) fn configure_model(
     events: &Sender<RuntimeEvent>,
 ) -> Result<(), RuntimeError> {
     if !is_supported_provider(&configuration.provider) {
-        return Err(RuntimeError::InvalidCommand(
-            "supported providers are minimax, anthropic, and anthropic-compatible".to_owned(),
-        ));
+        return Err(RuntimeError::InvalidCommand(format!(
+            "supported providers are {}",
+            SUPPORTED_PROVIDERS.join(", ")
+        )));
     }
+    state.config.model.protocol = protocol_for_provider(&configuration.provider).to_owned();
     state.config.model.provider = configuration.provider;
     state.config.model.name = configuration.model;
     state.config.model.context_window_tokens = model_context_window_tokens(
@@ -91,8 +98,26 @@ pub(super) fn turns_for_effort(effort: Effort) -> u32 {
     }
 }
 
+pub(super) const SUPPORTED_PROVIDERS: [&str; 8] = [
+    "minimax",
+    "anthropic",
+    "anthropic-compatible",
+    "openai",
+    "openai-oauth",
+    "openai-compatible",
+    "omniroute",
+    "local",
+];
+
 pub(super) fn is_supported_provider(provider: &str) -> bool {
-    matches!(provider, "minimax" | "anthropic" | "anthropic-compatible")
+    SUPPORTED_PROVIDERS.contains(&provider)
+}
+
+pub(super) fn protocol_for_provider(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" | "anthropic-compatible" => "anthropic",
+        _ => "openai",
+    }
 }
 
 pub(super) fn model_context_window_tokens(model: &str, configured_default: u64) -> u64 {
@@ -115,7 +140,7 @@ pub(super) fn should_auto_compact(
 
 pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
     let credential = if state.session_api_key.is_some()
-        || credential_environment(&state.config.model.provider)
+        || medusa_config::credential_environment(&state.config.model.provider)
             .is_some_and(|name| env::var(name).is_ok())
     {
         "credential: configured"
@@ -126,7 +151,10 @@ pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
         format!("provider: {}", state.config.model.provider),
         format!("model: {}", state.config.model.name),
         credential.to_owned(),
-        "set provider: /model provider <minimax|anthropic|anthropic-compatible>".to_owned(),
+        format!(
+            "set provider: /model provider <{}>",
+            SUPPORTED_PROVIDERS.join("|")
+        ),
         "set model: /model <model-name>".to_owned(),
         "set session key: /model key <api-key>".to_owned(),
     ]
@@ -136,7 +164,9 @@ pub(super) fn credential_environment(provider: &str) -> Option<&'static str> {
     match provider {
         "minimax" => Some("MINIMAX_API_KEY"),
         "anthropic" => Some("ANTHROPIC_API_KEY"),
-        "anthropic-compatible" => Some("MEDUSA_API_KEY"),
+        "anthropic-compatible" | "openai-compatible" => Some("MEDUSA_API_KEY"),
+        "openai" => Some("OPENAI_API_KEY"),
+        "openai-oauth" | "omniroute" | "local" => None,
         _ => None,
     }
 }
@@ -236,6 +266,23 @@ pub(super) fn load_selected_skill(
             "skill {name} disappeared while resolving its path"
         )));
     };
+    let approved_root = repo.join(".medusa/skills");
+    if scope == "project" && approved_root.is_dir() {
+        let canonical_root = fs::canonicalize(&approved_root)?;
+        if path.starts_with(&canonical_root) {
+            let resolved = crate::skill_dependencies::resolve_project_skill(
+                &approved_root,
+                name,
+                MAX_SKILL_CONTEXT_BYTES,
+            )
+            .map_err(RuntimeError::InvalidCommand)?;
+            return Ok(SelectedSkill {
+                name: name.to_owned(),
+                scope: scope.to_owned(),
+                content: resolved.content,
+            });
+        }
+    }
     let bytes = fs::read(&path)?;
     if bytes.len() > MAX_SKILL_CONTEXT_BYTES {
         return Err(RuntimeError::FileTooLarge {
@@ -283,6 +330,7 @@ pub(super) struct UpdateState {
     pending_tools: VecDeque<PendingTool>,
     model_started_at: Option<Instant>,
     pub(super) current_context_tokens: u64,
+    suppress_model_plan: bool,
 }
 
 impl UpdateState {
@@ -292,7 +340,12 @@ impl UpdateState {
             pending_tools: VecDeque::new(),
             model_started_at: None,
             current_context_tokens: 0,
+            suppress_model_plan: false,
         }
+    }
+
+    pub(super) fn suppress_model_plan(&mut self) {
+        self.suppress_model_plan = true;
     }
 }
 
@@ -312,36 +365,67 @@ pub(super) fn forward_update(
             state.model_started_at = Some(Instant::now());
         }
         AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
-            let model_elapsed_millis = state.model_started_at.take().map_or(0, |started_at| {
+            let measured_duration_ms = state.model_started_at.take().map_or(0, |started_at| {
                 u64::try_from(started_at.elapsed().as_millis())
                     .unwrap_or(u64::MAX)
                     .max(1)
             });
-            let input_tokens = usage
-                .get("input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let output_tokens = usage
-                .get("output_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let cache_read_input_tokens = usage
-                .get("cache_read_input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let cache_creation_input_tokens = usage
-                .get("cache_creation_input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            state.current_context_tokens = input_tokens
-                .saturating_add(cache_read_input_tokens)
-                .saturating_add(cache_creation_input_tokens);
+            let usage = serde_json::from_value::<TurnUsage>(usage.clone()).unwrap_or_else(|_| {
+                let input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let output_tokens = usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let cache_read_input_tokens = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let cache_creation_input_tokens = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let total_tokens = input_tokens
+                    .saturating_add(output_tokens)
+                    .saturating_add(cache_read_input_tokens)
+                    .saturating_add(cache_creation_input_tokens);
+                TurnUsage {
+                    turn: 0,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                    total_tokens,
+                    duration_ms: measured_duration_ms,
+                    tokens_per_second_milli: if measured_duration_ms == 0 {
+                        0
+                    } else {
+                        total_tokens.saturating_mul(1_000_000) / measured_duration_ms
+                    },
+                    estimated_cost_microusd: 0,
+                    provenance: if total_tokens == 0 {
+                        UsageProvenance::Estimated
+                    } else {
+                        UsageProvenance::ProviderReported
+                    },
+                }
+            });
+            state.current_context_tokens = usage
+                .input_tokens
+                .saturating_add(usage.cache_read_input_tokens)
+                .saturating_add(usage.cache_creation_input_tokens);
             let _ = events.send(RuntimeEvent::Usage {
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-                model_elapsed_millis,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                total_tokens: usage.total_tokens,
+                duration_ms: usage.duration_ms,
+                tokens_per_second_milli: usage.tokens_per_second_milli,
+                estimated_cost_microusd: usage.estimated_cost_microusd,
+                provenance: usage.provenance,
             });
         }
         AgentUpdate::Event(EventPayload::ToolCallRequested { tool, arguments }) => {
@@ -380,12 +464,14 @@ pub(super) fn forward_update(
             }
         }
         AgentUpdate::Plan(steps) => {
-            let _ = events.send(RuntimeEvent::Plan(steps.clone()));
+            if !state.suppress_model_plan {
+                let _ = events.send(RuntimeEvent::Plan(steps.clone()));
+            }
         }
         AgentUpdate::Question(_) => {}
         AgentUpdate::ToolOutput {
             tool,
-            output: _,
+            output,
             is_error,
         } => {
             if is_internal_tool(tool) {
@@ -409,7 +495,7 @@ pub(super) fn forward_update(
                     } else {
                         tool.clone()
                     },
-                    details: Vec::new(),
+                    details: tool_output_details(output),
                 },
                 |pending| RuntimeActivity {
                     id: Some(pending.id),
@@ -423,7 +509,7 @@ pub(super) fn forward_update(
                     } else {
                         pending.title
                     },
-                    details: Vec::new(),
+                    details: tool_output_details(output),
                 },
             );
             let _ = events.send(RuntimeEvent::Activity(activity));
@@ -442,6 +528,7 @@ pub(super) fn tool_title(tool: &str, arguments: &Value) -> String {
         "fs_create_dir" => format!("Mkdir({})", json_string(arguments, "path")),
         "fs_write" => format!("Write({})", json_string(arguments, "path")),
         "search_text" => format!("Search({})", json_string(arguments, "query")),
+        "semantic_capabilities" => "Semantic capability report".to_owned(),
         "code_index" => {
             let name = json_string(arguments, "name");
             if name.is_empty() {
@@ -492,6 +579,15 @@ fn shell_command(arguments: &Value) -> String {
     }
 }
 
+fn tool_output_details(output: &str) -> Vec<String> {
+    let output = output.trim();
+    if output.is_empty() {
+        Vec::new()
+    } else {
+        output.lines().map(str::to_owned).collect()
+    }
+}
+
 fn summarize(value: &str) -> String {
     let compact = value.replace('\n', " ");
     if compact.chars().count() <= 140 {
@@ -530,6 +626,20 @@ pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, R
             PromptAttachment::Image(image) => blocks.push(image_block(image)?),
             PromptAttachment::File(file) => {
                 let bytes = fs::read(&file.path)?;
+                if let Some(image) = encoded_image_info(&bytes, &file.path)? {
+                    blocks.push(MessageBlock::Image {
+                        source: ImageSource::Base64 {
+                            media_type: image.media_type.to_owned(),
+                            data: STANDARD.encode(bytes),
+                        },
+                        alt_text: file
+                            .path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(str::to_owned),
+                    });
+                    continue;
+                }
                 if bytes.len() > MAX_FILE_CONTEXT_BYTES {
                     return Err(RuntimeError::FileTooLarge {
                         path: file.path.clone(),
@@ -553,6 +663,127 @@ pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, R
         return Err(RuntimeError::EmptyPrompt);
     }
     Ok(blocks)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EncodedImageInfo {
+    media_type: &'static str,
+}
+
+fn encoded_image_info(
+    bytes: &[u8],
+    path: &Path,
+) -> Result<Option<EncodedImageInfo>, RuntimeError> {
+    let info = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(parse_png_dimensions(bytes))
+    } else if bytes.starts_with(&[0xff, 0xd8]) {
+        Some(parse_jpeg_dimensions(bytes))
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(parse_webp_dimensions(bytes))
+    } else {
+        None
+    };
+    let Some(info) = info else {
+        return Ok(None);
+    };
+    let (media_type, width, height) = info.ok_or_else(|| RuntimeError::InvalidImage {
+        path: path.to_path_buf(),
+    })?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(RuntimeError::FileTooLarge {
+            path: path.to_path_buf(),
+            bytes: bytes.len(),
+        });
+    }
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if width == 0 || height == 0 || pixels > MAX_IMAGE_PIXELS {
+        return Err(RuntimeError::ImagePixelLimit {
+            path: path.to_path_buf(),
+            pixels,
+            limit: MAX_IMAGE_PIXELS,
+        });
+    }
+    Ok(Some(EncodedImageInfo { media_type }))
+}
+
+fn parse_png_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+    if bytes.len() < 24 || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    Some((
+        "image/png",
+        u32::from_be_bytes(bytes[16..20].try_into().ok()?),
+        u32::from_be_bytes(bytes[20..24].try_into().ok()?),
+    ))
+}
+
+fn parse_jpeg_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+    let mut cursor = 2_usize;
+    while cursor + 1 < bytes.len() {
+        while cursor < bytes.len() && bytes[cursor] != 0xff {
+            cursor = cursor.saturating_add(1);
+        }
+        while cursor < bytes.len() && bytes[cursor] == 0xff {
+            cursor = cursor.saturating_add(1);
+        }
+        let marker = *bytes.get(cursor)?;
+        cursor = cursor.saturating_add(1);
+        if matches!(marker, 0x01 | 0xd0..=0xd9) {
+            continue;
+        }
+        let length = usize::from(u16::from_be_bytes([
+            *bytes.get(cursor)?,
+            *bytes.get(cursor.saturating_add(1))?,
+        ]));
+        if length < 2 || cursor.saturating_add(length) > bytes.len() {
+            return None;
+        }
+        if matches!(
+            marker,
+            0xc0 | 0xc1 | 0xc2 | 0xc3 | 0xc5 | 0xc6 | 0xc7 | 0xc9 | 0xca | 0xcb | 0xcd
+                | 0xce | 0xcf
+        ) {
+            let height = u32::from(u16::from_be_bytes([
+                *bytes.get(cursor.saturating_add(3))?,
+                *bytes.get(cursor.saturating_add(4))?,
+            ]));
+            let width = u32::from(u16::from_be_bytes([
+                *bytes.get(cursor.saturating_add(5))?,
+                *bytes.get(cursor.saturating_add(6))?,
+            ]));
+            return Some(("image/jpeg", width, height));
+        }
+        cursor = cursor.saturating_add(length);
+    }
+    None
+}
+
+fn parse_webp_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+    let chunk = bytes.get(12..16)?;
+    let payload = bytes.get(20..)?;
+    match chunk {
+        b"VP8X" if payload.len() >= 10 => {
+            let width = 1 + u32::from(payload[4])
+                + (u32::from(payload[5]) << 8)
+                + (u32::from(payload[6]) << 16);
+            let height = 1 + u32::from(payload[7])
+                + (u32::from(payload[8]) << 8)
+                + (u32::from(payload[9]) << 16);
+            Some(("image/webp", width, height))
+        }
+        b"VP8 " if payload.len() >= 10 && payload[3..6] == [0x9d, 0x01, 0x2a] => {
+            let width = u32::from(u16::from_le_bytes([payload[6], payload[7]]) & 0x3fff);
+            let height = u32::from(u16::from_le_bytes([payload[8], payload[9]]) & 0x3fff);
+            Some(("image/webp", width, height))
+        }
+        b"VP8L" if payload.len() >= 5 && payload[0] == 0x2f => {
+            let bits = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+            let width = (bits & 0x3fff) + 1;
+            let height = ((bits >> 14) & 0x3fff) + 1;
+            Some(("image/webp", width, height))
+        }
+        _ => None,
+    }
 }
 
 fn image_block(image: &ImageAttachment) -> Result<MessageBlock, RuntimeError> {
@@ -588,7 +819,14 @@ mod tests {
         assert!(is_supported_provider("minimax"));
         assert!(is_supported_provider("anthropic"));
         assert!(is_supported_provider("anthropic-compatible"));
+        assert!(is_supported_provider("openai"));
+        assert!(is_supported_provider("openai-oauth"));
+        assert!(is_supported_provider("openai-compatible"));
+        assert!(is_supported_provider("omniroute"));
+        assert!(is_supported_provider("local"));
         assert!(!is_supported_provider("other"));
+        assert_eq!(protocol_for_provider("anthropic"), "anthropic");
+        assert_eq!(protocol_for_provider("openai"), "openai");
         assert_eq!(credential_environment("minimax"), Some("MINIMAX_API_KEY"));
         assert_eq!(
             credential_environment("anthropic"),
@@ -598,6 +836,14 @@ mod tests {
             credential_environment("anthropic-compatible"),
             Some("MEDUSA_API_KEY")
         );
+        assert_eq!(credential_environment("openai"), Some("OPENAI_API_KEY"));
+        assert_eq!(
+            credential_environment("openai-compatible"),
+            Some("MEDUSA_API_KEY")
+        );
+        assert_eq!(credential_environment("openai-oauth"), None);
+        assert_eq!(credential_environment("omniroute"), None);
+        assert_eq!(credential_environment("local"), None);
         assert_eq!(credential_environment("other"), None);
         assert!(!should_auto_compact(399_999, 1_000_000, 40));
         assert!(should_auto_compact(400_000, 1_000_000, 40));
@@ -617,6 +863,11 @@ mod tests {
         );
         assert_eq!(summarize("short line"), "short line");
         assert!(summarize(&"x".repeat(150)).ends_with("..."));
+        assert!(tool_output_details("  \n").is_empty());
+        assert_eq!(
+            tool_output_details("stdout line\nstderr: command failed\n"),
+            vec!["stdout line", "stderr: command failed"]
+        );
     }
 
     #[test]
@@ -640,5 +891,27 @@ mod tests {
             objective_for(&attachments),
             "Use the 1 attached item(s) as context and complete the coding task."
         );
+    }
+
+    #[test]
+    fn encoded_jpeg_dimensions_are_detected() {
+        let bytes = vec![
+            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01,
+            0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+        ];
+        assert_eq!(
+            parse_jpeg_dimensions(&bytes),
+            Some(("image/jpeg", 3, 2))
+        );
+    }
+
+    #[test]
+    fn encoded_image_dimensions_are_bounded() {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        bytes.extend_from_slice(&100_000_u32.to_be_bytes());
+        bytes.extend_from_slice(&100_000_u32.to_be_bytes());
+        let error = encoded_image_info(&bytes, Path::new("large.png"))
+            .expect_err("reject large image");
+        assert!(matches!(error, RuntimeError::ImagePixelLimit { .. }));
     }
 }

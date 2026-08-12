@@ -1,23 +1,94 @@
-//! Persistent single-agent orchestration and built-in tools.
+//! Persistent single-agent execution, role-bound team contexts, and built-in tools.
 
+pub mod analysis_host;
+mod approval;
+pub mod branch_summary;
+pub mod compaction_v2;
 mod engine;
 mod engine_support;
 mod evidence;
+mod identity_guard;
 pub mod output_envelope;
 mod policy;
 mod session;
 pub mod session_browser;
+pub mod team;
+mod tool_dag;
 pub mod tools;
+mod transaction;
 mod verification;
+mod verification_authority;
+pub mod verification_dag;
+mod worker_execution;
+pub mod world_model_session;
 
+pub use approval::{
+    ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome,
+    RollbackReceipt,
+};
+pub use branch_summary::{
+    BranchAnchor, BranchSummaryRecord, DeterministicBranchMetadata, capture_restore_abandonment,
+    common_ancestor,
+};
 pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
 pub use engine_support::{compact_session, update_session_objective};
+pub use identity_guard::{compatibility_context, validate_provider_text};
 pub use policy::validate_shell_command;
+
+/// Runs a host-owned analysis helper inside the same fail-closed command containment used by
+/// Medusa tools. The caller supplies the containment root; analysis callers use only their
+/// session-scoped scratch directory, never the authoritative repository.
+pub fn run_contained_analysis_command(
+    root: &std::path::Path,
+    program: &str,
+    args: &[String],
+    cancellation: &std::sync::atomic::AtomicBool,
+) -> medusa_core::MedusaResult<std::process::Output> {
+    policy::validate_shell_command_hard_denials(program, args)?;
+    policy::sandboxed_command_cancellable(root, program, args, cancellation)
+}
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
-    AgentSession, bootstrap,
+    AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus, SessionEscalation,
+    SessionUsage, TurnUsage, UsageProvenance, bootstrap, export_manual_escalation,
+    import_manual_advice, launch_browser_assisted_escalation, load_escalation_journal,
+    persist_escalation_journal, render_chatgpt_prompt, session_usage,
 };
-pub use verification::{VerificationResult, targeted_verification};
+pub use team::{
+    AgentExecutionPolicy, TeamMember, TeamMemberContext, TeamMemberLifecycle, TeamRole, TeamRuntime,
+};
+pub use transaction::{
+    FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
+};
+pub use verification::VerificationResult;
+pub use verification_authority::{
+    AuthoritativeVerificationResult, authoritative_verification_for_components,
+    authoritative_verification_for_components_at, prepare_components_for_verification,
+};
+pub use verification_dag::{
+    VerificationAuthority, VerificationDag, VerificationInputKey, VerificationNode,
+    VerificationNodeState, VerificationReceipt,
+};
+pub use worker_execution::{
+    LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
+    WorkerProgressSummary,
+};
+
+/// Appends one canonical session event and commits the resulting snapshot before returning.
+pub fn record_session_event(
+    session: &mut AgentSession,
+    actor: medusa_protocol::Actor,
+    payload: medusa_protocol::EventPayload,
+) -> medusa_core::MedusaResult<()> {
+    evidence::append_event(session, actor, payload)?;
+    session.updated_at = time::OffsetDateTime::now_utc();
+    session::persist(session)
+}
+
+/// Persists a complete session through the crash-durable journal and compatibility snapshot.
+pub fn persist_session(session: &AgentSession) -> medusa_core::MedusaResult<()> {
+    session::persist(session)
+}
 
 #[cfg(test)]
 mod tests {
@@ -38,7 +109,9 @@ mod tests {
     use medusa_config::{Config, Mode};
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
     use medusa_protocol::EventPayload;
-    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage};
+    use medusa_provider::{
+        Message, ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Role, Usage,
+    };
     use serde_json::json;
 
     use super::*;
@@ -94,6 +167,25 @@ mod tests {
         }
     }
 
+    struct CapturingMessagesProvider {
+        messages: Arc<Mutex<Vec<Vec<Message>>>>,
+    }
+
+    impl ModelProvider for CapturingMessagesProvider {
+        fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+            self.messages
+                .lock()
+                .expect("captured messages lock")
+                .push(request.messages.clone());
+            Ok(response(
+                vec![ResponseBlock::Text {
+                    text: "Review accepted.".to_owned(),
+                }],
+                "end_turn",
+            ))
+        }
+    }
+
     fn response(blocks: Vec<ResponseBlock>, stop_reason: &str) -> ModelResponse {
         ModelResponse {
             response_id: Some("fixture".into()),
@@ -107,6 +199,13 @@ mod tests {
     fn fixture_bug_fix_survives_restart_with_exact_evidence() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("value.txt"), "41\n").expect("buggy fixture");
+        #[cfg(windows)]
+        fs::write(
+            directory.path().join("verify.ps1"),
+            "$ErrorActionPreference='Stop'\nif ((Get-Content -Raw value.txt).Trim() -ne '42') { exit 1 }\nWrite-Output 'verified-value-42'\n",
+        )
+        .expect("verification script");
+        #[cfg(not(windows))]
         fs::write(
             directory.path().join("verify.sh"),
             "#!/bin/sh\nset -eu\ntest \"$(cat value.txt)\" = \"42\"\necho verified-value-42\n",
@@ -216,6 +315,46 @@ mod tests {
     }
 
     #[test]
+    fn ephemeral_turn_instruction_is_latest_user_message_and_never_persisted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let engine = AgentEngine::new(
+            CapturingMessagesProvider {
+                messages: Arc::clone(&messages),
+            },
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "write the requested file".to_owned())
+            .expect("session");
+
+        assert_eq!(
+            engine
+                .step_with_observer_and_context_and_turn_instruction(
+                    &mut session,
+                    Some("Review the prepared patch."),
+                    Some("Current turn is review-only; do not execute the original request."),
+                    |_| {},
+                )
+                .expect("ephemeral turn instruction step"),
+            StepOutcome::TurnComplete
+        );
+
+        let captured = messages.lock().expect("captured messages");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].len(), 2);
+        assert_eq!(captured[0][1].role, Role::User);
+        let request_messages =
+            serde_json::to_string(&captured[0]).expect("serialize request messages");
+        assert!(request_messages.contains("Current turn is review-only"));
+
+        let durable_messages =
+            serde_json::to_string(&session.messages).expect("serialize durable messages");
+        assert!(!durable_messages.contains("Current turn is review-only"));
+        assert_eq!(session.messages.len(), 2);
+    }
+
+    #[test]
     fn conversational_end_turn_returns_to_the_composer_without_verification_or_completion() {
         let directory = tempfile::tempdir().expect("tempdir");
         let engine = AgentEngine::new(
@@ -267,12 +406,12 @@ mod tests {
         compact_session(&mut session, Some("keep the API decision")).expect("compact session");
 
         assert_eq!(session.objective, "new durable goal");
-        assert_eq!(session.messages.len(), 1);
-        assert!(matches!(
-            &session.messages[0].content[0],
-            medusa_provider::MessageBlock::Text { text }
-                if text.contains("keep the API decision") && text.contains("follow-up context")
-        ));
+        assert!(session.messages.len() >= 2);
+        let durable_messages =
+            serde_json::to_string(&session.messages).expect("serialize messages");
+        assert!(durable_messages.contains("[medusa-compaction-v2]"));
+        assert!(durable_messages.contains("keep the API decision"));
+        assert!(durable_messages.contains("follow-up context"));
         assert!(
             session.events.iter().any(|event| {
                 matches!(&event.payload, EventPayload::ConversationCompacted { .. })
@@ -311,6 +450,42 @@ mod tests {
             matches!(
                 update,
                 AgentUpdate::Event(EventPayload::ToolCallDenied { tool, .. }) if tool == "fs_write"
+            )
+        }));
+    }
+
+    #[test]
+    fn reviewer_execution_policy_denies_repository_mutation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "write-1".into(),
+                    name: "fs_write".into(),
+                    input: json!({"path": "blocked.txt", "content": "nope"}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        )
+        .with_execution_policy(AgentExecutionPolicy::for_team_role(TeamRole::Reviewer));
+        let mut session = engine
+            .create_session(directory.path(), "review the proposed change".to_owned())
+            .expect("session");
+        let mut updates = Vec::new();
+
+        assert_eq!(
+            engine
+                .step_with_observer(&mut session, |update| updates.push(update.clone()))
+                .expect("reviewer step"),
+            StepOutcome::Continue
+        );
+        assert!(!directory.path().join("blocked.txt").exists());
+        assert!(updates.iter().any(|update| {
+            matches!(
+                update,
+                AgentUpdate::Event(EventPayload::ToolCallDenied { tool, .. })
+                    if tool == "fs_write"
             )
         }));
     }
@@ -554,7 +729,8 @@ mod tests {
         assert!(validate_shell_command("cargo", &["build".into()]).is_ok());
         assert!(validate_shell_command("cargo", &["fmt".into(), "--check".into()]).is_ok());
         assert!(validate_shell_command("cargo", &["test".into()]).is_ok());
-        assert!(validate_shell_command("cargo", &["run".into()]).is_err());
+        assert!(validate_shell_command("cargo", &["run".into()]).is_ok());
+        assert!(validate_shell_command("rm", &["-rf".into(), "/".into()]).is_err());
     }
 
     #[test]
@@ -617,6 +793,40 @@ mod tests {
     }
 
     #[test]
+    fn semantic_capability_tool_reports_exact_language_levels() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let output = execute_tool(directory.path(), "semantic_capabilities", &json!({}))
+            .expect("semantic capability report");
+        let report: serde_json::Value = serde_json::from_str(&output).expect("JSON report");
+        let profiles = report["profiles"].as_array().expect("profiles");
+        assert_eq!(profiles.len(), 3);
+        let typescript = profiles
+            .iter()
+            .find(|profile| profile["language"] == "typescript_javascript")
+            .expect("typescript profile");
+        let claims = typescript["claims"].as_array().expect("claims");
+        for level in [
+            "text_only",
+            "definitions",
+            "references",
+            "diagnostics",
+            "workspace_symbols",
+            "guarded_refactoring",
+        ] {
+            let claim = claims
+                .iter()
+                .find(|claim| claim["level"] == level)
+                .expect("production TypeScript claim");
+            assert_eq!(claim["status"], "production");
+        }
+        let parsed_symbols = claims
+            .iter()
+            .find(|claim| claim["level"] == "parsed_symbols")
+            .expect("unavailable TypeScript parsed-symbol claim");
+        assert_eq!(parsed_symbols["status"], "unavailable");
+    }
+
+    #[test]
     fn patch_apply_tool_uses_guarded_transaction() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("value.txt"), "41\n").expect("fixture");
@@ -665,7 +875,7 @@ mod tests {
         assert!(write.is_err());
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn shell_tool_fails_closed_without_a_platform_sandbox() {
         let directory = tempfile::tempdir().expect("temporary repository");
@@ -705,6 +915,33 @@ mod tests {
         .expect_err("approval must retain the portable executable allowlist");
         assert_eq!(error.code, ErrorCode::PolicyDenied);
         assert!(error.to_string().contains("portable shell command"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_tool_uses_windows_containment_or_fails_closed_when_unavailable() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        match execute_tool(
+            directory.path(),
+            "shell_run",
+            &json!({"program": "cargo", "args": ["--version"]}),
+        ) {
+            Ok(output) => assert!(output.contains("cargo")),
+            Err(error) => {
+                assert_eq!(error.code, medusa_core::ErrorCode::SandboxUnavailable);
+                assert_eq!(
+                    error.context.get("sandbox_backend"),
+                    Some(&serde_json::Value::String("windows_base_container".into()))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn configured_parallel_worker_limit_is_bounded() {
+        assert_eq!(crate::engine::parallel_tool_limit(1), 1);
+        assert_eq!(crate::engine::parallel_tool_limit(4), 4);
+        assert_eq!(crate::engine::parallel_tool_limit(64), 8);
     }
 
     #[test]

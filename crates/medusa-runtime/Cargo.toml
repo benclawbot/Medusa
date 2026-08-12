@@ -1,22 +1,59 @@
 [package]
 name = "medusa-runtime"
-description = "Frontend-neutral interactive session runtime for Medusa"
+description = "Frontend-neutral interactive session runtime with durable execution lifecycle ownership"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+path = "src/lib_wrapper.rs"
+
 [dependencies]
+medusa-evidence.workspace = true
 base64 = "0.22"
+hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
+medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-config = { path = "../medusa-config" }
+medusa-context = { path = "../medusa-context" }
+medusa-continuation = { path = "../medusa-continuation" }
+medusa-core = { path = "../medusa-core" }
+medusa-execution-checkpoint = { path = "../medusa-execution-checkpoint" }
+medusa-execution-replay = { path = "../medusa-execution-replay" }
+medusa-improvement = { path = "../medusa-improvement" }
+medusa-intelligence = { path = "../medusa-intelligence" }
+medusa-markdown-memory = { path = "../medusa-markdown-memory" }
+medusa-mcp-cache = { path = "../medusa-mcp-cache" }
+medusa-memory = { path = "../medusa-memory" }
+medusa-memory-consolidation = { path = "../medusa-memory-consolidation" }
+medusa-memory-writeback = { path = "../medusa-memory-writeback" }
+medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
+medusa-openai-realtime = { path = "../medusa-openai-realtime" }
 medusa-protocol = { path = "../medusa-protocol" }
-medusa-provider = { path = "../medusa-provider" }
+medusa-provider = { package = "medusa-external-provider", path = "../medusa-external-provider" }
+medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
+medusa-review-model = { path = "../medusa-review-model" }
+medusa-session-continuity = { path = "../medusa-session-continuity" }
+medusa-time-travel = { path = "../medusa-time-travel" }
+medusa-tool-control = { path = "../medusa-tool-control" }
+medusa-tool-policy = { path = "../medusa-tool-policy" }
+medusa-turn-assembly = { path = "../medusa-turn-assembly" }
+medusa-wakeup = { path = "../medusa-wakeup" }
+medusa-workers = { path = "../medusa-workers" }
 png = "0.17"
+# Trusted runtime-only HTTP client for bounded Realtime client-secret minting.
+reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tungstenite.workspace = true
 
 [dev-dependencies]
+medusa-testkit.workspace = true
 tempfile.workspace = true
 
 [lints]

@@ -8,9 +8,12 @@ repository.workspace = true
 
 [dependencies]
 medusa-core.workspace = true
+medusa-context.workspace = true
+medusa-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+thiserror.workspace = true
 time.workspace = true
 ulid.workspace = true
 

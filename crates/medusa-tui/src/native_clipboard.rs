@@ -63,6 +63,21 @@ impl ClipboardService for NativeClipboard {
             },
         }
     }
+
+    fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
+        if text.as_bytes().contains(&0) {
+            return Err(ClipboardError::NulByte);
+        }
+        if text.len() > crate::clipboard::MAX_CLIPBOARD_TEXT_BYTES {
+            return Err(ClipboardError::TextByteLimit {
+                bytes: text.len(),
+                limit: crate::clipboard::MAX_CLIPBOARD_TEXT_BYTES,
+            });
+        }
+        self.lock()?
+            .set_text(text.to_owned())
+            .map_err(|error| ClipboardError::Unavailable(format!("failed to copy text: {error}")))
+    }
 }
 
 #[cfg(test)]

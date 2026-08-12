@@ -1,0 +1,66 @@
+name: Tool DAG Certification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-agent/**'
+      - 'crates/medusa-process-containment/**'
+      - 'crates/medusa-protocol/**'
+      - 'benchmarks/performance/baselines/tool-dag-v1.json'
+      - 'scripts/performance/certify_tool_dag.py'
+      - '.github/workflows/tool-dag-certification.yml'
+  schedule:
+    - cron: '41 3 * * 2'
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: Linux
+          - os: macos-latest
+            platform: macOS
+          - os: windows-latest
+            platform: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Execute compound-tool and DAG certification
+        shell: bash
+        run: >-
+          python scripts/performance/certify_tool_dag.py
+          --platform '${{ matrix.platform }}'
+          --output tool-dag-certification.json
+      - name: Validate evidence record
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('tool-dag-certification.json').read_text(encoding='utf-8'))
+          assert report['verified_success'] is True
+          assert report['verification_coverage'] == 1.0
+          assert report['tool_call_reduction_ratio'] >= 0.5
+          assert report['redundant_tool_call_ratio'] <= 0.03
+          assert report['timing_telemetry_contract_verified'] is True
+          assert report['cross_platform_resource_and_cancellation_verified'] is True
+          assert report['dependency_dag_verified'] is True
+          assert report['compound_tools_verified'] is True
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tool-dag-certification-${{ matrix.platform }}
+          path: tool-dag-certification.json
+          if-no-files-found: error
+          retention-days: 30

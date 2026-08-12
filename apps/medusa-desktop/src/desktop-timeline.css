@@ -1,0 +1,237 @@
+.conversation-timeline {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 780px);
+  margin: 4px auto 14px;
+  border: 1px solid rgba(90, 56, 222, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 48px rgba(16, 24, 40, 0.08);
+  padding: 14px;
+  backdrop-filter: blur(18px);
+}
+
+.timeline-header,
+.timeline-header > div,
+.timeline-activity-card > button {
+  display: flex;
+  align-items: center;
+}
+
+.timeline-header {
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 28px;
+}
+
+.timeline-header > div {
+  gap: 9px;
+}
+
+.timeline-header strong {
+  font-size: 0.88rem;
+}
+
+.timeline-header small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.timeline-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 0 0 5px var(--green-soft);
+}
+
+.timeline-live-dot.busy {
+  background: var(--purple);
+  box-shadow: 0 0 0 5px var(--purple-soft);
+  animation: medusa-timeline-pulse 1.3s ease-in-out infinite;
+}
+
+.timeline-plan {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  padding: 8px 10px;
+}
+
+.timeline-plan-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  min-height: 34px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.timeline-plan-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 25px;
+  bottom: -9px;
+  width: 1px;
+  background: var(--line-strong);
+}
+
+.timeline-plan-step.completed,
+.timeline-plan-step.inProgress {
+  color: var(--text);
+}
+
+.timeline-plan-step.completed .timeline-node {
+  color: var(--green);
+}
+
+.timeline-plan-step.inProgress .timeline-node {
+  color: var(--purple);
+}
+
+.timeline-plan-step.failed .timeline-node {
+  color: var(--danger);
+}
+
+.timeline-node {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
+.timeline-activity {
+  display: grid;
+  gap: 7px;
+}
+
+.timeline-activity-card {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.timeline-activity-card > button {
+  width: 100%;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  padding: 10px 11px;
+  color: var(--text);
+  text-align: left;
+}
+
+.timeline-activity-card > button:hover {
+  background: var(--surface-soft);
+}
+
+.timeline-activity-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border-radius: 7px;
+  color: var(--purple);
+  background: var(--purple-soft);
+}
+
+.timeline-activity-card.done .timeline-activity-icon {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.timeline-activity-card.error .timeline-activity-icon {
+  color: var(--danger);
+  background: #fff1f2;
+}
+
+.timeline-activity-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.timeline-activity-card svg:last-child {
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.timeline-activity-card svg:last-child.expanded {
+  transform: rotate(180deg);
+}
+
+.timeline-activity-details {
+  display: grid;
+  gap: 5px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+  padding: 9px 12px 10px 45px;
+}
+
+.timeline-activity-details small {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.73rem;
+}
+
+.timeline-progress {
+  overflow: hidden;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--purple-soft);
+}
+
+.timeline-progress span {
+  display: block;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--purple);
+  animation: medusa-timeline-progress 1.45s ease-in-out infinite;
+}
+
+/* The inspector remains a compact session summary; detailed execution now lives in the transcript. */
+.inspector .inspector-section:has(.mini-plan),
+.inspector .inspector-section:has(.activity-list) {
+  display: none;
+}
+
+@keyframes medusa-timeline-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.88); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes medusa-timeline-progress {
+  0% { transform: translateX(-110%); }
+  55% { transform: translateX(110%); }
+  100% { transform: translateX(270%); }
+}
+
+@media (max-width: 980px) {
+  .conversation-timeline {
+    width: 100%;
+    border-radius: 13px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-live-dot.busy,
+  .timeline-progress span {
+    animation: none;
+  }
+}

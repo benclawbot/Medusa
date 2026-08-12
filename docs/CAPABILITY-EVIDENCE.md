@@ -1,69 +1,91 @@
 # Medusa Capability Evidence
 
-Status snapshot: **July 19, 2026**, based on `main` through merged PR #67. This document is an evidence ledger, not a promise that every long-term product goal is complete.
+This document is the durable evidence ledger for capabilities represented on `main`. The machine-readable legacy-availability authority is [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json), validated by `scripts/check-capability-evidence.py`.
+
+Architecture-v2 certification is separate and is governed by [`architecture/INDEX.md`](architecture/INDEX.md) and [`architecture/baseline.json`](architecture/baseline.json). A legacy `production` value means a supported current entrypoint exists; it does **not** certify the capability against the v2 authority, lifecycle, dispatcher, review, verification, provider, trust-boundary, or deletion requirements.
 
 ## Evidence rules
 
-A capability is listed as **shipped** only when its production code is on `main` and covered by the repository's normal validation. Open pull requests, temporary writer workflows, branch-only diagnostics, and design intentions do not count as shipped.
+A legacy capability is represented by exactly one availability maturity:
 
-When a production boundary moves, its behavior tests must move with it or be replaced at the correct layer; orphaned test files and coverage percentages alone are not completion evidence.
+- `production`: available through supported current entrypoints, enabled by default where applicable, and backed by the recorded owner, tests, platforms, observability, documentation, and canonical gates.
+- `preview`: usable only through an explicit opt-in; compatibility and support may still change.
+- `experimental`: research or early implementation that requires a deliberate feature or configuration opt-in.
+- `design-only`: architecture or scaffolding with no production entrypoint or opt-in. Production capabilities may not depend on it.
 
-The authoritative order is:
+Architecture v2 adds a separate certification status: `certified-production`, `legacy-uncertified`, `quarantined`, or `design-only`. Production code and executable tests remain the highest authority for current behavior. Every capability-changing pull request must update the applicable legacy claim, v2 inventory, index, tests, and deletion target or explain why no record changes.
 
-1. production code and tests on `main`;
-2. required GitHub Actions gates;
-3. merged pull-request history;
-4. this evidence summary;
-5. historical phase plans.
+## Capability maturity matrix
 
-## Shipped on `main`
+| Claim | Maturity | Owner | Production entrypoint | Platforms | External dependencies |
+|---|---|---|---|---|---|
+| `shared-runtime` | `production` | runtime maintainers | `medusa`, desktop app | Linux, macOS, Windows | none |
+| `durable-sessions-memory` | `production` | agent runtime maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
+| `github-service` | `production` | integration maintainers | guarded GitHub workflows, `medusa-capabilities create-repository`, `medusa-github-operation` | Linux, macOS, Windows | GitHub API, GitHub CLI, Git |
+| `provider-context-resilience` | `production` | provider maintainers | `medusa`, `medusa run`, `medusa quickstart` | Linux, macOS, Windows | configured model provider |
+| `identity-approval-transactions` | `production` | safety maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
+| `daemon` | `production` | daemon maintainers | daemon and desktop adapter | Linux, macOS, Windows | none |
+| `release-trust` | `production` | release maintainers | publish-release workflow | Linux, macOS, Windows | GitHub artifact attestations |
+| `self-update` | `production` | CLI maintainers | `medusa update` | Linux, macOS, Windows | GitHub repository access |
+| `multi-agent-research` | `production` | agent runtime maintainers | coordinated `run_prompt` preflight and worktree implementation | Linux, macOS, Windows | configured model provider, Git |
+| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `typescript_semantic`, `symbol_rename` | Linux, macOS, Windows | `typescript-language-server` for TypeScript/JavaScript semantic operations |
 
-| Capability | Production evidence | Gate evidence |
-|---|---|---|
-| CLI and interactive entry point | `crates/medusa-cli`, `crates/medusa-tui` | Workspace build, Clippy, tests, docs, and package smoke jobs |
-| Full conversation transcript and distinct user/assistant presentation | `crates/medusa-tui` | TUI tests in the workspace suite |
-| Markdown rendering and mid-turn follow-up queueing | `crates/medusa-runtime`, `crates/medusa-tui`; introduced in PR #34 and moved behind the shared runtime in PR #39 | Workspace tests and source-size guardrail |
-| Clipboard text and screenshot prompts | Frontend-neutral prompt types in `crates/medusa-runtime`; OS clipboard access in `crates/medusa-tui` | Runtime/TUI tests and cross-platform package smoke |
-| Shared frontend-neutral interactive runtime | `crates/medusa-runtime`; extracted in PR #39, with `crates/medusa-tui` reduced to a terminal adapter | Runtime behavior tests, TUI mapping tests, workspace Clippy/tests, coverage, and package smoke |
-| Zeus-derived desktop entry point | `apps/medusa-desktop`; React/Tauri shell connected directly to `medusa-runtime` | Desktop frontend tests/build plus cross-platform Rust adapter Clippy/tests |
-| Validated desktop bundles | Tauri DEB/AppImage, app/DMG, and NSIS targets normalized and validated by PR #63 | Three-platform `Desktop` bundle matrix, version synchronization, minimum-size/path checks, and SHA-256 manifests |
-| Agent loop, planning, cancellation, tools, and verification | `crates/medusa-agent`, `crates/medusa-protocol`, `crates/medusa-provider` | Workspace tests plus named adversarial regressions |
-| Repository parsing, patching, and guarded transactions | `crates/medusa-intelligence`, `crates/medusa-agent` | Patch-transaction regression and workspace tests |
-| Durable Markdown memory and lifecycle controls | `crates/medusa-memory` | Workspace tests and migration/rollback checks |
-| Parallel workers and deterministic merge handling | `crates/medusa-workers` | Parallel merge and conflict-abort regressions |
-| Browser verification sidecar | `crates/medusa-browser-client`, `crates/medusa-browserd` | Workspace tests and package validation |
-| Skills, hooks, and MCP isolation | `crates/medusa-extensions` | Malicious-MCP regression and workspace tests |
-| Desktop Commander MCP integration | `crates/medusa-extensions`; merged in PR #37 with lockfile follow-up in PR #38 | MCP tests, dependency policy, and canonical CI |
-| Cross-platform persistent daemon | `crates/medusa-daemon`; transport/recovery in PR #47, frontend lifecycle supervision in PR #54, and process-tree cancellation in PR #59 | `Daemon` and `Desktop` matrices on Ubuntu, macOS, and Windows; reconnect, startup-race, load, queue, cancellation, and shutdown tests |
-| Bounded daemon concurrency | Four fixed workers, 32 queued jobs, `daemon_busy`, finite IPC timeouts, 64 KiB request cap | 64-client burst, exact one-worker/one-queue backpressure, graceful drain evidence on all three platforms |
-| Race-safe daemon cancellation and forced shutdown | Additive `Cancel` and `ShutdownNow` requests, per-job process controls, Unix process groups, Windows task-tree termination, durable `interrupted` records | Queued work never executes; descendants terminate within a bound; unrelated processes remain alive; immediate shutdown is bounded on all three platforms |
-| Operational hardening, migrations, archives, redaction, and recovery | `crates/medusa-hardening` | Release Gates: coverage, adversarial regressions, fuzz, chaos, security, and package smoke |
-| Production panic and workflow hygiene | Panic-free production Clippy target and read-only workflow guardrails from PRs #44–#45 | CI panic audit, source-size ceiling, and workflow-hygiene checks |
-| Dependency hygiene | Direct dependency pruning and permanent graph metrics from PR #52 | Base/current dependency policy, cargo-deny, and cargo-audit |
-| Deterministic release evidence | `scripts/release-evidence.py` generates synchronized-version checks, a CycloneDX 1.6 SBOM, complete asset manifests, and `SHA256SUMS`; merged in PR #67 | Fixture adversarial tests, real Cargo/npm lockfile SBOM generation, YAML parsing, documentation gates, and three-platform desktop packaging |
-| Attested draft release publication | `.github/workflows/publish-release.yml` accepts only a pushed version tag bound to the workflow event SHA, unchanged remote tag target, and `main` ancestry; it builds all platform assets, uses `actions/attest@v4`, and creates a draft release | Least-privilege workflow guard, exact-head CI/Daemon/Desktop/guardrails, full Release Gates, and explicit refusal to auto-publish or overwrite an existing release |
+The manifest records current production paths, behavioral test paths, canonical gates, observability references, public documentation, promotion evidence, default activation, explicit opt-ins, and capability dependencies. The v2 baseline additionally records dispositions, exact blockers, source-of-truth ownership, trust boundaries, migration consumers, and legacy deletion targets.
+
+## Architecture v2 certification baseline
+
+| Capability | Legacy availability | V2 certification | Blocking evidence |
+|---|---|---|---|
+| Shared runtime | production | legacy-uncertified | lifecycle and mutable authority remain implicit across runtime and projections |
+| Durable sessions and memory | production | legacy-uncertified | multiple projections require one declared authority per concern |
+| GitHub service | production | legacy-uncertified | migrate OAuth/backend operations behind the final versioned integration boundary |
+| Provider/context resilience | production | quarantined | streaming, cancellation, fallback-health, and readiness claims do not fully match wire behavior |
+| Identity/approval/transactions | production | legacy-uncertified | mutation authority and receipts remain split |
+| Daemon | production | legacy-uncertified | daemon and remote contracts are not yet versioned |
+| Release trust | production | legacy-uncertified | updater does not consume the verified prebuilt channel until #655 |
+| Self-update | production | quarantined | the default path compiles from source and takes minutes |
+| Multi-agent research | production | quarantined | integration precedes independent parent review; changed paths are not explicit verification input; task/reviewer state is partly decorative |
+| Browser tools | advertised outside this legacy claim set | quarantined | production `execute_tool` dispatch is absent |
+| Plugins/extensions | structural | design-only | no certified manifest, permissions, dispatcher, lifecycle, or durable result contract |
+| Telegram remote frontend | partial | quarantined | shared-path and operator conformance are incomplete |
+| Unsafe/FFI boundary | partial | legacy-uncertified | #653 owns the explicit unsafe allowlist and audit boundary |
+| TypeScript/JavaScript code intelligence | production | certified-production | none; final issue-closing certification binds dispatcher, freshness, benchmarks, architecture, and cross-platform evidence |
+
+These downgrades prevent current gaps from being presented as architecture-v2 guarantees while preserving truthful evidence about existing entrypoints.
+
+## Production capability evidence
+
+- `shared-runtime`: `crates/medusa-runtime`, `crates/medusa-tui`, and `apps/medusa-desktop`; validated by CI, Desktop, and Refactor Guardrails. V2 will replace implicit lifecycle ownership with versioned command, event, evidence, and artifact contracts.
+- `durable-sessions-memory`: session persistence and `crates/medusa-memory`; validated by CI and Release Gates. UI and process-local projections are not independent authorities.
+- `github-service`: `crates/medusa-github`, the approval-gated repository-creation entrypoint, and the backend-neutral operation entrypoint. Repository management uses serialized, repository-confined typed operations, normalized receipts, bounded and redacted payloads, approval tiers, and durable audit evidence. Validated by CI and Release Gates.
+- `provider-context-resilience`: provider, runtime, and agent layers; validated by current CI and Release Gates for legacy availability. The production contract now also exposes validated role/phase route pins and a bounded provider-agnostic reasoning handoff, while opaque native continuation remains fail-closed until a reviewed adapter advertises exact wire semantics. V2 certification remains quarantined because configuration can claim streaming while requests force `stream=false`, cancellation can return while a blocking request thread remains active, and route health/readiness has competing projections.
+- `identity-approval-transactions`: identity guard, approval, transaction, and engine wiring with named safety tests; validated by CI, Release Gates, and Refactor Guardrails. V2 must centralize mutation authority and receipts.
+- `daemon`: `crates/medusa-daemon`; validated by Daemon, Desktop, and CI. Remote frontend certification remains separate.
+- `release-trust`: release evidence scripts and publish workflows; validated by CI, Desktop, Release Gates, and Refactor Guardrails. #655 connects immutable Ed25519-verified prebuilt artifacts to the updater without requiring paid platform signing.
+- `self-update`: current CLI entrypoint in `crates/medusa-cli` and `crates/medusa-update`; available on supported platforms, but quarantined for v2 because the default update path compiles from source.
+- `multi-agent-research`: `run_prompt` dispatches independent read-only planner and risk-reviewer `AgentEngine` sessions under durable leases. Explicit mutation objectives then run an implementer `AgentEngine` in an execution-specific isolated worktree, reject out-of-scope or overlapping changes, verify the worktree, prepare a commit, integrate it, and only then hand evidence to the read-only parent reviewer. The current manager can roll back integration conflicts, but the review-after-integration order and changed-path verification gap are known failures, not v2 guarantees. Validated as legacy availability by CI, Daemon, Desktop, and Refactor Guardrails.
+- `truthful-code-intelligence-levels`: `semantic_capabilities` reports exact Rust, Python, and TypeScript/JavaScript depth. `typescript_semantic` dispatches repository-scoped definitions, references, diagnostics, and workspace symbols. `symbol_rename` routes TypeScript/JavaScript through an exact workspace symbol, `prepareRename`, independent references, normalized workspace-edit validation, deterministic repository/workspace fingerprints, exact touched-file snapshots, and the guarded `PatchTransaction`. Monorepo, ignored/generated, repository-switching, stale-state, Unicode cross-file, large-workspace, benchmark, and cross-platform certification evidence are retained in the code-intelligence architecture record and final gate.
+
+## Planned and scaffolding behavior
+
+### Remaining design-only boundary
+
+The current coordinated path supports one mutating implementer contract after parallel read-only preflight. Autonomous nested delegation, dynamic multi-implementer task creation, consensus voting, commit barriers, and distributed transaction coordination remain design-only until a production caller, one durable state authority, recovery path, observability contract, permissions, and behavioral proof are merged.
+
+Browser and plugin structure must not be presented as active capability merely because crates, schemas, or tool definitions exist. Architecture v2 requires definition → readiness → permission → dispatch → side effect → evidence → event delivery → cleanup conformance.
 
 ## Canonical gates
 
-- **CI** runs the complete workspace quality suite, production panic audit, documentation, dependency policy, deterministic release-evidence tests, real-lockfile SBOM generation, and static parsing of the tag-only release workflow. Its concurrency group cancels superseded runs for the same ref.
-- **Daemon** runs daemon/TUI formatting, Clippy, reconnect/recovery, lifecycle, load, queue, cancellation, and shutdown tests on Ubuntu, macOS, and Windows.
-- **Desktop** validates the React frontend, shared Tauri/runtime/daemon adapter, release-evidence fixtures, and unsigned DEB/AppImage, app/DMG, and NSIS bundles on all three platforms. Changes to release packaging logic trigger this matrix.
-- **Refactor Guardrails** enforces the 800-line production source ceiling, baseline documents, and workflow hygiene. The sole release writer is explicitly registered and cannot push commits or publish a release.
-- **Release Gates** runs coverage, adversarial, fuzz, chaos, cross-platform packaging, documentation/schema, security, and live-provider jobs. Draft pull requests skip these expensive jobs; marking a pull request ready activates them.
-- **Publish Draft Release** is intentionally not a pull-request gate. It runs only after a version tag is pushed, revalidates tag immutability and `main` ancestry, and creates a draft with deterministic evidence and short-lived OIDC provenance.
+- **CI** validates formatting, Clippy, panic-free production targets, workspace tests, documentation, dependency policy, release-evidence fixtures, SBOM generation, and workflow parsing.
+- **Daemon** validates daemon lifecycle behavior on Linux, macOS, and Windows.
+- **Desktop** validates the React/Tauri frontend, shared runtime adapter, daemon integration, and unsigned cross-platform bundles.
+- **Refactor Guardrails** enforces workflow permissions, current architecture metadata, and legacy maturity contracts.
+- **Architecture v2 Baseline** validates the living index, workspace/component inventory, production paths, duplicate authorities, forbidden dependencies, PR governance, CODEOWNERS, real CLI entrypoints, and removable expected-failure fixtures on Linux, macOS, and Windows.
+- **Release Gates** validates coverage, adversarial regressions, fuzzing, chaos recovery, security, packages, documentation/schema consistency, and live-provider scenarios.
+- **Code Intelligence Certification** installs the production TypeScript language server and validates formatting, linting, correctness/freshness fixtures, production agent tests, benchmark compilation/execution, and architecture ownership on Linux, macOS, and Windows for the final issue-closing PR.
 
-Skipping expensive release jobs on drafts changes scheduling, not acceptance criteria: merge readiness still requires the full configured gate set.
+## Operational boundaries
 
-## Current architecture boundary
+Platform support is explicit per capability and does not imply identical containment internals. External dependencies are recorded so provider APIs, Git services, Node sidecars, or artifact-attestation infrastructure cannot be mistaken for repository-owned guarantees. README, configuration, compatibility, release documentation, and UI labels may describe only behavior at or below the recorded legacy availability and v2 certification.
 
-Issue #42 is completed: production panic paths, Windows daemon parity, bounded concurrency, workflow hygiene, dependency pruning, and shared frontend lifecycle ownership are all merged with evidence.
-
-Issue #56 is completed in PR #59: daemon jobs support race-safe per-job cancellation and bounded immediate process-tree shutdown while retaining graceful drain semantics and rollback-readable durable state.
-
-Issue #66 is completed in PR #67: release packaging now has a permanent tag-bound draft workflow, deterministic SBOM/checksum evidence, three-platform assets, and GitHub/Sigstore provenance without automatic publication.
-
-Remaining release trust work requires external platform credentials and custody policy: Windows Authenticode, macOS Developer ID signing/notarization, and signed Linux distribution channels. Provenance attestations establish build origin and integrity but do not replace operating-system trust. Product work should continue deepening desktop parity—session discovery, richer diffs, approvals, memory browsing, and accessibility—without reintroducing a separate agent engine, provider stack, or daemon contract. The synchronous request loop should change only if measured local load exceeds the current timeout and 64-client acceptance boundary.
-
-## Documentation policy
-
-`README.md` is the product overview and installation guide. This file is the status/evidence ledger. Historical phase documents may explain intent, but they must not claim completion that is contradicted by `main`, open pull requests, or required checks. A new completion snapshot should update this ledger instead of creating another competing `FINAL.md`.
+- The `truthful-code-intelligence-levels` claim is recorded in the maturity matrix above and in `CAPABILITY-CLAIMS.json`. Its typed profiles, registry permissions, production dispatch, deterministic freshness evidence, guarded mutation path, architecture record, and benchmark must remain synchronized.

@@ -12,7 +12,10 @@ use serde_json::Value;
 
 use crate::{
     redaction::redact,
-    support::{internal, invalid, wait_with_timeout},
+    support::{
+        internal, invalid, subprocess_containment_available, subprocess_containment_error,
+        wait_with_timeout,
+    },
 };
 
 /// Supported deterministic hook events.
@@ -78,6 +81,9 @@ pub fn run_command_hook(
     source_environment: &BTreeMap<String, String>,
 ) -> MedusaResult<HookDecision> {
     validate_hook(hook, repository)?;
+    if !subprocess_containment_available() {
+        return Err(subprocess_containment_error("command hook"));
+    }
     let mut command = Command::new(&hook.program);
     command
         .args(&hook.args)

@@ -18,7 +18,10 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 use crate::{DaemonClient, DaemonPaths, Request, Response};
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
+// A cold Windows process can take several seconds to rebuild daemon state and
+// publish its loopback endpoint. Keep lifecycle status accurate instead of
+// reporting a transient degraded state while that process is still starting.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -386,14 +389,7 @@ fn process_is_alive(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn process_is_alive(pid: u32) -> bool {
-    let filter = format!("PID eq {pid}");
-    Command::new("tasklist")
-        .args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
-        .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
-        })
+    medusa_process_containment::process_is_alive(pid)
 }
 
 #[cfg(test)]

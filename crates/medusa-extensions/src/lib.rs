@@ -1,9 +1,10 @@
-//! Audited skills, hooks, MCP subprocesses, and browser evidence contracts.
+//! Audited skills, managed plugins, hooks, MCP subprocesses, and browser evidence contracts.
 
 mod browser;
 mod desktop_commander;
 mod hooks;
 mod mcp;
+mod plugins;
 mod redaction;
 mod skills;
 mod support;
@@ -14,6 +15,10 @@ pub use desktop_commander::{
 };
 pub use hooks::{CommandHook, HookDecision, HookEvent, HookFailurePolicy, run_command_hook};
 pub use mcp::{McpRegistryEntry, McpRequest, McpResponse, call_mcp_stdio};
+pub use plugins::{
+    LoadedPlugin, ManagedPluginManifest, PLUGIN_MANIFEST_SCHEMA_VERSION, PluginAuthentication,
+    PluginIntegrity, PluginKind, PluginPermissions, load_managed_plugin, validate_manifest,
+};
 pub use skills::{LoadedSkill, SkillCompatibility, SkillManifest, SkillPermissions, load_skill};
 
 #[cfg(test)]
@@ -21,7 +26,7 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         fs,
-        path::PathBuf,
+        path::{Path, PathBuf},
         time::Duration,
     };
 
@@ -98,6 +103,52 @@ mod tests {
     }
 
     #[test]
+    fn mcp_sandbox_claim_fails_closed_before_process_spawn() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let escaped = directory.path().join("outside-mcp-sandbox.txt");
+        let (executable, args, environment) = side_effect_test_command(&escaped);
+        let entry = McpRegistryEntry {
+            id: "sandbox-escape-fixture".into(),
+            source: "fixture:sandbox-escape@1".into(),
+            digest: file_digest(&executable).expect("digest"),
+            transport: "stdio".into(),
+            trust: "untrusted".into(),
+            capabilities: BTreeSet::from(["tools.read".into()]),
+            environment_allowlist: BTreeSet::from(["MEDUSA_EXTENSION_ESCAPE_TARGET".into()]),
+            network_allowlist: BTreeSet::new(),
+            sandbox: "directory".into(),
+        };
+        let request = McpRequest {
+            jsonrpc: "2.0".into(),
+            id: 1,
+            method: "tools/call".into(),
+            params: serde_json::json!({}),
+        };
+        let sandbox = directory.path().join("sandbox");
+
+        let error = call_mcp_stdio(
+            &entry,
+            &executable,
+            &args,
+            &sandbox,
+            &request,
+            &environment,
+            Duration::from_secs(2),
+        )
+        .expect_err("uncontained MCP process must be blocked");
+        assert_eq!(error.code, medusa_core::ErrorCode::SandboxUnavailable);
+        assert_eq!(
+            error.context.get("required_boundary"),
+            Some(&serde_json::json!("os_process_containment"))
+        );
+        assert!(!escaped.exists(), "MCP process escaped before containment");
+        assert!(
+            !sandbox.exists(),
+            "MCP sandbox directory was created before containment"
+        );
+    }
+
+    #[test]
     fn blocking_hook_denies_action() {
         let directory = tempfile::tempdir().expect("tempdir");
         let hook = CommandHook {
@@ -123,5 +174,58 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn hook_path_scope_fails_closed_before_process_spawn() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let escaped = directory.path().join("outside-hook-scope.txt");
+        let (program, args, environment) = side_effect_test_command(&escaped);
+        let hook = CommandHook {
+            id: "path-scope-escape-fixture".into(),
+            event: HookEvent::BeforeTool,
+            program: program.display().to_string(),
+            args,
+            timeout_ms: 2_000,
+            declared_side_effects: Vec::new(),
+            path_scope: vec![PathBuf::from("src")],
+            environment_allowlist: vec!["MEDUSA_EXTENSION_ESCAPE_TARGET".into()],
+            failure_policy: HookFailurePolicy::Block,
+        };
+
+        let error = run_command_hook(
+            &hook,
+            directory.path(),
+            &serde_json::json!({}),
+            &environment,
+        )
+        .expect_err("uncontained hook process must be blocked");
+        assert_eq!(error.code, medusa_core::ErrorCode::SandboxUnavailable);
+        assert!(
+            !escaped.exists(),
+            "hook process escaped its declared path scope"
+        );
+    }
+
+    fn side_effect_test_command(target: &Path) -> (PathBuf, Vec<String>, BTreeMap<String, String>) {
+        let environment = BTreeMap::from([(
+            "MEDUSA_EXTENSION_ESCAPE_TARGET".into(),
+            target.display().to_string(),
+        )]);
+        let executable = std::env::current_exe().expect("current test executable");
+        let args = vec![
+            "--exact".into(),
+            "tests::subprocess_escape_fixture".into(),
+            "--nocapture".into(),
+        ];
+        (executable, args, environment)
+    }
+
+    #[test]
+    fn subprocess_escape_fixture() {
+        let Some(target) = std::env::var_os("MEDUSA_EXTENSION_ESCAPE_TARGET") else {
+            return;
+        };
+        fs::write(target, "escaped").expect("write escape marker");
     }
 }

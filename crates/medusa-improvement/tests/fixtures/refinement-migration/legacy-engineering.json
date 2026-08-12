@@ -1,0 +1,21 @@
+[
+  {
+    "id": "engineering-1",
+    "createdAt": "2026-08-01T00:00:00Z",
+    "updatedAt": "2026-08-02T00:00:00Z",
+    "title": "Verify complete CI",
+    "problem": "A partial check result led to a premature fix.",
+    "proposedChange": "Wait for all applicable checks before editing.",
+    "evidence": ["session-1"],
+    "sourceSessions": ["session-1"],
+    "risk": "low",
+    "status": "adopted",
+    "revision": 1,
+    "approval": {"reviewer": "local-user", "approvedAt": "2026-08-02T00:00:00Z", "proposalRevision": 1},
+    "activeVersion": "engineering-1-r1",
+    "previousVersion": null,
+    "conflictsWith": [],
+    "observations": [],
+    "suspensionReason": null
+  }
+]

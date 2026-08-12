@@ -1,13 +1,32 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { commandSuggestions, pollRuntime, runRuntimeCommand, startRuntime } from "./runtime";
+import {
+  closeRuntime,
+  commandSuggestions,
+  configureRuntime,
+  loadSharedConfiguration,
+  pollRuntime,
+  runRuntimeCommand,
+  startRuntime,
+} from "./runtime";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("./runtime", async () => {
   const actual = await vi.importActual<typeof import("./runtime")>("./runtime");
   return {
     ...actual,
+    loadSharedConfiguration: vi.fn().mockResolvedValue({
+      revision: 0,
+      activeProfile: "default",
+      connection: "direct",
+      provider: "minimax",
+      model: "MiniMax-M3",
+      effort: "medium",
+      auth: "api-key",
+      configured: false,
+      credentialConfigured: false,
+    }),
     startRuntime: vi.fn(),
     closeRuntime: vi.fn(),
     pollRuntime: vi.fn().mockResolvedValue([]),
@@ -21,22 +40,80 @@ vi.mock("./runtime", async () => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  vi.mocked(loadSharedConfiguration).mockReset().mockResolvedValue({
+    revision: 0,
+    activeProfile: "default",
+    connection: "direct",
+    provider: "minimax",
+    model: "MiniMax-M3",
+    effort: "medium",
+    auth: "api-key",
+    configured: false,
+    credentialConfigured: false,
+  });
   vi.mocked(startRuntime).mockReset();
+  vi.mocked(closeRuntime).mockReset().mockResolvedValue(undefined);
+  vi.mocked(configureRuntime).mockReset().mockResolvedValue(undefined);
   vi.mocked(commandSuggestions).mockReset().mockResolvedValue([]);
   vi.mocked(runRuntimeCommand).mockReset();
   vi.mocked(pollRuntime).mockReset().mockResolvedValue([]);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 it("starts a general chat without requiring a project", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);
 
+  await waitFor(() => expect(loadSharedConfiguration).toHaveBeenCalled());
   await waitFor(() => expect(startRuntime).toHaveBeenCalledWith(undefined));
+  expect(window.localStorage.getItem("medusa.desktop.model")).toBeNull();
   expect(screen.getByRole("heading", { name: "Medusa" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "General chat" })).toBeInTheDocument();
   expect(screen.getByRole("textbox")).toBeEnabled();
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
+});
+
+it("gives the icon-only send button an accessible name", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  const sendButton = screen.getByRole("button", { name: "Send" });
+  expect(sendButton).toBeDisabled();
+
+  fireEvent.change(composer, { target: { value: "Hello" } });
+  expect(sendButton).toBeEnabled();
+});
+
+it.each([
+  { platform: "Win32", label: "Ctrl+N", modifier: { ctrlKey: true } },
+  { platform: "Linux x86_64", label: "Ctrl+N", modifier: { ctrlKey: true } },
+  { platform: "MacIntel", label: "⌘N", modifier: { metaKey: true } },
+])("uses $label to create a new session on $platform", async ({ platform, label, modifier }) => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue(platform);
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  expect(screen.getByText(label)).toBeInTheDocument();
+
+  fireEvent.keyDown(document, { key: "n", ...modifier });
+  await waitFor(() => expect(runRuntimeCommand).toHaveBeenCalledWith("runtime-general", "/new"));
+});
+
+it("closes a newly started runtime when shared configuration is rejected", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-orphan", repo: "" });
+  vi.mocked(configureRuntime).mockRejectedValueOnce(new Error("configuration rejected"));
+
+  render(<App />);
+
+  await waitFor(() =>
+    expect(closeRuntime).toHaveBeenCalledWith("runtime-orphan"),
+  );
+  expect(screen.getByText(/configuration rejected/i)).toBeInTheDocument();
 });
 
 it("presents API keys as persistent OS-managed credentials", async () => {
@@ -103,4 +180,46 @@ it("focuses Approve by default and renders conversation URLs as Ctrl-click links
   expect(approve).toHaveFocus();
   const link = await screen.findByRole("link", { name: "https://example.com/docs" });
   expect(link).toHaveAttribute("title", "Ctrl+click to open");
+});
+
+it("keeps diagnostics behind an explicit Session details control", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  const details = screen.getByRole("button", { name: "Session details" });
+  expect(details).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("complementary", { name: "Session details" })).not.toBeInTheDocument();
+
+  fireEvent.click(details);
+  expect(details).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("complementary", { name: "Session details" })).toBeInTheDocument();
+});
+
+it("consolidates desktop tools in the session rail", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  expect(screen.getByRole("button", { name: "Sessions" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Review changes" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Learning" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Engineering" })).toBeInTheDocument();
+});
+
+it("renders tool work as collapsed activity rows", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{
+      type: "activity",
+      activity: { id: "tool-1", kind: "tool", title: "Inspect repository", details: ["private command output"] },
+    }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const summary = await screen.findByText("Inspect repository");
+  const row = summary.closest("details");
+  expect(row).not.toHaveAttribute("open");
+  expect(row).toContainElement(screen.getByText("private command output"));
 });

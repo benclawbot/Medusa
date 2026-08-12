@@ -48,18 +48,41 @@ pub(super) fn center_or_crop(line: &str, block_width: usize, width: u16) -> Stri
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActivityGroup {
+    Execution,
+    Verification,
+}
+
+fn activity_group(activity: &TranscriptActivity) -> ActivityGroup {
+    if matches!(activity.kind, TranscriptActivityKind::Verification) {
+        ActivityGroup::Verification
+    } else {
+        ActivityGroup::Execution
+    }
+}
+
+fn activity_group_heading(group: ActivityGroup) -> StyledLine {
+    match group {
+        ActivityGroup::Execution => StyledLine::new("Execution activity", Color::DarkYellow),
+        ActivityGroup::Verification => StyledLine::new("Verification evidence", Color::Blue),
+    }
+}
+
 pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
-    for entry in &app.transcript {
+    let mut previous_activity_group = None;
+    for (entry_index, entry) in app.transcript.iter().enumerate() {
         match entry {
             TranscriptEntry::User(draft) => {
+                previous_activity_group = None;
                 let text = if draft.text.is_empty() {
                     "(attachment-only prompt)"
                 } else {
                     &draft.text
                 };
                 lines.extend(conversation_block_lines(
-                    "You     ",
+                    "    You  ",
                     Color::Cyan,
                     text,
                     Color::White,
@@ -70,7 +93,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 ));
                 for attachment in &draft.attachments {
                     lines.extend(conversation_block_lines(
-                        "        ",
+                        "            ",
                         Color::DarkGrey,
                         &format!("[attachment] {}", attachment_label(attachment)),
                         Color::White,
@@ -81,11 +104,30 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                     ));
                 }
             }
-            TranscriptEntry::Assistant(text) => lines.extend(
-                super::markdown::markdown_block_lines("Medusa  ", Color::Magenta, text, width),
-            ),
-            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
-            TranscriptEntry::System(message) => lines.push(system_line(message)),
+            TranscriptEntry::Assistant(text) => {
+                previous_activity_group = None;
+                lines.extend(super::markdown::markdown_block_lines(
+                    "Medusa  ",
+                    Color::Magenta,
+                    text,
+                    width,
+                ));
+            }
+            TranscriptEntry::Activity(activity) => {
+                let group = activity_group(activity);
+                if previous_activity_group != Some(group) {
+                    lines.push(activity_group_heading(group));
+                    previous_activity_group = Some(group);
+                }
+                lines.extend(activity_lines(
+                    activity,
+                    app.activity_details_expanded(entry_index, activity),
+                ));
+            }
+            TranscriptEntry::System(message) => {
+                previous_activity_group = None;
+                lines.push(system_line(message));
+            }
         }
     }
     lines
@@ -370,6 +412,7 @@ pub(crate) struct StyledLine {
     background: Option<Color>,
     attribute: Attribute,
     fill_background: bool,
+    selection: Option<(usize, usize)>,
 }
 
 impl StyledLine {
@@ -391,6 +434,7 @@ impl StyledLine {
             background,
             attribute,
             fill_background,
+            selection: None,
         }
     }
 
@@ -427,7 +471,25 @@ impl StyledLine {
             background,
             attribute,
             fill_background,
+            selection: None,
         }
+    }
+
+    pub(super) fn set_selection(&mut self, start: usize, end: usize) {
+        self.selection = Some((start, end));
+    }
+
+    pub(super) fn visible_text(&self, width: u16) -> String {
+        wrap_to_width(&self.display_text(), width)
+    }
+
+    fn display_text(&self) -> String {
+        self.marker
+            .as_ref()
+            .map(|(marker, _)| marker.as_str())
+            .unwrap_or_default()
+            .to_owned()
+            + &self.text
     }
 
     fn print_content(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
@@ -441,20 +503,37 @@ impl StyledLine {
             let remaining = width.saturating_sub(marker.chars().count() as u16);
             let body = wrap_to_width(&self.text, remaining);
             used = marker.chars().count().saturating_add(body.chars().count());
-            queue!(
+            print_selected_text(
                 stdout,
-                SetForegroundColor(*marker_color),
-                Print(marker),
-                SetForegroundColor(self.foreground),
-                Print(terminal_hyperlinks(&body)),
+                &marker,
+                self.selection,
+                *marker_color,
+                self.background,
+                self.attribute,
+            )?;
+            print_selected_text(
+                stdout,
+                &body,
+                self.selection.map(|(start, end)| {
+                    (
+                        start.saturating_sub(marker.chars().count()),
+                        end.saturating_sub(marker.chars().count()),
+                    )
+                }),
+                self.foreground,
+                self.background,
+                self.attribute,
             )?;
         } else {
             let body = wrap_to_width(&self.text, width);
             used = body.chars().count();
-            queue!(
+            print_selected_text(
                 stdout,
-                SetForegroundColor(self.foreground),
-                Print(terminal_hyperlinks(&body))
+                &body,
+                self.selection,
+                self.foreground,
+                self.background,
+                self.attribute,
             )?;
         }
         if self.fill_background {
@@ -498,6 +577,65 @@ impl StyledLine {
     }
 }
 
+fn print_selected_text(
+    stdout: &mut io::Stdout,
+    text: &str,
+    selection: Option<(usize, usize)>,
+    foreground: Color,
+    background: Option<Color>,
+    attribute: Attribute,
+) -> io::Result<()> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let Some((start, end)) = selection else {
+        return queue!(
+            stdout,
+            SetForegroundColor(foreground),
+            Print(terminal_hyperlinks(text))
+        );
+    };
+    let start = start.min(chars.len());
+    let end = end.min(chars.len());
+    if start >= end {
+        return queue!(
+            stdout,
+            SetForegroundColor(foreground),
+            Print(terminal_hyperlinks(text))
+        );
+    }
+    let base_background = background;
+    let print_base = |stdout: &mut io::Stdout| -> io::Result<()> {
+        if let Some(background) = base_background {
+            queue!(stdout, SetBackgroundColor(background))?;
+        } else {
+            queue!(stdout, ResetColor)?;
+        }
+        queue!(
+            stdout,
+            SetAttribute(attribute),
+            SetForegroundColor(foreground)
+        )
+    };
+    print_base(stdout)?;
+    queue!(
+        stdout,
+        Print(terminal_hyperlinks(
+            &chars[..start].iter().collect::<String>()
+        )),
+        SetBackgroundColor(Color::DarkGrey),
+        SetForegroundColor(Color::White),
+        Print(terminal_hyperlinks(
+            &chars[start..end].iter().collect::<String>()
+        )),
+    )?;
+    print_base(stdout)?;
+    queue!(
+        stdout,
+        Print(terminal_hyperlinks(
+            &chars[end..].iter().collect::<String>()
+        ))
+    )
+}
+
 pub(super) fn system_line(message: &str) -> StyledLine {
     if message.starts_with("error:") {
         StyledLine::new(format!("● {message}"), Color::Red)
@@ -512,7 +650,25 @@ pub(super) fn system_line(message: &str) -> StyledLine {
     }
 }
 
-pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
+const MAX_PRESENTED_ACTIVITY_DETAILS: usize = 6;
+
+fn presented_activity_details(details: &[String], expanded: bool) -> Vec<String> {
+    let mut rows = details
+        .iter()
+        .filter(|detail| !detail.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    if expanded || rows.len() <= MAX_PRESENTED_ACTIVITY_DETAILS {
+        return rows;
+    }
+
+    let omitted = rows.len() - (MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+    rows.truncate(MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+    rows.push(format!("… {omitted} more lines"));
+    rows
+}
+
+pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> Vec<StyledLine> {
     let color = match activity.kind {
         TranscriptActivityKind::Assistant => Color::Green,
         TranscriptActivityKind::Done => Color::Green,
@@ -531,15 +687,18 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
     } else {
         Color::Grey
     };
-    let marker = if matches!(activity.kind, TranscriptActivityKind::Error) {
-        "✻"
-    } else {
-        "●"
+    let (marker, lifecycle) = match activity.kind {
+        TranscriptActivityKind::Done => ("✓", "succeeded"),
+        TranscriptActivityKind::Error => ("✻", "failed"),
+        TranscriptActivityKind::Verification => ("◇", "verified"),
+        TranscriptActivityKind::Assistant
+        | TranscriptActivityKind::Progress
+        | TranscriptActivityKind::Tool => ("●", "running"),
     };
     let mut lines = vec![StyledLine::with_marker(
         format!("{marker} "),
         color,
-        &activity.title,
+        format!("[{lifecycle}] {}", activity.title),
         foreground,
     )];
     if !matches!(
@@ -547,9 +706,8 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
         TranscriptActivityKind::Assistant | TranscriptActivityKind::Tool
     ) {
         lines.extend(
-            activity
-                .details
-                .iter()
+            presented_activity_details(&activity.details, expanded)
+                .into_iter()
                 .map(|detail| StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)),
         );
     }
@@ -689,36 +847,30 @@ pub(crate) fn terminal_hyperlinks(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+#[path = "support_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+mod activity_detail_tests {
+    use super::presented_activity_details;
 
     #[test]
-    fn user_prompt_text_is_readable_on_a_dark_terminal() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let mut app = AppState::new(
-            directory.path().to_path_buf(),
-            "user-prompt-contrast",
-            "",
-            Arc::new(UnsupportedClipboard),
-        )
-        .expect("app");
-        app.transcript.push(TranscriptEntry::User(PromptDraft {
-            text: "make it into html".to_owned(),
-            ..PromptDraft::default()
-        }));
-
-        let prompt = transcript_lines(&app, 80)
-            .into_iter()
-            .find(|line| line.text == "make it into html")
-            .expect("rendered user prompt");
-
-        assert_ne!(prompt.foreground, Color::Black);
+    fn compact_activity_details_show_five_rows_and_omitted_count() {
+        let details = (1..=10)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>();
+        let rows = presented_activity_details(&details, false);
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[4], "line 5");
+        assert_eq!(rows[5], "… 5 more lines");
     }
 
     #[test]
-    fn conversation_urls_are_emitted_as_terminal_hyperlinks() {
-        let rendered = terminal_hyperlinks("See https://example.com/docs.");
-        assert!(rendered.contains("\x1b]8;;https://example.com/docs\x1b\\"));
-        assert!(rendered.ends_with("\x1b]8;;\x1b\\."));
+    fn expanded_activity_details_show_every_non_blank_row() {
+        let details = vec!["line 1".to_owned(), "  ".to_owned(), "line 2".to_owned()];
+        assert_eq!(
+            presented_activity_details(&details, true),
+            vec!["line 1".to_owned(), "line 2".to_owned()]
+        );
     }
 }

@@ -1,0 +1,50 @@
+name: Multimodal Contract
+
+on:
+  pull_request:
+    paths:
+      - "crates/medusa-provider/**"
+      - "crates/medusa-runtime/**"
+      - "crates/medusa-tui/**"
+      - "apps/medusa-desktop/**"
+      - "docs/MULTIMODAL-TESTING.md"
+      - ".github/workflows/multimodal-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-and-tui:
+    name: provider-and-tui (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo update --workspace
+      - name: Recording-provider multimodal contract
+        run: cargo test -p medusa-provider --test multimodal_contract
+      - name: Shared attachment and TUI controls
+        run: cargo test -p medusa-tui clipboard::tests
+
+  desktop:
+    name: desktop attachment UX
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: apps/medusa-desktop
+        run: npm ci
+      - name: Run desktop attachment tests
+        working-directory: apps/medusa-desktop
+        run: npm test

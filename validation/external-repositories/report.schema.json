@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/benclawbot/Medusa/validation/external-repositories/report.schema.json",
+  "title": "Medusa external repository validation report",
+  "type": "object",
+  "required": ["schema_version", "scenario_id", "status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "scenario_id": {"type": "string"},
+    "scenario_version": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["passed", "failed", "skipped"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "elapsed_seconds": {"type": "number", "minimum": 0},
+    "medusa_commit": {"type": "string"},
+    "repository": {
+      "type": "object",
+      "required": ["url", "commit", "ecosystem"],
+      "properties": {
+        "url": {"type": "string"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "ecosystem": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "platform": {"type": "object"},
+    "provider": {"type": "object"},
+    "metrics": {
+      "type": "object",
+      "required": ["verified_completion", "false_completion", "intervention_count", "recovery_outcome", "test_status", "policy_denials", "unrecovered_state"],
+      "properties": {
+        "verified_completion": {"type": "boolean"},
+        "false_completion": {"type": "boolean"},
+        "intervention_count": {"type": "integer", "minimum": 0},
+        "recovery_outcome": {"type": "string"},
+        "test_status": {"type": "string"},
+        "policy_denials": {"type": "integer", "minimum": 0},
+        "unrecovered_state": {"type": "boolean"}
+      }
+    },
+    "steps": {"type": "array"},
+    "reason": {"type": "string"}
+  },
+  "additionalProperties": true
+}

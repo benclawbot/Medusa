@@ -1,16 +1,31 @@
-//! Production hardening primitives: migrations, recovery, observability, and release manifests.
+//! Production hardening primitives: migrations, recovery, observability, evaluation, and release manifests.
 
 mod archive;
 mod chaos;
+mod evals;
+mod feedback;
 mod migrations;
 mod observability;
+mod operational_health;
 mod release;
 mod support;
 
 pub use archive::validate_archive_entries;
 pub use chaos::chaos_recovery_cycle;
+pub use evals::{
+    CodingTaskOutcome, EvaluationDecision, EvaluationPolicy, compare_outcomes, oracle_digest,
+};
+pub use feedback::{
+    CompletedSessionFeedback, ImprovementHint, SessionFeedbackRecord, TrajectorySignal,
+    persist_session_feedback,
+};
 pub use migrations::{CURRENT_SCHEMA_VERSION, Migration, MigrationReceipt, Migrator};
 pub use observability::{Observability, OperationalEvent};
+pub use operational_health::{
+    HealthComponent, HealthReport, HealthStatus, LivenessDisposition, LivenessObservation,
+    OPERATIONAL_HEALTH_SCHEMA_VERSION, ResourceBudget, ResourcePressure, ResourceSnapshot,
+    SupportBundle, SupportBundleManifest, SupportProduct,
+};
 pub use release::{ArtifactEntry, ReleaseManifest, build_release_manifest, package_smoke};
 
 #[cfg(test)]

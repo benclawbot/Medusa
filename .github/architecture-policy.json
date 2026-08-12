@@ -1,0 +1,20 @@
+{
+  "shipped_roots": [
+    "medusa-cli",
+    "medusa-daemon",
+    "medusa-tui",
+    "medusa-runtime",
+    "medusa-agent",
+    "medusa-browserd"
+  ],
+  "expected_binary_targets": [
+    "medusa",
+    "medusa-tui",
+    "medusa-browserd"
+  ],
+  "test_support_crates": [
+    "medusa-testkit"
+  ],
+  "ignored_unreferenced_rs": [],
+  "crate_exemptions": {}
+}

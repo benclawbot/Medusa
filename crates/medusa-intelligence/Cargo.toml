@@ -9,13 +9,19 @@ repository.workspace = true
 [dependencies]
 medusa-core.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
+hex.workspace = true
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
 walkdir = "2.5"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[bench]]
+name = "typescript_workspace"
+harness = false
 
 [lints]
 workspace = true

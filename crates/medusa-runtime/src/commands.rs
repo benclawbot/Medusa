@@ -50,6 +50,13 @@ impl std::fmt::Debug for ModelConfiguration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SlashCommand {
     Help,
+    Learning {
+        action: LearningCommand,
+    },
+    Review {
+        action: ReviewCommand,
+    },
+    Config(ConfigCommand),
     New,
     Compact {
         focus: Option<String>,
@@ -69,6 +76,58 @@ pub enum SlashCommand {
     Plan {
         task: Option<String>,
     },
+    Team(TeamCommand),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConfigCommand {
+    Show,
+    Profiles,
+    UseProfile { name: String },
+    Set { key: String, value: String },
+    Unset { key: String },
+    Validate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TeamCommand {
+    Show,
+    Steer {
+        worker_id: String,
+        instruction: String,
+    },
+    StopWorker {
+        worker_id: String,
+    },
+    StopTeam,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LearningCommand {
+    Show { filter: Option<String> },
+    Inspect { id: String },
+    Propose { scope: String, key: String, value: String },
+    Evaluate { id: String, passed: bool },
+    Approve { id: String },
+    Reject { id: String },
+    Defer { id: String },
+    Validate { id: String },
+    Activate { id: String },
+    Suspend { id: String },
+    Rollback { id: String },
+    Delete { id: String },
+    Privacy,
+    Export,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReviewCommand {
+    Show { filter: Option<String> },
+    AcceptFile { path: String },
+    AcceptTask,
+    RevertFile { path: String },
+    RevertHunk { path: String, hunk_id: String },
+    Export,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -141,6 +200,11 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "show or set the session goal",
     },
     CommandSpec {
+        name: "config",
+        usage: "/config [show|profiles|use <name>|set <key> <value>|unset <key>|validate]",
+        description: "inspect or update shared redacted configuration",
+    },
+    CommandSpec {
         name: "model",
         usage: "/model [name|provider|key]",
         description: "configure provider, model, and session key",
@@ -161,11 +225,101 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "enter read-only planning mode",
     },
     CommandSpec {
+        name: "team",
+        usage: "/team",
+        description: "show coordinated worker status",
+    },
+    CommandSpec {
+        name: "steer",
+        usage: "/steer <worker> <instruction>",
+        description: "redirect a running worker between turns",
+    },
+    CommandSpec {
+        name: "stop-worker",
+        usage: "/stop-worker <worker>",
+        description: "cancel one coordinated worker",
+    },
+    CommandSpec {
+        name: "stop-team",
+        usage: "/stop-team",
+        description: "request graceful coordinated-team shutdown",
+    },
+    CommandSpec {
+        name: "learning",
+        usage: "/learning [show [filter]|approve|reject|defer|validate|activate|suspend|rollback|delete <id>|privacy|export]",
+        description: "review and control the authoritative learning lifecycle",
+    },
+    CommandSpec {
+        name: "review",
+        usage: "/review [show [filter]|accept <path>|accept-all|revert <path>|revert-hunk <path> <hunk-id>|export]",
+        description: "inspect, filter, accept, revert, or export repository review state",
+    },
+    CommandSpec {
         name: "help",
         usage: "/help",
         description: "show available commands",
     },
 ];
+
+fn parse_config_command(input: &str) -> Result<SlashCommand, String> {
+    let (action, arguments) = input
+        .split_once(char::is_whitespace)
+        .map_or((input, ""), |(action, arguments)| {
+            (action, arguments.trim())
+        });
+    let no_arguments = |usage: &str| {
+        if arguments.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("usage: {usage}"))
+        }
+    };
+    match action.to_ascii_lowercase().as_str() {
+        "" | "show" => {
+            no_arguments("/config [show]")?;
+            Ok(SlashCommand::Config(ConfigCommand::Show))
+        }
+        "profiles" => {
+            no_arguments("/config profiles")?;
+            Ok(SlashCommand::Config(ConfigCommand::Profiles))
+        }
+        "validate" => {
+            no_arguments("/config validate")?;
+            Ok(SlashCommand::Config(ConfigCommand::Validate))
+        }
+        "use" => {
+            if arguments.is_empty() || arguments.contains(char::is_whitespace) {
+                return Err("usage: /config use <profile>".to_owned());
+            }
+            Ok(SlashCommand::Config(ConfigCommand::UseProfile {
+                name: arguments.to_owned(),
+            }))
+        }
+        "unset" => {
+            if arguments.is_empty() || arguments.contains(char::is_whitespace) {
+                return Err("usage: /config unset <key>".to_owned());
+            }
+            Ok(SlashCommand::Config(ConfigCommand::Unset {
+                key: arguments.to_owned(),
+            }))
+        }
+        "set" => {
+            let (key, value) = arguments
+                .split_once(char::is_whitespace)
+                .map_or((arguments, ""), |(key, value)| (key, value.trim()));
+            if key.is_empty() || value.is_empty() {
+                return Err("usage: /config set <key> <value>".to_owned());
+            }
+            Ok(SlashCommand::Config(ConfigCommand::Set {
+                key: key.to_owned(),
+                value: value.to_owned(),
+            }))
+        }
+        other => Err(format!(
+            "unknown /config action `{other}`; use show, profiles, use, set, unset, or validate"
+        )),
+    }
+}
 
 pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
     let trimmed = input.trim();
@@ -206,6 +360,7 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
         "goal" => Ok(Some(SlashCommand::Goal {
             objective: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
+        "config" => Ok(Some(parse_config_command(remainder)?)),
         "model" => {
             let model_command = if remainder.is_empty() {
                 ModelCommand::Show
@@ -262,14 +417,163 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
                 }))
             }
         }
+        "learning" => {
+            let mut parts = remainder.split_whitespace();
+            let required_id = |value: Option<&str>, action: &str| {
+                value
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("/learning {action} expects an item id"))
+            };
+            let action = match parts.next() {
+                None | Some("show") => LearningCommand::Show {
+                    filter: parts.next().map(str::to_owned),
+                },
+                Some("inspect") => LearningCommand::Inspect {
+                    id: required_id(parts.next(), "inspect")?,
+                },
+                Some("propose") => parse_learning_propose(remainder)?,
+                Some("evaluate") => {
+                    let id = required_id(parts.next(), "evaluate")?;
+                    let passed = match parts.next() {
+                        Some("pass") | Some("passed") | Some("true") => true,
+                        Some("fail") | Some("failed") | Some("false") => false,
+                        Some(other) => {
+                            return Err(format!(
+                                "/learning evaluate expects pass or fail, got {other}"
+                            ));
+                        }
+                        None => return Err("/learning evaluate expects pass or fail".to_owned()),
+                    };
+                    LearningCommand::Evaluate { id, passed }
+                }
+                Some("approve") => LearningCommand::Approve {
+                    id: required_id(parts.next(), "approve")?,
+                },
+                Some("reject") => LearningCommand::Reject {
+                    id: required_id(parts.next(), "reject")?,
+                },
+                Some("defer") => LearningCommand::Defer {
+                    id: required_id(parts.next(), "defer")?,
+                },
+                Some("validate") => LearningCommand::Validate {
+                    id: required_id(parts.next(), "validate")?,
+                },
+                Some("activate") => LearningCommand::Activate {
+                    id: required_id(parts.next(), "activate")?,
+                },
+                Some("suspend") => LearningCommand::Suspend {
+                    id: required_id(parts.next(), "suspend")?,
+                },
+                Some("rollback") => LearningCommand::Rollback {
+                    id: required_id(parts.next(), "rollback")?,
+                },
+                Some("delete") => LearningCommand::Delete {
+                    id: required_id(parts.next(), "delete")?,
+                },
+                Some("privacy") => LearningCommand::Privacy,
+                Some("export") => LearningCommand::Export,
+                Some(other) => return Err(format!("unknown /learning action: {other}")),
+            };
+            Ok(Some(SlashCommand::Learning { action }))
+        }
+        "review" => {
+            let mut parts = remainder.split_whitespace();
+            let action = match parts.next() {
+                None | Some("show") => ReviewCommand::Show {
+                    filter: parts.next().map(str::to_owned),
+                },
+                Some("accept") => ReviewCommand::AcceptFile {
+                    path: parts
+                        .next()
+                        .ok_or_else(|| "/review accept expects a path".to_owned())?
+                        .to_owned(),
+                },
+                Some("accept-all") => ReviewCommand::AcceptTask,
+                Some("revert") => ReviewCommand::RevertFile {
+                    path: parts
+                        .next()
+                        .ok_or_else(|| "/review revert expects a path".to_owned())?
+                        .to_owned(),
+                },
+                Some("revert-hunk") => ReviewCommand::RevertHunk {
+                    path: parts
+                        .next()
+                        .ok_or_else(|| "/review revert-hunk expects a path".to_owned())?
+                        .to_owned(),
+                    hunk_id: parts
+                        .next()
+                        .ok_or_else(|| "/review revert-hunk expects a hunk id".to_owned())?
+                        .to_owned(),
+                },
+                Some("export") => ReviewCommand::Export,
+                Some(other) => return Err(format!("unknown /review action: {other}")),
+            };
+            Ok(Some(SlashCommand::Review { action }))
+        }
         "plan" => Ok(Some(SlashCommand::Plan {
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
+        "team" => {
+            require_empty("team")?;
+            Ok(Some(SlashCommand::Team(TeamCommand::Show)))
+        }
+        "steer" => {
+            let (worker_id, instruction) = remainder
+                .split_once(char::is_whitespace)
+                .map_or((remainder, ""), |(worker, instruction)| {
+                    (worker, instruction.trim())
+                });
+            if worker_id.is_empty() || instruction.is_empty() {
+                return Err("/steer expects <worker> <instruction>".to_owned());
+            }
+            Ok(Some(SlashCommand::Team(TeamCommand::Steer {
+                worker_id: worker_id.to_owned(),
+                instruction: instruction.to_owned(),
+            })))
+        }
+        "stop-worker" => {
+            if remainder.is_empty() || remainder.contains(char::is_whitespace) {
+                return Err("/stop-worker expects exactly one worker ID".to_owned());
+            }
+            Ok(Some(SlashCommand::Team(TeamCommand::StopWorker {
+                worker_id: remainder.to_owned(),
+            })))
+        }
+        "stop-team" => {
+            require_empty("stop-team")?;
+            Ok(Some(SlashCommand::Team(TeamCommand::StopTeam)))
+        }
         _ => Ok(Some(SlashCommand::Skill {
             selector: name.to_owned(),
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
     }
+}
+
+fn parse_learning_propose(remainder: &str) -> Result<LearningCommand, String> {
+    let rest = remainder
+        .strip_prefix("propose")
+        .ok_or_else(|| "/learning propose expects scope, key, and value".to_owned())?
+        .trim_start();
+    let mut fields = rest.splitn(3, char::is_whitespace);
+    let scope = fields
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "/learning propose expects a scope".to_owned())?;
+    let key = fields
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "/learning propose expects a key".to_owned())?;
+    let value = fields
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "/learning propose expects a value".to_owned())?;
+    Ok(LearningCommand::Propose {
+        scope: scope.to_owned(),
+        key: key.to_owned(),
+        value: value.to_owned(),
+    })
 }
 
 #[must_use]
@@ -452,6 +756,33 @@ mod tests {
                 effort: Some(Effort::High)
             }))
         );
+        assert_eq!(
+            parse_slash_command("/learning inspect proposal-1"),
+            Ok(Some(SlashCommand::Learning {
+                action: LearningCommand::Inspect {
+                    id: "proposal-1".into()
+                }
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/learning propose repository workflow collect all CI failures"),
+            Ok(Some(SlashCommand::Learning {
+                action: LearningCommand::Propose {
+                    scope: "repository".into(),
+                    key: "workflow".into(),
+                    value: "collect all CI failures".into()
+                }
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/learning evaluate proposal-1 pass"),
+            Ok(Some(SlashCommand::Learning {
+                action: LearningCommand::Evaluate {
+                    id: "proposal-1".into(),
+                    passed: true
+                }
+            }))
+        );
     }
 
     #[test]
@@ -464,6 +795,40 @@ mod tests {
         );
         let command = parse_slash_command("/model key secret-value").expect("parse key");
         assert!(!format!("{command:?}").contains("secret-value"));
+    }
+
+    #[test]
+    fn parses_team_status_steering_and_cancellation_commands() {
+        assert_eq!(
+            parse_slash_command("/team"),
+            Ok(Some(SlashCommand::Team(TeamCommand::Show)))
+        );
+        assert_eq!(
+            parse_slash_command("/steer reviewer-1 inspect the failed assertion"),
+            Ok(Some(SlashCommand::Team(TeamCommand::Steer {
+                worker_id: "reviewer-1".to_owned(),
+                instruction: "inspect the failed assertion".to_owned(),
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/stop-worker reviewer-1"),
+            Ok(Some(SlashCommand::Team(TeamCommand::StopWorker {
+                worker_id: "reviewer-1".to_owned(),
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/stop-team"),
+            Ok(Some(SlashCommand::Team(TeamCommand::StopTeam)))
+        );
+        for input in [
+            "/team extra",
+            "/steer reviewer-1",
+            "/stop-worker",
+            "/stop-worker reviewer-1 extra",
+            "/stop-team extra",
+        ] {
+            assert!(parse_slash_command(input).is_err(), "{input}");
+        }
     }
 
     #[test]
@@ -510,6 +875,49 @@ mod tests {
             .find(|suggestion| suggestion.name == "release")
             .expect("project skill is selectable");
         assert!(release.description.contains("Prepare a release"));
+    }
+
+    #[test]
+    fn config_commands_parse_and_are_discoverable() {
+        assert_eq!(
+            parse_slash_command("/config"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Show)))
+        );
+        assert_eq!(
+            parse_slash_command("/config profiles"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Profiles)))
+        );
+        assert_eq!(
+            parse_slash_command("/config use work"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::UseProfile {
+                name: "work".to_owned()
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/config set model gpt-5"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Set {
+                key: "model".to_owned(),
+                value: "gpt-5".to_owned()
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/config unset base_url"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Unset {
+                key: "base_url".to_owned()
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/config validate"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Validate)))
+        );
+        assert!(parse_slash_command("/config use").is_err());
+        assert!(parse_slash_command("/config set model").is_err());
+        let directory = tempfile::tempdir().expect("temporary directory");
+        assert_eq!(
+            command_suggestions("/con", directory.path())[0].name,
+            "config"
+        );
+        assert!(!SlashCommand::Config(ConfigCommand::Show).runs_agent());
     }
 
     #[test]

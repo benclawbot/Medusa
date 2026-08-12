@@ -1,12 +1,35 @@
-use std::{
-    fs,
-    path::{Component, Path},
-};
+use std::{fs, path::Path};
 
 use medusa_core::MedusaResult;
 use walkdir::WalkDir;
 
-use crate::policy::safe_path;
+use crate::{
+    policy::safe_path,
+    transaction::{FileMutation, apply_atomic},
+};
+
+const MAX_SEARCH_FILES: usize = 10_000;
+const MAX_SEARCH_BYTES: u64 = 32 * 1024 * 1024;
+const IGNORED_DIRECTORY_NAMES: &[&str] = &[
+    ".git",
+    ".medusa",
+    "target",
+    "node_modules",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
+];
+
+fn is_ignored_directory(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        IGNORED_DIRECTORY_NAMES
+            .iter()
+            .any(|ignored| name == *ignored)
+    })
+}
 
 pub(crate) fn read(repo: &Path, relative: &str) -> MedusaResult<String> {
     if relative == "." {
@@ -21,12 +44,9 @@ fn repository_listing(repo: &Path) -> String {
         .min_depth(1)
         .max_depth(2)
         .into_iter()
+        .filter_entry(|entry| !is_ignored_directory(entry.path()))
         .filter_map(Result::ok)
-        .filter(|entry| {
-            !entry.path().components().any(|part| {
-                matches!(part, Component::Normal(name) if name == ".git" || name == ".medusa")
-            })
-        })
+        .filter(|entry| !is_ignored_directory(entry.path()))
         .filter_map(|entry| {
             let relative = entry.path().strip_prefix(repo).ok()?;
             let mut display = relative
@@ -48,15 +68,57 @@ fn repository_listing(repo: &Path) -> String {
     entries.join("\n")
 }
 
+/// Rejects mutations aimed at the Git metadata directory.
+///
+/// Repository-relative writes are otherwise unattended, and `.git/hooks`
+/// entries execute on the next Git invocation, which would let a repository
+/// write escalate into code execution outside the command sandbox. Reads are
+/// unaffected so that Git state remains inspectable.
+fn reject_git_metadata(relative: &str) -> MedusaResult<()> {
+    let first = Path::new(relative)
+        .components()
+        .find_map(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        });
+    if first.is_some_and(|name| name.eq_ignore_ascii_case(".git")) {
+        return Err(medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PolicyDenied,
+            medusa_core::ErrorCategory::Policy,
+            format!("refusing to modify Git metadata: {relative}"),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {
+    reject_git_metadata(relative)?;
+    apply_atomic(
+        repo,
+        &[FileMutation {
+            path: relative.to_owned(),
+            content: content.to_owned(),
+        }],
+    )?;
+    Ok(format!("wrote {} bytes to {relative}", content.len()))
+}
+
+pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
+    reject_git_metadata(relative)?;
     let path = safe_path(repo, relative)?;
+    fs::create_dir_all(&path)?;
+    Ok(format!("created directory {}", path.display()))
+}
+
+pub(crate) fn write_approved(path: &str, content: &str) -> MedusaResult<String> {
+    let path = approved_absolute_path(path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let original_permissions = fs::metadata(&path)
         .ok()
         .map(|metadata| metadata.permissions());
-    let temporary = path.with_extension("medusa-tmp");
+    let temporary = path.with_extension("medusa-approved-tmp");
     fs::write(&temporary, content)?;
     if let Some(permissions) = original_permissions {
         fs::set_permissions(&temporary, permissions)?;
@@ -69,29 +131,107 @@ pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<
     ))
 }
 
-pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
-    let path = safe_path(repo, relative)?;
-    fs::create_dir_all(&path)?;
-    Ok(format!("created directory {}", path.display()))
-}
-
-pub(crate) fn write_approved(path: &str, content: &str) -> MedusaResult<String> {
-    let path = approved_absolute_path(path)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, content)?;
-    Ok(format!(
-        "wrote {} bytes to {}",
-        content.len(),
-        path.display()
-    ))
-}
-
 pub(crate) fn create_dir_approved(path: &str) -> MedusaResult<String> {
     let path = approved_absolute_path(path)?;
     fs::create_dir_all(&path)?;
     Ok(format!("created directory {}", path.display()))
+}
+
+fn normalized_policy_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let normalized = if let Some(suffix) = normalized.strip_prefix("//?/UNC/") {
+        format!("//{suffix}")
+    } else if let Some(suffix) = normalized.strip_prefix("//?/") {
+        suffix.to_owned()
+    } else {
+        normalized
+    };
+    let normalized = normalized.trim_end_matches('/');
+    if cfg!(any(windows, target_os = "macos")) {
+        normalized.to_ascii_lowercase()
+    } else {
+        normalized.to_owned()
+    }
+}
+
+fn path_is_at_or_below(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn reject_sensitive_approved_path(path: &Path) -> MedusaResult<()> {
+    use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
+
+    let normalized = normalized_policy_path(path);
+    let components = normalized
+        .split('/')
+        .filter(|component| !component.is_empty());
+    if components
+        .clone()
+        .any(|component| component.eq_ignore_ascii_case(".git"))
+    {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!(
+                "approved external path is sensitive and cannot be modified: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    let mut sensitive_prefixes = vec![
+        "/etc".to_owned(),
+        "/bin".to_owned(),
+        "/sbin".to_owned(),
+        "/usr/bin".to_owned(),
+        "/usr/sbin".to_owned(),
+        "/usr/local/bin".to_owned(),
+        "/usr/local/sbin".to_owned(),
+        "/library/launchagents".to_owned(),
+        "/library/launchdaemons".to_owned(),
+        "c:/windows/system32/drivers/etc".to_owned(),
+        "c:/windows/system32/config".to_owned(),
+        "c:/windows/system32/wbem".to_owned(),
+        "c:/windows/system32".to_owned(),
+        "c:/windows/syswow64".to_owned(),
+    ];
+
+    for home in [std::env::var_os("HOME"), std::env::var_os("USERPROFILE")]
+        .into_iter()
+        .flatten()
+    {
+        let home = normalized_policy_path(Path::new(&home));
+        for suffix in [
+            ".ssh",
+            ".aws/credentials",
+            ".gnupg",
+            ".config/gh/hosts.yml",
+            ".config/autostart",
+            "library/launchagents",
+            "appdata/roaming/microsoft/windows/start menu/programs/startup",
+        ] {
+            sensitive_prefixes.push(format!("{home}/{suffix}"));
+        }
+    }
+
+    if sensitive_prefixes
+        .iter()
+        .any(|prefix| path_is_at_or_below(&normalized, prefix))
+    {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!(
+                "approved external path is sensitive and cannot be modified: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
@@ -124,6 +264,7 @@ fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
         )
     })?;
     let resolved = canonical_existing.join(suffix);
+    reject_sensitive_approved_path(&resolved)?;
     if resolved.exists() && fs::symlink_metadata(&resolved)?.file_type().is_symlink() {
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
@@ -136,14 +277,26 @@ fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
 
 pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
     let mut results = Vec::new();
-    for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
-        if !entry.file_type().is_file()
-            || entry.path().components().any(|part| {
-                matches!(part, Component::Normal(name) if name == ".git" || name == ".medusa")
-            })
-        {
+    let mut scanned_files = 0usize;
+    let mut scanned_bytes = 0u64;
+    let mut truncated = false;
+    for entry in WalkDir::new(repo)
+        .into_iter()
+        .filter_entry(|entry| !is_ignored_directory(entry.path()))
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
             continue;
         }
+        scanned_files = scanned_files.saturating_add(1);
+        let bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        if scanned_files > MAX_SEARCH_FILES
+            || scanned_bytes.saturating_add(bytes) > MAX_SEARCH_BYTES
+        {
+            truncated = true;
+            break;
+        }
+        scanned_bytes = scanned_bytes.saturating_add(bytes);
         if let Ok(text) = fs::read_to_string(entry.path()) {
             for (index, line) in text.lines().enumerate() {
                 if line.contains(query) {
@@ -158,14 +311,26 @@ pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
             }
         }
     }
-    Ok(results.join("\n"))
+    let mut output = results.join("\n");
+    if truncated {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&format!(
+            "[search truncated after scanning {scanned_files} files or {scanned_bytes} bytes]"
+        ));
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::Path};
 
-    use super::{create_dir, read, search, write};
+    use super::{
+        approved_absolute_path, create_dir, normalized_policy_path, read,
+        reject_sensitive_approved_path, search, write,
+    };
 
     #[test]
     fn extracted_filesystem_tools_preserve_read_write_and_search_behavior() {
@@ -199,5 +364,128 @@ mod tests {
         assert!(read(directory.path(), "../secret.txt").is_err());
         assert!(write(directory.path(), "../secret.txt", "nope").is_err());
         assert!(create_dir(directory.path(), "../outside").is_err());
+    }
+
+    #[test]
+    fn approved_external_paths_reject_git_metadata() {
+        assert!(
+            reject_sensitive_approved_path(Path::new("/tmp/project/.git/hooks/pre-commit"))
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approved_external_paths_reject_unix_system_targets() {
+        for path in ["/etc/hosts", "/bin/tool", "/sbin/tool", "/usr/bin/tool"] {
+            assert!(
+                reject_sensitive_approved_path(Path::new(path)).is_err(),
+                "{path}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn approved_external_paths_reject_windows_system_targets_after_canonicalization() {
+        assert_eq!(
+            super::normalized_policy_path(Path::new(r"\\?\C:\Windows\System32\drivers\etc\hosts")),
+            "c:/windows/system32/drivers/etc/hosts"
+        );
+
+        let windows = std::env::var_os("WINDIR")
+            .or_else(|| std::env::var_os("SystemRoot"))
+            .expect("WINDIR or SystemRoot");
+        let target = Path::new(&windows).join("System32/drivers/etc/hosts");
+        assert!(
+            approved_absolute_path(target.to_str().expect("utf8 system path")).is_err(),
+            "{}",
+            target.display()
+        );
+    }
+
+    #[test]
+    fn approved_external_paths_reject_user_credentials() {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+        let Some(home) = home else {
+            return;
+        };
+        let home = Path::new(&home);
+        for suffix in [
+            ".ssh/authorized_keys",
+            ".aws/credentials",
+            ".gnupg/private-keys-v1.d/key",
+            ".config/gh/hosts.yml",
+        ] {
+            let path = home.join(suffix);
+            assert!(
+                reject_sensitive_approved_path(&path).is_err(),
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn approved_external_paths_reject_linux_autostart() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let path = Path::new(&home).join(".config/autostart/medusa.desktop");
+        assert!(reject_sensitive_approved_path(&path).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn approved_external_paths_reject_macos_launch_agents_after_canonicalization() {
+        let target = Path::new("/Library/LaunchAgents/com.medusa.agent.plist");
+        assert!(approved_absolute_path(target.to_str().expect("utf8 path")).is_err());
+
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let user_target = Path::new(&home).join("Library/LaunchAgents/com.medusa.agent.plist");
+        assert!(
+            reject_sensitive_approved_path(&user_target).is_err(),
+            "{}",
+            user_target.display()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn approved_external_paths_reject_windows_startup() {
+        let Some(home) = std::env::var_os("USERPROFILE") else {
+            return;
+        };
+        let target = Path::new(&home)
+            .join("AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/medusa.cmd");
+        assert!(reject_sensitive_approved_path(&target).is_err());
+    }
+
+    #[test]
+    fn approved_external_path_outside_denylist_remains_allowed_by_path_policy() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let target = directory.path().join("exports/report.txt");
+        assert_eq!(
+            normalized_policy_path(
+                &approved_absolute_path(target.to_str().expect("utf8 path")).expect("allowed")
+            ),
+            normalized_policy_path(&target)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn single_file_write_uses_the_same_symlink_boundary_as_transactions() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        symlink(outside.path(), directory.path().join("linked")).expect("symlink");
+
+        assert!(write(directory.path(), "linked/escape.txt", "nope").is_err());
+        assert!(!outside.path().join("escape.txt").exists());
     }
 }

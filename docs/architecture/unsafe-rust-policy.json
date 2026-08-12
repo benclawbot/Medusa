@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "authority": "This file is the reviewed allowlist for every Rust source file in medusa-process-containment. Any source addition, move, classification change, or unsafe-code exception requires an architecture and security review.",
+  "containment_boundary": {
+    "crate": "crates/medusa-process-containment",
+    "default_lint": "deny",
+    "workspace_default_lint": "forbid",
+    "files": [
+      {
+        "path": "crates/medusa-process-containment/src/lib.rs",
+        "module": "crate-root",
+        "classification": "safe"
+      },
+      {
+        "path": "crates/medusa-process-containment/src/flatbuffer_builder.rs",
+        "module": "flatbuffer_builder",
+        "classification": "safe"
+      },
+      {
+        "path": "crates/medusa-process-containment/src/base_container.rs",
+        "module": "base_container",
+        "classification": "unsafe-ffi",
+        "reason": "Calls the Windows composable-sandbox, process, pipe, environment, library-loader, and Job Object APIs while owning every returned handle and allocation."
+      },
+      {
+        "path": "crates/medusa-process-containment/src/process_identity.rs",
+        "module": "process_identity",
+        "classification": "unsafe-ffi",
+        "reason": "Acquires immutable native process-creation identity using reviewed Windows process-time and macOS libproc APIs; Linux uses procfs without unsafe Rust, while all FFI remains isolated in this low-level module."
+      },
+      {
+        "path": "crates/medusa-process-containment/src/process_tree.rs",
+        "module": "process_tree",
+        "classification": "unsafe-ffi",
+        "reason": "Uses Unix kill(2) only to signal Medusa-owned dedicated process groups and delegates Windows descendant ownership to the reviewed Job Object boundary; all unsafe operations retain local safety rationale."
+      },
+      {
+        "path": "crates/medusa-process-containment/src/windows.rs",
+        "module": "windows",
+        "classification": "unsafe-ffi",
+        "reason": "Calls Windows Job Object, process, thread, snapshot, and handle APIs and declares Send/Sync only for the owned Job Object handle wrapper."
+      },
+      {
+        "path": "crates/medusa-process-containment/src/windows_acl.rs",
+        "module": "windows_acl",
+        "classification": "unsafe-ffi",
+        "reason": "Calls Windows token, SID, security-descriptor, ACL, and local-allocation APIs while validating returned structures and closing or freeing every owned resource."
+      }
+    ]
+  },
+  "review_requirements": [
+    "No crate-wide allow(unsafe_code) is permitted.",
+    "Only modules classified unsafe-ffi may receive a local module declaration exception.",
+    "Every unsafe operation or logically grouped operation must retain a nearby SAFETY rationale.",
+    "New or moved Rust source files fail CI until this inventory is explicitly updated.",
+    "Changes to this policy, the checker, or an unsafe module require the CODEOWNERS security review."
+  ]
+}

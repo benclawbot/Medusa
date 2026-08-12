@@ -1,0 +1,19 @@
+[package]
+name = "medusa-turn-assembly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
+time.workspace = true
+medusa-context = { path = "../medusa-context" }
+medusa-context-retrieval = { path = "../medusa-context-retrieval" }
+medusa-prompt-cache = { path = "../medusa-prompt-cache" }
+
+[lints]
+workspace = true

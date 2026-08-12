@@ -1,5 +1,11 @@
 use std::time::Instant;
 
+use medusa_protocol::frontend::{
+    FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
+};
+
+use crate::FrontendControlResult;
+
 use super::*;
 
 fn wait_for_endpoint(path: &Path) {
@@ -133,7 +139,7 @@ fn descendant_command(marker: &Path) -> (String, Vec<String>) {
             "-NoProfile".to_owned(),
             "-NonInteractive".to_owned(),
             "-Command".to_owned(),
-            "$target=$args[0]; $job=Start-Job -ArgumentList $target -ScriptBlock { param($path) Start-Sleep -Milliseconds 1000; Set-Content -NoNewline -LiteralPath $path -Value orphan }; Wait-Job -Job $job | Out-Null"
+            "$target=$args[0]; Start-Process powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', \"Start-Sleep -Milliseconds 1000; Set-Content -NoNewline -LiteralPath '$target' -Value orphan\")"
                 .to_owned(),
             marker.to_string_lossy().into_owned(),
         ],
@@ -142,10 +148,41 @@ fn descendant_command(marker: &Path) -> (String, Vec<String>) {
 
 fn spawn_unrelated_process() -> std::process::Child {
     let (program, args) = blocking_command();
-    Command::new(program)
+    std::process::Command::new(program)
         .args(args)
         .spawn()
         .expect("spawn unrelated process")
+}
+
+#[test]
+fn canonical_frontend_command_round_trips_over_daemon_wire() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let paths = DaemonPaths::for_repo(directory.path());
+    let (handle, server) = spawn(paths.clone()).expect("spawn daemon");
+    wait_for_endpoint(&paths.socket);
+    let client = DaemonClient::new(&paths.socket);
+    let envelope = FrontendCommandEnvelope {
+        protocol_version: FRONTEND_PROTOCOL_VERSION,
+        command_id: "desktop-list-1".to_owned(),
+        idempotency_key: "desktop:list:1".to_owned(),
+        frontend: FrontendKind::Desktop,
+        client_id: "desktop-client".to_owned(),
+        session_id: None,
+        turn_id: None,
+        timestamp: OffsetDateTime::now_utc(),
+        command: FrontendCommand::ListSessions,
+    };
+
+    let first = client.frontend(envelope.clone()).expect("frontend request");
+    let FrontendControlResult::Sessions { sessions } = &first.result else {
+        panic!("expected sessions response")
+    };
+    assert!(sessions.is_empty());
+    let duplicate = client.frontend(envelope).expect("idempotent replay");
+    assert_eq!(first, duplicate);
+
+    handle.shutdown();
+    server.join().expect("join daemon").expect("daemon result");
 }
 
 #[test]
@@ -160,7 +197,7 @@ fn client_reconnects_while_job_continues() {
     drop(first_client);
 
     let second_client = DaemonClient::new(&paths.socket);
-    let completed = (0..250).find_map(|_| {
+    let completed = (0..750).find_map(|_| {
         let Response::Status { job: Some(current) } = second_client
             .request(Request::Status {
                 job_id: job.id.clone(),

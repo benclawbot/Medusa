@@ -2,7 +2,6 @@ pub(super) mod markdown;
 pub(super) mod support;
 
 use super::*;
-use support::wrap_to_width;
 pub(crate) use support::*;
 
 #[cfg(unix)]
@@ -51,6 +50,10 @@ pub(super) struct PortableRenderSnapshot {
     input_tokens: u64,
     output_tokens: u64,
     timed_output_tokens: u64,
+    total_tokens: u64,
+    estimated_cost_microusd: u64,
+    tokens_per_second_milli: u64,
+    usage_provenance: Option<String>,
     cache_read_input_tokens: u64,
     cache_creation_input_tokens: u64,
     current_context_tokens: u64,
@@ -64,7 +67,9 @@ pub(super) struct PortableRenderSnapshot {
     model_label: Option<String>,
     effort_label: Option<String>,
     plan_mode: bool,
+    activity_detail_expansion: Vec<bool>,
     spinner_frame: u8,
+    selection: Option<TextSelection>,
     model_modal: Option<app::ModelModal>,
     welcome_visible: bool,
 }
@@ -82,6 +87,10 @@ pub(super) fn portable_render_snapshot(
         input_tokens: app.input_tokens,
         output_tokens: app.output_tokens,
         timed_output_tokens: app.timed_output_tokens,
+        total_tokens: app.total_tokens,
+        estimated_cost_microusd: app.estimated_cost_microusd,
+        tokens_per_second_milli: app.tokens_per_second_milli,
+        usage_provenance: app.usage_provenance.clone(),
         cache_read_input_tokens: app.cache_read_input_tokens,
         cache_creation_input_tokens: app.cache_creation_input_tokens,
         current_context_tokens: app.current_context_tokens(),
@@ -95,32 +104,67 @@ pub(super) fn portable_render_snapshot(
         model_label: app.model_label.clone(),
         effort_label: app.effort_label.clone(),
         plan_mode: app.plan_mode,
+        activity_detail_expansion: app.activity_detail_expansion_snapshot(),
         spinner_frame: app.spinner_frame,
+        selection: app.selection,
         model_modal: app.model_modal().cloned(),
         welcome_visible: app.welcome_visible(),
     }
 }
 
+fn active_status(app: &AppState) -> &str {
+    app.transcript
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            TranscriptEntry::Activity(activity)
+                if matches!(
+                    activity.kind,
+                    TranscriptActivityKind::Assistant
+                        | TranscriptActivityKind::Progress
+                        | TranscriptActivityKind::Tool
+                        | TranscriptActivityKind::Verification
+                ) =>
+            {
+                Some(activity.title.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or(&app.status)
+}
+
 pub(super) fn running_status(app: &AppState) -> String {
     format!(
         "{} ({} · turn {})",
-        app.status,
+        active_status(app),
         format_elapsed(app.elapsed_seconds().unwrap_or_default()),
         app.active_turn
     )
 }
 
-pub(super) fn session_metrics_line(app: &AppState) -> String {
+pub(super) fn session_metrics_line(app: &AppState, width: u16) -> String {
+    let elapsed = format_elapsed(app.session_elapsed_seconds());
+    let total = format_token_count(app.total_tokens);
+    let cost = format_cost(app.estimated_cost_microusd);
+    if width < 80 {
+        return format!("session {elapsed} · total {total} · cost {cost}");
+    }
     let rate = app
         .output_tokens_per_second()
         .map_or_else(|| "—".to_owned(), format_token_rate);
+    if width < 120 {
+        return format!(
+            "session {elapsed} · total {total} · output {} · cost {cost} · {rate} tok/s",
+            format_token_count(app.output_tokens),
+        );
+    }
     format!(
-        "session {} · in {} · out {} · cached {} ({:.0}%) · {rate} tok/s",
-        format_elapsed(app.session_elapsed_seconds()),
-        format_token_count(app.total_input_tokens()),
+        "session {elapsed} · total {total} · input {} · output {} · cache-read {} · cache-write {} · cost {cost} · {} · {rate} tok/s",
+        format_token_count(app.input_tokens),
         format_token_count(app.output_tokens),
         format_token_count(app.cache_read_input_tokens),
-        app.cache_read_percentage(),
+        format_token_count(app.cache_creation_input_tokens),
+        app.usage_provenance.as_deref().unwrap_or("—"),
     )
 }
 
@@ -151,6 +195,13 @@ pub(super) fn context_meter_line(app: &AppState) -> String {
     )
 }
 
+fn format_cost(microusd: u64) -> String {
+    if microusd == 0 {
+        return "—".to_owned();
+    }
+    format!("${:.4}", microusd as f64 / 1_000_000.0)
+}
+
 fn format_token_rate(tokens_per_second: f64) -> String {
     if tokens_per_second < 1_000.0 {
         return format!("{tokens_per_second:.1}");
@@ -178,6 +229,7 @@ pub(super) fn format_token_count(tokens: u64) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct UiIdentity {
+    project: String,
     model: String,
     effort: String,
 }
@@ -190,6 +242,12 @@ impl UiIdentity {
             Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
                 .unwrap_or_default();
         Self {
+            project: repo
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("General chat")
+                .to_owned(),
             model: config.model.name,
             effort: effort_label(config.agent.max_turns).to_owned(),
         }
@@ -216,167 +274,177 @@ pub(super) fn draw_common(
     stdout.flush()
 }
 
-#[allow(dead_code)]
-pub(super) fn legacy_draw_common(
-    stdout: &mut io::Stdout,
-    identity: &UiIdentity,
-    app: &AppState,
-) -> io::Result<()> {
-    let (width, height) = size()?;
-    queue!(
-        stdout,
-        MoveTo(0, 0),
-        Clear(ClearType::CurrentLine),
-        MoveTo(0, HEADER_TOP_PADDING)
-    )?;
-    for logo_line in MEDUSA_LOGO {
-        print_styled_line(stdout, width, logo_line, Color::Cyan, Attribute::Bold)?;
+fn modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
+    if model_modal.is_settings() {
+        settings_modal_lines(model_modal)
+    } else {
+        support::model_modal_lines(model_modal)
     }
-    queue!(
-        stdout,
-        Clear(ClearType::UntilNewLine),
-        SetForegroundColor(Color::Magenta),
-        SetAttribute(Attribute::Bold),
-        Print(wrap_to_width(
-            &format!(
-                "{} {}",
-                app.model_label.as_deref().unwrap_or(&identity.model),
-                app.effort_label.as_deref().unwrap_or(&identity.effort)
+}
+
+fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
+    let page = modal.settings_page().unwrap_or(app::SettingsPage::Root);
+    let revision = modal.settings_revision().unwrap_or_default();
+    let profile = modal.settings_active_profile().unwrap_or("default");
+    if page == app::SettingsPage::Root {
+        let mut lines = vec![StyledLine::new(
+            format!("Settings · profile {profile} · revision {revision}"),
+            Color::Cyan,
+        )];
+        for (index, (label, value)) in modal.settings_root_rows().into_iter().enumerate() {
+            let selected = index == modal.settings_root_selected();
+            lines.push(StyledLine::with_marker(
+                if selected { "› " } else { "  " },
+                if selected {
+                    Color::Magenta
+                } else {
+                    Color::DarkGrey
+                },
+                format!("{label:<15} {value}"),
+                if selected { Color::White } else { Color::Grey },
+            ));
+        }
+        lines.push(StyledLine::new(
+            format!(
+                "Last apply timing: {} · credentials remain external/redacted",
+                modal
+                    .settings_last_apply_timing()
+                    .map_or("none", |timing| timing.label())
             ),
-            width
-        )),
-        SetAttribute(Attribute::Reset),
-        ResetColor,
-        Print("\r\n"),
-    )?;
-    StyledLine::new(session_metrics_line(app), Color::DarkGrey).print(stdout, width)?;
-    let header_height = HEADER_TOP_PADDING + 5;
-    let model_modal = app.model_modal();
-    let modal_lines = model_modal.map(model_modal_lines).unwrap_or_default();
-    let suggestions = if model_modal.is_none() {
-        command_suggestions(&app.composer.draft.text, app.repository())
-    } else {
-        Vec::new()
-    };
-    let available_suggestion_rows = height.saturating_sub(header_height.saturating_add(5));
-    let suggestion_rows = usize::from(available_suggestion_rows);
-    let suggestion_start = app
-        .command_selection
-        .saturating_sub(suggestion_rows.saturating_sub(1))
-        .min(suggestions.len().saturating_sub(suggestion_rows));
-    let visible_suggestions = suggestions
-        .iter()
-        .skip(suggestion_start)
-        .take(suggestion_rows)
-        .collect::<Vec<_>>();
-    let requested_composer_height = if model_modal.is_some() {
-        3_u16.saturating_add(u16::try_from(modal_lines.len()).unwrap_or(u16::MAX))
-    } else {
-        5_u16.saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
-    };
-    let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
-    let content_rows = height.saturating_sub(composer_height + header_height) as usize;
-    let mut lines = transcript_lines(app, width);
-    if app.is_running() {
-        lines.push(StyledLine::with_marker(
-            spinner_marker(app.spinner_frame),
-            Color::Magenta,
-            running_status(app),
-            Color::Grey,
+            Color::DarkGrey,
         ));
-    }
-    if let Some(plan) = &app.plan {
-        lines.extend(plan_lines(plan));
-    }
-    let visible_content = lines
-        .iter()
-        .rev()
-        .skip(
-            app.scrollback_offset()
-                .min(lines.len().saturating_sub(content_rows)),
-        )
-        .take(content_rows)
-        .rev()
-        .collect::<Vec<_>>();
-    for line in &visible_content {
-        line.print(stdout, width)?;
-    }
-    for _ in visible_content.len()..content_rows {
-        queue!(stdout, Clear(ClearType::UntilNewLine), Print("\r\n"))?;
+        return lines;
     }
 
-    let composer_top = height.saturating_sub(composer_height);
-    queue!(
-        stdout,
-        MoveTo(0, composer_top),
-        SetForegroundColor(Color::DarkGrey),
-        Print("─".repeat(width as usize)),
-        ResetColor,
-        Print("\r\n")
-    )?;
-    if model_modal.is_some() {
-        let available_modal_rows = composer_height.saturating_sub(3);
-        for line in modal_lines.iter().take(usize::from(available_modal_rows)) {
-            line.print(stdout, width)?;
+    let page_name = match page {
+        app::SettingsPage::Root => "Settings",
+        app::SettingsPage::Profile => "Profile",
+        app::SettingsPage::Provider => "Provider",
+        app::SettingsPage::Model => "Model",
+        app::SettingsPage::Speed => "Speed",
+        app::SettingsPage::Reasoning => "Reasoning",
+        app::SettingsPage::Authentication => "Authentication",
+        app::SettingsPage::BaseUrl => "Base URL",
+        app::SettingsPage::Status => "Status",
+        app::SettingsPage::Review => "Review changes",
+    };
+    let mut lines = vec![StyledLine::new(
+        format!("Settings / {page_name} · revision {revision}"),
+        Color::Cyan,
+    )];
+    if page == app::SettingsPage::Status {
+        lines.push(StyledLine::new(
+            format!(
+                "Health: {} · active profile: {profile}",
+                modal.settings_doctor_summary()
+            ),
+            Color::White,
+        ));
+        let selected = modal.settings_selected_choice();
+        for (index, check) in modal.settings_doctor_checks().into_iter().enumerate() {
+            let is_selected = index == selected;
+            lines.push(StyledLine::with_marker(
+                if is_selected { "› " } else { "  " },
+                if is_selected { Color::Magenta } else { Color::DarkGrey },
+                format!("[{}] {} · {}", check.status.label(), check.name, check.detail),
+                if is_selected { Color::White } else { Color::Grey },
+            ));
+            if is_selected {
+                if let Some(remediation) = check.remediation {
+                    lines.push(StyledLine::new(
+                        format!("    {remediation}"),
+                        Color::DarkGrey,
+                    ));
+                }
+                if check.repair.is_some() {
+                    lines.push(StyledLine::new(
+                        "    Enter applies this deterministic repair through ProviderProfileCatalog.",
+                        Color::DarkGrey,
+                    ));
+                } else {
+                    lines.push(StyledLine::new(
+                        "    Enter refreshes diagnostics; no automatic mutation is available for this check.",
+                        Color::DarkGrey,
+                    ));
+                }
+            }
         }
-        print_separator(stdout, width)?;
-        StyledLine::with_marker(
-            "› ",
-            Color::Magenta,
-            "up/down choose · tab focus · enter set for this session · esc cancel",
+        lines.push(StyledLine::new(
+            "Credentials remain external/redacted · Esc returns without applying a repair.",
             Color::DarkGrey,
-        )
-        .print(stdout, width)?;
-        return stdout.flush();
+        ));
+        return lines;
     }
-    for (index, suggestion) in visible_suggestions.iter().enumerate() {
-        let selected = suggestion_start + index == app.command_selection;
-        StyledLine::with_marker(
-            if selected { "> " } else { "  " },
+    if page == app::SettingsPage::Review {
+        let review = modal.settings_review_lines();
+        if review.is_empty() {
+            lines.push(StyledLine::new("No staged changes.", Color::Grey));
+        } else {
+            lines.push(StyledLine::new("Pending non-secret changes:", Color::White));
+            for change in review {
+                lines.push(StyledLine::new(format!("  {change}"), Color::Grey));
+            }
+            lines.push(StyledLine::new(
+                "Enter applies all staged changes atomically · Esc returns without applying.",
+                Color::DarkGrey,
+            ));
+        }
+        return lines;
+    }
+    if page == app::SettingsPage::BaseUrl {
+        lines.push(StyledLine::with_marker(
+            "> ",
+            Color::Magenta,
+            if modal.settings_base_url_edit().is_empty() {
+                "provider default".to_owned()
+            } else {
+                modal.settings_base_url_edit().to_owned()
+            },
+            Color::White,
+        ));
+        lines.push(StyledLine::new(
+            "Empty uses the provider default. Managed provider routes reject custom endpoints.",
+            Color::DarkGrey,
+        ));
+        return lines;
+    }
+    if modal.settings_searching() || !modal.settings_search().is_empty() {
+        lines.push(StyledLine::with_marker(
+            "/ ",
+            Color::Magenta,
+            modal.settings_search(),
+            Color::White,
+        ));
+    }
+    let query = modal.settings_search().trim().to_lowercase();
+    for (index, choice) in modal.settings_choices().into_iter().enumerate() {
+        if !query.is_empty() && !choice.label.to_lowercase().contains(&query) {
+            continue;
+        }
+        let selected = index == modal.settings_selected_choice();
+        let description = if choice.description.is_empty() {
+            choice.label.clone()
+        } else {
+            format!("{}  {}", choice.label, choice.description)
+        };
+        lines.push(StyledLine::with_marker(
+            if selected { "› " } else { "  " },
             if selected {
                 Color::Magenta
             } else {
                 Color::DarkGrey
             },
-            format!("{:<34} {}", suggestion.usage, suggestion.description),
-            if selected { Color::White } else { Color::Grey },
-        )
-        .print(stdout, width)?;
+            description,
+            if !choice.enabled {
+                Color::DarkGrey
+            } else if selected {
+                Color::White
+            } else {
+                Color::Grey
+            },
+        ));
     }
-    let prompt = if app.composer.draft.text.is_empty() {
-        if app.is_running() {
-            "Add a follow-up for the next turn...".to_owned()
-        } else {
-            "Describe a coding task...".to_owned()
-        }
-    } else {
-        composer_prompt_text(&app.composer.draft.text)
-    };
-    StyledLine::with_marker(
-        "> ",
-        Color::Cyan,
-        prompt,
-        if app.composer.draft.text.is_empty() {
-            Color::DarkGrey
-        } else {
-            Color::White
-        },
-    )
-    .print(stdout, width)?;
-    StyledLine::new(context_meter_line(app), Color::Grey).print(stdout, width)?;
-    print_separator(stdout, width)?;
-    StyledLine::with_marker(
-        "› ",
-        Color::Magenta,
-        if app.is_running() {
-            "enter queues a follow-up · ctrl+c interrupt · esc exit"
-        } else {
-            "enter selects/submits · ctrl+v paste · tab also completes commands · esc exit"
-        },
-        Color::DarkGrey,
-    )
-    .print(stdout, width)?;
-    stdout.flush()
+    lines
 }
 
 pub(super) fn render_frame(
@@ -392,39 +460,45 @@ pub(super) fn render_frame(
         return frame;
     }
     let mut row = usize::from(HEADER_TOP_PADDING);
-    for logo_line in MEDUSA_LOGO {
-        set_frame_line(&mut frame, row, StyledLine::new(logo_line, Color::Cyan));
-        row = row.saturating_add(1);
-    }
+    let status = if app.is_running() {
+        running_status(app)
+    } else {
+        active_status(app).to_owned()
+    };
     set_frame_line(
         &mut frame,
         row,
         StyledLine::new(
             format!(
-                "{} {}",
+                "Medusa · {} · {} {} · {}",
+                identity.project,
                 app.model_label.as_deref().unwrap_or(&identity.model),
-                app.effort_label.as_deref().unwrap_or(&identity.effort)
+                app.effort_label.as_deref().unwrap_or(&identity.effort),
+                status,
             ),
-            Color::Magenta,
+            Color::Cyan,
         ),
     );
     row = row.saturating_add(1);
-    set_frame_line(
-        &mut frame,
-        row,
-        StyledLine::new(session_metrics_line(app), Color::DarkGrey),
-    );
+    set_frame_line(&mut frame, row, separator_line(width));
 
-    let header_height = HEADER_TOP_PADDING + 5;
+    let header_height = HEADER_TOP_PADDING + 2;
     let question_modal = app.question_modal();
     let model_modal = app.model_modal();
     let modal_lines = question_modal
         .map(question_modal_lines)
-        .or_else(|| model_modal.map(model_modal_lines))
+        .or_else(|| model_modal.map(modal_lines))
         .unwrap_or_default();
     let is_modal = question_modal.is_some() || model_modal.is_some();
     let plan_panel = if !is_modal && app.task_list_visible {
-        app.plan.as_ref().map(plan_lines).unwrap_or_default()
+        let mut details = vec![StyledLine::new(
+            session_metrics_line(app, width),
+            Color::DarkGrey,
+        )];
+        if let Some(plan) = app.plan.as_ref() {
+            details.extend(plan_lines(plan));
+        }
+        details
     } else {
         Vec::new()
     };
@@ -499,6 +573,18 @@ pub(super) fn render_frame(
             } else {
                 "up/down choose - space multi-select - enter next - tab switch"
             }
+        } else if let Some(model_modal) = model_modal
+            && model_modal.is_settings()
+        {
+            match model_modal.settings_page().unwrap_or(app::SettingsPage::Root) {
+                app::SettingsPage::Root => "up/down choose - enter open - esc close",
+                app::SettingsPage::BaseUrl => "type endpoint - enter apply - esc back",
+                app::SettingsPage::Status => "enter/esc back",
+                _ if model_modal.settings_searching() => {
+                    "type search - up/down choose - enter apply - esc clear search"
+                }
+                _ => "up/down choose - / search - enter apply - esc back",
+            }
         } else {
             "tab field - arrows choose - type or paste key - enter apply - esc cancel"
         };
@@ -507,6 +593,7 @@ pub(super) fn render_frame(
             bottom_row,
             StyledLine::with_marker("> ", Color::Magenta, help, Color::DarkGrey),
         );
+        apply_selection(&mut frame, app.selection);
         return frame;
     }
 
@@ -547,7 +634,7 @@ pub(super) fn render_frame(
         StyledLine::with_marker(
             "> ",
             Color::Cyan,
-            prompt,
+            format!("{USER_INPUT_INDENT}{prompt}"),
             if app.composer.draft.text.is_empty() {
                 Color::DarkGrey
             } else {
@@ -571,12 +658,69 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "enter queue follow-up - ctrl+c interrupt - ctrl+t tasks"
+                "enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+e activity details"
             } else {
-                "enter submit - ctrl+v paste - tab commands - ctrl+t tasks"
+                "enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+e activity details"
             },
             Color::DarkGrey,
         ),
     );
+    apply_selection(&mut frame, app.selection);
     frame
+}
+
+fn apply_selection(frame: &mut [StyledLine], selection: Option<TextSelection>) {
+    let Some(selection) = selection else {
+        return;
+    };
+    if selection.is_empty() {
+        return;
+    }
+    let (start, end) = selection.ordered();
+    for row in start.row..=end.row {
+        let from = if row == start.row {
+            usize::from(start.column)
+        } else {
+            0
+        };
+        let to = if row == end.row {
+            usize::from(end.column).saturating_add(1)
+        } else {
+            usize::MAX
+        };
+        if let Some(line) = frame.get_mut(usize::from(row)) {
+            line.set_selection(from, to);
+        }
+    }
+}
+
+pub(super) fn selected_text(frame: &[StyledLine], width: u16, selection: TextSelection) -> String {
+    if selection.is_empty() {
+        return String::new();
+    }
+    let (start, end) = selection.ordered();
+    let mut text = String::new();
+    for row in start.row..=end.row {
+        if row != start.row {
+            text.push('\n');
+        }
+        let Some(line) = frame.get(usize::from(row)) else {
+            continue;
+        };
+        let chars = line.visible_text(width).chars().collect::<Vec<_>>();
+        let from = if row == start.row {
+            usize::from(start.column).min(chars.len())
+        } else {
+            0
+        };
+        let to = if row == end.row {
+            usize::from(end.column).saturating_add(1).min(chars.len())
+        } else {
+            chars.len()
+        };
+        if from < to {
+            text.extend(chars[from..to].iter());
+        }
+    }
+    text
 }

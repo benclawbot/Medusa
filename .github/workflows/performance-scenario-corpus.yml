@@ -1,0 +1,62 @@
+name: Performance Scenario Corpus
+
+on:
+  pull_request:
+    paths:
+      - 'benchmarks/performance/**'
+      - 'scripts/performance/**'
+      - 'crates/medusa-provider/src/hedge_acceptance.rs'
+      - 'crates/medusa-provider/src/hedge_runtime.rs'
+      - '.github/workflows/performance-scenario-corpus.yml'
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-corpus:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Enforce measured hedge p95 improvement
+        run: >-
+          cargo test -p medusa-provider
+          injected_tail_latency_benchmark_enforces_p95_improvement
+          -- --nocapture
+      - name: Validate representative corpus
+        run: python scripts/performance/validate_scenarios.py
+      - name: Validate telemetry and publish machine-readable summary
+        run: >-
+          python scripts/performance/summarize_runs.py
+          benchmarks/performance/fixtures/run-v1.json
+          --output performance-summary.json
+      - name: Prove summary artifact is complete
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('performance-summary.json')
+          if not path.is_file():
+              raise SystemExit('performance summary was not written')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          if report.get('schema_version') != 1 or not report.get('groups'):
+              raise SystemExit('performance summary is incomplete')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: performance-corpus-${{ runner.os }}
+          path: performance-summary.json
+          if-no-files-found: error
+          retention-days: 14

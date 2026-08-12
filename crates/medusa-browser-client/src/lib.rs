@@ -1,3 +1,4 @@
+pub mod network_policy;
 pub mod protocol;
 pub mod transport;
 
@@ -16,8 +17,16 @@ pub struct BrowserClient {
 
 impl BrowserClient {
     pub fn spawn(command: &str) -> MedusaResult<Self> {
-        let mut child = Command::new(command)
-            .arg("--stdio")
+        Self::spawn_with_env(command, &[])
+    }
+
+    pub fn spawn_with_env(command: &str, environment: &[(&str, &str)]) -> MedusaResult<Self> {
+        let mut command_builder = Command::new(command);
+        command_builder.arg("--stdio");
+        for (key, value) in environment {
+            command_builder.env(key, value);
+        }
+        let mut child = command_builder
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

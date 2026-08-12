@@ -3,7 +3,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, Ordering},
@@ -13,25 +12,33 @@ use std::{
 };
 
 #[cfg(unix)]
+use std::process::Command;
+
+#[cfg(unix)]
 use std::process::Stdio;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_protocol::frontend::FrontendCommandEnvelope;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
 use crate::{
     cancellation::{append_detail, cancel_all_jobs, cancel_job, mark_job_interrupted},
+    frontend_control::{FrontendCommandAcknowledgement, FrontendControlPlane},
     paths::DaemonPaths,
     process::ProcessRegistry,
     protocol::{
-        DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
-        ResponseEnvelope,
+        DAEMON_PROTOCOL_VERSION, FrontendArtifactUpload, FrontendCredentialUpdate, JobRecord,
+        JobState, Request, RequestEnvelope, Response, ResponseEnvelope,
     },
     scheduler::{DaemonLimits, JobRunner, JobScheduler, SubmitError},
     transport::{LocalListener, LocalStream, connect, wake},
 };
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_NONE: u8 = 0;
 const SHUTDOWN_GRACEFUL: u8 = 1;
@@ -98,15 +105,125 @@ impl DaemonClient {
         }
         Ok(response.response)
     }
+
+    /// Sends one versioned frontend command through the repository-scoped daemon authority.
+    pub fn frontend(
+        &self,
+        envelope: FrontendCommandEnvelope,
+    ) -> MedusaResult<FrontendCommandAcknowledgement> {
+        match self.request(Request::Frontend { envelope })? {
+            Response::Frontend { acknowledgement } => Ok(acknowledgement),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected frontend response: {response:?}"),
+            )),
+        }
+    }
+
+    /// Stages one bounded attachment in the daemon-owned content-addressed artifact store.
+    pub fn frontend_artifact(&self, upload: FrontendArtifactUpload) -> MedusaResult<String> {
+        match self.request(Request::FrontendArtifact { upload })? {
+            Response::FrontendArtifact { artifact_id } => Ok(artifact_id),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected artifact response: {response:?}"),
+            )),
+        }
+    }
+
+    /// Exports one verified bounded artifact for a remote frontend delivery adapter.
+    pub fn frontend_artifact_export(
+        &self,
+        artifact_id: &str,
+    ) -> MedusaResult<crate::FrontendArtifactExport> {
+        match self.request(Request::FrontendArtifactExport {
+            artifact_id: artifact_id.to_owned(),
+        })? {
+            Response::FrontendArtifactExport { artifact } => Ok(artifact),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected artifact export response: {response:?}"),
+            )),
+        }
+    }
+
+    /// Updates one process-local daemon credential without persisting it in protocol evidence.
+    pub fn frontend_credential(&self, update: FrontendCredentialUpdate) -> MedusaResult<()> {
+        match self.request(Request::FrontendCredential { update })? {
+            Response::Ack => Ok(()),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected credential response: {response:?}"),
+            )),
+        }
+    }
+}
+
+fn frontend_request_error(code: String, message: String) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        format!("daemon frontend request failed ({code}): {message}"),
+    )
 }
 
 /// Starts a daemon loop with production limits and blocks until shutdown.
 pub fn serve(paths: DaemonPaths) -> MedusaResult<()> {
-    serve_with_limits(paths, DaemonLimits::default())
+    let config = load_repository_config(&paths.repo)?;
+    serve_with_config(paths, config)
+}
+
+fn load_repository_config(repo: &Path) -> MedusaResult<Config> {
+    let project = repo.join(".medusa/config.toml");
+    let project = project.exists().then_some(project);
+    Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
+}
+
+#[cfg(test)]
+mod repository_config_tests {
+    use super::*;
+
+    #[test]
+    fn daemon_loads_repository_agent_limits() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let medusa = directory.path().join(".medusa");
+        fs::create_dir_all(&medusa).expect("create .medusa");
+        fs::write(
+            medusa.join("config.toml"),
+            "[agent]\nmax_turns = 24\nparallel_workers = 1\n",
+        )
+        .expect("write project config");
+
+        let config = load_repository_config(directory.path()).expect("load repository config");
+        assert_eq!(config.agent.max_turns, 24);
+        assert_eq!(config.agent.parallel_workers, 1);
+    }
+}
+
+/// Starts a daemon loop with production limits and an explicit resolved configuration.
+pub fn serve_with_config(paths: DaemonPaths, config: Config) -> MedusaResult<()> {
+    serve_with_limits_and_config(paths, DaemonLimits::default(), config)
 }
 
 /// Starts a daemon loop with explicit worker and queue limits.
 pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResult<()> {
+    let config = load_repository_config(&paths.repo)?;
+    serve_with_limits_and_config(paths, limits, config)
+}
+
+fn serve_with_limits_and_config(
+    paths: DaemonPaths,
+    limits: DaemonLimits,
+    config: Config,
+) -> MedusaResult<()> {
     fs::create_dir_all(&paths.directory)?;
     let _ownership = Ownership::acquire(&paths)?;
     let (jobs, recovered) = load_and_recover(&paths)?;
@@ -115,6 +232,10 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
     }
     let jobs = Arc::new(Mutex::new(jobs));
     let processes = Arc::new(ProcessRegistry::default());
+    let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+        paths.repo.clone(),
+        config,
+    )));
     let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
     let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
         Ok(scheduler) => scheduler,
@@ -128,6 +249,7 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
         paths,
         jobs,
         processes,
+        frontend,
         Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
         scheduler,
     )
@@ -137,13 +259,29 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
 pub fn spawn(
     paths: DaemonPaths,
 ) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
-    spawn_with_limits(paths, DaemonLimits::default())
+    spawn_with_config(paths, Config::default())
+}
+
+/// Starts the server in a dedicated thread with an explicit resolved configuration.
+pub fn spawn_with_config(
+    paths: DaemonPaths,
+    config: Config,
+) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
+    spawn_with_limits_and_config(paths, DaemonLimits::default(), config)
 }
 
 /// Starts the server in a dedicated thread with explicit worker and queue limits.
 pub fn spawn_with_limits(
     paths: DaemonPaths,
     limits: DaemonLimits,
+) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
+    spawn_with_limits_and_config(paths, limits, Config::default())
+}
+
+fn spawn_with_limits_and_config(
+    paths: DaemonPaths,
+    limits: DaemonLimits,
+    config: Config,
 ) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
     fs::create_dir_all(&paths.directory)?;
     limits.validate()?;
@@ -160,6 +298,10 @@ pub fn spawn_with_limits(
             }
             let jobs = Arc::new(Mutex::new(jobs));
             let processes = Arc::new(ProcessRegistry::default());
+            let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+                paths.repo.clone(),
+                config,
+            )));
             let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
             let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
                 Ok(scheduler) => scheduler,
@@ -168,7 +310,15 @@ pub fn spawn_with_limits(
                     return Err(error);
                 }
             };
-            run_loop(listener, paths, jobs, processes, server_shutdown, scheduler)
+            run_loop(
+                listener,
+                paths,
+                jobs,
+                processes,
+                frontend,
+                server_shutdown,
+                scheduler,
+            )
         })
         .map_err(|error| {
             MedusaError::new(
@@ -200,6 +350,7 @@ fn run_loop(
     paths: DaemonPaths,
     jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
     processes: Arc<ProcessRegistry>,
+    frontend: Arc<Mutex<FrontendControlPlane>>,
     shutdown: Arc<AtomicU8>,
     mut scheduler: JobScheduler,
 ) -> MedusaResult<()> {
@@ -207,8 +358,9 @@ fn run_loop(
         while shutdown.load(Ordering::SeqCst) == SHUTDOWN_NONE {
             match listener.accept() {
                 Ok(stream) => {
-                    let _ =
-                        handle_connection(stream, &paths, &jobs, &processes, &shutdown, &scheduler);
+                    let _ = handle_connection(
+                        stream, &paths, &jobs, &processes, &frontend, &shutdown, &scheduler,
+                    );
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -236,6 +388,7 @@ fn handle_connection(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
     processes: &Arc<ProcessRegistry>,
+    frontend: &Arc<Mutex<FrontendControlPlane>>,
     shutdown: &Arc<AtomicU8>,
     scheduler: &JobScheduler,
 ) -> MedusaResult<()> {
@@ -246,13 +399,27 @@ fn handle_connection(
         .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
         .map_err(transport_error)?;
     let reader_stream = stream.try_clone().map_err(transport_error)?;
-    let mut reader = BufReader::new(reader_stream).take((MAX_REQUEST_BYTES + 1) as u64);
+    let mut reader = BufReader::new(reader_stream).take((MAX_ARTIFACT_REQUEST_BYTES + 1) as u64);
     let mut line = String::new();
     reader.read_line(&mut line)?;
     if line.trim().is_empty() {
         return Ok(());
     }
-    if line.len() > MAX_REQUEST_BYTES {
+    if line.len() > MAX_ARTIFACT_REQUEST_BYTES {
+        return write_response(
+            &mut stream,
+            Response::Error {
+                code: "request_too_large".into(),
+                message: format!(
+                    "daemon artifact request exceeds {MAX_ARTIFACT_REQUEST_BYTES} bytes"
+                ),
+            },
+        );
+    }
+    let envelope: RequestEnvelope = serde_json::from_str(&line)?;
+    if line.len() > MAX_REQUEST_BYTES
+        && !matches!(&envelope.request, Request::FrontendArtifact { .. })
+    {
         return write_response(
             &mut stream,
             Response::Error {
@@ -261,7 +428,6 @@ fn handle_connection(
             },
         );
     }
-    let envelope: RequestEnvelope = serde_json::from_str(&line)?;
     let response = if envelope.version != DAEMON_PROTOCOL_VERSION {
         Response::Error {
             code: "incompatible_protocol".into(),
@@ -273,6 +439,7 @@ fn handle_connection(
             paths,
             jobs,
             processes,
+            frontend,
             shutdown,
             scheduler,
         )?
@@ -298,6 +465,7 @@ fn dispatch(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
     processes: &Arc<ProcessRegistry>,
+    frontend: &Arc<Mutex<FrontendControlPlane>>,
     shutdown: &Arc<AtomicU8>,
     scheduler: &JobScheduler,
 ) -> MedusaResult<Response> {
@@ -358,6 +526,64 @@ fn dispatch(
             Ok(Response::Jobs {
                 jobs: locked.values().cloned().collect(),
             })
+        }
+        Request::Frontend { envelope } => {
+            let mut control = lock_frontend(frontend)?;
+            Ok(match control.dispatch(envelope) {
+                Ok(acknowledgement) => Response::Frontend { acknowledgement },
+                Err(error) => Response::Error {
+                    code: "frontend_control".to_owned(),
+                    message: error.to_string(),
+                },
+            })
+        }
+        Request::FrontendArtifact { upload } => {
+            let bytes = match STANDARD.decode(upload.bytes_base64.as_bytes()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return Ok(Response::Error {
+                        code: "invalid_artifact_encoding".to_owned(),
+                        message: format!("frontend artifact is not valid base64: {error}"),
+                    });
+                }
+            };
+            let control = lock_frontend(frontend)?;
+            Ok(
+                match control.ingest_artifact(
+                    upload.display_name,
+                    upload.mime_type,
+                    upload.kind,
+                    bytes,
+                ) {
+                    Ok(artifact_id) => Response::FrontendArtifact { artifact_id },
+                    Err(error) => Response::Error {
+                        code: "frontend_artifact".to_owned(),
+                        message: error.to_string(),
+                    },
+                },
+            )
+        }
+        Request::FrontendArtifactExport { artifact_id } => {
+            let control = lock_frontend(frontend)?;
+            Ok(match control.export_attachment(&artifact_id) {
+                Ok(artifact) => Response::FrontendArtifactExport { artifact },
+                Err(error) => Response::Error {
+                    code: "frontend_artifact_export".to_owned(),
+                    message: error.to_string(),
+                },
+            })
+        }
+        Request::FrontendCredential { update } => {
+            let mut control = lock_frontend(frontend)?;
+            Ok(
+                match control.update_credential(update.provider, update.credential) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Response::Error {
+                        code: "frontend_credential".to_owned(),
+                        message: error.to_string(),
+                    },
+                },
+            )
         }
         Request::Shutdown => {
             request_shutdown(shutdown, SHUTDOWN_GRACEFUL);
@@ -592,6 +818,18 @@ fn validate_program(program: &str) -> MedusaResult<()> {
     Ok(())
 }
 
+fn lock_frontend(
+    frontend: &Arc<Mutex<FrontendControlPlane>>,
+) -> MedusaResult<std::sync::MutexGuard<'_, FrontendControlPlane>> {
+    frontend.lock().map_err(|_| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            "daemon frontend control lock was poisoned",
+        )
+    })
+}
+
 pub(crate) fn lock_jobs(
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
 ) -> MedusaResult<std::sync::MutexGuard<'_, BTreeMap<String, JobRecord>>> {
@@ -680,14 +918,7 @@ fn process_is_alive(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn process_is_alive(pid: u32) -> bool {
-    let filter = format!("PID eq {pid}");
-    Command::new("tasklist")
-        .args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
-        .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
-        })
+    medusa_process_containment::process_is_alive(pid)
 }
 
 #[cfg(test)]

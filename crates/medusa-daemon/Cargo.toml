@@ -6,18 +6,35 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# The shipped daemon owns durable process supervision and recovery coordination.
 [dependencies]
+base64 = "0.22"
+hex.workspace = true
+medusa-agent = { path = "../medusa-agent" }
+medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
+medusa-process-containment.workspace = true
+medusa-process-registry = { path = "../medusa-process-registry" }
+medusa-protocol.workspace = true
+medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
+medusa-runtime = { path = "../medusa-runtime" }
+medusa-session-continuity = { path = "../medusa-session-continuity" }
+medusa-runtime-supervisor = { path = "../medusa-runtime-supervisor" }
+medusa-wakeup = { path = "../medusa-wakeup" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
 time.workspace = true
 ulid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 getrandom.workspace = true
-hex.workspace = true
 
 [dev-dependencies]
+medusa-provider = { path = "../medusa-provider" }
+medusa-testkit.workspace = true
 tempfile.workspace = true
 
 [lints]

@@ -1,0 +1,124 @@
+name: Sign Release Manifest
+
+on:
+  workflow_run:
+    workflows: ["Publish Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to sign
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: sign-release-manifest-${{ github.event.workflow_run.id || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    name: Verify and sign release assets
+    runs-on: ubuntu-latest
+    environment: release-signing
+    timeout-minutes: 20
+    env:
+      RELEASE_SEQUENCE: ${{ github.run_number }}
+      MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM: ${{ secrets.MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Resolve tag and download CI-produced release assets
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            RELEASE_TAG="$REQUESTED_TAG"
+          else
+            mapfile -t tags < <(git tag --points-at "$WORKFLOW_SHA" | grep '^v' || true)
+            if [ "${#tags[@]}" -ne 1 ]; then
+              printf 'expected exactly one release tag at %s, found %s\n' "$WORKFLOW_SHA" "${#tags[@]}" >&2
+              exit 1
+            fi
+            RELEASE_TAG="${tags[0]}"
+          fi
+          RELEASE_VERSION=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
+          RELEASE_SHA=$(git rev-parse "$RELEASE_TAG^{commit}")
+          test "$RELEASE_SHA" = "$(git rev-parse HEAD)"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
+          rm -rf release-assets
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
+          rm -f \
+            release-assets/medusa-release-manifest.json \
+            release-assets/medusa-release-manifest.sig.json \
+            release-assets/SHA256SUMS
+      - name: Generate, sign, and verify the canonical manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM"
+          release_key="$RUNNER_TEMP/medusa-release-ed25519.pem"
+          trap 'rm -f "$release_key"' EXIT
+          umask 077
+          printf '%s\n' "$MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM" > "$release_key"
+          python3 scripts/release-evidence.py manifest \
+            --root . \
+            --assets release-assets \
+            --output release-assets/medusa-release-manifest.json \
+            --checksums release-assets/SHA256SUMS \
+            --version "$RELEASE_VERSION" \
+            --revision "$RELEASE_SHA" \
+            --sequence "$RELEASE_SEQUENCE" \
+            --rollout-percentage 100 \
+            --minimum-updater-version "1.0.0"
+          python3 scripts/release-evidence.py sign-manifest \
+            --manifest release-assets/medusa-release-manifest.json \
+            --output release-assets/medusa-release-manifest.sig.json \
+            --private-key "$release_key" \
+            --key-id medusa-release-2026-01
+          python3 scripts/release-evidence.py verify-signature \
+            --manifest release-assets/medusa-release-manifest.json \
+            --signature release-assets/medusa-release-manifest.sig.json \
+            --public-key release/keys/medusa-release-2026-01.pem
+      - name: Attest the signed release authority
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: |
+            release-assets/medusa-release-manifest.json
+            release-assets/medusa-release-manifest.sig.json
+            release-assets/SHA256SUMS
+      - name: Publish the signed release authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            release-assets/medusa-release-manifest.json \
+            release-assets/medusa-release-manifest.sig.json \
+            release-assets/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          grep -Fx 'medusa-release-manifest.json' <<<"$assets"
+          grep -Fx 'medusa-release-manifest.sig.json' <<<"$assets"
+          grep -Fx 'SHA256SUMS' <<<"$assets"

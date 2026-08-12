@@ -1,0 +1,527 @@
+/* Issue #620: final neutral light override for every desktop surface. */
+:root {
+  color-scheme: light;
+  --bg: #f7f7f7;
+  --surface: #ffffff;
+  --surface-soft: #f5f5f5;
+  --line: #e6e6e6;
+  --line-strong: #d8d8d8;
+  --text: #191919;
+  --muted: #737373;
+  --purple: #333333;
+  --purple-soft: #f1f1f1;
+  --green: #555555;
+  --green-soft: #f1f1f1;
+  --dark: #ffffff;
+  --danger: #4a4a4a;
+  --warn: #5f5f5f;
+  --background: #f7f7f7;
+  --panel: #ffffff;
+  --border: #e6e6e6;
+  --success: #555555;
+  --medusa-canvas: #f7f7f7;
+  --medusa-panel: #ffffff;
+  --medusa-panel-solid: #ffffff;
+  --medusa-border: #e6e6e6;
+  --medusa-border-strong: #d8d8d8;
+  --medusa-ink: #191919;
+  --medusa-muted: #737373;
+  --medusa-accent: #333333;
+  --medusa-accent-soft: #f1f1f1;
+  --medusa-success: #555555;
+  --medusa-warning: #5f5f5f;
+  --medusa-danger: #4a4a4a;
+  --medusa-blue: #333333;
+  --medusa-shadow: 0 14px 42px rgba(0, 0, 0, 0.08);
+}
+
+html,
+body,
+#root,
+.app-shell,
+.workspace,
+.medusa-workspace {
+  background: #ffffff !important;
+  color: var(--text) !important;
+}
+
+.medusa-workspace,
+.workspace,
+.composer-wrap {
+  background-image: none !important;
+}
+
+.sidebar,
+.topbar,
+.inspector {
+  background: #fafafa !important;
+  backdrop-filter: none !important;
+}
+
+button {
+  border-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--text) !important;
+  background: transparent !important;
+  transition: background 120ms ease, color 120ms ease, opacity 120ms ease !important;
+}
+
+button:hover:not(:disabled),
+button[aria-expanded="true"],
+.nav-item.active,
+.recent-item-row.active {
+  border-color: transparent !important;
+  color: var(--text) !important;
+  background: #eeeeee !important;
+  transform: none !important;
+}
+
+button:active:not(:disabled) {
+  background: #e8e8e8 !important;
+}
+
+button:disabled {
+  color: #aaaaaa !important;
+  background: transparent !important;
+  opacity: 0.72;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid #b7b7b7 !important;
+  outline-offset: 2px !important;
+}
+
+.new-session,
+.nav-item,
+.project-picker,
+.projectless-action,
+.details-button,
+.rail-toggle,
+.icon-button,
+.composer-icon-button,
+.send-button,
+.voice-entry,
+.cancel-button,
+.retry-button,
+.primary-action,
+.secondary-action,
+.dashboard-actions button,
+.learning-header-actions button,
+.learning-actions button,
+.proposal-actions button,
+.session-resume,
+.memory-toolbar button,
+.memory-dock-close,
+.engineering-close,
+.session-dock-actions button {
+  min-height: 38px !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  padding: 0 10px !important;
+  background: transparent !important;
+  color: var(--text) !important;
+}
+
+.rail-toggle,
+.icon-button,
+.composer-icon-button,
+.send-button,
+.voice-entry,
+.memory-dock-close,
+.engineering-close,
+.session-dock-actions button {
+  width: 38px !important;
+  min-width: 38px !important;
+  height: 38px !important;
+  padding: 0 !important;
+  border-radius: 10px !important;
+}
+
+.brand-mark,
+.agent-avatar,
+.avatar,
+.chat-avatar {
+  color: var(--text) !important;
+  background: #f1f1f1 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.new-session,
+.composer-icon-button,
+.send-button,
+.voice-entry {
+  color: #333333 !important;
+  background: #ffffff !important;
+}
+
+.new-session:hover:not(:disabled),
+.composer-icon-button:hover:not(:disabled),
+.send-button:hover:not(:disabled),
+.voice-entry:hover:not(:disabled) {
+  background: #eeeeee !important;
+}
+
+.runtime-state,
+.version,
+kbd,
+.status,
+.session-status,
+.memory-status,
+.memory-list-meta em,
+.memory-tags span {
+  border: 0 !important;
+  color: #666666 !important;
+  background: #f1f1f1 !important;
+  box-shadow: none !important;
+}
+
+.status-dot,
+.active-pill::before {
+  background: #777777 !important;
+  box-shadow: none !important;
+}
+
+.message.user .message-body,
+.chat-user .chat-avatar,
+.session-history-message.user {
+  border-color: transparent !important;
+  color: var(--text) !important;
+  background: #f1f1f1 !important;
+}
+
+.activity-summary,
+.activity-row,
+.thinking-row,
+.standalone-panel,
+.settings-form,
+.approval-card,
+.recovery-dock-content,
+.desktop-update-card,
+.voice-controls,
+.session-details-panel {
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+/* All full-screen tools use one opaque light modal system. */
+.memory-dock-backdrop,
+.learning-overlay,
+.engineering-overlay {
+  background: rgba(70, 70, 70, 0.18) !important;
+  backdrop-filter: blur(2px) !important;
+}
+
+.memory-dock-panel,
+.learning-shell,
+.engineering-shell,
+.session-dock-panel,
+.diff-dock-panel {
+  border: 1px solid var(--border) !important;
+  color: var(--text) !important;
+  background: #ffffff !important;
+  box-shadow: var(--medusa-shadow) !important;
+  backdrop-filter: none !important;
+}
+
+/* Memory: prevent the screenshot's overlapping columns and translucent content. */
+.memory-browser {
+  gap: 18px !important;
+  padding: 24px !important;
+  color: var(--text) !important;
+  background: #ffffff !important;
+}
+
+.memory-toolbar,
+.memory-controls,
+.memory-detail-heading {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.memory-toolbar {
+  padding-right: 54px;
+}
+
+.memory-toolbar h2,
+.memory-detail-heading h2,
+.memory-list-title,
+.memory-confidence strong,
+.memory-body,
+.memory-sources,
+.memory-lineage {
+  color: var(--text) !important;
+  opacity: 1 !important;
+}
+
+.memory-search,
+.memory-list,
+.memory-detail,
+.memory-provenance-grid div,
+.memory-sources code {
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.memory-search {
+  min-height: 42px;
+}
+
+.memory-layout {
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr) !important;
+  gap: 16px !important;
+}
+
+.memory-list,
+.memory-detail {
+  min-width: 0;
+}
+
+.memory-list button {
+  min-height: 0 !important;
+  align-items: flex-start;
+  padding: 12px !important;
+}
+
+.memory-list button:hover,
+.memory-list button.active {
+  background: #f1f1f1 !important;
+}
+
+.memory-detail {
+  padding: 22px !important;
+}
+
+.memory-detail-heading > div,
+.memory-detail-heading > div:first-child,
+.memory-provenance-grid div,
+.memory-provenance-grid strong,
+.memory-sources code,
+.memory-lineage code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.memory-provenance-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+
+.memory-body {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.memory-muted,
+.memory-empty p,
+.memory-list-meta em,
+.memory-list-meta small,
+.memory-list-path,
+.memory-confidence small,
+.memory-provenance-grid small,
+.memory-toolbar p {
+  color: var(--muted) !important;
+  opacity: 1 !important;
+}
+
+/* Learning: remove the legacy black fallback and restore readable contrast. */
+.learning-shell {
+  width: min(1040px, calc(100vw - 40px)) !important;
+  max-height: calc(100vh - 40px) !important;
+  padding: 24px !important;
+}
+
+.learning-shell,
+.learning-shell * {
+  color: var(--text);
+}
+
+.learning-shell > header {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.learning-privacy,
+.learning-list article,
+.learning-filter,
+.learning-error {
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.learning-privacy,
+.learning-list article {
+  padding: 16px !important;
+}
+
+.learning-filter {
+  min-height: 42px;
+  border: 1px solid var(--border) !important;
+}
+
+.learning-title span,
+.learning-list dt,
+.learning-privacy small,
+.learning-empty {
+  color: var(--muted) !important;
+  opacity: 1 !important;
+}
+
+.learning-actions {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* Sessions and durable conversation remain light on both list and detail views. */
+.session-dock-panel {
+  width: min(520px, calc(100vw - 36px)) !important;
+}
+
+.session-dock-panel > header,
+.session-dock-panel > footer {
+  border-color: var(--border) !important;
+  color: var(--muted) !important;
+  background: #ffffff !important;
+}
+
+.session-dock-panel header small,
+.session-dock-panel footer,
+.session-dock-meta,
+.session-history-meta,
+.session-dock-meta code,
+.session-history-meta code,
+.session-history-message small,
+.session-dock-empty {
+  color: var(--muted) !important;
+}
+
+.session-dock-item,
+.session-history-message {
+  color: var(--text) !important;
+  background: #ffffff !important;
+}
+
+.session-dock-item:hover,
+.session-history-message.user {
+  background: #f1f1f1 !important;
+}
+
+.session-dock-item-top > strong,
+.session-history-message p {
+  color: var(--text) !important;
+}
+
+.session-history-message.assistant {
+  border: 1px solid var(--border);
+}
+
+.session-status.completed,
+.session-status.waiting,
+.session-status.active,
+.session-resume {
+  color: #555555 !important;
+  background: #f1f1f1 !important;
+}
+
+.session-dock-error,
+.learning-error,
+.engineering-error,
+.memory-error {
+  color: #444444 !important;
+  background: #f1f1f1 !important;
+  border-color: var(--border) !important;
+}
+
+/* Engineering dashboard: neutral data visualization and honest no-data state. */
+.engineering-shell,
+.engineering-dashboard {
+  background: #f7f7f7 !important;
+}
+
+.engineering-kpis > div,
+.engineering-card,
+.dashboard-actions select,
+.learning-filter {
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+  background: #ffffff !important;
+  box-shadow: none !important;
+}
+
+.engineering-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)) !important;
+}
+
+.engineering-kpis > div {
+  min-width: 0;
+}
+
+.engineering-kpis span,
+.engineering-kpis small,
+.engineering-header p,
+.proposal-list small,
+.friction-list small,
+.axis-labels,
+.empty-state {
+  color: var(--muted) !important;
+}
+
+.trend-card svg {
+  color: #777777 !important;
+}
+
+.trend-card polyline,
+.trend-card circle {
+  stroke: #777777 !important;
+}
+
+.trend-card circle {
+  fill: #ffffff !important;
+}
+
+.trend-card .grid line {
+  stroke: #e6e6e6 !important;
+}
+
+.trend-delta,
+.trend-delta.positive,
+.trend-delta.negative,
+.status.adopted,
+.status.approved,
+.status.rejected,
+.status.rolledBack {
+  color: #555555 !important;
+  background: #f1f1f1 !important;
+}
+
+.proposal-list article,
+.friction-list > div {
+  border-color: var(--border) !important;
+}
+
+@media (max-width: 900px) {
+  .memory-layout {
+    grid-template-columns: 1fr !important;
+  }
+
+  .memory-list {
+    max-height: 260px;
+  }
+
+  .memory-provenance-grid {
+    grid-template-columns: 1fr !important;
+  }
+}

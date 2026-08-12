@@ -1,51 +1,87 @@
-# Refactor Benchmark Contract
+# Reliability and recovery benchmark contract
 
-The modularization program must remain behavior-preserving and avoid material performance regressions.
+Medusa benchmarks product guarantees through the authoritative `cargo product-acceptance` suite. The benchmark layer scores retained acceptance evidence; it does not replace production runtime tests with synthetic mocks.
 
-## Frozen scenarios
+## Versioned suite
 
-Measure the following scenarios on the same machine, toolchain, build profile, repository fixture, and warm/cold state:
+`benchmarks/reliability-suite.json` defines the benchmark schema, scenarios, run count, metrics, and release-blocking thresholds. Its representative tasks cover:
 
-1. `cargo test --workspace --all-features --no-run`
-   - captures workspace compile and link cost;
-2. `cargo test -p medusa-agent`
-   - captures orchestration and tool-policy test execution;
-3. `cargo test -p medusa-memory`
-   - captures Markdown persistence, indexing, retrieval, and lifecycle behavior;
-4. `cargo test -p medusa-intelligence`
-   - captures parsing, patching, formatting, and impact analysis;
-5. `cargo build --release --locked --bin medusa`
-   - captures release-build cost and final binary size;
-6. `bash scripts/package-smoke.sh`
-   - captures startup and help/version smoke behavior.
+- small verified repair;
+- multi-file bug fix;
+- dependency or API migration;
+- interrupted work and resume after runtime termination;
+- failed verification and rollback;
+- prohibited filesystem or network access;
+- adversarial process spawning.
 
-## Measurement method
+Platform-specific acceptance scenarios may satisfy one benchmark case through `platform_any`. A case passes only when at least one applicable authoritative scenario exists and every selected scenario passes.
 
-Run each command at least five times after one untimed warm-up. Record wall-clock duration, peak resident memory where the platform exposes it, and output binary size for release builds. Compare medians rather than single runs.
+## Deterministic execution
 
-A portable timing example is:
+Run the credential-free suite with:
 
 ```bash
-/usr/bin/time -p cargo test -p medusa-agent
-/usr/bin/time -p cargo test -p medusa-memory
-/usr/bin/time -p cargo test -p medusa-intelligence
-/usr/bin/time -p cargo build --release --locked --bin medusa
-wc -c target/release/medusa
+python3 scripts/reliability-benchmark.py
 ```
 
-On macOS, use `/usr/bin/time -l`; on Linux, `/usr/bin/time -v` may be used for memory evidence.
+The command executes the product acceptance contract twice by default and writes:
 
-## Acceptance threshold
+- `target/reliability-benchmark/reliability-benchmark.json`;
+- `target/reliability-benchmark/reliability-benchmark.md`;
+- the original per-run acceptance summaries and logs.
 
-A median regression greater than 5% requires:
+The report records the exact commit, run count, scenario results, time to verified completion, and threshold failures. A test process exiting successfully is not sufficient: the underlying acceptance scenario must emit its required evidence marker and be recorded as `passed`.
 
-- the raw before/after measurements;
-- an explanation of the cause;
-- evidence that the regression is not measurement noise;
-- explicit approval in the pull request.
+## Metrics and release thresholds
 
-Improvements do not permit weakening correctness, adversarial, coverage, or migration gates.
+The deterministic suite blocks release unless it records:
 
-## Future upgrade
+- 100% verified completion;
+- 0% false completion;
+- 100% successful resume;
+- 100% successful rollback;
+- zero containment violations;
+- zero manual interventions;
+- 100% repeated-run determinism.
 
-Where stable microbenchmarks are useful, add Criterion benchmarks for parsing, retrieval scoring, patch validation, and policy normalization. Do not add synthetic benchmarks that bypass the production path merely to report favorable numbers.
+Historical release reports belong under `benchmarks/results/<release-or-commit>/` and must retain both JSON and Markdown outputs with artifact provenance.
+
+## Optional live-model evaluation
+
+Live-provider evaluation is separate and never substitutes for deterministic runtime evidence. Every live result must record provider, model, complete non-secret configuration, exact commit, and run count. Credentials remain external and are never included in benchmark artifacts.
+
+## Performance measurements
+
+For refactor performance comparisons, measure the same machine, toolchain, build profile, fixture, and warm/cold state. Compare medians across at least five timed runs after one warm-up. A median regression greater than 5% requires raw measurements, a noise analysis, and explicit approval. Performance gains never permit weakening correctness, adversarial, coverage, migration, or recovery gates.
+
+## End-to-end tool-orchestration benchmark
+
+`benchmarks/orchestration-suite.json` and `scripts/orchestration-benchmark.py` score complete trajectories produced by the shipped `cargo product-acceptance` entry point. The scenarios cover unfamiliar navigation, repeated repository work, localized and cross-package fixes, dependency updates, failing-test diagnosis, large outputs, transient recovery, context-heavy work, safe parallelism, and compression recovery reads.
+
+The report retains task success, first-pass success, median and p95 duration, critical-path latency, tool-call and redundancy counts, token classes, retained context, billed cost, cache behavior, fallback recovery, verification coverage, speculation waste, compression recovery reads, and user corrections. Only task success, verification coverage, and safety are release invariants; performance and cost results are reported as measured tradeoffs rather than compared with arbitrary preselected percentages.
+
+Repository-specific orchestration learning is stored in `.medusa/orchestration-profile.json`. It is versioned, resettable, confidence-scored, time-decayed, and capped to a small recommendation-score adjustment. Explicit policy, requested output mode, permissions, containment, mutation serialization, verification requirements, and budget ceilings always take precedence. Missing, disabled, stale, corrupt, adversarial, or low-confidence profiles fail closed and contribute no learned adjustment.
+
+Run the scoring contract without Rust:
+
+```bash
+python3 scripts/test-orchestration-benchmark.py
+```
+
+Run the complete benchmark through the shipped runtime acceptance entry point:
+
+```bash
+python3 scripts/orchestration-benchmark.py
+```
+
+## TypeScript/JavaScript workspace benchmark
+
+`crates/medusa-intelligence/benches/typescript_workspace.rs` measures deterministic production workspace discovery and content fingerprinting for 100, 1,000, and 5,000 supported source files. Every iteration verifies the exact source count and stable workspace fingerprint before emitting a machine-readable timing line. Generated and dependency paths are present in the fixture but excluded from adapter coverage.
+
+Compile and run it with:
+
+```bash
+cargo bench -p medusa-intelligence --bench typescript_workspace --locked
+```
+
+The final `Code Intelligence Certification` workflow compiles the benchmark on Linux, macOS, and Windows and executes it on Linux. Results are performance evidence only; correctness, freshness, repository confinement, stale-state refusal, and cross-file mutation safety remain release invariants.

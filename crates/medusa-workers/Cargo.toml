@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 medusa-core.workspace = true
+medusa-evidence.workspace = true
 serde.workspace = true
 ulid.workspace = true
 

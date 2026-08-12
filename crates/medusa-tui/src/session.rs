@@ -6,6 +6,8 @@ use crate::{
 use std::time::Instant;
 
 const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
+const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -21,6 +23,11 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     let draft_key = options
         .resume_session
         .clone()
+        .or_else(|| {
+            options
+                .continue_latest
+                .then(|| "continue-latest".to_owned())
+        })
         .unwrap_or_else(|| "current".to_owned());
     let mut app = AppState::new(
         options.repo.clone(),
@@ -29,9 +36,21 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         clipboard,
     )?;
     let identity = UiIdentity::for_repo(&options.repo);
-    let runtime = RuntimeController::start(options.repo.clone());
+    let runtime = runtime_for_options(&options).map_err(runtime_error)?;
     let mut terminal = TerminalGuard::enter()?;
     run_loop(terminal.stdout(), &options, &identity, &mut app, &runtime)
+}
+
+fn runtime_for_options(
+    options: &TuiOptions,
+) -> Result<RuntimeController, crate::runtime::RuntimeError> {
+    if let Some(session_id) = options.resume_session.as_deref() {
+        return RuntimeController::start_resumed(options.repo.clone(), session_id);
+    }
+    if options.continue_latest {
+        return RuntimeController::start_continue_latest(options.repo.clone());
+    }
+    Ok(RuntimeController::start(options.repo.clone()))
 }
 
 struct TerminalGuard {
@@ -94,13 +113,22 @@ pub(super) fn run_loop(
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
     let mut daemon = DaemonMonitor::new(options.socket_path());
+    let (mut daemon_jobs, mut daemon_status) = daemon.poll(app);
+    let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
     let mut last_ctrl_c = None;
+
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let (daemon_jobs, daemon_status) = daemon.poll(app);
+
+        let now = Instant::now();
+        if now >= next_daemon_poll {
+            (daemon_jobs, daemon_status) = daemon.poll(app);
+            next_daemon_poll = now + DAEMON_POLL_INTERVAL;
+        }
+
         draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
                 continue;
@@ -117,6 +145,9 @@ pub(super) fn run_loop(
             if ctrl_l_redraw(&terminal_event) {
                 continue;
             }
+            if handle_mouse_selection(app, identity, &terminal_event)? {
+                continue;
+            }
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
@@ -124,7 +155,6 @@ pub(super) fn run_loop(
                 return Ok(ExitReason::UserQuit);
             }
         }
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -139,17 +169,26 @@ pub(super) fn run_loop(
     let mut last_frame: Option<Vec<StyledLine>> = None;
     let mut last_ctrl_c = None;
     let mut daemon = DaemonMonitor::new(options.socket_path());
+    let _ = daemon.poll(app);
+    let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
+
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let _ = daemon.poll(app);
+
+        let now = Instant::now();
+        if now >= next_daemon_poll {
+            let _ = daemon.poll(app);
+            next_daemon_poll = now + DAEMON_POLL_INTERVAL;
+        }
+
         let (width, height) = size()?;
         let frame = render_frame(identity, app, width, height);
         if last_frame.as_ref() != Some(&frame) {
             draw_portable_frame(stdout, width, &frame, last_frame.as_deref())?;
             last_frame = Some(frame);
         }
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
                 continue;
@@ -170,6 +209,10 @@ pub(super) fn run_loop(
                 last_frame = None;
                 continue;
             }
+            if handle_mouse_selection(app, identity, &terminal_event)? {
+                last_frame = None;
+                continue;
+            }
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
@@ -177,7 +220,53 @@ pub(super) fn run_loop(
                 return Ok(ExitReason::UserQuit);
             }
         }
-        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn handle_mouse_selection(
+    app: &mut AppState,
+    identity: &UiIdentity,
+    event: &Event,
+) -> io::Result<bool> {
+    let Event::Mouse(mouse) = event else {
+        return Ok(false);
+    };
+    let position = TerminalPosition {
+        row: mouse.row,
+        column: mouse.column,
+    };
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            app.begin_text_selection(position);
+            Ok(true)
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            app.update_text_selection(position);
+            Ok(true)
+        }
+        MouseEventKind::Moved if app.is_selecting_text() => {
+            app.update_text_selection(position);
+            Ok(true)
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let Some(selection) = app.finish_text_selection(position) else {
+                return Ok(true);
+            };
+            if selection.is_empty() {
+                return Ok(true);
+            }
+            let (width, height) = size()?;
+            let frame = render_frame(identity, app, width, height);
+            let text = selected_text(&frame, width, selection);
+            if !text.is_empty()
+                && let Err(error) = app.copy_text(&text)
+            {
+                app.status = format!("copy failed: {error}");
+            }
+            Ok(true)
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => Ok(false),
+        _ => Ok(false),
     }
 }
 
@@ -310,6 +399,12 @@ pub(super) fn drain_runtime_events(
         match event {
             RuntimeEvent::Started => {
                 app.begin_run();
+                app.record_activity(TranscriptActivity {
+                    id: None,
+                    kind: TranscriptActivityKind::Progress,
+                    title: "Waiting for model or tool response".to_owned(),
+                    details: Vec::new(),
+                });
             }
             RuntimeEvent::AssistantText(text) => {
                 app.record_assistant_text(text);
@@ -321,12 +416,51 @@ pub(super) fn drain_runtime_events(
                         RuntimeActivityKind::Assistant => TranscriptActivityKind::Assistant,
                         RuntimeActivityKind::Done => TranscriptActivityKind::Done,
                         RuntimeActivityKind::Error => TranscriptActivityKind::Error,
+                        RuntimeActivityKind::Progress => TranscriptActivityKind::Progress,
                         RuntimeActivityKind::Tool => TranscriptActivityKind::Tool,
                         RuntimeActivityKind::Verification => TranscriptActivityKind::Verification,
                     },
                     title: activity.title,
                     details: activity.details,
                 });
+            }
+            RuntimeEvent::Team(snapshot) => {
+                let has_workers = !snapshot.workers.is_empty();
+                for worker in snapshot.workers {
+                    app.record_activity(TranscriptActivity {
+                        id: Some(format!("team:{}", worker.worker_id)),
+                        kind: match worker.lifecycle {
+                            medusa_runtime::TeamWorkerLifecycle::Completed
+                            | medusa_runtime::TeamWorkerLifecycle::Integrated => {
+                                TranscriptActivityKind::Done
+                            }
+                            medusa_runtime::TeamWorkerLifecycle::Failed => {
+                                TranscriptActivityKind::Error
+                            }
+                            _ => TranscriptActivityKind::Progress,
+                        },
+                        title: format!(
+                            "{} · {} · {:?}",
+                            worker.worker_id, worker.task_id, worker.lifecycle
+                        ),
+                        details: vec![
+                            format!("role {}", worker.role),
+                            format!("turn {}", worker.turn),
+                            format!(
+                                "session {}",
+                                worker.session_id.as_deref().unwrap_or("pending")
+                            ),
+                            worker.last_update,
+                        ],
+                    });
+                }
+                if has_workers {
+                    app.status = if snapshot.active {
+                        "team active".to_owned()
+                    } else {
+                        "team complete".to_owned()
+                    };
+                }
             }
             RuntimeEvent::Plan(plan) => {
                 app.set_plan(plan);
@@ -339,14 +473,22 @@ pub(super) fn drain_runtime_events(
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
-                model_elapsed_millis,
+                total_tokens,
+                duration_ms,
+                tokens_per_second_milli,
+                estimated_cost_microusd,
+                provenance,
             } => {
-                app.record_usage(
+                app.record_turn_usage(
                     input_tokens,
                     output_tokens,
                     cache_read_input_tokens,
                     cache_creation_input_tokens,
-                    model_elapsed_millis,
+                    total_tokens,
+                    duration_ms,
+                    tokens_per_second_milli,
+                    estimated_cost_microusd,
+                    provenance,
                 );
             }
             RuntimeEvent::Progress { turn } => {
@@ -444,80 +586,4 @@ pub(super) fn ctrl_l_redraw(event: &Event) -> bool {
                 && key.code == KeyCode::Char('l')
                 && key.modifiers.contains(KeyModifiers::CONTROL)
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::KeyEvent;
-
-    fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
-        Event::Key(KeyEvent::new(code, modifiers))
-    }
-
-    #[test]
-    fn escape_interrupts_at_top_level_but_remains_available_to_modals() {
-        let mut last_ctrl_c = None;
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Esc, KeyModifiers::NONE),
-                false,
-                &mut last_ctrl_c,
-            ),
-            Some(AppAction::Interrupt)
-        );
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Esc, KeyModifiers::NONE),
-                true,
-                &mut last_ctrl_c,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn second_ctrl_c_within_one_second_quits() {
-        let mut last_ctrl_c = None;
-        let ctrl_c = key(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(
-            session_control_action(&ctrl_c, false, &mut last_ctrl_c),
-            Some(AppAction::Interrupt)
-        );
-        assert!(last_ctrl_c.is_some());
-        assert_eq!(
-            session_control_action(&ctrl_c, false, &mut last_ctrl_c),
-            Some(AppAction::Quit)
-        );
-        assert!(last_ctrl_c.is_none());
-    }
-
-    #[test]
-    fn expired_ctrl_c_window_starts_a_new_interrupt_sequence() {
-        let mut last_ctrl_c =
-            Some(Instant::now() - DOUBLE_CTRL_C_WINDOW - Duration::from_millis(1));
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Char('c'), KeyModifiers::CONTROL),
-                false,
-                &mut last_ctrl_c,
-            ),
-            Some(AppAction::Interrupt)
-        );
-        assert!(last_ctrl_c.is_some());
-    }
-
-    #[test]
-    fn another_key_resets_the_double_ctrl_c_window() {
-        let mut last_ctrl_c = Some(Instant::now());
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Char('x'), KeyModifiers::NONE),
-                false,
-                &mut last_ctrl_c,
-            ),
-            None
-        );
-        assert!(last_ctrl_c.is_none());
-    }
 }

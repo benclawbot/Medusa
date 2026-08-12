@@ -1,0 +1,52 @@
+name: Provider Delivery
+
+on:
+  pull_request:
+    paths:
+      - '.cargo/config.toml'
+      - 'crates/medusa-cli/**'
+      - 'crates/medusa-config/**'
+      - 'docs/PROVIDER-DELIVERY.md'
+      - 'examples/provider-diagnostic/**'
+      - '.github/workflows/provider-delivery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Format provider diagnostic
+        run: cargo fmt --all -- --check
+      - name: Test provider diagnostic
+        run: cargo test -p medusa-cli --bin medusa-provider-diagnostic
+      - name: Validate deterministic local route
+        run: cargo provider-diagnostic --config examples/provider-diagnostic/local.toml --output provider-diagnostic.json
+      - name: Validate report contract
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path('provider-diagnostic.json').read_text())
+          assert report['schema_version'] == 1
+          assert report['status'] == 'ready'
+          assert report['provider'] == 'local'
+          assert report['streaming']['supported'] is True
+          assert report['image_input']['supported'] is False
+          assert report['failures'] == []
+          serialized = json.dumps(report)
+          for secret_name in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'MINIMAX_API_KEY', 'MEDUSA_API_KEY'):
+              assert secret_name not in serialized
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: provider-diagnostic
+          path: provider-diagnostic.json
+          if-no-files-found: error

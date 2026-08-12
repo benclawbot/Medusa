@@ -1,510 +1,97 @@
-//! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
+//! Provider-neutral model contracts and production provider adapters.
 
-use std::{env, sync::OnceLock, thread, time::Duration};
+mod anthropic;
+mod configured;
+mod contracts;
+mod health_store;
+mod hedge_acceptance;
+mod hedge_runtime;
+mod hedging;
+mod http;
+mod manager;
+mod openai;
+mod openai_streaming;
+mod openai_transport;
+mod reasoning_exchange;
+mod route_latency;
+mod route_metrics_store;
+mod streaming;
+mod streaming_tool_calls;
+mod verification_bridge;
 
-use medusa_config::Config;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::{StatusCode, blocking::Client};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+pub use anthropic::MiniMaxProvider;
+pub use configured::ConfiguredProvider;
+pub use contracts::{
+    ImageSource, Message, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
+    ProviderCapabilities, ProviderExecutionPhase, ResponseBlock, Role, ToolDefinition, Usage,
+};
+pub use health_store::ProviderHealthStore;
+pub use hedge_acceptance::{
+    HEDGE_ACCEPTANCE_MIN_SAMPLES, HedgeLatencyAcceptance, assess_hedge_latency_acceptance,
+};
+pub use hedging::{HedgeDecision, HedgePolicy, hedge_decision};
+pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
+pub use openai::OpenAiProvider;
+pub use openai_streaming::OpenAiStreamAccumulator;
+pub use reasoning_exchange::{
+    Alternative, Assumption, AssumptionStatus, ContinuationDisposition, ContinuationModelBinding,
+    Decision, EvidenceRef, HandoffPolicy, HandoffSource, HandoffTarget, HandoffTransfer,
+    HandoffTrustState, MAX_HANDOFF_EVIDENCE_ITEMS, MAX_HANDOFF_LIST_ITEMS, MAX_HANDOFF_TEXT_BYTES,
+    ProviderContinuationCapabilities, ProviderContinuationState, REASONING_HANDOFF_SCHEMA_VERSION,
+    ReasoningExchangeRequest, ReasoningHandoffV1, RouteIdentity, VerificationResult,
+};
+pub use route_latency::{
+    RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms, latency_aware_route_order,
+};
+pub use route_metrics_store::ProviderRouteLatencyStore;
+pub use streaming::{ProviderStreamEvent, ProviderStreamTranscript, SequencedStreamEvent};
+pub use streaming_tool_calls::StreamingToolCallAssembler;
+#[doc(hidden)]
+pub use verification_bridge::{
+    clear_pending_route_verification, mark_pending_route_mutation,
+    record_pending_route_verification,
+};
 
-/// Strict tool definition sent to the model.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub input_schema: Value,
-}
+pub(crate) use http::{
+    async_response_error, blocking_response_error, cancelled_provider_error, provider_error,
+    provider_response_error, run_cancellable_request, shared_async_http_client,
+    shared_blocking_http_client,
+};
 
-/// Conversation role.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    User,
-    Assistant,
-}
+#[cfg(test)]
+extern crate self as tempfile;
 
-/// Provider-neutral image source.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ImageSource {
-    Base64 { media_type: String, data: String },
-    AttachmentRef { attachment_id: String },
-}
+#[cfg(test)]
+#[doc(hidden)]
+pub struct TempDir(std::path::PathBuf);
 
-/// Provider-neutral message content.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MessageBlock {
-    Text {
-        text: String,
-    },
-    Image {
-        source: ImageSource,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        alt_text: Option<String>,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: Value,
-    },
-    ToolResult {
-        tool_use_id: String,
-        content: String,
-        is_error: bool,
-    },
-}
-
-/// Provider-neutral conversation message.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct Message {
-    pub role: Role,
-    pub content: Vec<MessageBlock>,
-}
-
-/// One model request.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ModelRequest {
-    pub system: String,
-    pub messages: Vec<Message>,
-    pub tools: Vec<ToolDefinition>,
-    pub max_tokens: u32,
-    pub temperature_milli: u16,
-}
-
-/// A returned response block. Thinking blocks are intentionally omitted.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ResponseBlock {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: Value,
-    },
-}
-
-/// Usage accounting returned by the provider.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Usage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_input_tokens: u64,
-    pub cache_creation_input_tokens: u64,
-}
-
-/// Explicit provider feature contract used before request submission.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ProviderCapabilities {
-    pub image_input: bool,
-    pub supported_image_media_types: Vec<String>,
-    pub max_image_bytes: Option<u64>,
-    pub max_images_per_request: Option<u32>,
-}
-
-/// Provider response stripped of private hidden reasoning.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct ModelResponse {
-    pub response_id: Option<String>,
-    pub stop_reason: Option<String>,
-    pub blocks: Vec<ResponseBlock>,
-    pub usage: Usage,
-}
-
-/// Pluggable provider interface used by orchestration.
-pub trait ModelProvider {
-    fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse>;
-
-    fn capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities::default()
+#[cfg(test)]
+impl TempDir {
+    #[doc(hidden)]
+    pub fn path(&self) -> &std::path::Path {
+        &self.0
     }
-}
-
-/// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.
-pub struct MiniMaxProvider {
-    client: Client,
-    base_url: String,
-    api_key: String,
-    model: String,
-    max_retries: u8,
-    capabilities: ProviderCapabilities,
-}
-
-impl MiniMaxProvider {
-    /// Builds an adapter from typed model configuration and provider environment variables.
-    pub fn from_config(config: &Config) -> MedusaResult<Self> {
-        Self::from_config_with_api_key(config, None)
-    }
-
-    /// Builds an adapter with an optional session-only credential supplied by an interactive client.
-    pub fn from_config_with_api_key(
-        config: &Config,
-        session_api_key: Option<String>,
-    ) -> MedusaResult<Self> {
-        let settings = provider_settings(&config.model.provider)?;
-        let api_key = session_api_key
-            .or_else(|| env::var(settings.api_key_env).ok())
-            .ok_or_else(|| {
-                MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Environment,
-                    format!("missing provider credential in {}", settings.api_key_env),
-                )
-            })?;
-        let base_url = env::var(settings.base_url_env)
-            .unwrap_or_else(|_| settings.default_base_url.to_owned());
-        let client = shared_http_client()?;
-        Ok(Self {
-            client,
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            api_key,
-            model: config.model.name.clone(),
-            max_retries: 5,
-            capabilities: (settings.capabilities)(),
-        })
-    }
-
-    fn request_body(&self, request: &ModelRequest) -> Value {
-        json!({
-            "model": self.model,
-            "system": request.system,
-            "messages": request.messages,
-            "tools": request.tools,
-            "max_tokens": request.max_tokens,
-            "temperature": f64::from(request.temperature_milli) / 1000.0,
-            "stream": false
-        })
-    }
-
-    fn validate_request(&self, request: &ModelRequest) -> MedusaResult<()> {
-        let images = request
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .filter(|block| matches!(block, MessageBlock::Image { .. }))
-            .count();
-        if images == 0 {
-            return Ok(());
-        }
-        if !self.capabilities.image_input {
-            return Err(MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Validation,
-                "configured MiniMax model does not declare image-input support; screenshot submission was blocked",
-            ));
-        }
-        if self
-            .capabilities
-            .max_images_per_request
-            .is_some_and(|limit| images > limit as usize)
-        {
-            return Err(MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Validation,
-                format!("request contains {images} images, exceeding provider limit"),
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn shared_http_client() -> MedusaResult<Client> {
-    static CLIENT: OnceLock<Client> = OnceLock::new();
-    if let Some(client) = CLIENT.get() {
-        return Ok(client.clone());
-    }
-    let client = Client::builder()
-        .timeout(Duration::from_secs(600))
-        .tcp_nodelay(true)
-        .pool_max_idle_per_host(8)
-        .build()
-        .map_err(provider_error)?;
-    let _ = CLIENT.set(client.clone());
-    Ok(CLIENT.get().cloned().unwrap_or(client))
-}
-
-struct ProviderSettings {
-    api_key_env: &'static str,
-    base_url_env: &'static str,
-    default_base_url: &'static str,
-    capabilities: fn() -> ProviderCapabilities,
-}
-
-fn provider_settings(provider: &str) -> MedusaResult<ProviderSettings> {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "minimax" => Ok(ProviderSettings {
-            api_key_env: "MINIMAX_API_KEY",
-            base_url_env: "MINIMAX_BASE_URL",
-            default_base_url: "https://api.minimax.io/anthropic",
-            capabilities: minimax_capabilities_from_environment,
-        }),
-        "anthropic" => Ok(ProviderSettings {
-            api_key_env: "ANTHROPIC_API_KEY",
-            base_url_env: "ANTHROPIC_BASE_URL",
-            default_base_url: "https://api.anthropic.com",
-            capabilities: anthropic_capabilities,
-        }),
-        "anthropic-compatible" => Ok(ProviderSettings {
-            api_key_env: "MEDUSA_API_KEY",
-            base_url_env: "MEDUSA_BASE_URL",
-            default_base_url: "https://api.minimax.io/anthropic",
-            capabilities: ProviderCapabilities::default,
-        }),
-        other => Err(MedusaError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorCategory::Validation,
-            format!(
-                "unsupported provider {other}; choose minimax, anthropic, or anthropic-compatible"
-            ),
-        )),
-    }
-}
-
-impl ModelProvider for MiniMaxProvider {
-    fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
-        self.validate_request(request)?;
-        let endpoint = format!("{}/v1/messages", self.base_url);
-        let body = self.request_body(request);
-        let mut attempt = 0_u8;
-        loop {
-            let response = self
-                .client
-                .post(&endpoint)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .json(&body)
-                .send();
-            match response {
-                Ok(response) if response.status().is_success() => {
-                    let wire: WireResponse = response.json().map_err(provider_error)?;
-                    return Ok(wire.into_model_response());
-                }
-                Ok(response) => {
-                    let status = response.status();
-                    let text = response.text().unwrap_or_default();
-                    let error = classify_status(status, text);
-                    if !error.retryable || attempt >= self.max_retries {
-                        return Err(error);
-                    }
-                }
-                Err(error) => {
-                    if attempt >= self.max_retries {
-                        return Err(provider_error(error));
-                    }
-                }
-            }
-            attempt = attempt.saturating_add(1);
-            thread::sleep(Duration::from_millis(250 * u64::from(attempt)));
-        }
-    }
-
-    fn capabilities(&self) -> ProviderCapabilities {
-        self.capabilities.clone()
-    }
-}
-
-fn minimax_capabilities_from_environment() -> ProviderCapabilities {
-    let image_input = env::var("MINIMAX_IMAGE_INPUT")
-        .ok()
-        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"));
-    if image_input {
-        ProviderCapabilities {
-            image_input: true,
-            supported_image_media_types: vec![
-                "image/png".to_owned(),
-                "image/jpeg".to_owned(),
-                "image/webp".to_owned(),
-                "image/gif".to_owned(),
-            ],
-            max_image_bytes: Some(20 * 1024 * 1024),
-            max_images_per_request: Some(10),
-        }
-    } else {
-        ProviderCapabilities::default()
-    }
-}
-
-fn anthropic_capabilities() -> ProviderCapabilities {
-    ProviderCapabilities {
-        image_input: true,
-        supported_image_media_types: vec![
-            "image/png".to_owned(),
-            "image/jpeg".to_owned(),
-            "image/webp".to_owned(),
-            "image/gif".to_owned(),
-        ],
-        max_image_bytes: Some(20 * 1024 * 1024),
-        max_images_per_request: Some(20),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct WireResponse {
-    id: Option<String>,
-    stop_reason: Option<String>,
-    #[serde(default)]
-    content: Vec<WireBlock>,
-    #[serde(default)]
-    usage: WireUsage,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum WireBlock {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        input: Value,
-    },
-    Thinking {
-        #[serde(default)]
-        thinking: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct WireUsage {
-    #[serde(default)]
-    input_tokens: u64,
-    #[serde(default)]
-    output_tokens: u64,
-    #[serde(default)]
-    cache_read_input_tokens: u64,
-    #[serde(default)]
-    cache_creation_input_tokens: u64,
-}
-
-impl WireResponse {
-    fn into_model_response(self) -> ModelResponse {
-        let blocks = self
-            .content
-            .into_iter()
-            .filter_map(|block| match block {
-                WireBlock::Text { text } => Some(ResponseBlock::Text { text }),
-                WireBlock::ToolUse { id, name, input } => {
-                    Some(ResponseBlock::ToolUse { id, name, input })
-                }
-                WireBlock::Thinking { thinking } => {
-                    let _ = thinking;
-                    None
-                }
-                WireBlock::Unknown => None,
-            })
-            .collect();
-        ModelResponse {
-            response_id: self.id,
-            stop_reason: self.stop_reason,
-            blocks,
-            usage: Usage {
-                input_tokens: self.usage.input_tokens,
-                output_tokens: self.usage.output_tokens,
-                cache_read_input_tokens: self.usage.cache_read_input_tokens,
-                cache_creation_input_tokens: self.usage.cache_creation_input_tokens,
-            },
-        }
-    }
-}
-
-fn classify_status(status: StatusCode, body: String) -> MedusaError {
-    let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-    let category = if retryable {
-        ErrorCategory::Transient
-    } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        ErrorCategory::Policy
-    } else {
-        ErrorCategory::Validation
-    };
-    MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        category,
-        format!("provider returned HTTP {status}: {body}"),
-    )
-    .with_retryable(retryable)
-}
-
-fn provider_error(error: impl std::fmt::Display) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        ErrorCategory::Transient,
-        format!("provider request failed: {error}"),
-    )
-    .with_retryable(true)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn thinking_is_not_exposed_or_persisted() {
-        let wire: WireResponse = serde_json::from_value(json!({
-            "id": "msg-1",
-            "stop_reason": "end_turn",
-            "content": [
-                {"type": "thinking", "thinking": "private chain"},
-                {"type": "text", "text": "concise result"}
-            ],
-            "usage": {"input_tokens": 10, "output_tokens": 4}
-        }))
-        .expect("wire response");
-        let response = wire.into_model_response();
-        assert_eq!(
-            response.blocks,
-            vec![ResponseBlock::Text {
-                text: "concise result".into()
-            }]
-        );
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
+}
 
-    #[test]
-    fn image_block_serializes_as_structured_content() {
-        let value = serde_json::to_value(MessageBlock::Image {
-            source: ImageSource::Base64 {
-                media_type: "image/png".to_owned(),
-                data: "AAEC".to_owned(),
-            },
-            alt_text: Some("test screenshot".to_owned()),
-        })
-        .expect("serialize image");
-        assert_eq!(value["type"], "image");
-        assert_eq!(value["source"]["type"], "base64");
-        assert_eq!(value["source"]["media_type"], "image/png");
-    }
+#[cfg(test)]
+#[doc(hidden)]
+pub fn tempdir() -> std::io::Result<TempDir> {
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-    #[test]
-    fn default_provider_capabilities_reject_images_by_contract() {
-        struct TextOnly;
-        impl ModelProvider for TextOnly {
-            fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
-                unreachable!("not called")
-            }
-        }
-        assert!(!TextOnly.capabilities().image_input);
-    }
-
-    #[test]
-    fn rate_limit_is_retryable() {
-        assert!(classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into()).retryable);
-    }
-
-    #[test]
-    fn session_credentials_support_provider_selection_without_environment_mutation() {
-        let mut config = Config::default();
-        config.model.provider = "anthropic".to_owned();
-        config.model.name = "claude-sonnet-test".to_owned();
-        let provider =
-            MiniMaxProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
-                .expect("build provider from session key");
-        assert!(provider.capabilities().image_input);
-        assert!(provider_settings("anthropic-compatible").is_ok());
-        assert!(provider_settings("unsupported").is_err());
-    }
+    static SEQUENCE: AtomicU64 = AtomicU64::new(1);
+    let path = std::env::temp_dir().join(format!(
+        "medusa-provider-health-{}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::SeqCst),
+    ));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path)?;
+    Ok(TempDir(path))
 }

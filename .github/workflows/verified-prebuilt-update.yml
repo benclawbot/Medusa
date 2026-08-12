@@ -1,0 +1,54 @@
+name: Verified Prebuilt Update
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  release:
+    types: [published, prereleased]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verified-prebuilt-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  updater:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
+      )
+    name: Verified updater (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: clippy, rustfmt
+      - name: Require the committed dependency graph
+        shell: bash
+        run: cargo metadata --format-version 1 --locked --no-deps >/dev/null
+      - name: Verify canonical release evidence and Ed25519 fixtures
+        run: python scripts/release-evidence.py self-test
+      - name: Test signed manifest, download, confinement, and rollback contracts
+        run: cargo test -p medusa-update --all-targets --locked
+      - name: Test CLI default main and explicit release paths
+        run: cargo test -p medusa-cli --bin medusa --locked update_
+      - name: Check updater formatting
+        run: cargo fmt --all -- --check
+      - name: Lint update crates
+        run: cargo clippy -p medusa-update -p medusa-cli --all-targets --locked -- -D warnings

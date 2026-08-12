@@ -5,23 +5,77 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+build = "build.rs"
+autobins = false
 
 [[bin]]
 name = "medusa"
-path = "src/main.rs"
+path = "src/wrapper.rs"
+
+[[bin]]
+name = "medusa-quickstart"
+path = "src/quickstart.rs"
+
+[[bin]]
+name = "medusa-capabilities"
+path = "src/capabilities.rs"
+doc = false
+
+[[bin]]
+name = "medusa-github-operation"
+path = "src/github_operation.rs"
+
+[[bin]]
+name = "medusa-clarity"
+path = "src/clarity.rs"
+
+[[bin]]
+name = "medusa-product-acceptance"
+path = "src/product_acceptance.rs"
+
+[[bin]]
+name = "medusa-proof"
+path = "src/proof.rs"
+
+[[bin]]
+name = "medusa-recall"
+path = "src/recall.rs"
+
+[[bin]]
+name = "medusa-provider-diagnostic"
+path = "src/provider_diagnostic.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+ctrlc = "3.4"
+hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
+medusa-capabilities = { path = "../medusa-capabilities" }
+medusa-clearops = { path = "../medusa-clearops" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
+medusa-escalation = { path = "../medusa-escalation" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
+# Keep the typed adapter in the shipped graph while the legacy command surface migrates.
+medusa-external-github = { path = "../medusa-external-github" }
+medusa-github = { path = "../medusa-github" }
 medusa-hardening = { path = "../medusa-hardening" }
+medusa-memory = { path = "../medusa-memory" }
+medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
+medusa-runtime = { path = "../medusa-runtime" }
+medusa-skill = { path = "../medusa-skill" }
 medusa-tui = { path = "../medusa-tui" }
+medusa-update = { path = "../medusa-update" }
+reqwest.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+toml.workspace = true
 walkdir = "2.5"
 
 [dev-dependencies]

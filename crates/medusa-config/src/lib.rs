@@ -5,6 +5,31 @@ use std::{collections::BTreeMap, fs, path::Path};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
+mod config_doctor;
+mod configuration_state;
+mod provider_profile;
+mod provider_profiles;
+mod staged_profile;
+
+pub use config_doctor::{
+    ConfigDoctorCheck, ConfigDoctorRepair, ConfigDoctorReport, ConfigDoctorStatus,
+    diagnose_config_catalog, repair_config_check,
+};
+pub use configuration_state::{
+    ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
+};
+pub use provider_profile::{
+    PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
+    credential_environment,
+};
+pub use provider_profiles::{
+    ProviderProfileCatalog, ProviderProfileSnapshot, ProviderProfileSummary, ProviderProfileUpdate,
+};
+pub use staged_profile::{
+    ProviderProfileDiffEntry, ProviderProfileHistoryEntry, ProviderProfileSection,
+    StagedProviderProfile,
+};
+
 /// Current configuration schema version.
 pub const CONFIG_VERSION: u16 = 1;
 
@@ -17,16 +42,6 @@ pub enum Mode {
     ReadOnly,
 }
 
-/// Runtime backend.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RuntimeBackend {
-    Auto,
-    Host,
-    Container,
-    Remote,
-}
-
 /// Root configuration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -34,68 +49,101 @@ pub struct Config {
     pub version: u16,
     pub agent: AgentConfig,
     pub model: ModelConfig,
-    pub runtime: RuntimeConfig,
-    pub git: GitConfig,
     pub memory: MemoryConfig,
     pub verification: VerificationConfig,
 }
 
-/// Agent settings.
+/// Agent settings with production runtime effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentConfig {
     pub mode: Mode,
     pub max_turns: u32,
     pub parallel_workers: u16,
-    pub ask_policy: String,
 }
 
-/// Model settings.
+/// Model settings with production provider effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelConfig {
     pub provider: String,
+    pub fallback_providers: Vec<FallbackProviderConfig>,
+    /// Optional role/phase to existing route-profile bindings. Empty preserves the single-route
+    /// behavior; values are route ids such as `primary` or `fallback[0]`.
+    pub role_routes: BTreeMap<String, String>,
     pub name: String,
     pub protocol: String,
     pub temperature_milli: u16,
     pub max_output_tokens: u32,
     pub context_window_tokens: u64,
     pub auto_compact_percent: u8,
+    pub base_url: Option<String>,
+    pub auth: String,
+    pub tool_calling: bool,
+    pub streaming: bool,
+    pub max_retries: u8,
+    pub retry_base_delay_ms: u64,
+    pub retry_max_delay_ms: u64,
+    pub retry_jitter_ms: u64,
 }
 
-/// Runtime settings.
+/// A complete, independently resolved fallback route.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct RuntimeConfig {
-    pub backend: RuntimeBackend,
-    pub network: String,
-    pub process_limit: u32,
+#[serde(deny_unknown_fields)]
+pub struct FallbackProviderConfig {
+    pub provider: String,
+    pub name: String,
+    pub protocol: String,
+    pub base_url: Option<String>,
+    pub auth: String,
+    #[serde(default = "default_true")]
+    pub tool_calling: bool,
+    #[serde(default)]
+    pub streaming: bool,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u8,
+    #[serde(default = "default_retry_base_delay_ms")]
+    pub retry_base_delay_ms: u64,
+    #[serde(default = "default_retry_max_delay_ms")]
+    pub retry_max_delay_ms: u64,
+    #[serde(default = "default_retry_jitter_ms")]
+    pub retry_jitter_ms: u64,
 }
 
-/// Git settings.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct GitConfig {
-    pub auto_commit: bool,
-    pub allow_force_push: bool,
-    pub protect_dirty_tree: bool,
+fn default_true() -> bool {
+    true
 }
 
-/// Memory settings.
+fn default_max_retries() -> u8 {
+    1
+}
+
+fn default_retry_base_delay_ms() -> u64 {
+    250
+}
+
+fn default_retry_max_delay_ms() -> u64 {
+    8_000
+}
+
+fn default_retry_jitter_ms() -> u64 {
+    100
+}
+
+/// Memory settings with production persistence effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemoryConfig {
     pub enabled: bool,
     pub format: String,
-    pub auto_promote_low_risk: bool,
 }
 
-/// Verification settings.
+/// Verification settings with production execution effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VerificationConfig {
     pub required: bool,
-    pub independent_review: bool,
+    /// Automatically run browser verification for effective UI changes.
     pub browser_on_ui_change: bool,
 }
 
@@ -105,8 +153,6 @@ impl Default for Config {
             version: CONFIG_VERSION,
             agent: AgentConfig::default(),
             model: ModelConfig::default(),
-            runtime: RuntimeConfig::default(),
-            git: GitConfig::default(),
             memory: MemoryConfig::default(),
             verification: VerificationConfig::default(),
         }
@@ -119,7 +165,6 @@ impl Default for AgentConfig {
             mode: Mode::Yolo,
             max_turns: 500,
             parallel_workers: 4,
-            ask_policy: "only_irreducible".into(),
         }
     }
 }
@@ -128,32 +173,22 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             provider: "minimax".into(),
+            fallback_providers: Vec::new(),
+            role_routes: BTreeMap::new(),
             name: "MiniMax-M3".into(),
-            protocol: "anthropic".into(),
+            protocol: "openai".into(),
             temperature_milli: 200,
             max_output_tokens: 32_768,
             context_window_tokens: 1_000_000,
             auto_compact_percent: 40,
-        }
-    }
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            backend: RuntimeBackend::Auto,
-            network: "allowlist".into(),
-            process_limit: 512,
-        }
-    }
-}
-
-impl Default for GitConfig {
-    fn default() -> Self {
-        Self {
-            auto_commit: true,
-            allow_force_push: false,
-            protect_dirty_tree: true,
+            base_url: None,
+            auth: "api-key".into(),
+            tool_calling: true,
+            streaming: false,
+            max_retries: default_max_retries(),
+            retry_base_delay_ms: default_retry_base_delay_ms(),
+            retry_max_delay_ms: default_retry_max_delay_ms(),
+            retry_jitter_ms: default_retry_jitter_ms(),
         }
     }
 }
@@ -163,7 +198,6 @@ impl Default for MemoryConfig {
         Self {
             enabled: true,
             format: "markdown".into(),
-            auto_promote_low_risk: true,
         }
     }
 }
@@ -172,7 +206,6 @@ impl Default for VerificationConfig {
     fn default() -> Self {
         Self {
             required: true,
-            independent_review: true,
             browser_on_ui_change: true,
         }
     }
@@ -193,8 +226,25 @@ impl Config {
         environment: &BTreeMap<String, String>,
         cli: &BTreeMap<String, String>,
     ) -> MedusaResult<Self> {
+        let profile = ProviderProfileCatalog::user()?.active_store()?.load()?;
+        Self::load_layers_with_provider_profile(&profile, user, project, environment, cli)
+    }
+
+    /// Resolves and validates all layers against an explicit provider-profile candidate.
+    ///
+    /// Frontends use this before persisting a profile mutation or selection so an invalid
+    /// effective configuration never replaces the prior valid state.
+    pub fn load_layers_with_provider_profile(
+        profile: &ProviderProfile,
+        user: Option<&Path>,
+        project: Option<&Path>,
+        environment: &BTreeMap<String, String>,
+        cli: &BTreeMap<String, String>,
+    ) -> MedusaResult<Self> {
+        profile.validate()?;
         let mut value =
             toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;
+        merge_provider_profile(&mut value, profile)?;
         if let Some(path) = user {
             merge_file(&mut value, path)?;
         }
@@ -227,13 +277,72 @@ impl Config {
         if self.model.context_window_tokens == 0 {
             return Err(invalid("context_window_tokens must be greater than zero"));
         }
+        validate_route(
+            "primary",
+            &self.model.provider,
+            &self.model.name,
+            &self.model.protocol,
+            &self.model.auth,
+            self.model.max_retries,
+            self.model.retry_base_delay_ms,
+            self.model.retry_max_delay_ms,
+            self.model.retry_jitter_ms,
+        )?;
+        for (index, fallback) in self.model.fallback_providers.iter().enumerate() {
+            validate_route(
+                &format!("fallback[{index}]"),
+                &fallback.provider,
+                &fallback.name,
+                &fallback.protocol,
+                &fallback.auth,
+                fallback.max_retries,
+                fallback.retry_base_delay_ms,
+                fallback.retry_max_delay_ms,
+                fallback.retry_jitter_ms,
+            )?;
+        }
+        for (role, route) in &self.model.role_routes {
+            if !matches!(
+                role.as_str(),
+                "default"
+                    | "planning"
+                    | "planner"
+                    | "research"
+                    | "implementation"
+                    | "implementer"
+                    | "high_risk_review"
+                    | "reviewer"
+                    | "repair"
+                    | "debugger"
+                    | "verifier"
+                    | "summarization"
+                    | "summarizer"
+                    | "formatting"
+                    | "formatter"
+            ) {
+                return Err(invalid(format!(
+                    "unsupported model role route key `{role}`"
+                )));
+            }
+            if route != "primary" {
+                let Some(index) = route
+                    .strip_prefix("fallback[")
+                    .and_then(|value| value.strip_suffix(']'))
+                    .and_then(|value| value.parse::<usize>().ok())
+                else {
+                    return Err(invalid(format!(
+                        "model role route `{role}` must reference `primary` or `fallback[index]`"
+                    )));
+                };
+                if index >= self.model.fallback_providers.len() {
+                    return Err(invalid(format!(
+                        "model role route `{role}` references missing fallback[{index}]"
+                    )));
+                }
+            }
+        }
         if !(1..=100).contains(&self.model.auto_compact_percent) {
             return Err(invalid("auto_compact_percent must be between 1 and 100"));
-        }
-        if self.git.allow_force_push {
-            return Err(invalid(
-                "force push cannot be enabled by the built-in schema",
-            ));
         }
         if self.memory.format != "markdown" {
             return Err(invalid("memory format must remain markdown"));
@@ -242,12 +351,80 @@ impl Config {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn validate_route(
+    label: &str,
+    provider: &str,
+    model: &str,
+    protocol: &str,
+    auth: &str,
+    max_retries: u8,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
+    jitter_ms: u64,
+) -> MedusaResult<()> {
+    if provider.trim().is_empty() || model.trim().is_empty() {
+        return Err(invalid(format!(
+            "{label} provider and model must be explicit"
+        )));
+    }
+    if !matches!(
+        protocol.trim().to_ascii_lowercase().as_str(),
+        "anthropic" | "openai"
+    ) {
+        return Err(invalid(format!(
+            "{label} protocol must be anthropic or openai"
+        )));
+    }
+    if !matches!(
+        auth.trim().to_ascii_lowercase().as_str(),
+        "api-key" | "none"
+    ) {
+        return Err(invalid(format!("{label} auth must be api-key or none")));
+    }
+    if max_retries > 8 {
+        return Err(invalid(format!("{label} max_retries must be at most 8")));
+    }
+    if base_delay_ms == 0 || max_delay_ms < base_delay_ms || jitter_ms > max_delay_ms {
+        return Err(invalid(format!(
+            "{label} retry policy is invalid or unbounded"
+        )));
+    }
+    Ok(())
+}
+
 fn invalid(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
         ErrorCategory::Validation,
         message,
     )
+}
+
+fn merge_provider_profile(base: &mut toml::Value, profile: &ProviderProfile) -> MedusaResult<()> {
+    if !profile.configured {
+        return Ok(());
+    }
+    let protocol = profile.protocol().to_owned();
+    let ProviderProfile {
+        provider,
+        model: model_name,
+        auth,
+        base_url,
+        ..
+    } = profile.clone();
+    let mut model = toml::map::Map::new();
+    model.insert("provider".to_owned(), toml::Value::String(provider));
+    model.insert("name".to_owned(), toml::Value::String(model_name));
+    model.insert("protocol".to_owned(), toml::Value::String(protocol));
+    model.insert("auth".to_owned(), toml::Value::String(auth));
+    let mut root = toml::map::Map::new();
+    root.insert("model".to_owned(), toml::Value::Table(model));
+    merge(base, toml::Value::Table(root));
+    if let Some(url) = base_url {
+        set_path(base, "model.base_url", toml::Value::String(url))?;
+    }
+    Ok(())
 }
 
 fn merge_file(base: &mut toml::Value, path: &Path) -> MedusaResult<()> {
@@ -318,16 +495,67 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_validate() {
+    fn defaults_validate_and_are_documented_contract() {
         let config = Config::default();
         config.validate().expect("defaults");
+        assert_eq!(config.agent.mode, Mode::Yolo);
+        assert_eq!(config.agent.max_turns, 500);
+        assert_eq!(config.agent.parallel_workers, 4);
+        assert_eq!(config.model.provider, "minimax");
+        assert!(config.model.role_routes.is_empty());
+        assert_eq!(config.model.name, "MiniMax-M3");
+        assert_eq!(config.model.temperature_milli, 200);
+        assert_eq!(config.model.max_output_tokens, 32_768);
         assert_eq!(config.model.context_window_tokens, 1_000_000);
         assert_eq!(config.model.auto_compact_percent, 40);
+        assert!(config.memory.enabled);
+        assert_eq!(config.memory.format, "markdown");
+        assert!(config.verification.required);
     }
 
     #[test]
     fn unknown_fields_fail_closed() {
         assert!(Config::from_toml("version = 1\nunknown = true").is_err());
+    }
+
+    #[test]
+    fn role_routes_bind_roles_to_existing_fallback_profiles() {
+        let config = Config::from_toml(
+            "version = 1\n[model]\nrole_routes = { planner = 'primary', implementer = 'fallback[0]' }\n[[model.fallback_providers]]\nprovider = 'openai'\nname = 'gpt-test'\nprotocol = 'openai'\nauth = 'api-key'\n",
+        )
+        .expect("role route config");
+        assert_eq!(config.model.role_routes["planner"], "primary");
+        assert_eq!(config.model.role_routes["implementer"], "fallback[0]");
+    }
+
+    #[test]
+    fn role_routes_reject_unknown_or_missing_profiles() {
+        for document in [
+            "version = 1\n[model]\nrole_routes = { auditor = 'primary' }\n",
+            "version = 1\n[model]\nrole_routes = { planner = 'fallback[0]' }\n",
+            "version = 1\n[model]\nrole_routes = { planner = 'other' }\n",
+        ] {
+            assert!(Config::from_toml(document).is_err(), "accepted {document}");
+        }
+    }
+
+    #[test]
+    fn removed_no_effect_fields_fail_closed() {
+        for document in [
+            "version = 1\n[agent]\nask_policy = 'only_irreducible'\n",
+            "version = 1\n[model]\nspeed = 'balanced'\n",
+            "version = 1\n[model]\nreasoning = 'medium'\n",
+            "version = 1\n[runtime]\nbackend = 'auto'\n",
+            "version = 1\n[runtime]\nnetwork = 'allowlist'\n",
+            "version = 1\n[runtime]\nprocess_limit = 512\n",
+            "version = 1\n[git]\nauto_commit = true\n",
+            "version = 1\n[git]\nprotect_dirty_tree = true\n",
+            "version = 1\n[git]\nallow_force_push = false\n",
+            "version = 1\n[memory]\nauto_promote_low_risk = true\n",
+            "version = 1\n[verification]\nindependent_review = true\n",
+        ] {
+            assert!(Config::from_toml(document).is_err(), "accepted {document}");
+        }
     }
 
     #[test]
@@ -354,11 +582,6 @@ mod tests {
             parse_override_value("only_irreducible").expect("string override"),
             toml::Value::String("only_irreducible".into())
         );
-    }
-
-    #[test]
-    fn force_push_fails_closed() {
-        assert!(Config::from_toml("version = 1\n[git]\nallow_force_push = true\n").is_err());
     }
 }
 

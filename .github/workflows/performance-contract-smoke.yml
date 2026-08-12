@@ -1,0 +1,43 @@
+name: Performance Contract Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'benchmarks/performance/**'
+      - 'scripts/performance/**'
+      - '.github/workflows/performance-contract-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'benchmarks/performance/**'
+      - 'scripts/performance/**'
+
+permissions:
+  contents: read
+
+jobs:
+  compare-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare representative fixtures
+        run: >-
+          python scripts/performance/compare_runs.py
+          benchmarks/performance/fixtures/baseline.json
+          benchmarks/performance/fixtures/candidate.json
+      - name: Reject correctness regression
+        shell: bash
+        run: |
+          cp benchmarks/performance/fixtures/candidate.json /tmp/regression.json
+          python - <<'PY'
+          import json
+          path = '/tmp/regression.json'
+          data = json.load(open(path, encoding='utf-8'))
+          data['verified_success'] = False
+          json.dump(data, open(path, 'w', encoding='utf-8'))
+          PY
+          if python scripts/performance/compare_runs.py benchmarks/performance/fixtures/baseline.json /tmp/regression.json; then
+            echo 'comparator accepted an unverified result' >&2
+            exit 1
+          fi

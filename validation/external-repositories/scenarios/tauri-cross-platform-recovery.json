@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scenario_version": 1,
+  "id": "tauri-cross-platform-recovery",
+  "repository": {
+    "url": "https://github.com/tauri-apps/tauri.git",
+    "commit": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+    "ecosystem": "rust-cargo"
+  },
+  "task": "Investigate a bounded cross-platform build failure, survive interruption, restore authoritative state, and complete the relevant verification.",
+  "expected_invariants": [
+    "resume preserves the ordered task and verification timeline",
+    "rollback does not discard unrelated repository state",
+    "completion requires passing verification"
+  ],
+  "allowed_scope": ["crates/**", "tooling/**", "Cargo.toml", "Cargo.lock"],
+  "coverage": ["interruption-resume", "rollback"],
+  "execution": {
+    "mode": "offline",
+    "timeout_seconds": 5400,
+    "provider": {"kind": "recording-replay", "fixture": "interrupt-and-resume-v1"}
+  },
+  "acceptance": {
+    "expected_outcome": "verified-completion-after-resume",
+    "verification_commands": [["cargo", "test", "--workspace", "--all-features"]],
+    "required_evidence": ["interruption", "checkpoint", "resume", "rollback", "passing-verification"]
+  }
+}

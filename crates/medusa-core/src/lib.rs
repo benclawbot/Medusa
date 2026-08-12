@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ulid::Ulid;
 
+pub mod learning_policy;
+
 macro_rules! typed_id {
     ($name:ident, $prefix:literal) => {
         #[doc = concat!("Stable ", stringify!($name), " identifier.")]
@@ -74,6 +76,8 @@ pub enum ErrorCategory {
 pub enum ErrorCode {
     #[error("invalid configuration")]
     InvalidConfiguration,
+    #[error("invalid input")]
+    InvalidInput,
     #[error("incompatible protocol version")]
     IncompatibleProtocol,
     #[error("invalid event")]
@@ -82,6 +86,8 @@ pub enum ErrorCode {
     ChecksumMismatch,
     #[error("policy denied")]
     PolicyDenied,
+    #[error("sandbox unavailable")]
+    SandboxUnavailable,
     #[error("dependency unavailable")]
     DependencyUnavailable,
     #[error("tool execution failed")]

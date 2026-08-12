@@ -17,7 +17,8 @@ use std::{
 use std::thread;
 
 use app::{
-    AppAction, AppError, AppState, TranscriptActivity, TranscriptActivityKind, TranscriptEntry,
+    AppAction, AppError, AppState, TerminalPosition, TextSelection, TranscriptActivity,
+    TranscriptActivityKind, TranscriptEntry,
 };
 use clipboard::{ClipboardService, PromptAttachment, PromptDraft, UnsupportedClipboard};
 use commands::command_suggestions;
@@ -25,7 +26,7 @@ use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEventKind, KeyModifiers,
+        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute, queue,
     style::{
@@ -49,6 +50,7 @@ const MEDUSA_LOGO: [&str; 3] = [
 ];
 const MEDUSA_LOADING_LOGO: &str = include_str!("medusa_logo_ascii.txt");
 const HEADER_TOP_PADDING: u16 = 1;
+const USER_INPUT_INDENT: &str = "    ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiOptions {
@@ -298,15 +300,130 @@ mod tests {
             TranscriptActivityKind::Tool,
             TranscriptActivityKind::Assistant,
         ] {
-            let lines = activity_lines(&TranscriptActivity {
-                id: None,
-                kind,
-                title: "High-level step".to_owned(),
-                details: vec!["argument: private detail".to_owned()],
-            });
+            let lines = activity_lines(
+                &TranscriptActivity {
+                    id: None,
+                    kind,
+                    title: "High-level step".to_owned(),
+                    details: vec!["argument: private detail".to_owned()],
+                },
+                false,
+            );
             assert_eq!(lines.len(), 1);
-            assert_eq!(lines[0].text, "High-level step");
+            assert_eq!(lines[0].text, "[running] High-level step");
         }
+    }
+
+    #[test]
+    fn structured_activity_groups_and_lifecycle_labels_render() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "structured-activity",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.transcript.extend([
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("run".to_owned()),
+                kind: TranscriptActivityKind::Progress,
+                title: "Inspect repository".to_owned(),
+                details: vec![],
+            }),
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("done".to_owned()),
+                kind: TranscriptActivityKind::Done,
+                title: "Patch applied".to_owned(),
+                details: vec![],
+            }),
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("verify".to_owned()),
+                kind: TranscriptActivityKind::Verification,
+                title: "Focused tests passed".to_owned(),
+                details: vec!["cargo test -p medusa-tui".to_owned()],
+            }),
+        ]);
+
+        let lines = transcript_lines(&app, 100);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(text.contains(&"Execution activity"));
+        assert!(text.contains(&"[running] Inspect repository"));
+        assert!(text.contains(&"[succeeded] Patch applied"));
+        assert!(text.contains(&"Verification evidence"));
+        assert!(text.contains(&"[verified] Focused tests passed"));
+    }
+
+    #[test]
+    fn ctrl_e_expands_only_the_latest_activity_with_details() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "per-activity-details",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
+        app.transcript.extend([
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("first".to_owned()),
+                kind: TranscriptActivityKind::Verification,
+                title: "First verification".to_owned(),
+                details: (1..=8).map(|index| format!("first {index}")).collect(),
+            }),
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("second".to_owned()),
+                kind: TranscriptActivityKind::Verification,
+                title: "Second verification".to_owned(),
+                details: (1..=8).map(|index| format!("second {index}")).collect(),
+            }),
+        ]);
+
+        let ctrl_e = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL,
+        ));
+        assert!(matches!(
+            app.handle_event(ctrl_e.clone()).expect("expand"),
+            AppAction::Redraw
+        ));
+        assert!(!app.activity_details_expanded(
+            0,
+            match &app.transcript[0] {
+                TranscriptEntry::Activity(activity) => activity,
+                _ => unreachable!(),
+            },
+        ));
+        assert!(app.activity_details_expanded(
+            1,
+            match &app.transcript[1] {
+                TranscriptEntry::Activity(activity) => activity,
+                _ => unreachable!(),
+            },
+        ));
+
+        app.transcript
+            .push(TranscriptEntry::Activity(TranscriptActivity {
+                id: None,
+                kind: TranscriptActivityKind::Progress,
+                title: "Legacy activity".to_owned(),
+                details: vec!["legacy detail".to_owned()],
+            }));
+        assert!(matches!(
+            app.handle_event(ctrl_e).expect("expand legacy"),
+            AppAction::Redraw
+        ));
+        assert!(app.activity_details_expanded(
+            2,
+            match &app.transcript[2] {
+                TranscriptEntry::Activity(activity) => activity,
+                _ => unreachable!(),
+            },
+        ));
     }
 
     #[test]
@@ -351,8 +468,35 @@ mod tests {
         app.record_usage(700, 1_200, 200, 100, 2_000);
         assert_eq!(running_status(&app), "Working (0s · turn 3)");
         assert_eq!(
-            session_metrics_line(&app),
-            "session 0s · in 1.0k · out 1.5k · cached 200 (20%) · 600.0 tok/s"
+            session_metrics_line(&app, 120),
+            "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 1.2k tok/s"
+        );
+    }
+
+    #[test]
+    fn authoritative_usage_renders_cost_rate_and_provider_provenance() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "authoritative-usage",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.record_turn_usage(
+            1_000,
+            500,
+            100,
+            50,
+            1_650,
+            2_000,
+            825_000,
+            12_345,
+            "provider".to_owned(),
+        );
+        assert_eq!(
+            session_metrics_line(&app, 120),
+            "session 0s · total 1.6k · input 1.0k · output 500 · cache-read 100 · cache-write 50 · cost $0.0123 · provider · 825.0 tok/s"
         );
     }
 

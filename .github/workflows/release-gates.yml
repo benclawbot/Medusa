@@ -2,7 +2,7 @@ name: Release Gates
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -13,18 +13,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  final-issue-validation:
+    name: Final issue validation requested
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Running exhaustive release validation for an issue-closing merge.'
+
   coverage:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     name: Workspace coverage >= 75%
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: llvm-tools-preview
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-llvm-cov
       - name: Run complete workspace coverage suite
@@ -32,7 +45,7 @@ jobs:
         run: |
           set -o pipefail
           cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 75 2>&1 | tee coverage.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: coverage-diagnostics
@@ -42,16 +55,22 @@ jobs:
           if-no-files-found: warn
 
   adversarial-regression:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     name: Named adversarial regressions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Install Linux sandbox backend
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
       - name: Parent path escape is denied
         run: cargo test -p medusa-agent parent_path_escape_is_denied --locked -- --nocapture
       - name: Symlink escape is denied
@@ -74,36 +93,36 @@ jobs:
         run: cargo test -p medusa-hardening arbitrary_archive_paths_never_escape --locked -- --nocapture
 
   fuzz-smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - run: bash scripts/fuzz-smoke.sh
 
   chaos-and-migrations:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - run: bash scripts/chaos-smoke.sh
       - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact -- --exact
 
   package-smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Build release package
-        run: cargo build --release --locked --bin medusa
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Smoke test package on Unix
         if: runner.os != 'Windows'
         run: bash scripts/package-smoke.sh
@@ -112,17 +131,27 @@ jobs:
         shell: pwsh
         run: |
           $binary = 'target/release/medusa.exe'
+          $recall = 'target/release/medusa-recall.exe'
+          $githubOperation = 'target/release/medusa-github-operation.exe'
           & $binary --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $binary --help | Select-String 'Autonomous coding agent'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $recall --help | Select-String 'medusa-recall'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $recall --help | Select-String 'search'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $githubOperation --help | Select-String 'medusa-github-operation'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $githubOperation --help | Select-String 'interchangeable backend'
 
   security:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-deny,cargo-audit
       - run: cargo deny check advisories sources
@@ -131,14 +160,14 @@ jobs:
       - run: cargo test -p medusa-hardening operational_events_redact_credentials -- --exact
 
   docs-and-schema:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: python3 scripts/release-evidence.py self-test
       - run: test -s README.md
@@ -150,17 +179,28 @@ jobs:
       - run: test -s docs/SECURITY-HARDENING.md
 
   live-minimax-coding-e2e:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      LIVE_E2E_TIMEOUT_SECONDS: '1500'
+      LIVE_E2E_HEARTBEAT_SECONDS: '60'
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
-      - uses: actions/setup-node@v4
+      - name: Install Linux sandbox backend
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       - name: Require configured live-test secret
@@ -173,12 +213,12 @@ jobs:
       - name: Mask live credential defensively
         shell: bash
         run: echo "::add-mask::$MINIMAX_API_KEY"
-      - name: Run three autonomous coding scenarios
+      - name: Run one autonomous session with three independent validations
         shell: bash
         run: bash scripts/live-coding-e2e.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: live-minimax-coding-evidence
           path: live-e2e-artifacts
-          if-no-files-found: ignore
+          if-no-files-found: warn

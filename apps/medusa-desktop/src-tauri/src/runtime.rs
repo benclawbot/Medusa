@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -10,25 +10,36 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::ImageReader;
-use medusa_daemon::{DaemonLaunch, DaemonLifecycleState, DaemonSupervisor};
+use medusa_daemon::{
+    DaemonClient, DaemonLaunch, DaemonLifecycleState, DaemonSupervisor, FrontendArtifactKind,
+    FrontendArtifactUpload, FrontendCommandAcknowledgement, FrontendControlResult,
+    FrontendCredentialUpdate, FrontendTransientEvent,
+};
+use medusa_protocol::frontend::{
+    FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
+};
 use medusa_runtime::{
-    RuntimeController, SubmitDisposition,
-    commands::{Effort, ModelConfiguration, command_suggestions, parse_slash_command},
-    prompt::{
-        ClipboardImage, FileAttachment, MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES,
-        MAX_IMAGE_PIXELS, MAX_TOTAL_ATTACHMENT_BYTES, PromptAttachment, PromptDraft,
-        TextAttachment,
+    attachment::{
+        MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_PROMPT,
+        MAX_TOTAL_ATTACHMENT_BYTES,
     },
+    commands::command_suggestions,
+    prompt::MAX_IMAGE_PIXELS,
 };
 use tauri::{AppHandle, Manager, State};
+use time::OffsetDateTime;
+use ulid::Ulid;
 
 use crate::{
+    config::{DesktopConfigurationChanged, prepare_provider_profile},
     credentials::{CredentialStore, SystemCredentialStore},
     dto::{
         DesktopAttachment, DesktopCommandSuggestion, DesktopModelConfiguration, DesktopPromptDraft,
         DesktopRuntimeEvent, DesktopSubmitDisposition, RuntimeStartResponse,
     },
 };
+
+const DESKTOP_CLIENT_ID: &str = "desktop-primary";
 
 struct DesktopDaemon {
     supervisor: DaemonSupervisor,
@@ -37,7 +48,11 @@ struct DesktopDaemon {
 
 struct RuntimeEntry {
     repo: PathBuf,
-    controller: RuntimeController,
+    client_id: String,
+    session_id: Option<String>,
+    replay_cursor: u64,
+    pending_ack_cursor: Option<u64>,
+    presentation: DesktopCanonicalPresentation,
     daemon: DesktopDaemon,
 }
 
@@ -61,11 +76,262 @@ impl RuntimeEntry {
             details: vec![lifecycle.detail],
         })
     }
-}
 
-impl Drop for RuntimeEntry {
-    fn drop(&mut self) {
-        self.controller.cancel();
+    fn ensure_daemon(&mut self) -> Result<(), String> {
+        let lifecycle = self
+            .daemon
+            .supervisor
+            .ensure_running()
+            .map_err(|error| error.to_string())?;
+        self.daemon.last_state = Some(lifecycle.state);
+        Ok(())
+    }
+
+    fn client(&self) -> DaemonClient {
+        self.daemon.supervisor.client()
+    }
+
+    fn envelope(&self, command: FrontendCommand) -> FrontendCommandEnvelope {
+        let id = format!("desktop-command-{}", Ulid::new());
+        FrontendCommandEnvelope {
+            protocol_version: FRONTEND_PROTOCOL_VERSION,
+            command_id: id.clone(),
+            idempotency_key: id,
+            frontend: FrontendKind::Desktop,
+            client_id: self.client_id.clone(),
+            session_id: self.session_id.clone(),
+            turn_id: None,
+            timestamp: OffsetDateTime::now_utc(),
+            command,
+        }
+    }
+
+    fn envelope_for_session(
+        &self,
+        session_id: String,
+        command: FrontendCommand,
+    ) -> FrontendCommandEnvelope {
+        let mut envelope = self.envelope(command);
+        envelope.session_id = Some(session_id);
+        envelope
+    }
+
+    fn dispatch(
+        &mut self,
+        command: FrontendCommand,
+    ) -> Result<FrontendCommandAcknowledgement, String> {
+        self.ensure_daemon()?;
+        self.client()
+            .frontend(self.envelope(command))
+            .map_err(|error| error.to_string())
+    }
+
+    fn dispatch_for_session(
+        &mut self,
+        session_id: String,
+        command: FrontendCommand,
+    ) -> Result<FrontendCommandAcknowledgement, String> {
+        self.ensure_daemon()?;
+        self.client()
+            .frontend(self.envelope_for_session(session_id, command))
+            .map_err(|error| error.to_string())
+    }
+
+    fn bind_attachment(&mut self, attachment: medusa_daemon::LiveSessionAttachmentView) {
+        self.session_id = Some(attachment.session.id);
+        self.replay_cursor = attachment.replay_cursor;
+        if self.replay_cursor > attachment.acknowledged_cursor {
+            self.pending_ack_cursor = Some(self.replay_cursor);
+        }
+        self.presentation.push(attachment.replay);
+    }
+
+    fn resume(&mut self, session_id: String) -> Result<(), String> {
+        let acknowledgement = self.dispatch_for_session(
+            session_id.clone(),
+            FrontendCommand::ResumeSession {
+                session_id: session_id.clone(),
+            },
+        )?;
+        let FrontendControlResult::RuntimeReady { attachment } = acknowledgement.result else {
+            return Err("daemon returned an unexpected resume result".to_owned());
+        };
+        self.bind_attachment(attachment);
+        Ok(())
+    }
+
+    fn sync_credential(&mut self, provider: &str, credential: Option<String>) -> Result<(), String> {
+        let Some(credential) = credential.filter(|value| !value.trim().is_empty()) else {
+            return Ok(());
+        };
+        self.ensure_daemon()?;
+        self.client()
+            .frontend_credential(FrontendCredentialUpdate {
+                provider: provider.to_owned(),
+                credential,
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn stage_draft(&mut self, draft: DesktopPromptDraft) -> Result<(String, Vec<String>), String> {
+        let DesktopPromptDraft {
+            text,
+            attachments,
+            revision,
+        } = draft;
+        let _advisory_revision = revision;
+        let mut total = 0_usize;
+        let mut images = 0_usize;
+        let mut ids = Vec::with_capacity(attachments.len());
+        for attachment in attachments {
+            let upload = match attachment {
+                DesktopAttachment::File { path } => {
+                    let canonical = fs::canonicalize(&path)
+                        .map_err(|error| format!("cannot attach {path}: {error}"))?;
+                    if !canonical.starts_with(&self.repo) {
+                        return Err(format!(
+                            "attachment {} is outside the selected repository",
+                            canonical.display()
+                        ));
+                    }
+                    let bytes = fs::read(&canonical)
+                        .map_err(|error| format!("cannot read {}: {error}", canonical.display()))?;
+                    total = checked_total(total, bytes.len())?;
+                    FrontendArtifactUpload {
+                        display_name: canonical
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("attachment.bin")
+                            .to_owned(),
+                        mime_type: None,
+                        kind: FrontendArtifactKind::File,
+                        bytes_base64: STANDARD.encode(bytes),
+                    }
+                }
+                DesktopAttachment::Image { name, data_url } => {
+                    images = images.saturating_add(1);
+                    if images > MAX_IMAGES_PER_PROMPT {
+                        return Err(format!(
+                            "prompt allows at most {MAX_IMAGES_PER_PROMPT} images"
+                        ));
+                    }
+                    let (header, encoded) = data_url
+                        .split_once(',')
+                        .ok_or_else(|| format!("image attachment {name} is not a data URL"))?;
+                    if !header.starts_with("data:image/") || !header.ends_with(";base64") {
+                        return Err(format!(
+                            "image attachment {name} must be a base64 image data URL"
+                        ));
+                    }
+                    let mime_type = header
+                        .trim_start_matches("data:")
+                        .trim_end_matches(";base64")
+                        .to_ascii_lowercase();
+                    if !matches!(
+                        mime_type.as_str(),
+                        "image/gif" | "image/jpeg" | "image/png" | "image/webp"
+                    ) {
+                        return Err(format!("image attachment {name} has unsupported type {mime_type}"));
+                    }
+                    let bytes = STANDARD
+                        .decode(encoded)
+                        .map_err(|error| format!("cannot decode image attachment {name}: {error}"))?;
+                    if bytes.len() > MAX_IMAGE_BYTES {
+                        return Err(format!(
+                            "image attachment {name} is {} bytes; limit is {MAX_IMAGE_BYTES}",
+                            bytes.len()
+                        ));
+                    }
+                    let dimensions = ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
+                        .with_guessed_format()
+                        .map_err(|error| format!("cannot detect image attachment {name}: {error}"))?
+                        .into_dimensions()
+                        .map_err(|error| format!("cannot inspect image attachment {name}: {error}"))?;
+                    validate_image_dimensions(&name, dimensions.0, dimensions.1)?;
+                    total = checked_total(total, bytes.len())?;
+                    FrontendArtifactUpload {
+                        display_name: name,
+                        mime_type: Some(mime_type),
+                        kind: FrontendArtifactKind::Image,
+                        bytes_base64: STANDARD.encode(bytes),
+                    }
+                }
+                DesktopAttachment::Text { name, text } => {
+                    if text.len() > MAX_CLIPBOARD_TEXT_BYTES {
+                        return Err(format!(
+                            "text attachment {name} exceeds the clipboard text limit"
+                        ));
+                    }
+                    total = checked_total(total, text.len())?;
+                    FrontendArtifactUpload {
+                        display_name: name,
+                        mime_type: Some("text/plain".to_owned()),
+                        kind: FrontendArtifactKind::Text,
+                        bytes_base64: STANDARD.encode(text.as_bytes()),
+                    }
+                }
+            };
+            let id = self
+                .client()
+                .frontend_artifact(upload)
+                .map_err(|error| error.to_string())?;
+            ids.push(id);
+        }
+        Ok((text, ids))
+    }
+
+    fn acknowledge_previous_delivery(&mut self) -> Result<(), String> {
+        let Some(cursor) = self.pending_ack_cursor.take() else {
+            return Ok(());
+        };
+        let acknowledgement = self.dispatch(FrontendCommand::AcknowledgeCursor { cursor })?;
+        if !matches!(
+            acknowledgement.result,
+            FrontendControlResult::CursorAcknowledged { .. }
+        ) {
+            return Err("daemon returned an unexpected cursor acknowledgement".to_owned());
+        }
+        Ok(())
+    }
+
+    fn poll_daemon(&mut self) -> Result<(), String> {
+        let Some(session_id) = self.session_id.clone() else {
+            return Ok(());
+        };
+        self.acknowledge_previous_delivery()?;
+
+        let transient = self.dispatch(FrontendCommand::PollTransient)?;
+        let FrontendControlResult::Transient { events } = transient.result else {
+            return Err("daemon returned an unexpected transient-event result".to_owned());
+        };
+        for event in events {
+            if matches!(event, FrontendTransientEvent::NewSession) {
+                self.presentation.reset();
+                self.session_id = None;
+                self.replay_cursor = 0;
+                self.pending_ack_cursor = None;
+            }
+            self.presentation.push_transient(event);
+        }
+        if self.session_id.is_none() {
+            return Ok(());
+        }
+
+        let replay = self.dispatch(FrontendCommand::Replay {
+            after_cursor: self.replay_cursor,
+        })?;
+        let FrontendControlResult::Events { replay } = replay.result else {
+            return Err("daemon returned an unexpected replay result".to_owned());
+        };
+        if replay.session_id != session_id {
+            return Err("daemon replay switched sessions unexpectedly".to_owned());
+        }
+        self.replay_cursor = replay.next_cursor;
+        self.presentation.push(replay.events);
+        if replay.next_cursor > replay.after_cursor {
+            self.pending_ack_cursor = Some(replay.next_cursor);
+        }
+        Ok(())
     }
 }
 
@@ -85,16 +351,21 @@ impl RuntimeRegistry {
             "desktop-runtime-{}",
             self.next_id.fetch_add(1, Ordering::Relaxed) + 1
         );
-        let controller = RuntimeController::start(repo.clone());
-        let supervisor = DaemonLaunch::for_current_executable()
-            .map(|launch| DaemonSupervisor::new(&repo, launch))
-            .unwrap_or_else(|_| DaemonSupervisor::observe_only(&repo));
+        let launch = DaemonLaunch::for_current_executable().map_err(|error| error.to_string())?;
+        let mut supervisor = DaemonSupervisor::new(&repo, launch);
+        let lifecycle = supervisor
+            .ensure_running()
+            .map_err(|error| error.to_string())?;
         let entry = Arc::new(Mutex::new(RuntimeEntry {
-            repo: repo.clone(),
-            controller,
+            repo,
+            client_id: DESKTOP_CLIENT_ID.to_owned(),
+            session_id: None,
+            replay_cursor: 0,
+            pending_ack_cursor: None,
+            presentation: DesktopCanonicalPresentation::new(),
             daemon: DesktopDaemon {
                 supervisor,
-                last_state: None,
+                last_state: Some(lifecycle.state),
             },
         }));
         self.entries
@@ -177,15 +448,31 @@ pub fn runtime_submit(
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<DesktopSubmitDisposition, String> {
     registry.with_entry(&runtime_id, |entry| {
-        let draft = convert_prompt(&entry.repo, draft)?;
-        entry
-            .controller
-            .submit(draft)
-            .map(|disposition| match disposition {
-                SubmitDisposition::Started => DesktopSubmitDisposition::Started,
-                SubmitDisposition::Queued => DesktopSubmitDisposition::Queued,
-            })
-            .map_err(|error| error.to_string())
+        entry.ensure_daemon()?;
+        let (text, attachment_ids) = entry.stage_draft(draft)?;
+        let command = if entry.session_id.is_none() {
+            FrontendCommand::CreateSession {
+                repository_profile: "desktop".to_owned(),
+                objective: (!text.trim().is_empty()).then_some(text),
+                attachment_ids,
+            }
+        } else {
+            FrontendCommand::Submit {
+                text,
+                attachment_ids,
+            }
+        };
+        let acknowledgement = entry.dispatch(command)?;
+        let FrontendControlResult::SubmissionAccepted { session_id, queued } = acknowledgement.result
+        else {
+            return Err("daemon returned an unexpected submission result".to_owned());
+        };
+        entry.session_id = Some(session_id);
+        Ok(if queued {
+            DesktopSubmitDisposition::Queued
+        } else {
+            DesktopSubmitDisposition::Started
+        })
     })
 }
 
@@ -195,14 +482,26 @@ pub fn runtime_command(
     input: String,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<(), String> {
-    let command = parse_slash_command(&input)
-        .map_err(|error| format!("invalid slash command: {error}"))?
-        .ok_or_else(|| "runtime_command expects a slash command".to_owned())?;
     registry.with_entry(&runtime_id, |entry| {
-        entry
-            .controller
-            .run_command(command)
-            .map_err(|error| error.to_string())
+        let command = if input.trim() == "/new" {
+            FrontendCommand::NewSession
+        } else {
+            FrontendCommand::RunCommand { input }
+        };
+        let acknowledgement = entry.dispatch(command)?;
+        if !matches!(
+            &acknowledgement.result,
+            FrontendControlResult::CommandAccepted { .. }
+        ) {
+            return Err("daemon returned an unexpected command result".to_owned());
+        }
+        if matches!(&acknowledgement.result, FrontendControlResult::CommandAccepted { command, .. } if command == "new_session") {
+            entry.session_id = None;
+            entry.replay_cursor = 0;
+            entry.pending_ack_cursor = None;
+            entry.presentation.reset();
+        }
+        Ok(())
     })
 }
 
@@ -229,7 +528,14 @@ pub fn runtime_cancel(
     runtime_id: String,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<bool, String> {
-    registry.with_entry(&runtime_id, |entry| Ok(entry.controller.cancel()))
+    registry.with_entry(&runtime_id, |entry| {
+        let acknowledgement = entry.dispatch(FrontendCommand::CancelTurn)?;
+        let FrontendControlResult::CancellationRequested { requested, .. } = acknowledgement.result
+        else {
+            return Err("daemon returned an unexpected cancellation result".to_owned());
+        };
+        Ok(requested)
+    })
 }
 
 #[tauri::command]
@@ -242,15 +548,17 @@ pub fn runtime_poll(
         let mut events = Vec::new();
         let limit = max_events.unwrap_or(200).clamp(1, 500);
         if let Some(event) = entry.daemon_event() {
+            if matches!(entry.daemon.last_state, Some(DaemonLifecycleState::Recovered)) {
+                if let Some(session_id) = entry.session_id.clone() {
+                    entry.resume(session_id)?;
+                }
+            }
             events.push(event);
         }
+        entry.poll_daemon()?;
         while events.len() < limit {
-            match entry
-                .controller
-                .try_event()
-                .map_err(|error| error.to_string())?
-            {
-                Some(event) => events.push(event.into()),
+            match entry.presentation.try_event() {
+                Some(event) => events.push(event),
                 None => break,
             }
         }
@@ -263,15 +571,21 @@ pub fn runtime_configure_model(
     runtime_id: String,
     configuration: DesktopModelConfiguration,
     registry: State<'_, RuntimeRegistry>,
-) -> Result<(), String> {
-    let effort = match configuration.effort.to_ascii_lowercase().as_str() {
-        "low" => Effort::Low,
-        "medium" => Effort::Medium,
-        "high" => Effort::High,
-        "auto" => Effort::Auto,
-        _ => return Err("effort must be low, medium, high, or auto".to_owned()),
-    };
+) -> Result<Option<DesktopConfigurationChanged>, String> {
+    let effort_name = configuration.effort.to_ascii_lowercase();
+    if !matches!(effort_name.as_str(), "low" | "medium" | "high" | "auto") {
+        return Err("effort must be low, medium, high, or auto".to_owned());
+    }
     let provider = configuration.provider;
+    let model = configuration.model;
+    let prepared_profile = prepare_provider_profile(
+        &provider,
+        &model,
+        &effort_name,
+        configuration.expected_revision,
+    )?;
+    let previous_profile = prepared_profile.previous_profile().clone();
+    let profile_changed = prepared_profile.is_changed();
     let supplied_api_key = configuration.api_key.filter(|key| !key.trim().is_empty());
     let credentials = SystemCredentialStore;
     let api_key = match supplied_api_key.as_ref() {
@@ -279,20 +593,59 @@ pub fn runtime_configure_model(
         None => credentials.load(&provider)?,
     };
     registry.with_entry(&runtime_id, |entry| {
-        entry
-            .controller
-            .configure_model(ModelConfiguration {
-                provider: provider.clone(),
-                model: configuration.model,
-                effort,
-                api_key,
-            })
-            .map_err(|error| error.to_string())
+        entry.sync_credential(&provider, api_key.clone())?;
+        entry.dispatch(FrontendCommand::ConfigureModel {
+            provider: Some(provider.clone()),
+            model: model.clone(),
+        })?;
+        entry.dispatch(FrontendCommand::SetEffort {
+            effort: effort_name.clone(),
+        })?;
+        Ok(())
     })?;
-    if let Some(api_key) = supplied_api_key {
-        credentials.save(&provider, &api_key)?;
+    let persisted = (|| {
+        if let Some(api_key) = supplied_api_key {
+            credentials.save(&provider, &api_key)?;
+        }
+        if profile_changed {
+            prepared_profile.commit().map(Some)
+        } else {
+            drop(prepared_profile);
+            Ok(None)
+        }
+    })();
+    match persisted {
+        Ok(change) => Ok(change.map(Into::into)),
+        Err(error) => {
+            restore_runtime_profile(&runtime_id, &previous_profile, &registry, &credentials)?;
+            Err(error)
+        }
     }
-    Ok(())
+}
+
+fn restore_runtime_profile(
+    runtime_id: &str,
+    profile: &medusa_config::ProviderProfile,
+    registry: &State<'_, RuntimeRegistry>,
+    credentials: &SystemCredentialStore,
+) -> Result<(), String> {
+    let effort = match profile.reasoning.as_str() {
+        "low" => "low",
+        "high" | "maximum" => "high",
+        _ => "medium",
+    };
+    let api_key = credentials.load(&profile.provider)?;
+    registry.with_entry(runtime_id, |entry| {
+        entry.sync_credential(&profile.provider, api_key)?;
+        entry.dispatch(FrontendCommand::ConfigureModel {
+            provider: Some(profile.provider.clone()),
+            model: profile.model.clone(),
+        })?;
+        entry.dispatch(FrontendCommand::SetEffort {
+            effort: effort.to_owned(),
+        })?;
+        Ok(())
+    })
 }
 
 fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
@@ -304,122 +657,14 @@ fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn convert_prompt(repo: &Path, source: DesktopPromptDraft) -> Result<PromptDraft, String> {
-    let mut draft = PromptDraft {
-        text: source.text,
-        attachments: Vec::new(),
-        revision: source.revision,
-    };
-    for attachment in source.attachments {
-        match attachment {
-            DesktopAttachment::File { path } => attach_file(repo, &mut draft, Path::new(&path))?,
-            DesktopAttachment::Image { name, data_url } => {
-                attach_image(&mut draft, &name, &data_url)?;
-            }
-            DesktopAttachment::Text { name, text } => attach_text(&mut draft, name, text)?,
-        }
-    }
-    Ok(draft)
-}
-
-fn attach_file(repo: &Path, draft: &mut PromptDraft, path: &Path) -> Result<(), String> {
-    let canonical = fs::canonicalize(path)
-        .map_err(|error| format!("cannot attach {}: {error}", path.display()))?;
-    if !canonical.starts_with(repo) {
+fn checked_total(total: usize, additional: usize) -> Result<usize, String> {
+    let total = total.saturating_add(additional);
+    if total > MAX_TOTAL_ATTACHMENT_BYTES {
         return Err(format!(
-            "attachment {} is outside the selected repository",
-            canonical.display()
+            "prompt attachments total {total} bytes; limit is {MAX_TOTAL_ATTACHMENT_BYTES}"
         ));
     }
-    let metadata = fs::metadata(&canonical)
-        .map_err(|error| format!("cannot inspect {}: {error}", canonical.display()))?;
-    if !metadata.is_file() {
-        return Err(format!("attachment {} is not a file", canonical.display()));
-    }
-    let byte_len = usize::try_from(metadata.len())
-        .map_err(|_| format!("attachment {} is too large", canonical.display()))?;
-    ensure_total(draft, byte_len)?;
-    draft
-        .attachments
-        .push(PromptAttachment::File(FileAttachment {
-            path: canonical,
-            byte_len,
-        }));
-    Ok(())
-}
-
-fn attach_text(draft: &mut PromptDraft, name: String, text: String) -> Result<(), String> {
-    if text.len() > MAX_CLIPBOARD_TEXT_BYTES {
-        return Err(format!(
-            "text attachment {name} exceeds the clipboard text limit"
-        ));
-    }
-    ensure_total(draft, text.len())?;
-    draft
-        .attachments
-        .push(PromptAttachment::PastedText(TextAttachment {
-            display_name: name,
-            text,
-        }));
-    Ok(())
-}
-
-fn attach_image(draft: &mut PromptDraft, name: &str, data_url: &str) -> Result<(), String> {
-    let (header, encoded) = data_url
-        .split_once(',')
-        .ok_or_else(|| format!("image attachment {name} is not a data URL"))?;
-    if !header.starts_with("data:image/") || !header.ends_with(";base64") {
-        return Err(format!(
-            "image attachment {name} must be a base64 image data URL"
-        ));
-    }
-    let max_encoded_bytes = MAX_IMAGE_BYTES
-        .saturating_mul(4)
-        .div_ceil(3)
-        .saturating_add(4);
-    if encoded.len() > max_encoded_bytes {
-        return Err(format!(
-            "encoded image attachment {name} exceeds the {MAX_IMAGE_BYTES}-byte image limit"
-        ));
-    }
-    let bytes = STANDARD
-        .decode(encoded)
-        .map_err(|error| format!("cannot decode image attachment {name}: {error}"))?;
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err(format!(
-            "image attachment {name} is {} bytes; limit is {MAX_IMAGE_BYTES}",
-            bytes.len()
-        ));
-    }
-    let dimensions = ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
-        .with_guessed_format()
-        .map_err(|error| format!("cannot detect image attachment {name}: {error}"))?
-        .into_dimensions()
-        .map_err(|error| format!("cannot inspect image attachment {name}: {error}"))?;
-    validate_image_dimensions(name, dimensions.0, dimensions.1)?;
-    let image = ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|error| format!("cannot detect image attachment {name}: {error}"))?
-        .decode()
-        .map_err(|error| format!("cannot decode image attachment {name}: {error}"))?;
-    let rgba = image.to_rgba8();
-    draft
-        .add_image(ClipboardImage {
-            width: rgba.width(),
-            height: rgba.height(),
-            rgba: rgba.into_raw(),
-            source_format: Some(
-                header
-                    .trim_start_matches("data:")
-                    .trim_end_matches(";base64")
-                    .to_owned(),
-            ),
-        })
-        .map_err(|error| error.to_string())?;
-    if let Some(PromptAttachment::Image(image)) = draft.attachments.last_mut() {
-        image.display_name = name.to_owned();
-    }
-    Ok(())
+    Ok(total)
 }
 
 fn validate_image_dimensions(name: &str, width: u32, height: u32) -> Result<(), String> {
@@ -434,78 +679,22 @@ fn validate_image_dimensions(name: &str, width: u32, height: u32) -> Result<(), 
             "image attachment {name} has {pixels} pixels; limit is {MAX_IMAGE_PIXELS}"
         ));
     }
-    let rgba_bytes = pixels
-        .checked_mul(4)
-        .ok_or_else(|| format!("image attachment {name} byte count overflow"))?;
-    if rgba_bytes > MAX_IMAGE_BYTES as u64 {
-        return Err(format!(
-            "image attachment {name} requires {rgba_bytes} RGBA bytes; limit is {MAX_IMAGE_BYTES}"
-        ));
-    }
-    Ok(())
-}
-
-fn ensure_total(draft: &PromptDraft, additional: usize) -> Result<(), String> {
-    let total = draft.total_attachment_bytes().saturating_add(additional);
-    if total > MAX_TOTAL_ATTACHMENT_BYTES {
-        return Err(format!(
-            "prompt attachments total {total} bytes; limit is {MAX_TOTAL_ATTACHMENT_BYTES}"
-        ));
-    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
-    fn file_attachments_are_confined_to_the_selected_repository() {
-        let repo = tempdir().expect("repo");
-        let outside = tempdir().expect("outside");
-        let path = outside.path().join("secret.txt");
-        fs::write(&path, "secret").expect("write outside file");
-        let error = convert_prompt(
-            repo.path(),
-            DesktopPromptDraft {
-                text: String::new(),
-                attachments: vec![DesktopAttachment::File {
-                    path: path.to_string_lossy().into_owned(),
-                }],
-                revision: 0,
-            },
-        )
-        .expect_err("outside attachment must fail");
-        assert!(error.contains("outside the selected repository"));
-    }
-
-    #[test]
-    fn oversized_image_dimensions_are_rejected_before_decode() {
+    fn oversized_image_dimensions_are_rejected_before_upload() {
         let error = validate_image_dimensions("bomb.png", 10_000, 10_000)
             .expect_err("oversized dimensions must fail");
         assert!(error.contains("pixels"));
     }
 
     #[test]
-    fn repository_file_attachment_keeps_canonical_path_and_size() {
-        let repo = tempdir().expect("repo");
-        let path = repo.path().join("context.txt");
-        fs::write(&path, "context").expect("write file");
-        let draft = convert_prompt(
-            repo.path(),
-            DesktopPromptDraft {
-                text: "review this".to_owned(),
-                attachments: vec![DesktopAttachment::File {
-                    path: path.to_string_lossy().into_owned(),
-                }],
-                revision: 4,
-            },
-        )
-        .expect("valid attachment");
-        assert_eq!(draft.revision, 4);
-        assert!(
-            matches!(&draft.attachments[0], PromptAttachment::File(file) if file.byte_len == 7)
-        );
+    fn desktop_client_identity_is_stable_for_cursor_reconnect() {
+        assert_eq!(DESKTOP_CLIENT_ID, "desktop-primary");
     }
 }

@@ -1,7 +1,11 @@
 # Workflow files that require `contents: write`.
-# Format: repository-relative workflow path|specific justification
 #
-# Keep this registry empty unless a retained workflow has a reviewed,
-# non-self-modifying reason to write repository contents. Direct `git push`
-# and workflow self-deletion are forbidden even for registered entries.
-.github/workflows/publish-release.yml|Creates a draft GitHub Release and uploads validated assets for an existing version tag; it never pushes commits or publishes the release.
+# Format: workflow path, a pipe (`|`), then the least-privilege justification.
+# Keep this list intentionally small. The workflow hygiene guard rejects broad,
+# self-modifying, or unexplained entries.
+.github/workflows/bootstrap-desktop-release.yml|Commits only deterministic desktop/package lockfiles and bootstrap metadata generated from the reviewed workflow inputs.
+.github/workflows/publish-release.yml|Creates and uploads immutable release artifacts only after the release gate succeeds; it does not modify repository source.
+.github/workflows/refresh-cli-release-assets.yml|Replaces CLI release assets for an existing release from a reviewed workflow dispatch; it does not modify repository source.
+.github/workflows/replace-v1-release.yml|One-time replacement of v1.0.0: rebuilds reviewed main on all supported platforms, rebinds only the v1.0.0 tag, and replaces only that GitHub Release after all build and evidence gates succeed; it does not modify repository source.
+.github/workflows/sign-draft-release.yml|Uploads detached signatures and verified checksums to an existing draft release; it does not publish the release or modify repository source.
+.github/workflows/sign-release-manifest.yml|Uploads only the verified release manifest, detached signature, checksums, and attestations after the Publish Release workflow succeeds; it never pushes commits or publishes the release.

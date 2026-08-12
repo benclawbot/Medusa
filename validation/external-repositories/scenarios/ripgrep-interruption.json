@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scenario_version": 1,
+  "id": "ripgrep-interruption-resume",
+  "repository": {
+    "url": "https://github.com/BurntSushi/ripgrep.git",
+    "commit": "f9c05a949d1a0dc8e16dee28ca9605d38611faeb",
+    "ecosystem": "rust-cargo"
+  },
+  "task": "Add a regression test and implementation for a small command-line behavior change selected by the harness fixture. Preserve formatting and run the focused test before the full workspace test.",
+  "expected_invariants": [
+    "all writes remain inside the checkout",
+    "session state survives a forced interruption and resume",
+    "completion is not reported before verification succeeds"
+  ],
+  "allowed_scope": ["crates/**", "tests/**", "Cargo.toml", "Cargo.lock"],
+  "coverage": ["interruption-resume"],
+  "execution": {
+    "mode": "offline",
+    "timeout_seconds": 5400,
+    "provider": {"kind": "recording-replay", "fixture": "interruption-after-first-write"}
+  },
+  "acceptance": {
+    "expected_outcome": "verified-completion-after-resume",
+    "verification_commands": [["cargo", "test", "--all"]],
+    "required_evidence": ["checkpoint", "resume-event", "verification-result", "repository-diff"]
+  }
+}

@@ -333,7 +333,7 @@ fn model_key_text_is_never_autosaved() {
 }
 
 #[test]
-fn question_modal_tabs_answers_and_requires_confirmation_before_submission() {
+fn question_modal_tabs_answers_and_submits_final_selection_immediately() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(
         repository.path().to_path_buf(),
@@ -394,22 +394,12 @@ fn question_modal_tabs_answers_and_requires_confirmation_before_submission() {
             if text.contains("Which project should I use?")
                 && text.contains("Who is this for?")
     ));
-    assert_eq!(
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )))
-        .expect("answer second question"),
-        AppAction::Redraw
-    );
-    assert!(app.question_modal().expect("review answers").is_reviewing());
-    assert_eq!(app.transcript.len(), 1);
     let action = app
         .handle_event(Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         )))
-        .expect("confirm answers");
+        .expect("answer second question and submit answers");
     assert_eq!(
         action,
         AppAction::AnswerQuestion("Project: Projects/site-a\nAudience: Customers".to_owned())
@@ -424,7 +414,7 @@ fn question_modal_tabs_answers_and_requires_confirmation_before_submission() {
 }
 
 #[test]
-fn clarification_question_and_confirmed_answer_stay_in_transcript() {
+fn clarification_question_and_immediate_answer_stay_in_transcript() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(
         repository.path().to_path_buf(),
@@ -447,20 +437,12 @@ fn clarification_question_and_confirmed_answer_stay_in_transcript() {
         Some(TranscriptEntry::Assistant(text))
             if text.contains("Who is this for?") && text.contains("Customers")
     ));
-    assert_eq!(
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )))
-        .expect("select answer"),
-        AppAction::Redraw
-    );
     let action = app
         .handle_event(Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         )))
-        .expect("confirm answer");
+        .expect("select and submit answer");
     assert_eq!(
         action,
         AppAction::AnswerQuestion("Audience: Customers".to_owned())
@@ -532,4 +514,44 @@ fn page_and_mouse_scrolling_update_scrollback() {
         AppAction::Redraw
     );
     assert_eq!(app.scrollback_offset(), 3);
+}
+
+#[test]
+fn ctrl_e_toggles_activity_detail_expansion_and_new_session_resets_it() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "details-toggle",
+        "",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+    app.transcript
+        .push(TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("details".to_owned()),
+            kind: TranscriptActivityKind::Verification,
+            title: "Verification".to_owned(),
+            details: vec!["detail".to_owned()],
+        }));
+    let activity = match &app.transcript[0] {
+        TranscriptEntry::Activity(activity) => activity,
+        _ => unreachable!(),
+    };
+    assert!(!app.activity_details_expanded(0, activity));
+    assert_eq!(
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL,
+        )))
+        .expect("toggle details"),
+        AppAction::Redraw
+    );
+    let activity = match &app.transcript[0] {
+        TranscriptEntry::Activity(activity) => activity,
+        _ => unreachable!(),
+    };
+    assert!(app.activity_details_expanded(0, activity));
+
+    app.clear_for_new_session();
+    assert!(app.activity_detail_expansion_snapshot().is_empty());
 }

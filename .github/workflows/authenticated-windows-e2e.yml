@@ -1,0 +1,78 @@
+name: Authenticated Windows E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Safe read-only prompt sent through the existing ChatGPT OAuth session
+        required: false
+        default: Reply with the exact text MEDUSA_OAUTH_E2E_OK and do not modify files.
+      skip_desktop_launch:
+        description: Build and test desktop without launching the native window
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: authenticated-windows-e2e
+  cancel-in-progress: false
+
+jobs:
+  windows-oauth-e2e:
+    name: TUI and Windows app with ChatGPT OAuth
+    runs-on: [self-hosted, Windows, X64, medusa-oauth]
+    environment: chatgpt-oauth-e2e
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          clean: true
+          persist-credentials: false
+
+      - name: Select Rust 1.88
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup override set 1.88.0
+          rustc --version
+          cargo --version
+
+      - name: Validate Node.js 22
+        run: |
+          $major = [int]((node --version).TrimStart('v').Split('.')[0])
+          if ($major -ne 22) {
+            throw "Authenticated E2E runner requires Node.js 22; found $(node --version)."
+          }
+          node --version
+          npm --version
+
+      - name: Run authenticated end-to-end suite
+        env:
+          MEDUSA_E2E_PROMPT: ${{ inputs.prompt }}
+          MEDUSA_E2E_SKIP_DESKTOP: ${{ inputs.skip_desktop_launch }}
+        run: |
+          $arguments = @(
+            '-File', 'scripts/e2e/windows-chatgpt-oauth.ps1',
+            '-RepositoryRoot', $PWD.Path,
+            '-Prompt', $env:MEDUSA_E2E_PROMPT
+          )
+          if ($env:MEDUSA_E2E_SKIP_DESKTOP -eq 'true') {
+            $arguments += '-SkipDesktopLaunch'
+          }
+          & pwsh @arguments
+
+      - name: Upload sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: authenticated-windows-e2e-${{ github.run_id }}
+          path: artifacts/oauth-e2e
+          if-no-files-found: error
+          retention-days: 14

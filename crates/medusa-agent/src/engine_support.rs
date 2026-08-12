@@ -1,10 +1,17 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::{HashMap, VecDeque},
+    fs,
+    path::Path,
+};
 
+use medusa_capabilities::CapabilityRegistry;
 use medusa_config::Mode;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::{DesktopCommanderSettings, desktop_commander_tool_is_mutating};
 use medusa_protocol::{Actor, EventPayload};
-use medusa_provider::{ImageSource, Message, MessageBlock, ProviderCapabilities, Role};
+use medusa_provider::{
+    ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase,
+};
 use time::OffsetDateTime;
 
 use crate::{
@@ -33,6 +40,14 @@ pub(crate) fn content_with_session_goal(
     content
 }
 
+pub(crate) const fn provider_execution_phase(mode: Mode) -> ProviderExecutionPhase {
+    match mode {
+        Mode::ReadOnly => ProviderExecutionPhase::Planning,
+        Mode::Review => ProviderExecutionPhase::HighRiskReview,
+        Mode::Yolo => ProviderExecutionPhase::Implementation,
+    }
+}
+
 pub(crate) fn system_prompt_with_context(
     mode: Mode,
     repo: &Path,
@@ -44,6 +59,15 @@ pub(crate) fn system_prompt_with_context(
         SYSTEM_PROMPT
     };
     let mut prompt = format!("{base}\n\nWorkspace: {}", repo.display());
+    match CapabilityRegistry::discover(repo) {
+        Ok(registry) => {
+            prompt.push_str("\n\nRuntime capabilities (shared with every Medusa frontend):\n");
+            prompt.push_str(&registry.prompt_summary());
+        }
+        Err(error) => prompt.push_str(&format!(
+            "\n\nRuntime capability discovery unavailable: {error}"
+        )),
+    }
     let instructions = repository_instructions(repo);
     if instructions.is_empty() {
         prompt.push_str("\n\nNo repository instruction files were found.");
@@ -53,7 +77,7 @@ pub(crate) fn system_prompt_with_context(
     }
     let skills = available_skills(repo);
     if skills.is_empty() {
-        prompt.push_str("\n\nNo Medusa or Claude skills are installed for this workspace or user.");
+        prompt.push_str("\n\nNo Medusa skills are installed for this workspace or user.");
     } else {
         prompt.push_str(
             "\n\nAvailable skills: call `skill_read` before applying a relevant skill.\n",
@@ -82,12 +106,15 @@ pub(crate) fn system_prompt_with_context(
 
 pub(crate) fn available_tools(
     mode: Mode,
+    repo: &Path,
     desktop_commander: &DesktopCommanderSettings,
-) -> Vec<medusa_provider::ToolDefinition> {
-    built_in_tools(desktop_commander, mode == Mode::ReadOnly)
-        .into_iter()
-        .filter(|tool| tool_allowed(mode, &tool.name))
-        .collect()
+) -> MedusaResult<Vec<medusa_provider::ToolDefinition>> {
+    built_in_tools(repo, desktop_commander, mode == Mode::ReadOnly).map(|tools| {
+        tools
+            .into_iter()
+            .filter(|tool| tool_allowed(mode, &tool.name))
+            .collect()
+    })
 }
 
 pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {
@@ -96,7 +123,9 @@ pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {
             tool,
             "fs_read"
                 | "search_text"
+                | "semantic_capabilities"
                 | "code_index"
+                | "typescript_semantic"
                 | "web_search"
                 | "web_fetch"
                 | "skill_read"
@@ -260,6 +289,22 @@ where
     session.pending_question = Some(question.clone());
     append_observed(
         session,
+        EventPayload::QuestionRequested {
+            question: serde_json::to_value(&question).map_err(json_error)?,
+        },
+        observer,
+    )?;
+    if let Some(approval) = question.approval.as_ref() {
+        append_observed(
+            session,
+            EventPayload::ApprovalRequested {
+                request: serde_json::to_value(approval).map_err(json_error)?,
+            },
+            observer,
+        )?;
+    }
+    append_observed(
+        session,
         EventPayload::SessionPaused {
             reason: "waiting for a user response".to_owned(),
         },
@@ -346,68 +391,90 @@ pub(crate) fn compact_envelope_for_model(envelope: &OutputEnvelope) -> String {
     )
 }
 
-pub(crate) fn has_mutating_tool_result(session: &AgentSession) -> bool {
-    session.events.iter().any(|event| {
-        matches!(
-            &event.payload,
-            EventPayload::ToolExecutionCompleted {
-                tool,
-                exit_code: Some(0)
-            } if matches!(tool.as_str(), "fs_create_dir" | "fs_write" | "patch_apply" | "symbol_rename" | "git_checkpoint")
-                || tool
-                    .strip_prefix("desktop_commander:")
-                    .is_some_and(desktop_commander_tool_is_mutating)
-        )
-    })
+fn tool_call_mutates_repository(tool: &str, input: &serde_json::Value) -> bool {
+    if let Some(desktop_tool) = tool.strip_prefix("desktop_commander:") {
+        return desktop_commander_tool_is_mutating(desktop_tool);
+    }
+    crate::tool_dag::invalidates_repository_revision(tool, input)
 }
 
-pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
-    let mut calls = HashMap::new();
-    let mut paths = Vec::new();
-    for message in &session.messages {
-        for block in &message.content {
-            match block {
-                MessageBlock::ToolUse { id, name, input } => {
-                    calls.insert(id.as_str(), (name.as_str(), input));
-                }
-                MessageBlock::ToolResult {
-                    tool_use_id,
-                    is_error: false,
-                    ..
-                } => {
-                    let Some((name, input)) = calls.get(tool_use_id.as_str()) else {
-                        continue;
-                    };
-                    match *name {
-                        "fs_write" | "fs_create_dir" => {
-                            if let Some(path) =
-                                input.get("path").and_then(serde_json::Value::as_str)
-                            {
-                                paths.push(path.to_owned());
-                            }
-                        }
-                        "patch_apply" => {
-                            paths.extend(
-                                input
-                                    .get("edits")
-                                    .and_then(serde_json::Value::as_array)
-                                    .into_iter()
-                                    .flatten()
-                                    .filter_map(|edit| edit.get("path"))
-                                    .filter_map(serde_json::Value::as_str)
-                                    .map(str::to_owned),
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
+fn successful_mutating_tool_calls(session: &AgentSession) -> Vec<(&str, &serde_json::Value)> {
+    let mut pending = HashMap::<&str, VecDeque<&serde_json::Value>>::new();
+    let mut successful = Vec::new();
+    for event in &session.events {
+        match &event.payload {
+            EventPayload::ToolCallRequested { tool, arguments } => {
+                pending
+                    .entry(tool.as_str())
+                    .or_default()
+                    .push_back(arguments);
             }
+            EventPayload::ToolExecutionCompleted { tool, exit_code } => {
+                let input = pending.get_mut(tool.as_str()).and_then(VecDeque::pop_back);
+                if *exit_code == Some(0)
+                    && let Some(input) = input
+                    && tool_call_mutates_repository(tool, input)
+                {
+                    successful.push((tool.as_str(), input));
+                }
+            }
+            _ => {}
         }
+    }
+    successful
+}
+
+pub(crate) fn has_mutating_tool_result(session: &AgentSession) -> bool {
+    !successful_mutating_tool_calls(session).is_empty()
+}
+
+fn finalize_mutation_paths(mut paths: Vec<String>, has_mutations: bool) -> Vec<String> {
+    if paths.is_empty() && has_mutations {
+        paths.push(".".to_owned());
     }
     paths.sort();
     paths.dedup();
     paths
+}
+
+pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
+    let mutations = successful_mutating_tool_calls(session);
+    let mut paths = Vec::new();
+    for (_, input) in &mutations {
+        collect_mutation_paths(input, &mut paths);
+    }
+    finalize_mutation_paths(paths, !mutations.is_empty())
+}
+
+fn collect_mutation_paths(value: &serde_json::Value, paths: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if matches!(
+                    key.as_str(),
+                    "path"
+                        | "file"
+                        | "file_path"
+                        | "source"
+                        | "destination"
+                        | "old_path"
+                        | "new_path"
+                ) {
+                    if let Some(path) = value.as_str() {
+                        paths.push(path.to_owned());
+                        continue;
+                    }
+                }
+                collect_mutation_paths(value, paths);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_mutation_paths(value, paths);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn plan_is_complete(session: &AgentSession) -> bool {
@@ -421,7 +488,7 @@ pub(crate) fn plan_is_complete(session: &AgentSession) -> bool {
 fn repository_instructions(repo: &Path) -> String {
     let mut remaining = MAX_REPOSITORY_INSTRUCTIONS_BYTES;
     let mut output = String::new();
-    for name in ["AGENTS.md", "CLAUDE.md", "MEDUSA.md", ".medusa/AGENTS.md"] {
+    for name in ["AGENTS.md", "MEDUSA.md", ".medusa/AGENTS.md"] {
         if remaining == 0 {
             break;
         }
@@ -459,50 +526,40 @@ pub fn update_session_objective(session: &mut AgentSession, objective: String) -
     persist(session)
 }
 
-/// Compacts durable session history without requiring a live model provider.
+/// Compacts durable session history into a crash-safe V2 hybrid manifest.
 pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {
+    compact_session_with_semantic(session, focus, None)
+}
+
+pub(crate) fn compact_session_with_semantic(
+    session: &mut AgentSession,
+    focus: Option<&str>,
+    semantic: Option<crate::compaction_v2::ValidatedSemanticSummary>,
+) -> MedusaResult<()> {
     let original_messages = session.messages.len();
-    let mut entries = session
-        .messages
+    let source_event_sequences = session
+        .events
         .iter()
-        .flat_map(|message| {
-            message
-                .content
-                .iter()
-                .map(move |block| (message.role, block))
-        })
-        .map(|(role, block)| {
-            let speaker = match role {
-                Role::User => "User",
-                Role::Assistant => "Assistant",
-            };
-            format!("{speaker}: {}", compact_block_text(block))
-        })
+        .map(|event| event.sequence)
         .collect::<Vec<_>>();
-    const MAX_ENTRIES: usize = 24;
-    if entries.len() > MAX_ENTRIES {
-        entries = entries.split_off(entries.len() - MAX_ENTRIES);
+    let migrated_v1 = session.messages.iter().flat_map(|message| &message.content).any(|block| matches!(block, MessageBlock::Text { text } if text.starts_with("[medusa-compaction-v1]")));
+    let prepared = crate::compaction_v2::prepare_with_semantic(session, focus, semantic)?;
+    let generation = prepared.manifest.generation;
+    let mut preserved_sections = prepared.preserved_sections;
+    preserved_sections.push(format!("migrated_v1={migrated_v1}"));
+    if !session.tool_artifacts.contains(&prepared.manifest_path) {
+        session.tool_artifacts.push(prepared.manifest_path.clone());
     }
-    let focus = focus
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("\nFocus for the next turn: {value}"))
-        .unwrap_or_default();
-    let summary = format!(
-        "This is a compacted Medusa session.\nCurrent goal: {}{}\n\nRecent durable context:\n{}",
-        session.objective,
-        focus,
-        entries.join("\n")
-    );
-    session.messages = vec![Message {
-        role: Role::User,
-        content: vec![MessageBlock::Text { text: summary }],
-    }];
+    session.messages = prepared.projection;
     append_event(
         session,
         Actor::Coordinator,
         EventPayload::ConversationCompacted {
             original_messages: u32::try_from(original_messages).unwrap_or(u32::MAX),
-            retained_messages: 1,
+            retained_messages: u32::try_from(session.messages.len()).unwrap_or(u32::MAX),
+            generation,
+            source_event_sequences,
+            preserved_sections,
         },
     )?;
     session.updated_at = OffsetDateTime::now_utc();
@@ -553,6 +610,8 @@ where
     F: FnMut(&AgentUpdate),
 {
     append_event(session, Actor::Coordinator, payload.clone())?;
+    session.updated_at = OffsetDateTime::now_utc();
+    persist(session)?;
     observer(&AgentUpdate::Event(payload));
     Ok(())
 }
@@ -653,6 +712,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn image_block(media_type: &str, data: &str) -> MessageBlock {
@@ -682,6 +742,8 @@ mod tests {
             supported_image_media_types: vec!["image/png".to_owned()],
             max_image_bytes: Some(1024),
             max_images_per_request: Some(2),
+            tool_calling: true,
+            streaming: false,
         };
         validate_user_content(&[image_block("image/png", "AAEC")], &capabilities)
             .expect("accept supported image");
@@ -694,6 +756,8 @@ mod tests {
             supported_image_media_types: vec!["image/png".to_owned()],
             max_image_bytes: None,
             max_images_per_request: None,
+            tool_calling: true,
+            streaming: false,
         };
         let error = validate_user_content(&[image_block("image/tiff", "AAEC")], &capabilities)
             .expect_err("reject unsupported type");
@@ -701,12 +765,31 @@ mod tests {
     }
 
     #[test]
+    fn provider_phase_tracks_production_agent_mode() {
+        assert_eq!(
+            provider_execution_phase(Mode::ReadOnly),
+            ProviderExecutionPhase::Planning
+        );
+        assert_eq!(
+            provider_execution_phase(Mode::Review),
+            ProviderExecutionPhase::HighRiskReview
+        );
+        assert_eq!(
+            provider_execution_phase(Mode::Yolo),
+            ProviderExecutionPhase::Implementation
+        );
+    }
+
+    #[test]
     fn web_tools_are_available_in_standard_and_planning_modes() {
         for mode in [Mode::Yolo, Mode::ReadOnly] {
-            let tools = available_tools(mode, &DesktopCommanderSettings::default())
-                .into_iter()
-                .map(|tool| tool.name)
-                .collect::<Vec<_>>();
+            let directory = tempfile::tempdir().expect("tempdir");
+            let tools =
+                available_tools(mode, directory.path(), &DesktopCommanderSettings::default())
+                    .expect("available tools")
+                    .into_iter()
+                    .map(|tool| tool.name)
+                    .collect::<Vec<_>>();
             assert!(tools.contains(&"web_search".to_owned()));
             assert!(tools.contains(&"web_fetch".to_owned()));
             assert!(tools.contains(&"skill_read".to_owned()));
@@ -750,6 +833,7 @@ mod tests {
         .expect("write skill");
 
         let prompt = system_prompt_with_context(Mode::Yolo, directory.path(), None);
+        assert!(prompt.contains("Runtime capabilities (shared with every Medusa frontend):"));
         assert!(prompt.contains("Run the focused test suite."));
         assert!(prompt.contains("release (project): Release preparation"));
         assert!(prompt.contains("call `skill_read`"));
@@ -767,5 +851,52 @@ mod tests {
             question.questions[0].question,
             "What kind of website is it?"
         );
+    }
+
+    #[test]
+    fn production_mutation_classifier_covers_all_repository_write_lanes() {
+        assert!(tool_call_mutates_repository(
+            "apply_structured_patch",
+            &json!({"repository_revision":"r","edits":[{"path":"src/lib.rs"}]})
+        ));
+        assert!(tool_call_mutates_repository(
+            "shell_run",
+            &json!({"program":"cargo","args":["fmt"]})
+        ));
+        assert!(tool_call_mutates_repository(
+            "desktop_commander:write_file",
+            &json!({"tool":"write_file","arguments":{"path":"src/lib.rs"}})
+        ));
+        assert!(!tool_call_mutates_repository(
+            "inspect_target",
+            &json!({"path":"src/lib.rs"})
+        ));
+    }
+
+    #[test]
+    fn mutation_path_collection_handles_structured_and_nested_adapters() {
+        let mut paths = Vec::new();
+        collect_mutation_paths(
+            &json!({
+                "edits": [{"path":"src/lib.rs"}, {"file_path":"src/main.rs"}],
+                "arguments": {"destination":"generated/out.rs"}
+            }),
+            &mut paths,
+        );
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "generated/out.rs".to_owned(),
+                "src/lib.rs".to_owned(),
+                "src/main.rs".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn pathless_mutation_uses_repository_wide_verification_scope() {
+        assert_eq!(finalize_mutation_paths(Vec::new(), true), vec!["."]);
+        assert!(finalize_mutation_paths(Vec::new(), false).is_empty());
     }
 }

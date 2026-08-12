@@ -1,15 +1,19 @@
-name: Publish Draft Release
+name: Publish Release
 
 on:
   push:
     tags:
       - "v*"
+    branches:
+      - main
+    paths:
+      - ".github/release-trigger-v1.0.0"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: publish-draft-${{ github.ref_name }}
+  group: publish-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -20,10 +24,10 @@ jobs:
       release-tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Validate evidence generator
@@ -32,10 +36,30 @@ jobs:
         id: release
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            RELEASE_TAG="$REF_NAME"
+          else
+            RELEASE_TAG="v1.0.0"
+            if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+              existing=$(git rev-list -n 1 "$RELEASE_TAG")
+              if [[ "$existing" != "$RELEASE_SHA" ]]; then
+                echo "release tag $RELEASE_TAG already points to $existing" >&2
+                exit 2
+              fi
+            else
+              gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/git/refs" \
+                -f ref="refs/tags/$RELEASE_TAG" \
+                -f sha="$RELEASE_SHA" >/dev/null
+            fi
+          fi
           version=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
           git fetch --force --tags origin
           git fetch --no-tags origin main
@@ -57,18 +81,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Linux Tauri dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Install desktop dependencies
         working-directory: apps/medusa-desktop
         run: npm ci
@@ -84,16 +108,19 @@ jobs:
           --platform linux
           --manifest desktop-package-linux.json
       - name: Build Linux CLI
-        run: cargo build --release --locked --bin medusa
+        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
       - name: Assemble Linux release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
+          target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
           tar -czf release-assets/medusa-cli-linux.tar.gz -C cli-package .
 
@@ -106,7 +133,7 @@ jobs:
           cp "$deb" release-assets/medusa-desktop-linux.deb
           cp "$appimage" release-assets/medusa-desktop-linux.AppImage
           cp desktop-package-linux.json release-assets/desktop-package-linux.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: medusa-release-linux-${{ github.sha }}
           path: release-assets
@@ -119,16 +146,16 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Install desktop dependencies
         working-directory: apps/medusa-desktop
         run: npm ci
@@ -142,16 +169,19 @@ jobs:
           --platform macos
           --manifest desktop-package-macos.json
       - name: Build macOS CLI
-        run: cargo build --release --locked --bin medusa
+        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
       - name: Assemble macOS release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
+          target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
           tar -czf release-assets/medusa-cli-macos.tar.gz -C cli-package .
 
@@ -164,7 +194,7 @@ jobs:
           cp "$dmg" release-assets/medusa-desktop-macos.dmg
           ditto -c -k --sequesterRsrc --keepParent "$app" release-assets/medusa-desktop-macos-app.zip
           cp desktop-package-macos.json release-assets/desktop-package-macos.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: medusa-release-macos-${{ github.sha }}
           path: release-assets
@@ -177,16 +207,16 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Install desktop dependencies
         working-directory: apps/medusa-desktop
         run: npm ci
@@ -200,16 +230,21 @@ jobs:
           --platform windows
           --manifest desktop-package-windows.json
       - name: Build Windows CLI
-        run: cargo build --release --locked --bin medusa
+        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
       - name: Assemble Windows release assets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force release-assets, cli-package | Out-Null
           Copy-Item target/release/medusa.exe cli-package/medusa.exe
+          Copy-Item target/release/medusa-github-operation.exe cli-package/medusa-github-operation.exe
           Copy-Item LICENSE cli-package/LICENSE
           Copy-Item docs/RELEASE.md cli-package/RELEASE.md
           Copy-Item docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          & target/release/medusa-github-operation.exe --help | Select-String 'medusa-github-operation'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & target/release/medusa-github-operation.exe --help | Select-String 'interchangeable backend'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path cli-package/* -DestinationPath release-assets/medusa-cli-windows.zip
@@ -220,7 +255,7 @@ jobs:
           }
           Copy-Item $installers[0].FullName release-assets/medusa-desktop-windows.exe
           Copy-Item desktop-package-windows.json release-assets/desktop-package-windows.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: medusa-release-windows-${{ github.sha }}
           path: release-assets
@@ -228,7 +263,7 @@ jobs:
           retention-days: 30
 
   publish-draft:
-    name: Attest and create draft release
+    name: Attest and create release
     needs: [validate, linux, macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -237,13 +272,13 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: medusa-release-*-${{ github.sha }}
           path: release-assets
@@ -253,6 +288,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
           RELEASE_SHA: ${{ github.sha }}
+          RELEASE_SEQUENCE: ${{ github.run_number }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG"
@@ -269,19 +306,24 @@ jobs:
           python3 scripts/release-evidence.py manifest \
             --assets release-assets \
             --output release-assets/medusa-release-manifest.json \
-            --checksums release-assets/SHA256SUMS
+            --checksums release-assets/SHA256SUMS \
+            --version "$RELEASE_VERSION" \
+            --revision "$RELEASE_SHA" \
+            --sequence "$RELEASE_SEQUENCE" \
+            --rollout-percentage 100 \
+            --minimum-updater-version "1.0.0"
       - name: Attest release assets
-        uses: actions/attest@v4
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-path: release-assets/*
       - name: Preserve assembled release evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: medusa-draft-release-${{ needs.validate.outputs.release-tag }}
           path: release-assets
           if-no-files-found: error
           retention-days: 90
-      - name: Create draft GitHub Release
+      - name: Create GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -294,7 +336,6 @@ jobs:
             exit 2
           fi
           gh release create "$RELEASE_TAG" release-assets/* \
-            --draft \
             --verify-tag \
             --generate-notes \
             --title "Medusa $RELEASE_VERSION"

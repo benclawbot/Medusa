@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     io,
     path::{Path, PathBuf},
     sync::Arc,
@@ -10,7 +11,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKin
 use crate::{
     clipboard::{
         ClipboardContent, ClipboardError, ClipboardService, FileAttachment, PromptAttachment,
-        PromptDraft,
+        PromptDraft, attach_image_file, attachment_summary, remove_attachment,
     },
     commands::{
         ModelCommand, SlashCommand, command_suggestions, complete_first_command,
@@ -26,6 +27,12 @@ mod models;
 mod tests;
 
 pub use models::*;
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ActivityDetailKey {
+    Id(String),
+    TranscriptIndex(usize),
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Scrollback {
@@ -53,6 +60,10 @@ pub struct AppState {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub timed_output_tokens: u64,
+    pub total_tokens: u64,
+    pub estimated_cost_microusd: u64,
+    pub tokens_per_second_milli: u64,
+    pub usage_provenance: Option<String>,
     pub cache_read_input_tokens: u64,
     pub cache_creation_input_tokens: u64,
     current_context_tokens: u64,
@@ -65,8 +76,11 @@ pub struct AppState {
     pub effort_label: Option<String>,
     pub plan_mode: bool,
     pub task_list_visible: bool,
+    expanded_activity_details: BTreeSet<ActivityDetailKey>,
     pub spinner_frame: u8,
     pub scrollback: Scrollback,
+    pub selection: Option<TextSelection>,
+    selection_dragging: bool,
     welcome_visible: bool,
     credential_configured: bool,
     model_modal: Option<ModelModal>,
@@ -102,6 +116,59 @@ impl AppState {
         self.scrollback.scroll_down(step);
     }
 
+    fn activity_detail_key(index: usize, activity: &TranscriptActivity) -> ActivityDetailKey {
+        activity
+            .id
+            .as_ref()
+            .map_or(ActivityDetailKey::TranscriptIndex(index), |id| {
+                ActivityDetailKey::Id(id.clone())
+            })
+    }
+
+    #[must_use]
+    pub(crate) fn activity_details_expanded(
+        &self,
+        index: usize,
+        activity: &TranscriptActivity,
+    ) -> bool {
+        self.expanded_activity_details
+            .contains(&Self::activity_detail_key(index, activity))
+    }
+
+    pub(crate) fn activity_detail_expansion_snapshot(&self) -> Vec<bool> {
+        self.transcript
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| match entry {
+                TranscriptEntry::Activity(activity) => {
+                    self.activity_details_expanded(index, activity)
+                }
+                _ => false,
+            })
+            .collect()
+    }
+
+    fn toggle_latest_activity_details(&mut self) {
+        let key = self
+            .transcript
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, entry)| match entry {
+                TranscriptEntry::Activity(activity) if !activity.details.is_empty() => {
+                    Some(Self::activity_detail_key(index, activity))
+                }
+                _ => None,
+            });
+        let Some(key) = key else {
+            self.status = "no activity details available".to_owned();
+            return;
+        };
+        if !self.expanded_activity_details.remove(&key) {
+            self.expanded_activity_details.insert(key);
+        }
+    }
+
     pub fn new(
         repository: PathBuf,
         draft_key: impl Into<String>,
@@ -126,6 +193,10 @@ impl AppState {
             input_tokens: 0,
             output_tokens: 0,
             timed_output_tokens: 0,
+            total_tokens: 0,
+            estimated_cost_microusd: 0,
+            tokens_per_second_milli: 0,
+            usage_provenance: None,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
             current_context_tokens: 0,
@@ -138,8 +209,11 @@ impl AppState {
             effort_label: None,
             plan_mode: false,
             task_list_visible: true,
+            expanded_activity_details: BTreeSet::new(),
             spinner_frame: 0,
             scrollback: Scrollback::default(),
+            selection: None,
+            selection_dragging: false,
             welcome_visible: true,
             credential_configured: false,
             model_modal: None,
@@ -188,6 +262,10 @@ impl AppState {
                 self.task_list_visible = !self.task_list_visible;
                 return Ok(AppAction::Redraw);
             }
+            if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.toggle_latest_activity_details();
+                return Ok(AppAction::Redraw);
+            }
             if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.paste_from_clipboard()?;
                 self.persist_draft()?;
@@ -221,6 +299,53 @@ impl AppState {
             ComposerAction::CommandNext => self.select_command(1),
             ComposerAction::CompleteCommand => self.complete_command(),
             ComposerAction::Submit => {
+                let command_text = self.composer.draft.text.trim().to_owned();
+                if let Some(path) = command_text.strip_prefix("/image ") {
+                    let path = PathBuf::from(path.trim());
+                    attach_image_file(&mut self.composer.draft, &path)?;
+                    self.composer.draft.text.clear();
+                    self.composer.cursor = 0;
+                    self.status = format!(
+                        "{} · compatibility checked by active route before send",
+                        attachment_summary(&self.composer.draft)
+                    );
+                    self.persist_draft()?;
+                    return Ok(AppAction::Redraw);
+                }
+                if command_text == "/images" {
+                    self.status = format!(
+                        "{} · compatibility checked by active route before send",
+                        attachment_summary(&self.composer.draft)
+                    );
+                    self.composer.draft.text.clear();
+                    self.composer.cursor = 0;
+                    self.persist_draft()?;
+                    return Ok(AppAction::Redraw);
+                }
+                if let Some(index) = command_text.strip_prefix("/remove-image ") {
+                    let index = index.trim().parse::<usize>().map_err(|_| {
+                        AppError::Clipboard(ClipboardError::Unavailable(
+                            "usage: /remove-image <1-based index>".to_owned(),
+                        ))
+                    })?;
+                    if index == 0
+                        || remove_attachment(&mut self.composer.draft, index - 1).is_none()
+                    {
+                        self.status = format!(
+                            "image index {index} is out of range; {}",
+                            attachment_summary(&self.composer.draft)
+                        );
+                    } else {
+                        self.status = format!(
+                            "removed image {index}; {}",
+                            attachment_summary(&self.composer.draft)
+                        );
+                    }
+                    self.composer.draft.text.clear();
+                    self.composer.cursor = 0;
+                    self.persist_draft()?;
+                    return Ok(AppAction::Redraw);
+                }
                 let suggestions = command_suggestions(&self.composer.draft.text, &self.repository);
                 let command_text = self.composer.draft.text.trim();
                 let is_exact_command = suggestions
@@ -239,6 +364,27 @@ impl AppState {
                 self.composer = ComposerState::new("");
                 self.draft_store.delete(&self.draft_key)?;
                 self.command_selection = 0;
+                if submitted.attachments.is_empty()
+                    && submitted.text.trim().eq_ignore_ascii_case("/settings")
+                {
+                    match ModelModal::new_settings(
+                        self.model_label.as_deref(),
+                        self.effort_label.as_deref(),
+                        self.credential_configured,
+                    ) {
+                        Ok(modal) => {
+                            self.model_modal = Some(modal);
+                            self.status = "settings".to_owned();
+                        }
+                        Err(error) => {
+                            self.transcript.push(TranscriptEntry::System(format!(
+                                "error: could not open settings: {error}"
+                            )));
+                            self.status = "settings unavailable".to_owned();
+                        }
+                    }
+                    return Ok(AppAction::Redraw);
+                }
                 if submitted.attachments.is_empty() {
                     match parse_slash_command(&submitted.text) {
                         Ok(Some(command)) => {
@@ -308,6 +454,10 @@ impl AppState {
         self.input_tokens = 0;
         self.output_tokens = 0;
         self.timed_output_tokens = 0;
+        self.total_tokens = 0;
+        self.estimated_cost_microusd = 0;
+        self.tokens_per_second_milli = 0;
+        self.usage_provenance = None;
         self.cache_read_input_tokens = 0;
         self.cache_creation_input_tokens = 0;
         self.current_context_tokens = 0;
@@ -318,7 +468,10 @@ impl AppState {
         self.status = "new session".to_owned();
         self.plan_mode = false;
         self.task_list_visible = true;
+        self.expanded_activity_details.clear();
         self.question_modal = None;
+        self.selection = None;
+        self.selection_dragging = false;
     }
 
     pub fn compact_transcript(&mut self, message: String) {
@@ -353,6 +506,43 @@ impl AppState {
     pub fn set_plan(&mut self, plan: TranscriptPlan) {
         self.plan = Some(plan);
         self.task_list_visible = true;
+    }
+
+    pub fn begin_text_selection(&mut self, position: TerminalPosition) {
+        self.selection = Some(TextSelection {
+            anchor: position,
+            active: position,
+        });
+        self.selection_dragging = true;
+    }
+
+    pub fn update_text_selection(&mut self, position: TerminalPosition) {
+        if self.selection_dragging
+            && let Some(selection) = self.selection.as_mut()
+        {
+            selection.active = position;
+        }
+    }
+
+    #[must_use]
+    pub fn finish_text_selection(&mut self, position: TerminalPosition) -> Option<TextSelection> {
+        if !self.selection_dragging {
+            return None;
+        }
+        self.update_text_selection(position);
+        self.selection_dragging = false;
+        self.selection
+    }
+
+    #[must_use]
+    pub fn is_selecting_text(&self) -> bool {
+        self.selection_dragging
+    }
+
+    pub fn copy_text(&mut self, text: &str) -> Result<(), AppError> {
+        self.clipboard.write_text(text)?;
+        self.status = format!("copied {} characters", text.chars().count());
+        Ok(())
     }
 
     pub fn record_assistant_text(&mut self, text: String) {
@@ -444,7 +634,9 @@ impl AppState {
                 let width = image.width;
                 let height = image.height;
                 self.composer.draft.add_image(image)?;
-                self.status = format!("attached screenshot {width}×{height}");
+                self.status = format!(
+                    "attached screenshot {width}×{height} · compatibility checked by active route before send"
+                );
             }
             ClipboardContent::Files(paths) => {
                 let mut added = 0_usize;
@@ -522,11 +714,49 @@ impl AppState {
         cache_creation_input_tokens: u64,
         model_elapsed_millis: u64,
     ) {
+        let total_tokens = input_tokens
+            .saturating_add(output_tokens)
+            .saturating_add(cache_read_input_tokens)
+            .saturating_add(cache_creation_input_tokens);
+        self.record_turn_usage(
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            total_tokens,
+            model_elapsed_millis,
+            if model_elapsed_millis == 0 {
+                0
+            } else {
+                output_tokens.saturating_mul(1_000_000) / model_elapsed_millis
+            },
+            0,
+            "estimated".to_owned(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_turn_usage(
+        &mut self,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_input_tokens: u64,
+        cache_creation_input_tokens: u64,
+        total_tokens: u64,
+        duration_ms: u64,
+        tokens_per_second_milli: u64,
+        estimated_cost_microusd: u64,
+        provenance: String,
+    ) {
         self.input_tokens = self.input_tokens.saturating_add(input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(output_tokens);
-        if model_elapsed_millis > 0 {
-            self.timed_output_tokens = self.timed_output_tokens.saturating_add(output_tokens);
-        }
+        self.timed_output_tokens = self.timed_output_tokens.saturating_add(output_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(total_tokens);
+        self.estimated_cost_microusd = self
+            .estimated_cost_microusd
+            .saturating_add(estimated_cost_microusd);
+        let _ = tokens_per_second_milli;
+        self.usage_provenance = Some(provenance);
         self.cache_read_input_tokens = self
             .cache_read_input_tokens
             .saturating_add(cache_read_input_tokens);
@@ -536,9 +766,12 @@ impl AppState {
         self.current_context_tokens = input_tokens
             .saturating_add(cache_read_input_tokens)
             .saturating_add(cache_creation_input_tokens);
-        self.model_elapsed_millis = self
-            .model_elapsed_millis
-            .saturating_add(model_elapsed_millis);
+        self.model_elapsed_millis = self.model_elapsed_millis.saturating_add(duration_ms);
+        self.tokens_per_second_milli = if self.model_elapsed_millis == 0 {
+            0
+        } else {
+            self.total_tokens.saturating_mul(1_000_000) / self.model_elapsed_millis
+        };
     }
 
     #[must_use]
@@ -574,8 +807,7 @@ impl AppState {
 
     #[must_use]
     pub fn output_tokens_per_second(&self) -> Option<f64> {
-        (self.model_elapsed_millis > 0)
-            .then(|| self.timed_output_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)
+        (self.tokens_per_second_milli > 0).then(|| self.tokens_per_second_milli as f64 / 1_000.0)
     }
 
     #[must_use]

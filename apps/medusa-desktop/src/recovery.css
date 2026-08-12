@@ -1,0 +1,27 @@
+.recovery-panel { margin: 0 auto 20px; max-width: 850px; padding: 20px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); box-shadow: 0 10px 28px rgba(20,27,45,.08); }
+.recovery-panel header { display: flex; justify-content: space-between; gap: 16px; }
+.recovery-panel h2 { margin: 0; }
+.recovery-health { font-size: .7rem; font-weight: 700; text-transform: uppercase; }
+.recovery-summary { line-height: 1.5; }
+.recovery-facts { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
+.recovery-facts div, .checkpoint-card, .recovery-preview { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.recovery-facts dt { font-size: .68rem; color: var(--muted); text-transform: uppercase; }
+.recovery-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.recovery-warnings p, .recovery-preview p { display: flex; gap: 8px; align-items: center; }
+.recovery-warnings { color: var(--danger); }
+.recovery-checkpoint { display: grid; gap: 6px; margin: 14px 0; color: var(--muted); font-size: .78rem; }
+.recovery-checkpoint select { width: 100%; border: 1px solid var(--line-strong); border-radius: 8px; background: white; padding: 9px 10px; color: var(--text); }
+.checkpoint-card small { display: block; color: var(--muted); }
+.checkpoint-card p { margin-bottom: 0; }
+.recovery-preview code { margin-left: auto; overflow-wrap: anywhere; }
+.recovery-preview .risk { color: var(--danger); }
+.recovery-confirm { display: flex; gap: 8px; margin: 14px 0; }
+.recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.recovery-actions button { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 8px; background: white; padding: 8px 11px; }
+.recovery-actions .danger { border-color: #fecaca; color: var(--danger); }
+.recovery-corrupt, .recovery-blocked { border-color: #fecaca; }
+.recovery-dock { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; }
+.recovery-dock-backdrop { position: absolute; inset: 0; background: rgba(20,27,45,.48); backdrop-filter: blur(2px); }
+.recovery-dock-content { position: relative; width: min(920px, 100%); max-height: calc(100vh - 48px); overflow: auto; }
+.recovery-error { max-width: 850px; margin: 0 auto 10px; border: 1px solid #fecaca; border-radius: 8px; background: #fff1f2; color: #b42318; padding: 10px 12px; }
+@media (max-width: 760px) { .recovery-facts { grid-template-columns: 1fr 1fr; } }
