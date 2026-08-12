@@ -6,5 +6,6 @@
 .github/workflows/bootstrap-desktop-release.yml|Commits only deterministic desktop/package lockfiles and bootstrap metadata generated from the reviewed workflow inputs.
 .github/workflows/publish-release.yml|Creates and uploads immutable release artifacts only after the release gate succeeds; it does not modify repository source.
 .github/workflows/refresh-cli-release-assets.yml|Replaces CLI release assets for an existing release from a reviewed workflow dispatch; it does not modify repository source.
+.github/workflows/replace-v1-release.yml|One-time replacement of v1.0.0: rebuilds reviewed main on all supported platforms, rebinds only the v1.0.0 tag, and replaces only that GitHub Release after all build and evidence gates succeed; it does not modify repository source.
 .github/workflows/sign-draft-release.yml|Uploads detached signatures and verified checksums to an existing draft release; it does not publish the release or modify repository source.
 .github/workflows/sign-release-manifest.yml|Uploads only the verified release manifest, detached signature, checksums, and attestations after the Publish Release workflow succeeds; it never pushes commits or publishes the release.
