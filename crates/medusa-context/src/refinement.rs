@@ -245,6 +245,11 @@ pub enum RefinementEvent {
         version: u64,
         receipt: ApprovalReceipt,
     },
+    Deferred {
+        proposal_id: String,
+        version: u64,
+        reason: String,
+    },
     Superseded {
         proposal_id: String,
         version: u64,
@@ -255,6 +260,11 @@ pub enum RefinementEvent {
         proposal_id: String,
         version: u64,
     },
+    Suspended {
+        proposal_id: String,
+        version: u64,
+        reason: String,
+    },
     RolledBack {
         proposal_id: String,
         version: u64,
@@ -263,6 +273,11 @@ pub enum RefinementEvent {
         reason: String,
     },
     Rejected {
+        proposal_id: String,
+        version: u64,
+        reason: String,
+    },
+    Tombstoned {
         proposal_id: String,
         version: u64,
         reason: String,
@@ -288,13 +303,16 @@ pub struct RefinementJournal {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Lifecycle {
     Proposed,
+    Deferred,
     Validated,
     Evaluated,
     Approved,
     Active,
     Superseded,
+    Suspended,
     RolledBack,
     Rejected,
+    Tombstoned,
 }
 
 #[derive(Clone, Debug)]
@@ -302,23 +320,74 @@ struct ProposalState {
     proposal: RefinementProposal,
     lifecycle: Lifecycle,
     evaluation_passed: bool,
+    approval_receipt: Option<ApprovalReceipt>,
+    predecessor: Option<ProposalKey>,
+    last_recorded_at: OffsetDateTime,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefinementLifecycle {
+    Proposed,
+    Deferred,
+    Validated,
+    Evaluated,
+    Approved,
+    Active,
+    Superseded,
+    Suspended,
+    RolledBack,
+    Rejected,
+    Tombstoned,
+    Conflict,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RefinementRecord {
+    pub proposal_id: String,
+    pub version: u64,
+    pub artifact_kind: RefinementArtifactKind,
+    pub scope: RefinementScope,
+    pub lifecycle: RefinementLifecycle,
+    pub proposal: Option<RefinementProposal>,
+    pub evidence_digest: String,
+    pub approval_receipt_digest: Option<String>,
+    pub predecessor_proposal_id: Option<String>,
+    pub predecessor_version: Option<u64>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub last_recorded_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefinementProjection {
-    active: BTreeMap<(RefinementScope, RefinementArtifactKind, String), RefinementProposal>,
+    active: BTreeMap<ProposalKey, RefinementProposal>,
+    records: Vec<RefinementRecord>,
+    head_hash: String,
+}
+
+impl Default for RefinementProjection {
+    fn default() -> Self {
+        Self {
+            active: BTreeMap::new(),
+            records: Vec::new(),
+            head_hash: GENESIS_HASH.to_owned(),
+        }
+    }
 }
 
 impl RefinementProjection {
     #[must_use]
     pub fn active(&self) -> Vec<&RefinementProposal> {
-        self.active.values().collect()
+        self.active
+            .values()
+            .filter(|proposal| !self.is_conflicted(proposal))
+            .collect()
     }
 
     #[must_use]
     pub fn active_for_scope(&self, scope: RefinementScope) -> Vec<&RefinementProposal> {
-        self.active
-            .values()
+        self.active()
+            .into_iter()
             .filter(|proposal| proposal.scope == scope)
             .collect()
     }
@@ -334,13 +403,44 @@ impl RefinementProjection {
             .collect()
     }
 
+    #[must_use]
+    pub fn records(&self) -> &[RefinementRecord] {
+        &self.records
+    }
+
+    #[must_use]
+    pub fn head_hash(&self) -> &str {
+        &self.head_hash
+    }
+
+    #[must_use]
+    pub fn conflict_keys(&self) -> Vec<String> {
+        let mut counts = BTreeMap::new();
+        for proposal in self.active.values() {
+            *counts.entry(projection_key(proposal)).or_insert(0_usize) += 1;
+        }
+        counts
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .map(|((_, kind, identity), _)| format!("{}:{identity}", artifact_kind_key(kind)))
+            .collect()
+    }
+
+    fn is_conflicted(&self, proposal: &RefinementProposal) -> bool {
+        self.active
+            .values()
+            .filter(|candidate| projection_key(candidate) == projection_key(proposal))
+            .count()
+            > 1
+    }
+
     pub fn context_items(
         &self,
         mut next_sequence: u64,
         recorded_at: OffsetDateTime,
     ) -> Result<Vec<ContextItem>, &'static str> {
         let mut items = Vec::new();
-        for proposal in self.active.values() {
+        for proposal in self.active() {
             let evidence = proposal
                 .evidence
                 .iter()
@@ -506,6 +606,11 @@ fn event_key(event: &RefinementEvent) -> ProposalKey {
             version,
             ..
         }
+        | RefinementEvent::Deferred {
+            proposal_id,
+            version,
+            ..
+        }
         | RefinementEvent::Superseded {
             proposal_id,
             version,
@@ -515,12 +620,22 @@ fn event_key(event: &RefinementEvent) -> ProposalKey {
             proposal_id,
             version,
         }
+        | RefinementEvent::Suspended {
+            proposal_id,
+            version,
+            ..
+        }
         | RefinementEvent::RolledBack {
             proposal_id,
             version,
             ..
         }
         | RefinementEvent::Rejected {
+            proposal_id,
+            version,
+            ..
+        }
+        | RefinementEvent::Tombstoned {
             proposal_id,
             version,
             ..
@@ -556,7 +671,18 @@ fn validate_transition(
             }
             Ok(())
         }
-        RefinementEvent::Validated { .. } => require_lifecycle(event, states, Lifecycle::Proposed),
+        RefinementEvent::Deferred { reason, .. } => {
+            require_lifecycle(event, states, Lifecycle::Proposed)?;
+            require_reason(reason)
+        }
+        RefinementEvent::Validated { .. } => {
+            let state = state_for(event, states)?;
+            if matches!(state.lifecycle, Lifecycle::Proposed | Lifecycle::Deferred) {
+                Ok(())
+            } else {
+                Err(RefinementError::InvalidTransition)
+            }
+        }
         RefinementEvent::Evaluated { result, .. } => {
             require_lifecycle(event, states, Lifecycle::Validated)?;
             if !result.is_well_formed() {
@@ -600,16 +726,17 @@ fn validate_transition(
         }
         RefinementEvent::Activated { .. } => {
             let state = state_for(event, states)?;
-            if state.lifecycle != Lifecycle::Approved {
+            if state.lifecycle == Lifecycle::Tombstoned {
+                return Err(RefinementError::InvalidTransition);
+            }
+            if !matches!(state.lifecycle, Lifecycle::Approved | Lifecycle::Suspended) {
                 return Err(RefinementError::ApprovalRequired);
             }
-            if projection
-                .active
-                .contains_key(&projection_key(&state.proposal))
-            {
-                return Err(RefinementError::Conflict);
-            }
             Ok(())
+        }
+        RefinementEvent::Suspended { reason, .. } => {
+            require_lifecycle(event, states, Lifecycle::Active)?;
+            require_reason(reason)
         }
         RefinementEvent::RolledBack {
             restore_proposal_id,
@@ -648,6 +775,21 @@ fn validate_transition(
             }
             Ok(())
         }
+        RefinementEvent::Tombstoned { reason, .. } => {
+            let state = state_for(event, states)?;
+            if state.lifecycle == Lifecycle::Tombstoned {
+                return Err(RefinementError::InvalidTransition);
+            }
+            require_reason(reason)
+        }
+    }
+}
+
+fn require_reason(reason: &str) -> Result<(), RefinementError> {
+    if reason.trim().is_empty() {
+        Err(RefinementError::InvalidTransition)
+    } else {
+        Ok(())
     }
 }
 
@@ -679,14 +821,25 @@ fn replay(
                         proposal: proposal.clone(),
                         lifecycle: Lifecycle::Proposed,
                         evaluation_passed: false,
+                        approval_receipt: None,
+                        predecessor: None,
+                        last_recorded_at: entry.recorded_at,
                     },
                 );
             }
-            RefinementEvent::Validated { .. } => {
-                states
+            RefinementEvent::Deferred { .. } => {
+                let state = states
                     .get_mut(&key)
-                    .ok_or(RefinementError::UnknownProposal)?
-                    .lifecycle = Lifecycle::Validated;
+                    .ok_or(RefinementError::UnknownProposal)?;
+                state.lifecycle = Lifecycle::Deferred;
+                state.last_recorded_at = entry.recorded_at;
+            }
+            RefinementEvent::Validated { .. } => {
+                let state = states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?;
+                state.lifecycle = Lifecycle::Validated;
+                state.last_recorded_at = entry.recorded_at;
             }
             RefinementEvent::Evaluated { result, .. } => {
                 let state = states
@@ -694,19 +847,31 @@ fn replay(
                     .ok_or(RefinementError::UnknownProposal)?;
                 state.lifecycle = Lifecycle::Evaluated;
                 state.evaluation_passed = result.passed();
+                state.last_recorded_at = entry.recorded_at;
             }
-            RefinementEvent::Approved { .. } => {
-                states
-                    .get_mut(&key)
-                    .ok_or(RefinementError::UnknownProposal)?
-                    .lifecycle = Lifecycle::Approved;
-            }
-            RefinementEvent::Superseded { .. } => {
+            RefinementEvent::Approved { receipt, .. } => {
                 let state = states
                     .get_mut(&key)
                     .ok_or(RefinementError::UnknownProposal)?;
-                projection.active.remove(&projection_key(&state.proposal));
+                state.lifecycle = Lifecycle::Approved;
+                state.approval_receipt = Some(receipt.clone());
+                state.last_recorded_at = entry.recorded_at;
+            }
+            RefinementEvent::Superseded {
+                by_proposal_id,
+                by_version,
+                ..
+            } => {
+                let state = states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?;
+                projection.active.remove(&key);
                 state.lifecycle = Lifecycle::Superseded;
+                state.last_recorded_at = entry.recorded_at;
+                let replacement = states
+                    .get_mut(&proposal_key(by_proposal_id, *by_version))
+                    .ok_or(RefinementError::UnknownProposal)?;
+                replacement.predecessor = Some(key.clone());
             }
             RefinementEvent::Activated { .. } => {
                 let state = states
@@ -714,45 +879,133 @@ fn replay(
                     .ok_or(RefinementError::UnknownProposal)?;
                 projection
                     .active
-                    .insert(projection_key(&state.proposal), state.proposal.clone());
+                    .insert(key.clone(), state.proposal.clone());
                 state.lifecycle = Lifecycle::Active;
+                state.last_recorded_at = entry.recorded_at;
+            }
+            RefinementEvent::Suspended { .. } => {
+                let state = states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?;
+                projection.active.remove(&key);
+                state.lifecycle = Lifecycle::Suspended;
+                state.last_recorded_at = entry.recorded_at;
             }
             RefinementEvent::RolledBack {
                 restore_proposal_id,
                 restore_version,
                 ..
             } => {
-                let current = states
-                    .get(&key)
-                    .ok_or(RefinementError::UnknownProposal)?
-                    .proposal
-                    .clone();
-                projection.active.remove(&projection_key(&current));
-                states
+                states.get(&key).ok_or(RefinementError::UnknownProposal)?;
+                projection.active.remove(&key);
+                let state = states
                     .get_mut(&key)
-                    .ok_or(RefinementError::UnknownProposal)?
-                    .lifecycle = Lifecycle::RolledBack;
+                    .ok_or(RefinementError::UnknownProposal)?;
+                state.lifecycle = Lifecycle::RolledBack;
+                state.last_recorded_at = entry.recorded_at;
                 if let (Some(id), Some(version)) = (restore_proposal_id, restore_version) {
                     let restore_key = proposal_key(id, *version);
                     let previous = states
                         .get_mut(&restore_key)
                         .ok_or(RefinementError::UnknownProposal)?;
                     previous.lifecycle = Lifecycle::Active;
-                    projection.active.insert(
-                        projection_key(&previous.proposal),
-                        previous.proposal.clone(),
-                    );
+                    previous.last_recorded_at = entry.recorded_at;
+                    projection
+                        .active
+                        .insert(restore_key, previous.proposal.clone());
                 }
             }
             RefinementEvent::Rejected { .. } => {
-                states
+                let state = states
                     .get_mut(&key)
-                    .ok_or(RefinementError::UnknownProposal)?
-                    .lifecycle = Lifecycle::Rejected;
+                    .ok_or(RefinementError::UnknownProposal)?;
+                state.lifecycle = Lifecycle::Rejected;
+                state.last_recorded_at = entry.recorded_at;
+            }
+            RefinementEvent::Tombstoned { .. } => {
+                let state = states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?;
+                projection.active.remove(&key);
+                state.lifecycle = Lifecycle::Tombstoned;
+                state.last_recorded_at = entry.recorded_at;
             }
         }
     }
+    projection.head_hash = entries
+        .last()
+        .map_or_else(|| GENESIS_HASH.to_owned(), |entry| entry.hash.clone());
+    projection.records = projection_records(&states, &projection);
     Ok((states, projection))
+}
+
+fn projection_records(
+    states: &BTreeMap<ProposalKey, ProposalState>,
+    projection: &RefinementProjection,
+) -> Vec<RefinementRecord> {
+    states
+        .iter()
+        .map(|((proposal_id, version), state)| {
+            let conflicted =
+                state.lifecycle == Lifecycle::Active && projection.is_conflicted(&state.proposal);
+            let lifecycle = if conflicted {
+                RefinementLifecycle::Conflict
+            } else {
+                public_lifecycle(state.lifecycle)
+            };
+            let (predecessor_proposal_id, predecessor_version) = state
+                .predecessor
+                .as_ref()
+                .map_or((None, None), |(id, version)| {
+                    (Some(id.clone()), Some(*version))
+                });
+            RefinementRecord {
+                proposal_id: proposal_id.clone(),
+                version: *version,
+                artifact_kind: state.proposal.artifact_kind,
+                scope: state.proposal.scope,
+                lifecycle,
+                proposal: (state.lifecycle != Lifecycle::Tombstoned)
+                    .then(|| state.proposal.clone()),
+                evidence_digest: serialized_digest(&state.proposal.evidence),
+                approval_receipt_digest: state.approval_receipt.as_ref().map(serialized_digest),
+                predecessor_proposal_id,
+                predecessor_version,
+                last_recorded_at: state.last_recorded_at,
+            }
+        })
+        .collect()
+}
+
+fn public_lifecycle(lifecycle: Lifecycle) -> RefinementLifecycle {
+    match lifecycle {
+        Lifecycle::Proposed => RefinementLifecycle::Proposed,
+        Lifecycle::Deferred => RefinementLifecycle::Deferred,
+        Lifecycle::Validated => RefinementLifecycle::Validated,
+        Lifecycle::Evaluated => RefinementLifecycle::Evaluated,
+        Lifecycle::Approved => RefinementLifecycle::Approved,
+        Lifecycle::Active => RefinementLifecycle::Active,
+        Lifecycle::Superseded => RefinementLifecycle::Superseded,
+        Lifecycle::Suspended => RefinementLifecycle::Suspended,
+        Lifecycle::RolledBack => RefinementLifecycle::RolledBack,
+        Lifecycle::Rejected => RefinementLifecycle::Rejected,
+        Lifecycle::Tombstoned => RefinementLifecycle::Tombstoned,
+    }
+}
+
+fn serialized_digest<T: Serialize>(value: &T) -> String {
+    let bytes = serde_json::to_vec(value).expect("serializing refinement audit fields cannot fail");
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn artifact_kind_key(kind: RefinementArtifactKind) -> &'static str {
+    match kind {
+        RefinementArtifactKind::Memory => "memory",
+        RefinementArtifactKind::RepositoryConvention => "repository_convention",
+        RefinementArtifactKind::WorkflowMetadata => "workflow_metadata",
+        RefinementArtifactKind::TeamRoleMetadata => "team_role_metadata",
+        RefinementArtifactKind::PromptGuidance => "prompt_guidance",
+    }
 }
 
 fn entry_hash(
@@ -1093,15 +1346,20 @@ mod tests {
             )
             .expect("propose conflict");
         evaluate_and_approve(&mut journal, "other", 1);
-        assert_eq!(
-            journal.append(
+        journal
+            .append(
                 RefinementEvent::Activated {
                     proposal_id: "other".into(),
                     version: 1,
                 },
                 at,
-            ),
-            Err(RefinementError::Conflict)
+            )
+            .expect("record equal-precedence conflict");
+        let projection = journal.projection().expect("projection");
+        assert!(projection.active().is_empty());
+        assert_eq!(
+            projection.conflict_keys(),
+            vec!["repository_convention:testing.workflow"]
         );
     }
 

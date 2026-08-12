@@ -1730,7 +1730,10 @@ name = "medusa-testkit"
 version = "1.0.0"
 dependencies = [
  "medusa-core",
+ "medusa-execution-checkpoint",
  "medusa-protocol",
+ "medusa-transaction-coordinator",
+ "serde_json",
  "time",
 ]
 

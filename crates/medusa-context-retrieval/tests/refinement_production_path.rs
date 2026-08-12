@@ -5,7 +5,8 @@ use medusa_context::{
     refinement::{
         ApprovalAuthority, ApprovalReceipt, EvaluationResult, EvidenceKind, EvidenceRef,
         ProposerMetadata, RefinementArtifactKind, RefinementContent, RefinementError,
-        RefinementEvent, RefinementJournal, RefinementProposal, RefinementRisk, RefinementScope,
+        RefinementEvent, RefinementJournal, RefinementLifecycle, RefinementProposal,
+        RefinementRisk, RefinementScope,
     },
 };
 use medusa_context_retrieval::{ContextRetriever, RetrievalQuery};
@@ -293,4 +294,147 @@ fn active_refinement_flows_through_context_retrieval() {
 
     assert_eq!(result.ids(), vec!["refinement:testing:1"]);
     assert!(result.items[0].item.content.contains("evidence=[event-7]"));
+}
+
+#[test]
+fn suspension_removes_behavior_without_deleting_lineage() {
+    let at = datetime!(2026-08-11 12:00 UTC);
+    let mut journal = RefinementJournal::default();
+    activate(&mut journal, proposal(1, "v1"));
+    let active_head = journal.projection().unwrap().head_hash().to_owned();
+
+    journal
+        .append(
+            RefinementEvent::Suspended {
+                proposal_id: "testing".into(),
+                version: 1,
+                reason: "temporarily unsafe for this repository".into(),
+            },
+            at,
+        )
+        .unwrap();
+
+    let projection = journal.projection().unwrap();
+    assert!(projection.active().is_empty());
+    assert_ne!(projection.head_hash(), active_head);
+    assert_eq!(projection.records().len(), 1);
+    assert_eq!(
+        projection.records()[0].lifecycle,
+        RefinementLifecycle::Suspended
+    );
+    assert!(projection.records()[0].proposal.is_some());
+}
+
+#[test]
+fn tombstone_redacts_content_and_prevents_reactivation() {
+    let at = datetime!(2026-08-11 12:00 UTC);
+    let mut journal = RefinementJournal::default();
+    activate(&mut journal, proposal(1, "private correction"));
+
+    journal
+        .append(
+            RefinementEvent::Tombstoned {
+                proposal_id: "testing".into(),
+                version: 1,
+                reason: "user requested deletion".into(),
+            },
+            at,
+        )
+        .unwrap();
+
+    let projection = journal.projection().unwrap();
+    assert!(projection.active().is_empty());
+    assert_eq!(
+        projection.records()[0].lifecycle,
+        RefinementLifecycle::Tombstoned
+    );
+    assert!(projection.records()[0].proposal.is_none());
+    assert!(!projection.records()[0].evidence_digest.is_empty());
+    assert_eq!(
+        journal.append(
+            RefinementEvent::Activated {
+                proposal_id: "testing".into(),
+                version: 1,
+            },
+            at,
+        ),
+        Err(RefinementError::InvalidTransition)
+    );
+}
+
+#[test]
+fn colliding_active_successors_are_reported_and_not_selected() {
+    let at = datetime!(2026-08-11 12:00 UTC);
+    let mut journal = RefinementJournal::default();
+    activate(&mut journal, proposal(1, "first"));
+
+    let mut successor = proposal(2, "second");
+    successor.id = "testing-alternative".into();
+    journal
+        .append(
+            RefinementEvent::Proposed {
+                proposal: successor,
+            },
+            at,
+        )
+        .unwrap();
+    journal
+        .append(
+            RefinementEvent::Validated {
+                proposal_id: "testing-alternative".into(),
+                version: 2,
+            },
+            at,
+        )
+        .unwrap();
+    journal
+        .append(
+            RefinementEvent::Evaluated {
+                proposal_id: "testing-alternative".into(),
+                version: 2,
+                result: EvaluationResult {
+                    evaluator: "deterministic-suite".into(),
+                    validation_passed: true,
+                    regression_passed: true,
+                    effectiveness_passed: true,
+                    notes: "passed".into(),
+                },
+            },
+            at,
+        )
+        .unwrap();
+    journal
+        .append_approved(
+            "testing-alternative",
+            2,
+            ApprovalReceipt {
+                approver: "user".into(),
+                receipt_id: "approved:testing-alternative:2".into(),
+            },
+            at,
+            &TestAuthority,
+        )
+        .unwrap();
+    journal
+        .append(
+            RefinementEvent::Activated {
+                proposal_id: "testing-alternative".into(),
+                version: 2,
+            },
+            at,
+        )
+        .unwrap();
+
+    let projection = journal.projection().unwrap();
+    assert!(projection.active().is_empty());
+    assert_eq!(
+        projection.conflict_keys(),
+        vec!["repository_convention:testing.workflow"]
+    );
+    assert!(
+        projection
+            .records()
+            .iter()
+            .all(|record| record.lifecycle == RefinementLifecycle::Conflict)
+    );
 }
