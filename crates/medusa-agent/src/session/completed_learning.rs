@@ -15,6 +15,7 @@ use medusa_improvement::{
     },
     correction_signals::{ConversationRole, ConversationTurn},
     learning_monitor::{CohortKey, LearningMonitorStore, OutcomeRecord, OutcomeStatus},
+    meta_improvement::MetaImprovementStore,
     provenance::{
         ProvenanceGraph, ProvenanceGraphStore, ProvenanceOutcome, ProvenanceSource,
         repository_identity, repository_revision,
@@ -43,6 +44,7 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
     };
     if session.completed {
         record_monitor_outcome(session, &policy, &provenance)?;
+        record_meta_improvement_feedback(session, &policy, &provenance)?;
     }
     if !session.completed {
         return Ok(());
@@ -83,6 +85,43 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
             "authority_receipts": authority_receipts(session),
         }),
     )
+}
+
+fn record_meta_improvement_feedback(
+    session: &AgentSession,
+    policy: &LearningAdmissionPolicy,
+    provenance: &ProvenanceGraph,
+) -> MedusaResult<()> {
+    if !policy.telemetry_enabled() {
+        return Ok(());
+    }
+    let model = std::env::var("MEDUSA_MODEL").unwrap_or_else(|_| "unknown-model".into());
+    let provider = std::env::var("MEDUSA_PROVIDER").unwrap_or_else(|_| "unknown-provider".into());
+    let harness = format!("medusa-agent/{}", env!("CARGO_PKG_VERSION"));
+    let mut store = MetaImprovementStore::open(&session.repo).map_err(|error| {
+        medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PersistenceFailed,
+            medusa_core::ErrorCategory::Persistence,
+            format!("meta-improvement store unavailable: {error}"),
+        )
+    })?;
+    store
+        .record_provenance(
+            &session.repo,
+            provenance,
+            &model,
+            &provider,
+            &harness,
+            session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000,
+        )
+        .map_err(|error| {
+            medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                format!("meta-improvement feedback persistence failed: {error}"),
+            )
+        })?;
+    Ok(())
 }
 
 fn record_monitor_outcome(
@@ -867,6 +906,58 @@ mod tests {
             Some(1)
         );
         assert_eq!(state["unattributed_outcomes"][0]["status"], "positive");
+    }
+
+    #[test]
+    fn telemetry_failure_routes_typed_friction_to_meta_improvement_store() {
+        let repo = tempfile::tempdir().expect("repo");
+        update_privacy(
+            repo.path(),
+            medusa_core::learning_policy::LearningPrivacyPolicy {
+                capture_enabled: true,
+                user_persistence_enabled: false,
+                cross_repository_reuse_enabled: false,
+                telemetry_enabled: true,
+                automatic_proposals_enabled: false,
+            },
+        );
+        let mut session = session(repo.path());
+        session.events.clear();
+        append_event(
+            &mut session,
+            Actor::System("test".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: false,
+                evidence: vec!["cargo test failed".into()],
+            },
+        )
+        .expect("failed verification event");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "failed-report".into(),
+            },
+        )
+        .expect("completion event");
+        process(&session).expect("process");
+        let state: Value = serde_json::from_slice(
+            &fs::read(
+                repo.path()
+                    .join(".medusa/improvements/meta-proposals/state.json"),
+            )
+            .expect("meta-improvement state"),
+        )
+        .expect("meta-improvement json");
+        assert_eq!(
+            state["signals"].as_object().map(|items| items.len()),
+            Some(1)
+        );
+        assert!(
+            state["proposals"]
+                .as_object()
+                .is_some_and(|items| items.is_empty())
+        );
     }
 
     #[test]
