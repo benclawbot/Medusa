@@ -37,6 +37,7 @@
     "medusa-openai-realtime": "provider",
     "medusa-process-containment": "safety",
     "medusa-process-registry": "safety",
+    "medusa-skill": "runtime",
     "medusa-progress": "intelligence",
     "medusa-prompt-cache": "intelligence",
     "medusa-protocol": "foundation",

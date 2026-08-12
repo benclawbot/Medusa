@@ -1137,6 +1137,7 @@ dependencies = [
  "medusa-progress",
  "medusa-protocol",
  "medusa-provider",
+ "medusa-skill",
  "medusa-testkit",
  "medusa-transaction-coordinator",
  "medusa-worker-leases",
@@ -1218,6 +1219,7 @@ dependencies = [
  "medusa-protocol",
  "medusa-provider",
  "medusa-runtime",
+ "medusa-skill",
  "medusa-tui",
  "medusa-update",
  "reqwest",
@@ -1728,6 +1730,18 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "medusa-skill"
+version = "1.0.0"
+dependencies = [
+ "medusa-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 mod browser;
 mod browser_dispatch;
 mod compound;
+mod executable_skills;
 mod filesystem;
 mod git;
 mod intelligence;
@@ -147,6 +148,10 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
             input_string(input, "name")?,
             input.get("scope").and_then(Value::as_str),
         ),
+        "skill_execute" => {
+            let cancellation = AtomicBool::new(false);
+            executable_skills::run(repo, input, &cancellation)
+        }
         "git_checkpoint" => git::checkpoint(repo, input_string(input, "message")?),
         _ => Err(invalid_tool(format!("unknown tool: {name}"))),
     }
@@ -160,6 +165,9 @@ pub(crate) fn execute_tool_cancellable(
 ) -> MedusaResult<String> {
     if cancellation.load(Ordering::Acquire) {
         return Err(cancelled_tool(name));
+    }
+    if name == "skill_execute" {
+        return executable_skills::run(repo, input, cancellation);
     }
     if name != "shell_run" {
         return execute_tool(repo, name, input);

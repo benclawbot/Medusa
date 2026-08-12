@@ -3,6 +3,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use medusa_skill::validate_package;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -37,6 +38,8 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
         "approve" => approve(&root, &command_args[1..]),
         "reject" => reject(&root, &command_args[1..]),
         "metrics" => metrics(&root, &command_args[1..]),
+        "validate" => validate(&root, &command_args[1..]),
+        "scaffold" => scaffold(&root, &command_args[1..]),
         "help" | "--help" | "-h" => {
             println!("{}", usage());
             Ok(())
@@ -46,7 +49,151 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "Usage:\n  medusa [--repo PATH] skills list [--json]\n  medusa [--repo PATH] skills show NAME [--json]\n  medusa [--repo PATH] skills approve NAME\n  medusa [--repo PATH] skills reject NAME [--reason TEXT]\n  medusa [--repo PATH] skills metrics [--json]".to_owned()
+    "Usage:\n  medusa [--repo PATH] skills list [--json]\n  medusa [--repo PATH] skills show NAME [--json]\n  medusa [--repo PATH] skills approve NAME\n  medusa [--repo PATH] skills reject NAME [--reason TEXT]\n  medusa [--repo PATH] skills metrics [--json]\n  medusa [--repo PATH] skills validate NAME [--json]\n  medusa [--repo PATH] skills scaffold NAME --program PATH [--runtime native_command|python|node]".to_owned()
+}
+
+fn validate(root: &Path, args: &[String]) -> Result<(), String> {
+    let (name, json_output) = parse_named_json(args)?;
+    validate_name(name)?;
+    let package_root = root.join(ACTIVE_ROOT).join(name);
+    let package = validate_package(&package_root).map_err(|error| error.to_string())?;
+    if package.manifest.id != name {
+        return Err(format!(
+            "skill manifest id `{}` does not match installed name `{name}`",
+            package.manifest.id
+        ));
+    }
+    let receipt_path = package_root.join("skill.validation.json");
+    let receipt = serde_json::to_vec_pretty(&package.receipt)
+        .map_err(|error| format!("serialize validation receipt: {error}"))?;
+    atomic_write(&receipt_path, &receipt)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&package.receipt)
+                .map_err(|error| format!("serialize validation receipt: {error}"))?
+        );
+    } else {
+        println!("Validated `{name}` ({})", package.receipt.package_digest);
+    }
+    Ok(())
+}
+
+fn scaffold(root: &Path, args: &[String]) -> Result<(), String> {
+    let (name, program, runtime) = parse_scaffold_args(args)?;
+    validate_name(name)?;
+    let program_path = Path::new(&program);
+    if program_path.is_absolute()
+        || program_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+        || program.trim().is_empty()
+    {
+        return Err("--program must be a non-empty package-relative path".to_owned());
+    }
+    let package_root = root.join(ACTIVE_ROOT).join(name);
+    if package_root.exists() {
+        return Err(format!(
+            "refusing to overwrite existing package: {}",
+            package_root.display()
+        ));
+    }
+    if let Some(parent) = package_root.join(program_path).parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    }
+    fs::create_dir_all(package_root.join("tests"))
+        .map_err(|error| format!("create tests directory: {error}"))?;
+    atomic_write(
+        &package_root.join("SKILL.md"),
+        b"# Executable skill\n\nReplace the scaffold program and document its bounded JSON contract here.\n",
+    )?;
+    atomic_write(
+        &package_root.join(&program),
+        b"Replace this placeholder with the package entrypoint.\n",
+    )?;
+    atomic_write(&package_root.join("tests/smoke"), b"scaffold smoke test\n")?;
+    let manifest = json!({
+        "schema_version": 1,
+        "id": name,
+        "version": "0.1.0",
+        "description": "Scaffolded executable skill",
+        "scope": "project",
+        "entrypoints": [{
+            "name": "run",
+            "runtime": runtime,
+            "program": program,
+            "args": [],
+            "input_schema": {"type": "object"},
+            "output_schema": {"type": "object"},
+            "capabilities": ["filesystem_read"],
+            "env": [],
+            "repository_access": "read_only",
+            "network": "denied",
+            "resources": {"timeout_seconds": 60,"cpu_time_seconds": 30,"max_output_bytes": 131072,"max_processes": 1,"max_memory_bytes": 134217728,"max_disk_bytes": 16777216},
+            "side_effect": "read_only",
+            "idempotent": true,
+            "cancellation_supported": true,
+            "tests": ["tests/smoke"],
+            "verification": ["tests/smoke"],
+            "artifacts": [],
+            "input_file_arg": "--input-file"
+        }]
+    });
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| format!("serialize scaffold manifest: {error}"))?;
+    atomic_write(&package_root.join("skill.json"), &manifest_bytes)?;
+    println!("Scaffolded executable skill at {}", package_root.display());
+    Ok(())
+}
+
+fn parse_scaffold_args(args: &[String]) -> Result<(&str, String, &str), String> {
+    let Some(name) = args.first().map(String::as_str) else {
+        return Err(usage());
+    };
+    let mut program = None;
+    let mut runtime = "native_command";
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--program" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("--program requires a path".to_owned());
+                };
+                program = Some(value.clone());
+                index += 2;
+            }
+            value if value.starts_with("--program=") => {
+                program = Some(value.trim_start_matches("--program=").to_owned());
+                index += 1;
+            }
+            "--runtime" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("--runtime requires a value".to_owned());
+                };
+                runtime = match value.as_str() {
+                    "native_command" | "python" | "node" => value,
+                    _ => return Err("--runtime must be native_command, python, or node".to_owned()),
+                };
+                index += 2;
+            }
+            value if value.starts_with("--runtime=") => {
+                runtime = match value.trim_start_matches("--runtime=") {
+                    "native_command" => "native_command",
+                    "python" => "python",
+                    "node" => "node",
+                    _ => return Err("--runtime must be native_command, python, or node".to_owned()),
+                };
+                index += 1;
+            }
+            _ => return Err(usage()),
+        }
+    }
+    let program = program.ok_or_else(|| "scaffold requires --program PATH".to_owned())?;
+    Ok((name, program, runtime))
 }
 
 fn split_global_repo(args: &[String]) -> Result<(Option<PathBuf>, Vec<String>), String> {
@@ -523,5 +670,42 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         assert!(proposal_directory(temp.path(), "../escape").is_err());
         assert!(proposal_directory(temp.path(), "nested/name").is_err());
+    }
+
+    #[test]
+    fn executable_skill_scaffold_can_be_explicitly_validated() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        scaffold(
+            temp.path(),
+            &[
+                "example".to_owned(),
+                "--program".to_owned(),
+                "scripts/run".to_owned(),
+            ],
+        )
+        .expect("scaffold");
+        validate(temp.path(), &["example".to_owned()]).expect("validate");
+        assert!(
+            temp.path()
+                .join(ACTIVE_ROOT)
+                .join("example/skill.validation.json")
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn scaffold_rejects_package_escape_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(
+            scaffold(
+                temp.path(),
+                &[
+                    "example".to_owned(),
+                    "--program".to_owned(),
+                    "../run".to_owned(),
+                ],
+            )
+            .is_err()
+        );
     }
 }

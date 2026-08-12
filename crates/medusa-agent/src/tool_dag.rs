@@ -82,6 +82,15 @@ pub(crate) fn profile(name: &str, input: &Value) -> ToolExecutionProfile {
             1,
             true,
         ),
+        "skill_execute" => (
+            vec![read("repository"), write("process_pool")],
+            SideEffectClass::External,
+            false,
+            true,
+            5_000,
+            4,
+            false,
+        ),
         "semantic_capabilities" => (
             vec![read("capabilities")],
             SideEffectClass::None,
