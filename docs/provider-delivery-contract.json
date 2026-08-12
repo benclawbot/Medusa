@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "provider_support_authority": "docs/provider-support.json",
   "first_run_choices": [
     "chatgpt",
     "anthropic",

@@ -34,6 +34,10 @@ def require(condition: bool, message: str) -> None:
 def validate(root: Path) -> None:
     contract = json.loads((root / "docs/provider-delivery-contract.json").read_text())
     require(contract.get("schema_version") == 1, "unsupported provider contract schema")
+    require(
+        contract.get("provider_support_authority") == "docs/provider-support.json",
+        "provider support authority drifted",
+    )
     require(contract.get("first_run_choices") == EXPECTED_CHOICES, "first-run choices drifted")
     require(contract.get("diagnostic_checks") == EXPECTED_CHECKS, "diagnostic checks drifted")
     require(contract.get("credential_persistence") is False, "credentials must not be persisted")

@@ -5,20 +5,32 @@ on:
     paths:
       - 'crates/medusa-cli/src/config_command.rs'
       - 'crates/medusa-cli/src/provider_diagnostic.rs'
+      - 'crates/medusa-config/src/provider_catalog.rs'
+      - 'crates/medusa-runtime/src/support.rs'
       - 'docs/PROVIDER-DELIVERY.md'
+      - 'docs/PROVIDER-SUPPORT.md'
       - 'docs/provider-delivery-contract.json'
+      - 'docs/provider-support.json'
       - 'examples/**/*.toml'
       - 'scripts/check-provider-delivery.py'
+      - 'scripts/check-provider-support.py'
+      - 'scripts/live-coding-e2e.py'
       - '.github/workflows/provider-delivery-contract.yml'
   push:
     branches: [main]
     paths:
       - 'crates/medusa-cli/src/config_command.rs'
       - 'crates/medusa-cli/src/provider_diagnostic.rs'
+      - 'crates/medusa-config/src/provider_catalog.rs'
+      - 'crates/medusa-runtime/src/support.rs'
       - 'docs/PROVIDER-DELIVERY.md'
+      - 'docs/PROVIDER-SUPPORT.md'
       - 'docs/provider-delivery-contract.json'
+      - 'docs/provider-support.json'
       - 'examples/**/*.toml'
       - 'scripts/check-provider-delivery.py'
+      - 'scripts/check-provider-support.py'
+      - 'scripts/live-coding-e2e.py'
       - '.github/workflows/provider-delivery-contract.yml'
 
 permissions:
@@ -38,4 +50,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Validate provider delivery contract
-        run: python3 scripts/check-provider-delivery.py
+        run: |
+          python3 scripts/check-provider-delivery.py
+          python3 scripts/check-provider-support.py

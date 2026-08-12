@@ -229,6 +229,8 @@ API keys are read from the environment and are not written to `provider.toml`.
 
 Direct provider routes include:
 
+The canonical selectable-route, support-tier, credential, live-dogfood, and Realtime status matrix is [`docs/provider-support.json`](docs/provider-support.json); the rendered [provider support guide](docs/PROVIDER-SUPPORT.md) is checked against it in CI.
+
 | Route | Credential |
 |---|---|
 | MiniMax | `MINIMAX_API_KEY` |

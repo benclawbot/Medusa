@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "authority": "medusa-config::provider_catalog",
+  "support_tiers": {
+    "production-supported": "A first-class direct route backed by a production provider adapter.",
+    "custom": "A user-supplied endpoint using a supported wire protocol; endpoint behavior remains operator-owned.",
+    "managed": "A selectable managed gateway with an explicit external runtime dependency.",
+    "local": "A selectable user-operated local model runtime."
+  },
+  "dogfood_statuses": {
+    "primary": "The scheduled cross-platform live dogfood gate uses this exact route.",
+    "configurable": "The route is selectable in production but is not exercised by the scheduled live dogfood gate.",
+    "not-enabled": "The route is intentionally excluded from credentialed live dogfood."
+  },
+  "providers": [
+    {
+      "id": "minimax",
+      "display_name": "MiniMax direct",
+      "connection": "direct",
+      "profile_provider": "minimax",
+      "support_tier": "production-supported",
+      "runtime_protocol": "openai",
+      "credential_environment": "MINIMAX_API_KEY",
+      "default_model": "MiniMax-M3",
+      "dogfood": {
+        "status": "primary",
+        "model": "MiniMax-M3",
+        "protocol": "anthropic",
+        "base_url": "https://api.minimax.io/anthropic",
+        "auth": "api-key"
+      },
+      "realtime_voice": "unavailable"
+    },
+    {
+      "id": "anthropic",
+      "display_name": "Anthropic",
+      "connection": "direct",
+      "profile_provider": "anthropic",
+      "support_tier": "production-supported",
+      "runtime_protocol": "anthropic",
+      "credential_environment": "ANTHROPIC_API_KEY",
+      "default_model": "claude-sonnet-4-6",
+      "dogfood": { "status": "configurable" },
+      "realtime_voice": "unavailable"
+    },
+    {
+      "id": "anthropic-compatible",
+      "display_name": "Anthropic-compatible",
+      "connection": "direct",
+      "profile_provider": "anthropic-compatible",
+      "support_tier": "custom",
+      "runtime_protocol": "anthropic",
+      "credential_environment": "MEDUSA_API_KEY",
+      "default_model": "custom-model",
+      "dogfood": { "status": "not-enabled" },
+      "realtime_voice": "unavailable"
+    },
+    {
+      "id": "openai",
+      "display_name": "OpenAI API",
+      "connection": "openai-api",
+      "profile_provider": "openai",
+      "support_tier": "production-supported",
+      "runtime_protocol": "openai",
+      "credential_environment": "OPENAI_API_KEY",
+      "default_model": "gpt-5.1-codex",
+      "dogfood": { "status": "configurable" },
+      "realtime_voice": "unavailable"
+    },
+    {
+      "id": "openai-oauth",
+      "display_name": "ChatGPT OAuth",
+      "connection": "chatgpt-oauth",
+      "profile_provider": "openai-oauth",
+      "support_tier": "production-supported",
+      "runtime_protocol": "openai",
+      "credential_environment": null,
+      "default_model": "gpt-5",
+      "dogfood": { "status": "not-enabled" },
+      "realtime_voice": "external-acceptance-pending"
+    },
+    {
+      "id": "openai-compatible",
+      "display_name": "OpenAI-compatible",
+      "connection": "openai-compatible",
+      "profile_provider": "openai-compatible",
+      "support_tier": "custom",
+      "runtime_protocol": "openai",
+      "credential_environment": "MEDUSA_API_KEY",
+      "default_model": "custom-model",
+      "dogfood": { "status": "not-enabled" },
+      "realtime_voice": "unavailable"
+    },
+    {
+      "id": "omniroute",
+      "display_name": "OmniRoute",
+      "connection": "omniroute",
+      "profile_provider": "auto/coding",
+      "support_tier": "managed",
+      "runtime_protocol": "openai",
+      "credential_environment": null,
+      "default_model": "auto/coding",
+      "dogfood": { "status": "configurable" },
+      "realtime_voice": "unavailable"
+    },
+    {
+      "id": "local",
+      "display_name": "Local runtime",
+      "connection": "local",
+      "profile_provider": "local",
+      "support_tier": "local",
+      "runtime_protocol": "openai",
+      "credential_environment": null,
+      "default_model": "MiniMax-M3",
+      "dogfood": { "status": "not-enabled" },
+      "realtime_voice": "unavailable"
+    }
+  ],
+  "non_selectable_status": {
+    "test_scaffolding_only": [],
+    "quarantined": [
+      {
+        "id": "openai-realtime-live-evidence",
+        "required_route": "openai-oauth",
+        "reason": "Repository tests are complete; real ChatGPT OAuth account, audio hardware, and sanitized live evidence are still required."
+      },
+      {
+        "id": "telegram-live-evidence",
+        "reason": "Repository tests are complete; real bot, chat, Mini App, and sanitized live evidence are still required."
+      }
+    ]
+  }
+}

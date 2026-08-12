@@ -2,6 +2,8 @@
 
 The live-provider dogfood gate exercises the public `medusa` executable against a disposable multi-language repository on Linux, macOS, and Windows. It complements deterministic pull-request acceptance; provider availability is not a normal PR requirement.
 
+The selected provider, model, protocol, endpoint, authentication mode, and credential environment come from the single `primary` entry in `docs/provider-support.json`. The harness does not maintain an independent provider declaration.
+
 ## Execution contract
 
 Each platform job builds the release binary, copies it into an isolated staged installation, launches it from an unrelated working directory with an explicit `--repo`, and asks one production MiniMax-M3 session to repair three independent defects. The agent cannot modify the verifier, JavaScript test, package contract, fixtures, or expected outputs.
