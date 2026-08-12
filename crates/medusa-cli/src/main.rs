@@ -87,19 +87,19 @@ enum CommandKind {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    /// Check for or install the latest Medusa main-branch build.
+    /// Check for or install a Medusa update.
     Update {
-        /// Report whether this build matches the current main branch without modifying it.
+        /// Report whether the selected update target is current without modifying this installation.
         #[arg(long)]
         check: bool,
         /// Apply an available update without an additional prompt (for managed automation).
         #[arg(long)]
         automatic: bool,
-        /// Select the main-branch source channel or the explicit verified release channel.
-        #[arg(long, default_value = "source", value_parser = ["source", "release"])]
-        channel: String,
-        /// Permit an intentional version or rollout-sequence rollback on the release channel.
+        /// Use the latest verified prebuilt release instead of the latest main-branch source.
         #[arg(long)]
+        release: bool,
+        /// Permit an intentional version or rollout-sequence rollback on the release path.
+        #[arg(long, requires = "release")]
         allow_downgrade: bool,
     },
     Search {
@@ -319,9 +319,9 @@ fn run() -> MedusaResult<()> {
         CommandKind::Update {
             check,
             automatic,
-            channel,
+            release,
             allow_downgrade,
-        } => update_command::run(&repo, check, automatic, &channel, allow_downgrade),
+        } => update_command::run(&repo, check, automatic, release, allow_downgrade),
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
@@ -1354,7 +1354,7 @@ mod tests {
     }
 
     #[test]
-    fn update_command_is_available_without_extra_arguments() {
+    fn update_command_defaults_to_main() {
         let cli =
             Cli::try_parse_from(["medusa", "update", "--check"]).expect("parse update command");
         assert!(matches!(
@@ -1362,10 +1362,50 @@ mod tests {
             Some(CommandKind::Update {
                 check: true,
                 automatic: false,
-                channel,
+                release: false,
                 allow_downgrade: false,
-            }) if channel == "source"
+            })
         ));
+    }
+
+    #[test]
+    fn update_command_accepts_explicit_release() {
+        let cli = Cli::try_parse_from(["medusa", "update", "--release", "--check"])
+            .expect("parse release update command");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Update {
+                check: true,
+                automatic: false,
+                release: true,
+                allow_downgrade: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn update_downgrade_requires_release() {
+        assert!(Cli::try_parse_from(["medusa", "update", "--allow-downgrade"]).is_err());
+        let cli = Cli::try_parse_from([
+            "medusa",
+            "update",
+            "--release",
+            "--allow-downgrade",
+        ])
+        .expect("release downgrade is explicit");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Update {
+                release: true,
+                allow_downgrade: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn legacy_update_channel_selector_is_rejected() {
+        assert!(Cli::try_parse_from(["medusa", "update", "--channel", "source"]).is_err());
     }
 
     #[test]
