@@ -1,8 +1,11 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
 };
+
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
@@ -252,30 +255,13 @@ pub(crate) fn sandboxed_command(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let root = repo.canonicalize()?;
-        #[cfg(windows)]
-        if program.eq_ignore_ascii_case("ls") {
-            return Command::new("cmd")
-                .args(["/C", "dir"])
-                .current_dir(root)
-                .output()
-                .map_err(local_shell_error);
-        }
-        Command::new(program)
-            .args(args)
-            .current_dir(root)
-            .output()
-            .map_err(local_shell_error)
+        let _ = (repo, program, args);
+        Err(MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Environment,
+            "shell sandbox unavailable on this platform; refusing unsandboxed host execution",
+        ))
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn local_shell_error(error: std::io::Error) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        ErrorCategory::Environment,
-        format!("local shell execution unavailable: {error}"),
-    )
 }
 
 fn policy_denied(message: impl Into<String>) -> MedusaError {

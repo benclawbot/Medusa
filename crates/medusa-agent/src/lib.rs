@@ -667,15 +667,44 @@ mod tests {
 
     #[cfg(not(target_os = "linux"))]
     #[test]
-    fn shell_tool_runs_in_the_repository_without_linux_bubblewrap() {
+    fn shell_tool_fails_closed_without_a_platform_sandbox() {
         let directory = tempfile::tempdir().expect("temporary repository");
-        let output = execute_tool(
+        let error = execute_tool(
             directory.path(),
             "shell_run",
             &json!({"program": "cargo", "args": ["--version"]}),
         )
-        .expect("run allowed local command");
-        assert!(output.contains("cargo"));
+        .expect_err("host command execution must require a platform sandbox");
+        assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+        assert!(error.to_string().contains("sandbox unavailable"));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn approved_shell_tool_fails_closed_without_a_platform_sandbox() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let error = execute_approved_tool(
+            directory.path(),
+            "shell_run",
+            &json!({"program": "cargo", "args": ["--version"]}),
+        )
+        .expect_err("approval must not bypass platform sandboxing");
+        assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+        assert!(error.to_string().contains("sandbox unavailable"));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn approved_shell_tool_does_not_bypass_the_portable_allowlist() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let error = execute_approved_tool(
+            directory.path(),
+            "shell_run",
+            &json!({"program": "medusa-wrapper", "args": []}),
+        )
+        .expect_err("approval must retain the portable executable allowlist");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
+        assert!(error.to_string().contains("portable shell command"));
     }
 
     #[test]

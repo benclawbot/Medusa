@@ -231,7 +231,7 @@ The default capability set is read-only. Enable write tools explicitly:
 export MEDUSA_DESKTOP_COMMANDER_ALLOW_WRITE=true
 ```
 
-Desktop Commander process and terminal tools are not exposed. Use Medusa's native `shell_run`, which remains subject to command policy and sandbox controls.
+Desktop Commander process and terminal tools are not exposed. Medusa's native `shell_run` uses bubblewrap confinement on Linux. It fails closed on Windows and macOS until equivalent filesystem and network isolation is available; Medusa never falls back to unsandboxed host execution.
 
 ## Headless commands
 
@@ -258,6 +258,7 @@ Medusa is autonomous, but not boundary-free. The runtime enforces:
 - repository-relative filesystem containment and symlink checks
 - atomic writes and guarded multi-file transactions
 - hard denial of destructive shell and Git operations
+- fail-closed shell execution when a platform sandbox is unavailable
 - isolated worker worktrees and deterministic conflict handling
 - environment and credential redaction
 - checksummed sessions, extensions, and operational evidence

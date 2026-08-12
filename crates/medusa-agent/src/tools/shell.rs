@@ -3,7 +3,7 @@ use std::path::Path;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 use crate::{
-    policy::{sandboxed_command, validate_shell_command, validate_shell_command_hard_denials},
+    policy::{sandboxed_command, validate_shell_command},
     tools::format_command_output,
 };
 
@@ -13,7 +13,7 @@ pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<S
 }
 
 pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
-    validate_shell_command_hard_denials(program, args)?;
+    validate_shell_command(program, args)?;
     run_validated(repo, program, args)
 }
 

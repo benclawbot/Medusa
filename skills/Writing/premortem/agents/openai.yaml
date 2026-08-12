@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pre-mortem"
+  short_description: "Stress-test plans by imagining failure first"
+  default_prompt: "Use $premortem to stress test this plan and produce a revised plan with blind spots exposed."
