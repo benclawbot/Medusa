@@ -58,7 +58,9 @@ fn provider_profile_cli_covers_mutation_history_and_named_profiles() {
 
     let invalid_section = run(home.path(), &["config", "reset-section", "invalid"]);
     assert!(!invalid_section.status.success());
-    assert!(String::from_utf8_lossy(&invalid_section.stderr).contains("connection` or `preferences"));
+    assert!(
+        String::from_utf8_lossy(&invalid_section.stderr).contains("connection` or `preferences")
+    );
 
     let created = run(home.path(), &["config", "profiles", "create", "work"]);
     assert_success(&created);
@@ -74,7 +76,9 @@ fn provider_profile_cli_covers_mutation_history_and_named_profiles() {
 
     let selected = run(home.path(), &["config", "profiles", "use", "work"]);
     assert_success(&selected);
-    assert!(String::from_utf8_lossy(&selected.stdout).contains("Active provider profile is now `work`"));
+    assert!(
+        String::from_utf8_lossy(&selected.stdout).contains("Active provider profile is now `work`")
+    );
 
     let active_delete = run(home.path(), &["config", "profiles", "delete", "work"]);
     assert!(!active_delete.status.success());
