@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::fs;
 
 use medusa_evidence::{ChangeKind, ChangedComponent, VerificationPlanner};
 
@@ -18,7 +18,7 @@ fn repository_defined_python_verifier_does_not_imply_pytest() {
     .expect("verification script");
 
     let components = vec![
-        ChangedComponent::new(ChangeKind::Modified, PathBuf::from("src/slugify.py"))
+        ChangedComponent::new(ChangeKind::Modified, "src/slugify.py")
             .expect("changed component"),
     ];
     let plan = VerificationPlanner::plan(
