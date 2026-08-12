@@ -8,6 +8,7 @@ pub mod learning;
 pub mod learning_admission;
 pub mod learning_review;
 pub mod lesson_inference;
+pub mod provenance;
 pub mod refinement_authority;
 pub mod refinement_migration;
 mod refinement_persistence;

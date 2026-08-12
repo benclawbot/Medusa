@@ -1468,6 +1468,7 @@ version = "1.0.0"
 dependencies = [
  "medusa-context",
  "medusa-core",
+ "medusa-protocol",
  "serde",
  "serde_json",
  "sha2",

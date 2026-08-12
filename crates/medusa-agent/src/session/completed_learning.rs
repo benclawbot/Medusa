@@ -8,7 +8,13 @@ use medusa_context::refinement::{
     RefinementProposal, RefinementRisk, RefinementScope,
 };
 use medusa_core::{MedusaResult, learning_policy::LearningAdmissionPolicy};
-use medusa_improvement::refinement_authority::RefinementAuthorityStore;
+use medusa_improvement::{
+    provenance::{
+        ProvenanceGraph, ProvenanceGraphStore, ProvenanceOutcome, ProvenanceSource,
+        repository_identity, repository_revision,
+    },
+    refinement_authority::RefinementAuthorityStore,
+};
 use medusa_protocol::{Actor, EventPayload};
 use serde_json::{Value, json};
 
@@ -18,7 +24,12 @@ const MIN_PROBATION_CONFIDENCE_MILLI: u64 = 750;
 
 pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
     let policy = policy_for(&session.repo)?;
-    if !policy.capture_enabled() || !session.completed {
+    if !policy.capture_enabled() {
+        return Ok(());
+    }
+
+    let provenance = persist_provenance(session, &policy)?;
+    if !session.completed {
         return Ok(());
     }
 
@@ -55,9 +66,70 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
             "authoritative_success": true,
             "automatic_proposals_enabled": policy.automatic_proposals_enabled(),
             "telemetry_enabled": policy.telemetry_enabled(),
+            "provenance_head_digest": provenance.head_digest,
+            "provenance_observation_count": provenance.observations.len(),
             "authority_receipts": authority_receipts(session),
         }),
     )
+}
+
+pub(super) fn provenance_graph(session: &AgentSession) -> MedusaResult<ProvenanceGraph> {
+    let policy = policy_for(&session.repo)?;
+    if !policy.capture_enabled() {
+        return Ok(ProvenanceGraph::empty());
+    }
+    let mut graph = ProvenanceGraph::empty();
+    let repository = repository_identity(&session.repo);
+    let revision = repository_revision(&session.repo);
+    for event in &session.events {
+        graph
+            .ingest_event(
+                event,
+                &session.id.to_string(),
+                repository.clone(),
+                revision.clone(),
+                &policy,
+                session.updated_at,
+            )
+            .map_err(|error| {
+                medusa_core::MedusaError::new(
+                    medusa_core::ErrorCode::PersistenceFailed,
+                    medusa_core::ErrorCategory::Persistence,
+                    format!("typed provenance rejected event: {error}"),
+                )
+            })?;
+    }
+    Ok(graph)
+}
+
+fn persist_provenance(
+    session: &AgentSession,
+    policy: &LearningAdmissionPolicy,
+) -> MedusaResult<ProvenanceGraph> {
+    let mut store = ProvenanceGraphStore::open(&session.repo).map_err(|error| {
+        medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PersistenceFailed,
+            medusa_core::ErrorCategory::Persistence,
+            format!("typed provenance store unavailable: {error}"),
+        )
+    })?;
+    store
+        .ingest_events(
+            &session.events,
+            &session.id.to_string(),
+            repository_identity(&session.repo),
+            repository_revision(&session.repo),
+            policy,
+            session.updated_at,
+        )
+        .map_err(|error| {
+            medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                format!("typed provenance ingestion failed: {error}"),
+            )
+        })?;
+    Ok(store.graph().clone())
 }
 
 pub(super) fn policy_for(repo: &Path) -> MedusaResult<LearningAdmissionPolicy> {
@@ -246,13 +318,7 @@ fn admit_to_refinement_authority(
         version: 1,
         artifact_kind: RefinementArtifactKind::RepositoryConvention,
         scope: RefinementScope::Repository,
-        evidence: vec![EvidenceRef {
-            id: format!("completed-session-evidence-{}", session.id),
-            kind: EvidenceKind::ToolEvent,
-            trajectory_id: session.id.to_string(),
-            start_sequence: 1,
-            end_sequence: sequence,
-        }],
+        evidence: provenance_evidence_refs(session, sequence),
         before: None,
         after: RefinementContent::RepositoryConvention {
             key: format!("lesson.{proposal_id}"),
@@ -291,6 +357,43 @@ fn admit_to_refinement_authority(
     }
 }
 
+fn provenance_evidence_refs(session: &AgentSession, sequence: u64) -> Vec<EvidenceRef> {
+    let references = provenance_graph(session)
+        .ok()
+        .map(|graph| {
+            graph
+                .observations
+                .iter()
+                .take(12)
+                .map(|observation| EvidenceRef {
+                    id: observation.id.clone(),
+                    kind: match observation.source {
+                        ProvenanceSource::UserCorrection => EvidenceKind::UserCorrection,
+                        ProvenanceSource::Verification
+                        | ProvenanceSource::Integration
+                        | ProvenanceSource::Recovery
+                        | ProvenanceSource::TerminalOutcome => EvidenceKind::ExplicitOutcome,
+                        _ => EvidenceKind::ToolEvent,
+                    },
+                    trajectory_id: observation.trajectory_id.clone(),
+                    start_sequence: observation.source_range.start_sequence,
+                    end_sequence: observation.source_range.end_sequence,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if references.is_empty() {
+        return vec![EvidenceRef {
+            id: format!("completed-session-evidence-{}", session.id),
+            kind: EvidenceKind::ToolEvent,
+            trajectory_id: session.id.to_string(),
+            start_sequence: 1,
+            end_sequence: sequence,
+        }];
+    }
+    references
+}
+
 pub(super) fn authoritative_evidence(session: &AgentSession) -> Vec<String> {
     let mut evidence = session.evidence.clone();
     for event in &session.events {
@@ -311,6 +414,21 @@ pub(super) fn authoritative_evidence(session: &AgentSession) -> Vec<String> {
                 evidence.push(summary);
             }
             _ => {}
+        }
+    }
+    if let Ok(graph) = provenance_graph(session) {
+        for observation in graph.observations.iter().filter(|observation| {
+            matches!(
+                observation.source,
+                ProvenanceSource::Verification
+                    | ProvenanceSource::Integration
+                    | ProvenanceSource::TerminalOutcome
+            ) && observation.outcome == ProvenanceOutcome::Positive
+        }) {
+            evidence.push(format!(
+                "{} [provenance:{}]",
+                observation.summary, observation.id
+            ));
         }
     }
     evidence.sort();
