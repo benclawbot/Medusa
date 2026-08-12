@@ -351,6 +351,7 @@ pub struct RefinementRecord {
     pub lifecycle: RefinementLifecycle,
     pub proposal: Option<RefinementProposal>,
     pub evidence_digest: String,
+    pub approval_receipt_id: Option<String>,
     pub approval_receipt_digest: Option<String>,
     pub predecessor_proposal_id: Option<String>,
     pub predecessor_version: Option<u64>,
@@ -494,6 +495,14 @@ pub enum RefinementError {
     Conflict,
     CorruptJournal,
 }
+
+impl std::fmt::Display for RefinementError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for RefinementError {}
 
 type ProposalKey = (String, u64);
 
@@ -968,6 +977,10 @@ fn projection_records(
                 proposal: (state.lifecycle != Lifecycle::Tombstoned)
                     .then(|| state.proposal.clone()),
                 evidence_digest: serialized_digest(&state.proposal.evidence),
+                approval_receipt_id: state
+                    .approval_receipt
+                    .as_ref()
+                    .map(|receipt| receipt.receipt_id.clone()),
                 approval_receipt_digest: state.approval_receipt.as_ref().map(serialized_digest),
                 predecessor_proposal_id,
                 predecessor_version,
