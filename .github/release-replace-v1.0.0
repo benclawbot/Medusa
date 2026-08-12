@@ -1,2 +1,4 @@
 Replace Medusa v1.0.0 with freshly rebuilt artifacts from the main commit that merges this change.
 The replacement workflow must rebuild Linux, macOS, and Windows CLI and desktop assets, rebind v1.0.0 to that exact main commit, replace the existing GitHub Release, and allow the protected manifest-signing workflow to sign the rebuilt release.
+
+Retry 2: use the current release-evidence manifest contract with explicit version, revision, sequence, rollout, and minimum updater version.
