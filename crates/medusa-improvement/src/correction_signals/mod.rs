@@ -252,7 +252,14 @@ fn classify(text: &str) -> Option<Classification> {
     } else if lower.contains("this repo") || lower.contains("medusa") {
         CandidateScope::Repository
     } else if explicit || dissatisfaction {
-        CandidateScope::Unresolved
+        // A concrete omission is interpreted by the lesson engine into an explicit
+        // completeness procedure. Keep generic dissatisfaction unresolved, but do not
+        // discard a correction whose failure class is already typed as an omission.
+        if omission {
+            CandidateScope::Task
+        } else {
+            CandidateScope::Unresolved
+        }
     } else {
         CandidateScope::Task
     };

@@ -2,6 +2,7 @@ extern crate self as hex;
 
 mod implementation;
 
+pub mod correction_loop;
 #[allow(clippy::obfuscated_if_else)]
 pub mod correction_signals;
 pub mod learning;
