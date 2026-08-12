@@ -59,7 +59,8 @@ use github_pull_request_mutations::{
 };
 use github_repository::runtime_github_repository_access;
 use learning::{
-    runtime_learning_export, runtime_learning_privacy, runtime_learning_redaction_preview,
+    runtime_learning_evaluate, runtime_learning_export, runtime_learning_inspect,
+    runtime_learning_privacy, runtime_learning_propose, runtime_learning_redaction_preview,
     runtime_learning_review, runtime_learning_transition,
 };
 use memories::runtime_list_memories;
@@ -132,6 +133,9 @@ pub fn run() -> tauri::Result<()> {
             runtime_update_improvement,
             runtime_learning_review,
             runtime_learning_transition,
+            runtime_learning_inspect,
+            runtime_learning_propose,
+            runtime_learning_evaluate,
             runtime_learning_privacy,
             runtime_learning_redaction_preview,
             runtime_learning_export,

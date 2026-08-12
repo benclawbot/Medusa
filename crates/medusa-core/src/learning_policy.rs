@@ -45,7 +45,12 @@ pub struct LearningAdmissionPolicy {
 
 impl LearningAdmissionPolicy {
     pub fn for_repository(repo: &Path) -> MedusaResult<Self> {
-        let path = repo.join(".medusa/learning-review/state.json");
+        let canonical_path = repo.join(".medusa/refinement-authority/privacy.json");
+        let path = if canonical_path.exists() {
+            canonical_path
+        } else {
+            repo.join(".medusa/learning-review/state.json")
+        };
         if !path.exists() {
             return Ok(Self::from_privacy(
                 LearningPrivacyPolicy::private_by_default(),

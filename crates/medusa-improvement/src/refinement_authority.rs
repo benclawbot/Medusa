@@ -25,6 +25,7 @@ use crate::{
     },
     scoped_memory::RepositoryIdentity,
 };
+use medusa_core::learning_policy::LearningPrivacyPolicy;
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -89,6 +90,31 @@ pub struct SelectionResult {
     pub journal_head_hash: String,
 }
 
+impl SelectionResult {
+    #[must_use]
+    pub fn prompt_context(&self) -> Option<String> {
+        (!self.selected.is_empty()).then(|| {
+            self.selected
+                .iter()
+                .map(|selected| {
+                    format!(
+                        "[canonical_refinement id={} version={} scope={:?} artifact={:?} evidence=[{}] approval_receipt={} journal_head={}] {}",
+                        selected.proposal.id,
+                        selected.proposal.version,
+                        selected.proposal.scope,
+                        selected.proposal.artifact_kind,
+                        selected.evidence_ids.join(","),
+                        selected.approval_receipt_id,
+                        selected.journal_head_hash,
+                        content_body(&selected.proposal).unwrap_or_default(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RefinementAuthoritySnapshot {
     pub schema_version: u32,
@@ -121,6 +147,8 @@ pub enum RefinementAuthorityError {
     CorruptAuthority { path: String, reason: String },
     #[error("refinement projection could not be published: {reason}")]
     ProjectionFailure { reason: String },
+    #[error("refinement authority lock unavailable: {reason}")]
+    LockUnavailable { reason: String },
     #[error("refinement authority validation failed: {0}")]
     Validation(String),
     #[error("approval receipt is required for proposal {proposal_id}:{version}")]
@@ -159,6 +187,13 @@ struct ExportDocument {
     snapshot: RefinementAuthoritySnapshot,
     journal: RefinementJournal,
     approvals: Vec<ApprovalBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PrivacyDocument {
+    schema_version: u32,
+    revision: u64,
+    privacy: LearningPrivacyPolicy,
 }
 
 #[derive(Clone, Debug)]
@@ -207,6 +242,78 @@ impl RefinementAuthorityStore {
 
     pub fn snapshot(&self) -> Result<RefinementAuthoritySnapshot, RefinementAuthorityError> {
         snapshot_from_journal(&self.journal)
+    }
+
+    pub fn privacy(&self) -> Result<LearningPrivacyPolicy, RefinementAuthorityError> {
+        let Some(bytes) = read_optional(&self.privacy_path())? else {
+            return Ok(LearningPrivacyPolicy::private_by_default());
+        };
+        let document: PrivacyDocument = serde_json::from_slice(&bytes).map_err(|error| {
+            authority_corrupt(
+                &self.root,
+                &self.privacy_path(),
+                format!("privacy state is invalid: {error}"),
+            )
+        })?;
+        if document.schema_version != SCHEMA_VERSION {
+            return Err(authority_corrupt(
+                &self.root,
+                &self.privacy_path(),
+                format!("unsupported privacy schema {}", document.schema_version),
+            ));
+        }
+        Ok(document.privacy)
+    }
+
+    pub fn privacy_revision(&self) -> Result<u64, RefinementAuthorityError> {
+        let Some(bytes) = read_optional(&self.privacy_path())? else {
+            return Ok(0);
+        };
+        let document: PrivacyDocument = serde_json::from_slice(&bytes).map_err(|error| {
+            authority_corrupt(
+                &self.root,
+                &self.privacy_path(),
+                format!("privacy state is invalid: {error}"),
+            )
+        })?;
+        Ok(document.revision)
+    }
+
+    pub fn update_privacy(
+        &self,
+        privacy: LearningPrivacyPolicy,
+        expected_revision: u64,
+    ) -> Result<u64, RefinementAuthorityError> {
+        let actual = self.privacy_revision()?;
+        ensure_revision(actual, expected_revision)?;
+        let next = actual.saturating_add(1);
+        atomic_write(
+            &self.privacy_path(),
+            &serde_json::to_vec_pretty(&PrivacyDocument {
+                schema_version: SCHEMA_VERSION,
+                revision: next,
+                privacy,
+            })?,
+        )?;
+        Ok(next)
+    }
+
+    pub fn initialize_privacy(
+        &self,
+        privacy: LearningPrivacyPolicy,
+    ) -> Result<(), RefinementAuthorityError> {
+        if self.privacy_path().is_file() {
+            return Ok(());
+        }
+        atomic_write(
+            &self.privacy_path(),
+            &serde_json::to_vec_pretty(&PrivacyDocument {
+                schema_version: SCHEMA_VERSION,
+                revision: 1,
+                privacy,
+            })?,
+        )?;
+        Ok(())
     }
 
     pub fn propose(
@@ -435,9 +542,10 @@ impl RefinementAuthorityStore {
             journal_head_hash: snapshot.journal_head_hash.clone(),
             ..SelectionResult::default()
         };
-        let records = snapshot.records.iter().filter_map(|record| {
-            (record.lifecycle == RefinementLifecycle::Active).then_some(record)
-        });
+        let records = snapshot
+            .records
+            .iter()
+            .filter(|record| record.lifecycle == RefinementLifecycle::Active);
         for record in records {
             let Some(proposal) = record.proposal.as_ref() else {
                 continue;
@@ -518,7 +626,19 @@ impl RefinementAuthorityStore {
         event: RefinementEvent,
         binding: Option<ApprovalBinding>,
     ) -> Result<RefinementAuthoritySnapshot, RefinementAuthorityError> {
-        let actual_revision = self.journal.entries().len() as u64;
+        let _lock = crate::refinement_persistence::acquire_lock(&self.root).map_err(|error| {
+            RefinementAuthorityError::LockUnavailable {
+                reason: error.to_string(),
+            }
+        })?;
+        let memory_revision = self.journal.entries().len() as u64;
+        let actual_revision = persisted_revision(&self.journal_path(), &self.root)?;
+        if actual_revision != memory_revision {
+            return Err(RefinementAuthorityError::Conflict {
+                expected: expected_revision,
+                actual: actual_revision,
+            });
+        }
         ensure_revision(actual_revision, expected_revision)?;
         let mut candidate_journal = self.journal.clone();
         let mut candidate_approvals = self.approvals.clone();
@@ -684,6 +804,25 @@ impl RefinementAuthorityStore {
     fn transaction_path(&self) -> PathBuf {
         self.root.join("transactions/active.json")
     }
+
+    fn privacy_path(&self) -> PathBuf {
+        self.root.join("privacy.json")
+    }
+}
+
+fn persisted_revision(path: &Path, root: &Path) -> Result<u64, RefinementAuthorityError> {
+    let Some(bytes) = read_optional(path)? else {
+        return Ok(0);
+    };
+    let journal: RefinementJournal = serde_json::from_slice(&bytes).map_err(|error| {
+        quarantine_corrupt(
+            root,
+            "journal",
+            &bytes,
+            format!("journal is invalid: {error}"),
+        )
+    })?;
+    Ok(journal.entries().len() as u64)
 }
 
 #[derive(Clone, Debug, Deserialize)]

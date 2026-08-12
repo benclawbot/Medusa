@@ -54,15 +54,3 @@ export interface EngineeringDashboardData {
 export function loadEngineeringDashboard(repo: string, days = 90) {
   return invoke<EngineeringDashboardData>("runtime_engineering_dashboard", { repo, days });
 }
-
-export function generateImprovement(repo: string) {
-  return invoke<ImprovementRecord>("runtime_generate_improvement", { repo });
-}
-
-export function updateImprovement(
-  repo: string,
-  id: string,
-  action: "approve" | "reject" | "adopt" | "rollback" | "benchmark" | "suspend" | "supersede",
-) {
-  return invoke<ImprovementRecord>("runtime_update_improvement", { repo, id, action });
-}

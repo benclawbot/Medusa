@@ -33,6 +33,34 @@ pub fn runtime_learning_transition(
 }
 
 #[tauri::command]
+pub fn runtime_learning_inspect(repo: String, id: String) -> Result<Vec<String>, String> {
+    let repo = canonical_repo(&repo)?;
+    learning_review::inspect(&repo, &id).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn runtime_learning_propose(
+    repo: String,
+    scope: String,
+    key: String,
+    value: String,
+) -> Result<LearningReviewSnapshot, String> {
+    let repo = canonical_repo(&repo)?;
+    learning_review::propose(&repo, &scope, &key, &value)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn runtime_learning_evaluate(
+    repo: String,
+    id: String,
+    passed: bool,
+) -> Result<LearningReviewSnapshot, String> {
+    let repo = canonical_repo(&repo)?;
+    learning_review::evaluate(&repo, &id, passed).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn runtime_learning_privacy(
     repo: String,
     privacy: LearningPrivacy,

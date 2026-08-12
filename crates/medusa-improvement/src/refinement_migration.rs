@@ -18,6 +18,7 @@ use crate::{
     refinement_authority::{RefinementAuthorityError, RefinementAuthorityStore},
     refinement_persistence::{current_unix_ms, quarantine_bytes},
 };
+use medusa_core::learning_policy::LearningPrivacyPolicy;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,6 +55,7 @@ impl RefinementMigrator {
         store: &mut RefinementAuthorityStore,
     ) -> Result<MigrationReport, RefinementAuthorityError> {
         let mut report = MigrationReport::default();
+        import_legacy_privacy(repo, store)?;
         let mut sources = legacy_sources(repo);
         sources.sort();
         sources.dedup();
@@ -66,6 +68,27 @@ impl RefinementMigrator {
         append_receipts(store.root(), &report.receipts)?;
         Ok(report)
     }
+}
+
+fn import_legacy_privacy(
+    repo: &Path,
+    store: &RefinementAuthorityStore,
+) -> Result<(), RefinementAuthorityError> {
+    if store.privacy_revision()? > 0 {
+        return Ok(());
+    }
+    let path = repo.join(".medusa/learning-review/state.json");
+    let Ok(bytes) = fs::read(path) else {
+        return Ok(());
+    };
+    let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(());
+    };
+    let Some(privacy) = document.get("privacy") else {
+        return Ok(());
+    };
+    let privacy: LearningPrivacyPolicy = serde_json::from_value(privacy.clone())?;
+    store.initialize_privacy(privacy)
 }
 
 fn migrate_source(
@@ -216,7 +239,15 @@ fn migrate_record(
         MigrationDisposition::AlreadyImported
     } else {
         let revision = store.snapshot()?.revision;
-        store.propose(proposal, revision)?;
+        if let Err(error) = store.propose(proposal, revision) {
+            report.receipts.push(quarantined_receipt(
+                source,
+                source_record_id,
+                source_fingerprint,
+                &format!("canonical import rejected and was quarantined: {error}"),
+            ));
+            return Ok(());
+        }
         if compatibility_only {
             MigrationDisposition::CompatibilityOnly
         } else {

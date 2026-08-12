@@ -72,6 +72,10 @@ jobs:
         run: cargo generate-lockfile
       - name: Validate lifecycle inventory
         run: cargo test -p medusa-testkit data_lifecycle --locked -- --nocapture
+      - name: Certify single refinement authority policy
+        run: cargo test -p medusa-testkit refinement_authority_policy --locked -- --nocapture
+      - name: Certify canonical refinement lifecycle
+        run: cargo test -p medusa-improvement --test refinement_authority --locked -- --nocapture
       - name: Certify content-addressed evidence semantics
         run: cargo test -p medusa-evidence artifact::tests --locked -- --nocapture
       - name: Certify memory authority and derived indexes

@@ -235,3 +235,69 @@ fn selection_excludes_nonmatching_scope_and_reports_conflicts() {
     assert_eq!(selected.selected[0].proposal.id, "p1");
     assert_eq!(selected.selected[0].approval_receipt_id, "decision-p1");
 }
+
+#[test]
+fn rollback_restores_the_direct_superseded_predecessor() {
+    let repo = tempfile::tempdir().expect("repo");
+    let mut store = RefinementAuthorityStore::open(repo.path()).expect("open");
+    let first = proposal("p1", 1, "run all checks");
+    let mut snapshot = store.propose(first.clone(), 0).expect("p1");
+    snapshot = store
+        .validate("p1", 1, snapshot.revision)
+        .expect("validate p1");
+    snapshot = store
+        .record_evaluation("p1", 1, evaluated(), snapshot.revision)
+        .expect("evaluate p1");
+    snapshot = store
+        .approve(
+            "p1",
+            1,
+            ApprovalActorClass::User,
+            "decision-p1",
+            10,
+            snapshot.revision,
+        )
+        .expect("approve p1");
+    snapshot = store
+        .activate("p1", 1, snapshot.revision)
+        .expect("activate p1");
+
+    let mut replacement = proposal("p2", 1, "run every check");
+    replacement.before = Some(first.after);
+    snapshot = store.propose(replacement, snapshot.revision).expect("p2");
+    snapshot = store
+        .validate("p2", 1, snapshot.revision)
+        .expect("validate p2");
+    snapshot = store
+        .record_evaluation("p2", 1, evaluated(), snapshot.revision)
+        .expect("evaluate p2");
+    snapshot = store
+        .approve(
+            "p2",
+            1,
+            ApprovalActorClass::User,
+            "decision-p2",
+            11,
+            snapshot.revision,
+        )
+        .expect("approve p2");
+    snapshot = store
+        .supersede("p1", 1, "p2", 1, snapshot.revision)
+        .expect("supersede");
+    assert!(snapshot.active.is_empty());
+    snapshot = store
+        .activate("p2", 1, snapshot.revision)
+        .expect("activate p2");
+    assert_eq!(snapshot.active[0].id, "p2");
+    snapshot = store
+        .rollback(
+            "p2",
+            1,
+            Some("p1"),
+            Some(1),
+            "restore predecessor",
+            snapshot.revision,
+        )
+        .expect("rollback");
+    assert_eq!(snapshot.active[0].id, "p1");
+}

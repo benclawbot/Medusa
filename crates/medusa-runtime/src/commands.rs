@@ -105,6 +105,9 @@ pub enum TeamCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LearningCommand {
     Show { filter: Option<String> },
+    Inspect { id: String },
+    Propose { scope: String, key: String, value: String },
+    Evaluate { id: String, passed: bool },
     Approve { id: String },
     Reject { id: String },
     Defer { id: String },
@@ -425,6 +428,24 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
                 None | Some("show") => LearningCommand::Show {
                     filter: parts.next().map(str::to_owned),
                 },
+                Some("inspect") => LearningCommand::Inspect {
+                    id: required_id(parts.next(), "inspect")?,
+                },
+                Some("propose") => parse_learning_propose(remainder)?,
+                Some("evaluate") => {
+                    let id = required_id(parts.next(), "evaluate")?;
+                    let passed = match parts.next() {
+                        Some("pass") | Some("passed") | Some("true") => true,
+                        Some("fail") | Some("failed") | Some("false") => false,
+                        Some(other) => {
+                            return Err(format!(
+                                "/learning evaluate expects pass or fail, got {other}"
+                            ));
+                        }
+                        None => return Err("/learning evaluate expects pass or fail".to_owned()),
+                    };
+                    LearningCommand::Evaluate { id, passed }
+                }
                 Some("approve") => LearningCommand::Approve {
                     id: required_id(parts.next(), "approve")?,
                 },
@@ -527,6 +548,32 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
     }
+}
+
+fn parse_learning_propose(remainder: &str) -> Result<LearningCommand, String> {
+    let rest = remainder
+        .strip_prefix("propose")
+        .ok_or_else(|| "/learning propose expects scope, key, and value".to_owned())?
+        .trim_start();
+    let mut fields = rest.splitn(3, char::is_whitespace);
+    let scope = fields
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "/learning propose expects a scope".to_owned())?;
+    let key = fields
+        .next()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "/learning propose expects a key".to_owned())?;
+    let value = fields
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "/learning propose expects a value".to_owned())?;
+    Ok(LearningCommand::Propose {
+        scope: scope.to_owned(),
+        key: key.to_owned(),
+        value: value.to_owned(),
+    })
 }
 
 #[must_use]
@@ -707,6 +754,33 @@ mod tests {
             parse_slash_command("/effort high"),
             Ok(Some(SlashCommand::Effort {
                 effort: Some(Effort::High)
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/learning inspect proposal-1"),
+            Ok(Some(SlashCommand::Learning {
+                action: LearningCommand::Inspect {
+                    id: "proposal-1".into()
+                }
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/learning propose repository workflow collect all CI failures"),
+            Ok(Some(SlashCommand::Learning {
+                action: LearningCommand::Propose {
+                    scope: "repository".into(),
+                    key: "workflow".into(),
+                    value: "collect all CI failures".into()
+                }
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/learning evaluate proposal-1 pass"),
+            Ok(Some(SlashCommand::Learning {
+                action: LearningCommand::Evaluate {
+                    id: "proposal-1".into(),
+                    passed: true
+                }
             }))
         );
     }
