@@ -2,14 +2,16 @@
 
 ## Authority
 
-`medusa update` uses the stable GitHub release channel by default. A release is eligible only when it contains:
+`medusa update --release` uses the stable GitHub release channel. The default `medusa update` path follows the latest `main` commit through the source updater instead; the two paths are explicit and neither is a fallback for the other.
+
+A release is eligible only when it contains:
 
 - `medusa-release-manifest.json`, using `medusa-release-manifest-v2`;
 - `medusa-release-manifest.sig.json`, using `medusa-release-signature-v1`;
 - exactly one signed CLI archive for the running operating system and architecture;
 - exact signed byte counts and SHA-256 digests for every installable artifact.
 
-The updater verifies the Ed25519 signature over the exact manifest bytes before parsing or trusting the version, source revision, URLs, platform mapping, sizes, hashes, rollout sequence, minimum updater version, or artifact names. GitHub release metadata is only a transport bootstrap for the two fixed manifest asset names.
+The release updater verifies the Ed25519 signature over the exact manifest bytes before parsing or trusting the version, source revision, URLs, platform mapping, sizes, hashes, rollout sequence, minimum updater version, or artifact names. GitHub release metadata is only a transport bootstrap for the two fixed manifest asset names.
 
 The embedded public key and the reviewed key lifecycle are recorded in `release/keys/keyring.json`. The private key is not stored in the repository. It is provided only to the protected `release-signing` environment through `MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM`.
 
@@ -33,11 +35,11 @@ stateDiagram-v2
   RolledBack --> [*]
 ```
 
-A newly published release is not update-eligible until `Sign Release Manifest` completes successfully. The updater fails closed during that interval because unsigned or incompletely signed releases have no trusted authority.
+A newly published release is not update-eligible until `Sign Release Manifest` completes successfully. `medusa update --release` fails closed during that interval because unsigned or incompletely signed releases have no trusted authority. It does not switch to the source updater.
 
 ## Update state machine
 
-The CLI records path-free JSONL phase diagnostics for:
+The verified release CLI path records path-free JSONL phase diagnostics for:
 
 1. release check;
 2. manifest verification;
@@ -72,23 +74,31 @@ Archives are extracted into a private temporary workspace. Absolute paths, paren
 
 Release metadata uses bounded requests and conditional ETag caching. Manifest and signature responses have independent size limits. Artifact downloads are streamed to a partial file, may resume with an HTTP range request, never exceed the signed byte count, and are renamed to the final local name only after streaming size and SHA-256 verification.
 
-No source compilation is used as a fallback for a failed release update. Network failure, unsupported platform, invalid signature, unknown or revoked key, version mismatch, missing artifact, size mismatch, digest mismatch, extraction error, or replacement failure is surfaced as an error and leaves the current binary usable.
+No source compilation is used as a fallback for a failed `--release` update. Network failure, unsupported platform, invalid signature, unknown or revoked key, version mismatch, missing artifact, size mismatch, digest mismatch, extraction error, or replacement failure is surfaced as an error and leaves the current binary usable.
 
 ## Rollout and downgrade policy
 
-The signed manifest contains a monotonically increasing rollout sequence and a rollout percentage. Cohort selection is deterministic per repository path. A candidate below the installed sequence is rejected unless the operator explicitly passes `--allow-downgrade`. A semantic-version downgrade also requires that flag.
+The signed manifest contains a monotonically increasing rollout sequence and a rollout percentage. Cohort selection is deterministic per repository path. A candidate below the installed sequence is rejected unless the operator explicitly passes `medusa update --release --allow-downgrade`. A semantic-version downgrade also requires that release-only flag.
 
 Key rotation uses non-overlapping or explicitly bounded sequence windows in `release/keys/keyring.json`. A replacement key must be embedded and active before a release uses it. Revoked keys are rejected even when the signature is cryptographically valid. The rotation policy requires at least two release overlaps before retiring the previous key.
 
-## Source developer channel
+## Main-branch source path
 
-Local source compilation remains available only through:
+The default updater path is:
 
 ```text
-medusa update --channel source
+medusa update
 ```
 
-The command emits an explicit warning, retains the existing main-branch source updater, and is never selected automatically or used as a fallback. The default and automatic channels are always verified prebuilt releases.
+It resolves the latest `main` commit, invokes Cargo, and compiles locally. `medusa update --check` checks that moving target without modifying the installation. This path does not inspect release manifests and is never selected as a fallback after a failed `medusa update --release`.
+
+The stable verified prebuilt path is selected only with:
+
+```text
+medusa update --release
+```
+
+Keeping the trust models separate means an unsigned or malformed release cannot alter the behavior of the default main-branch updater, and a source-build failure cannot silently redirect the user to a release.
 
 ## Verification
 
@@ -99,7 +109,7 @@ The command emits an explicit warning, retains the existing main-branch source u
 - exact artifact size and digest verification;
 - archive confinement and concurrent-update rejection;
 - health-check and rollback script contracts;
-- CLI release/source channel behavior;
+- CLI default-main and explicit-release behavior;
 - formatting and Clippy.
 
 `.github/workflows/sign-release-manifest.yml` is the production signing path. It downloads only artifacts already produced by release CI, regenerates the canonical manifest from those bytes, signs it in the protected environment, verifies it against the repository public key, attests the manifest authority, and uploads the manifest, signature, and checksum inventory to the existing release.
