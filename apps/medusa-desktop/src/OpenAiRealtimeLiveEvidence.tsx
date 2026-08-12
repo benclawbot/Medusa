@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   OpenAiRealtimeWebRtcTransport,
+  type DesktopRealtimeCapability,
   loadDesktopRealtimeCapability,
 } from "./OpenAiRealtimeWebRtcTransport";
 import type { VoicePhase, VoiceTranscript } from "./VoiceControls";
@@ -18,13 +19,49 @@ const evidencePhrase = "Medusa live voice evidence. Please answer with a short c
 
 type RunState = "idle" | "running" | "passed" | "failed";
 
+interface DesktopSharedConfiguration {
+  connection: string;
+  provider: string;
+  model: string;
+  auth: string;
+  configured: boolean;
+  credentialConfigured: boolean;
+}
+
 export function OpenAiRealtimeLiveEvidence() {
   const [runState, setRunState] = useState<RunState>("idle");
   const [status, setStatus] = useState(
     "No microphone access has been requested. Start only when you are ready to speak.",
   );
   const [report, setReport] = useState<OpenAiRealtimeLiveEvidenceReport>();
+  const [configuration, setConfiguration] = useState<DesktopSharedConfiguration>();
+  const [capability, setCapability] = useState<DesktopRealtimeCapability>();
+  const [preflightError, setPreflightError] = useState<string>();
+  const [routeModalDismissed, setRouteModalDismissed] = useState(false);
   const transportRef = useRef<OpenAiRealtimeWebRtcTransport | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([
+      invoke<DesktopSharedConfiguration>("desktop_shared_configuration"),
+      loadDesktopRealtimeCapability(),
+    ])
+      .then(([nextConfiguration, nextCapability]) => {
+        if (!active) return;
+        setConfiguration(nextConfiguration);
+        setCapability(nextCapability);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setPreflightError(
+          "Medusa could not inspect the active provider configuration. Live evidence is disabled until the configuration can be read.",
+        );
+        setStatus(safeEvidenceError(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -232,8 +269,26 @@ export function OpenAiRealtimeLiveEvidence() {
     setStatus("Sanitized evidence JSON copied.");
   }
 
+  const activeProvider = configuration?.provider.trim().toLowerCase();
+  const activeConnection = configuration?.connection.trim().toLowerCase();
+  const activeAuth = configuration?.auth.trim().toLowerCase();
+  const oauthConfigured =
+    activeConnection === "chatgpt-oauth" &&
+    activeProvider === "openai-oauth" &&
+    activeAuth === "none";
+  const canStart = oauthConfigured && capability?.available === true;
+  const routeMismatch = configuration !== undefined && !oauthConfigured;
+  const configurationGuidance = !configuration
+    ? "Checking the active Medusa provider before enabling live evidence…"
+    : !oauthConfigured
+      ? `Live evidence only supports the ChatGPT OAuth route, but the active configuration is \`${configuration.connection}\` / \`${configuration.provider}\` with ${configuration.auth} authentication. Close this window, open Medusa normally, select ChatGPT OAuth in Settings, apply the configuration, then relaunch evidence mode.`
+      : capability && !capability.available
+        ? capability.reason ??
+          "The authenticated ChatGPT account does not expose OpenAI Realtime audio."
+        : "ChatGPT OAuth is configured and the authenticated Realtime route is available.";
+
   return (
-    <main style={styles.page}>
+    <main className="realtime-evidence" style={styles.page}>
       <section style={styles.card} aria-labelledby="live-evidence-title">
         <p style={styles.eyebrow}>Developer-only acceptance evidence</p>
         <h1 id="live-evidence-title">OpenAI Realtime live voice proof</h1>
@@ -246,13 +301,22 @@ export function OpenAiRealtimeLiveEvidence() {
           The report stores no credential, raw audio, or transcript text. Final
           transcripts are represented only by SHA-256 and character count.
         </p>
+        <div style={styles.configuration} role="status">
+          <strong>Configured provider:</strong>{" "}
+          {configuration ? `${configuration.provider} / ${configuration.model}` : "checking…"}
+          {configuration?.auth ? ` (${configuration.auth})` : ""}
+        </div>
+        <div style={styles.callout} role="status">
+          {preflightError ?? configurationGuidance}
+        </div>
         <div style={styles.callout} role="status">
           {status}
         </div>
         <button
           type="button"
           onClick={() => void start()}
-          disabled={runState === "running"}
+          disabled={runState === "running" || !canStart}
+          className="realtime-evidence-button"
           style={styles.button}
         >
           {runState === "running" ? "Live evidence running…" : "Start 45-second live evidence"}
@@ -263,12 +327,52 @@ export function OpenAiRealtimeLiveEvidence() {
               Sanitized evidence: {report.result.toUpperCase()}
             </h2>
             <pre style={styles.pre}>{JSON.stringify(report, null, 2)}</pre>
-            <button type="button" onClick={() => void copyReport()} style={styles.button}>
+            <button
+              type="button"
+              onClick={() => void copyReport()}
+              className="realtime-evidence-button"
+              style={styles.button}
+            >
               Copy evidence JSON
             </button>
           </section>
         ) : null}
       </section>
+      {routeMismatch && !routeModalDismissed ? (
+        <div style={styles.modalBackdrop} role="presentation">
+          <section
+            style={styles.modal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="oauth-route-modal-title"
+          >
+            <p style={styles.eyebrow}>Live evidence setup</p>
+            <h2 id="oauth-route-modal-title">ChatGPT OAuth is required</h2>
+            <p>
+              This voice proof intentionally works only with Medusa&apos;s shared ChatGPT OAuth
+              route. It will not run with MiniMax, an API-key provider, or another compatible
+              endpoint.
+            </p>
+            <p style={styles.modalDetails}>
+              Current configuration: <strong>{configuration.connection}</strong> /{" "}
+              <strong>{configuration.provider}</strong> ({configuration.auth} authentication).
+            </p>
+            <p>
+              Close this evidence window, launch Medusa normally, choose <strong>ChatGPT OAuth</strong>{" "}
+              in Settings, apply the configuration, and then relaunch evidence mode. No microphone
+              permission or API key is requested until the OAuth route passes its capability check.
+            </p>
+            <button
+              type="button"
+              className="realtime-evidence-button"
+              style={styles.button}
+              onClick={() => setRouteModalDismissed(true)}
+            >
+              I understand
+            </button>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -341,6 +445,14 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#0d1117",
     border: "1px solid #30363d",
   },
+  configuration: {
+    margin: "24px 0 0",
+    padding: "12px 16px",
+    borderRadius: "10px",
+    background: "#21262d",
+    border: "1px solid #30363d",
+    color: "#f0f6fc",
+  },
   button: {
     minHeight: "44px",
     padding: "10px 16px",
@@ -363,5 +475,29 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #30363d",
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
+  },
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    display: "grid",
+    placeItems: "center",
+    padding: "24px",
+    background: "rgba(1, 4, 9, 0.78)",
+    zIndex: 10,
+  },
+  modal: {
+    width: "min(560px, 100%)",
+    padding: "28px",
+    border: "1px solid #484f58",
+    borderRadius: "14px",
+    background: "#161b22",
+    color: "#f0f6fc",
+    boxShadow: "0 24px 80px rgba(0, 0, 0, 0.55)",
+  },
+  modalDetails: {
+    padding: "12px 14px",
+    borderRadius: "8px",
+    background: "#21262d",
+    border: "1px solid #30363d",
   },
 };

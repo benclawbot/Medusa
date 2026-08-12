@@ -86,6 +86,23 @@ button:disabled {
   opacity: 0.72;
 }
 
+/* The developer-only Realtime evidence surface uses its own dark card. Keep
+   its actions readable even though the light desktop theme normalizes buttons. */
+main.realtime-evidence button.realtime-evidence-button,
+main.realtime-evidence button.realtime-evidence-button:hover:not(:disabled),
+main.realtime-evidence button.realtime-evidence-button:active:not(:disabled) {
+  border: 1px solid #2f81f7 !important;
+  background: #1f6feb !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+
+main.realtime-evidence button.realtime-evidence-button:disabled {
+  border-color: #484f58 !important;
+  background: #30363d !important;
+  color: #8b949e !important;
+}
+
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,

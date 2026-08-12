@@ -25,6 +25,12 @@ Unsupported or revoked accounts fail before microphone permission is requested.
 
 From `apps/medusa-desktop`, explicitly enable evidence mode and start the Tauri development application.
 
+Before launching evidence mode, start the normal desktop application once and select **ChatGPT OAuth**
+under Settings, then apply the configuration. The evidence surface reads the shared active provider and
+will refuse to start against another route such as MiniMax; it does not silently switch providers or
+request microphone permission for an unsupported route. Close the normal desktop application before
+launching evidence mode.
+
 Linux or macOS:
 
 ```bash
@@ -46,6 +52,11 @@ The evidence surface is also available to development builds with the query para
 4. Pause and allow the server VAD to finalize the turn.
 5. Wait for the assistant audio to play.
 6. Copy the sanitized evidence JSON only after the screen reports `PASSED`.
+
+If the screen reports that the authenticated account does not expose Realtime, the account's existing
+ChatGPT/Codex authentication did not provision a Realtime-capable OpenAI credential. Keep the evidence
+open and resolve the account/gateway capability first; do not add an API-key field or paste credentials
+into the evidence surface.
 
 The run stops and tears down the microphone, peer connection, data channel, and audio element as soon as it passes or after 45 seconds.
 
