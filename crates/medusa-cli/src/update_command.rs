@@ -12,15 +12,13 @@ pub(super) fn run(
     repo: &Path,
     check_only: bool,
     automatic: bool,
-    channel: &str,
+    release: bool,
     allow_downgrade: bool,
 ) -> MedusaResult<()> {
-    match channel {
-        "release" => release_channel(repo, check_only, automatic, allow_downgrade),
-        "source" => source_channel(repo, check_only, automatic),
-        other => Err(invalid(format!(
-            "unknown update channel {other}; use release or source"
-        ))),
+    if release {
+        release_channel(repo, check_only, automatic, allow_downgrade)
+    } else {
+        source_channel(repo, check_only, automatic)
     }
 }
 
@@ -181,7 +179,7 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
     let check_only = check_only || policy == UpdatePolicy::Check;
     let automatic = automatic || policy == UpdatePolicy::Automatic;
     eprintln!(
-        "Developer source channel selected explicitly. This channel invokes Cargo, compiles locally, and never acts as a fallback for verified release updates."
+        "Updating from the latest Medusa main branch. This path invokes Cargo and compiles locally; use `medusa update --release` for a verified prebuilt release."
     );
     let updater = MainBranchUpdater::public()?;
     let latest = updater.latest_main()?;
@@ -190,7 +188,7 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
         println!("Medusa is already running main commit {current}.");
         return Ok(());
     }
-    println!("Medusa source update available: {current} -> {}", latest.sha);
+    println!("Medusa main update available: {current} -> {}", latest.sha);
     if check_only {
         return Ok(());
     }
@@ -202,7 +200,7 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
     }
     super::request_daemon_shutdown(repo);
     updater.schedule_main_install(&location.executable, std::process::id())?;
-    println!("The explicit source build is scheduled after this process exits.");
+    println!("The latest main-branch source build is scheduled after this process exits.");
     Ok(())
 }
 
@@ -231,7 +229,6 @@ fn read_installed_sequence(repo: &Path) -> Option<u64> {
         .and_then(|value| value.trim().parse().ok())
 }
 
-
 fn invalid(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
@@ -254,5 +251,4 @@ mod tests {
         assert_eq!(rollout_eligible(repo, 50), rollout_eligible(repo, 50));
         assert!(rollout_eligible(repo, 100));
     }
-
 }
