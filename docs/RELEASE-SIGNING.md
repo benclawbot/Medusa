@@ -4,7 +4,7 @@ Medusa separates build provenance, platform publisher signing, and updater relea
 
 - `Publish Release` assembles and attests CI-produced artifacts.
 - `Sign Draft Release` applies platform-native signatures to an existing draft.
-- `Sign Release Manifest` creates the Ed25519 authority consumed by `medusa update` after a release is published.
+- `Sign Release Manifest` creates the Ed25519 authority consumed by `medusa update --release` after a release is published.
 
 All signing jobs use the protected `release-signing` environment.
 
@@ -20,7 +20,7 @@ Create a GitHub environment named `release-signing` with required reviewers. Res
 
 The private key is written only to a mode-0600 temporary runner file and removed through a shell trap. The workflow fails when the secret is absent, the tag does not match synchronized repository versions, the release assets are incomplete, any asset basename is duplicated, an asset escapes the download directory, signing fails, or local verification fails.
 
-A published release is not update-eligible until this workflow succeeds. The updater rejects an unsigned release rather than using GitHub metadata or source compilation as a fallback.
+A published release is not update-eligible until this workflow succeeds. `medusa update --release` rejects an unsigned release rather than using GitHub metadata or source compilation as a fallback. The default `medusa update` main-branch path is separate and does not consult the release manifest.
 
 ### Windows platform signing
 
@@ -50,7 +50,7 @@ Linux package assets receive keyless Sigstore signatures and certificates throug
 3. Run **Sign Draft Release** when platform-native signatures are required, approve the protected environment, and verify all platform outputs.
 4. Publish the stable release.
 5. Approve the automatically triggered **Sign Release Manifest** deployment.
-6. Verify that the release contains `medusa-release-manifest.json`, `medusa-release-manifest.sig.json`, and `SHA256SUMS` before announcing update availability.
+6. Verify that the release contains `medusa-release-manifest.json`, `medusa-release-manifest.sig.json`, and `SHA256SUMS` before announcing `medusa update --release` availability.
 
 A signing rerun may use `workflow_dispatch` with an existing stable tag. It regenerates the authority from the release's current CI artifacts and replaces only the three manifest-authority assets.
 
@@ -73,6 +73,6 @@ Private keys should be generated on a controlled maintainer system or hardware-b
 
 ## Trust boundary
 
-Ed25519 manifest verification proves that Medusa release maintainers authorized exact artifact metadata for the updater. GitHub attestations prove workflow provenance. Authenticode, Developer ID, notarization, and Linux Sigstore evidence prove publisher or platform identity. SHA-256 proves byte identity. These controls are complementary and none replaces the others.
+Ed25519 manifest verification proves that Medusa release maintainers authorized exact artifact metadata for the release updater. GitHub attestations prove workflow provenance. Authenticode, Developer ID, notarization, and Linux Sigstore evidence prove publisher or platform identity. SHA-256 proves byte identity. These controls are complementary and none replaces the others.
 
 See [Verified prebuilt update architecture](architecture/PREBUILT-UPDATES.md) and [ADR 0002](architecture/decisions/0002-verified-prebuilt-updates.md).
