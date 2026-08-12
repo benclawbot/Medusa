@@ -124,7 +124,7 @@ fn descendant_command(marker: &Path) -> (String, Vec<String>) {
         "sh".to_owned(),
         vec![
             "-c".to_owned(),
-            "(sleep 1; printf orphan > \"$1\") &".to_owned(),
+            "(sleep 1; printf orphan > \"$1\") & wait".to_owned(),
             "medusa-descendant".to_owned(),
             marker.to_string_lossy().into_owned(),
         ],
