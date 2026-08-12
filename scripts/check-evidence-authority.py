@@ -13,7 +13,7 @@ checks = {
     "exact changed components": "pub struct ChangedComponent" in read("crates/medusa-evidence/src/change.rs"),
     "planner selects browser behavior": "BrowserBehavior" in read("crates/medusa-evidence/src/verification.rs"),
     "planner selects accessibility": "Accessibility" in read("crates/medusa-evidence/src/verification.rs"),
-    "command outputs become receipts": "CommandReceipt::new" in read("crates/medusa-agent/src/verification_authority.rs"),
+    "command outputs become receipts": "CommandReceipt::new" in read("crates/medusa-agent/src/verification_authority_legacy.rs"),
     "trusted exact-file formatting precedes verification": "prepare_components_for_verification" in read("crates/medusa-runtime/src/mutating_worker_coordinator.rs"),
     "browser verification is mandatory": "required_browser_verification" in read("crates/medusa-agent/src/verification.rs"),
     "accessibility behavior is inspected": "unlabeled_controls" in read("crates/medusa-agent/src/verification.rs"),

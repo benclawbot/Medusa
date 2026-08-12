@@ -46,8 +46,8 @@ jobs:
         run: python scripts/release-evidence.py self-test
       - name: Test signed manifest, download, confinement, and rollback contracts
         run: cargo test -p medusa-update --all-targets --locked
-      - name: Test CLI release and explicit source channels
-        run: cargo test -p medusa-cli --bin medusa --locked update_command
+      - name: Test CLI default main and explicit release paths
+        run: cargo test -p medusa-cli --bin medusa --locked update_
       - name: Check updater formatting
         run: cargo fmt --all -- --check
       - name: Lint update crates

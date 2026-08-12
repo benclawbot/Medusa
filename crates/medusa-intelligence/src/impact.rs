@@ -80,10 +80,6 @@ pub fn select_tests_with_index(index: &CodeIndex, changed_paths: &[PathBuf]) -> 
                 commands.insert("cargo test --all-features".to_owned());
                 reasons.insert(format!("Changed root Rust source: {}", path.display()));
             }
-        } else if path.extension().is_some_and(|extension| extension == "py") && commands.is_empty()
-        {
-            commands.insert("python -m pytest".to_owned());
-            reasons.insert(format!("Changed Python source: {}", path.display()));
         }
     }
 
@@ -219,5 +215,27 @@ mod tests {
                 .iter()
                 .any(|reason| reason.contains("api.rs"))
         );
+    }
+
+    #[test]
+    fn python_source_without_impacted_test_does_not_invent_pytest() {
+        let repository = tempfile::tempdir().expect("repository");
+        fs::create_dir_all(repository.path().join("src")).expect("src");
+        fs::write(
+            repository.path().join("src/slugify.py"),
+            "def slugify(value):\n    return value.lower()\n",
+        )
+        .expect("source");
+        fs::write(
+            repository.path().join("verify.py"),
+            "print('repository-defined verification')\n",
+        )
+        .expect("verification script");
+        let index = CodeIndex::build(repository.path()).expect("index");
+
+        let impact = select_tests_with_index(&index, &[PathBuf::from("src/slugify.py")]);
+
+        assert!(impact.commands.is_empty());
+        assert!(impact.reasons.is_empty());
     }
 }
