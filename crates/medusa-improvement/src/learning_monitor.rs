@@ -350,7 +350,7 @@ impl LearningMonitorStore {
     ) -> Result<MonitorResult, LearningMonitorError> {
         validate_outcome(&outcome)?;
         let groups = self.exposure_groups(&outcome);
-        if groups.len() <= 1 {
+        if groups.is_empty() {
             return self.record_outcome_single(repo, outcome);
         }
 
