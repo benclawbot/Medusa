@@ -1,14 +1,17 @@
 use std::{collections::BTreeSet, fs, path::PathBuf, process::Command};
 
 use medusa_core::MedusaResult;
+use medusa_improvement::provenance::{
+    ProvenanceOutcome, ProvenanceSource, repository_identity, repository_revision,
+};
+use medusa_provider::MessageBlock;
 use serde::Serialize;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 
 use super::{
     AgentSession,
-    completed_learning::{authoritative_evidence, authoritative_success},
+    completed_learning::{authoritative_evidence, authoritative_success, provenance_graph},
 };
 
 const MAX_EVIDENCE_ITEMS: usize = 12;
@@ -32,6 +35,8 @@ struct LessonProposal {
     created_at: String,
     repository_fingerprint: String,
     repository_revision: Option<String>,
+    repository_identity: Option<medusa_improvement::scoped_memory::RepositoryIdentity>,
+    provenance_observation_ids: Vec<String>,
     kind: LessonKind,
     title: String,
     summary: String,
@@ -68,17 +73,49 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
     let mut tools = BTreeSet::new();
     let mut successful_steps = Vec::new();
     let mut failed_steps = Vec::new();
+    let graph = provenance_graph(session)?;
     let mut all_text = vec![session.objective.clone()];
 
     for message in &session.messages {
-        let value = serde_json::to_value(message)?;
-        collect_strings(&value, &mut all_text);
-        collect_tool_observations(&value, &mut tools, &mut successful_steps, &mut failed_steps);
+        for block in &message.content {
+            match block {
+                MessageBlock::Text { text } if safe_text(text) => {
+                    all_text.push(compact(text, 300));
+                }
+                MessageBlock::Text { .. } => {}
+                MessageBlock::ToolUse { name, .. } => {
+                    tools.insert(name.clone());
+                }
+                MessageBlock::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } => {
+                    let description = format!("tool result {}", compact(tool_use_id, 120));
+                    if *is_error {
+                        failed_steps.push(description);
+                    } else {
+                        successful_steps.push(description);
+                    }
+                }
+                MessageBlock::Image { .. } => {}
+            }
+        }
     }
-    for event in &session.events {
-        let value = serde_json::to_value(event)?;
-        collect_strings(&value, &mut all_text);
-        collect_tool_observations(&value, &mut tools, &mut successful_steps, &mut failed_steps);
+    for observation in &graph.observations {
+        if let Some(tool) = &observation.tool_name {
+            tools.insert(tool.clone());
+        }
+        all_text.push(observation.summary.clone());
+        match (observation.source, observation.outcome) {
+            (ProvenanceSource::ToolExecution, ProvenanceOutcome::Positive) => {
+                successful_steps.push(observation.summary.clone());
+            }
+            (ProvenanceSource::ToolExecution, ProvenanceOutcome::Negative) => {
+                failed_steps.push(observation.summary.clone());
+            }
+            _ => {}
+        }
     }
 
     let meaningful = session.turn >= 2
@@ -132,7 +169,13 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
         source_session_id: session.id.to_string(),
         created_at: timestamp,
         repository_fingerprint: repository_fingerprint(&session.repo),
-        repository_revision: git_output(&session.repo, &["rev-parse", "HEAD"]),
+        repository_revision: repository_revision(&session.repo),
+        repository_identity: repository_identity(&session.repo),
+        provenance_observation_ids: graph
+            .observations
+            .iter()
+            .map(|observation| observation.id.clone())
+            .collect(),
         kind,
         title: format!("Reusable workflow: {objective}"),
         summary: format!(
@@ -203,61 +246,6 @@ fn classify(text: &[String], failures: &[String], tools: &BTreeSet<String>) -> L
         LessonKind::Command
     } else {
         LessonKind::Debugging
-    }
-}
-
-fn collect_tool_observations(
-    value: &Value,
-    tools: &mut BTreeSet<String>,
-    successful: &mut Vec<String>,
-    failed: &mut Vec<String>,
-) {
-    match value {
-        Value::Object(map) => {
-            let tool = ["tool", "name"]
-                .iter()
-                .find_map(|key| map.get(*key).and_then(Value::as_str))
-                .filter(|value| !value.trim().is_empty());
-            if let Some(tool) = tool {
-                tools.insert(tool.to_owned());
-                let success = ["success", "ok"]
-                    .iter()
-                    .find_map(|key| map.get(*key).and_then(Value::as_bool));
-                let description = ["text", "message", "command", "output"]
-                    .iter()
-                    .find_map(|key| map.get(*key).and_then(Value::as_str))
-                    .filter(|text| safe_text(text))
-                    .map(|text| compact(text, 240))
-                    .unwrap_or_else(|| format!("Used {tool}"));
-                match success {
-                    Some(true) => successful.push(description),
-                    Some(false) => failed.push(description),
-                    None => {}
-                }
-            }
-            for child in map.values() {
-                collect_tool_observations(child, tools, successful, failed);
-            }
-        }
-        Value::Array(values) => {
-            for child in values {
-                collect_tool_observations(child, tools, successful, failed);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_strings(value: &Value, output: &mut Vec<String>) {
-    match value {
-        Value::String(text) if safe_text(text) => output.push(compact(text, 300)),
-        Value::Array(values) => values
-            .iter()
-            .for_each(|value| collect_strings(value, output)),
-        Value::Object(map) => map
-            .values()
-            .for_each(|value| collect_strings(value, output)),
-        _ => {}
     }
 }
 
@@ -364,7 +352,7 @@ mod tests {
         let path = extract_completed_session(&session)
             .expect("extract")
             .expect("proposal");
-        let value: Value =
+        let value: serde_json::Value =
             serde_json::from_slice(&fs::read(path).expect("proposal file")).expect("proposal json");
         assert_eq!(value["source_session_id"], session.id.to_string());
         assert_eq!(value["kind"], "platform_fix");
