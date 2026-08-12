@@ -62,6 +62,21 @@ jobs:
           grep -q 'medusa-agent' docs/PUBLIC-API-BASELINE.md
           echo refactor-baseline-ok
 
+  public-api-compatibility:
+    name: Rust public API remains compatible
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Compare governed crates with the pull-request base
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
+        with:
+          baseline-rev: ${{ github.event.pull_request.base.sha }}
+          package: medusa-core,medusa-provider,medusa-memory,medusa-intelligence,medusa-agent,medusa-workers,medusa-extensions,medusa-hardening,medusa-daemon,medusa-cli,medusa-tui
+          rust-toolchain: '1.88.0'
+
   capability-evidence:
     name: Capability claims match code, tests, gates, and docs
     runs-on: ubuntu-latest

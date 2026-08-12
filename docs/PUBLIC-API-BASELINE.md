@@ -54,4 +54,6 @@ cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 ```
 
-The API baseline will later be upgraded to a generated `cargo public-api` or semver-check snapshot once the crate publishing surface is finalized. Until then, compatibility is enforced by existing integration, serialization, migration, CLI, package, and live-provider tests plus review of public re-exports.
+The `Rust public API remains compatible` pull-request check runs `cargo-semver-checks` for every governed crate above against the exact base commit of the pull request. It is the machine-enforced source of truth for Rust item and re-export compatibility. Existing integration, serialization, migration, CLI, package, and live-provider tests remain responsible for behavioral and wire-format compatibility that Rust API analysis cannot prove.
+
+The compatibility job is intentionally pull-request-only: a merged `main` commit has no distinct proposed/base pair. Intentional breaking changes must follow the change protocol above and update the crate version as required by semantic versioning; disabling or bypassing the check is not an acknowledgement mechanism.
