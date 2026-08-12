@@ -288,6 +288,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
           RELEASE_SHA: ${{ github.sha }}
+          RELEASE_SEQUENCE: ${{ github.run_number }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG"
@@ -304,7 +306,12 @@ jobs:
           python3 scripts/release-evidence.py manifest \
             --assets release-assets \
             --output release-assets/medusa-release-manifest.json \
-            --checksums release-assets/SHA256SUMS
+            --checksums release-assets/SHA256SUMS \
+            --version "$RELEASE_VERSION" \
+            --revision "$RELEASE_SHA" \
+            --sequence "$RELEASE_SEQUENCE" \
+            --rollout-percentage 100 \
+            --minimum-updater-version "1.0.0"
       - name: Attest release assets
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
