@@ -92,6 +92,8 @@ Other commands:
 
 ```bash
 medusa doctor
+medusa health --json
+medusa health --json --support-bundle .medusa/diagnostics/support.json
 medusa migrate
 medusa update --check
 medusa update
@@ -100,6 +102,11 @@ medusa shell cargo test --workspace
 medusa checkpoint "before refactor"
 medusa resume <session-id>
 ```
+
+`medusa health` is a bounded, non-billable operational check. It reports typed component status,
+resource pressure, and durable-journal evidence without treating configuration presence as live
+provider readiness. `--support-bundle` writes a local, versioned, redacted JSON export; it never
+uploads data or includes credentials, prompts, hidden reasoning, or authoritative journal payloads.
 
 ### Terminal UI
 

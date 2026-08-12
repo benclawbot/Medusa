@@ -46,3 +46,10 @@ Retention must preserve the journal ancestry and evidence required by every reta
 ## Diagnostics
 
 `medusa doctor` verifies every discoverable session journal by replay, reports total verified cursors, validates all persisted checkpoint records, and identifies the latest recoverable checkpoint. Corruption, incompatible schemas, conflicting fingerprints, malformed continuity metadata, or replay divergence produce a failed check with an actionable error while leaving the prior valid state untouched.
+
+`medusa health --json` is the bounded operational projection for startup and support workflows. It
+aggregates typed component evidence, marks optional routes as unavailable until live readiness is
+proven, applies backpressure status before the state budget is full, and returns a non-zero result
+for recovery-required or unsafe states. `medusa health --support-bundle PATH` creates a local,
+versioned JSON bundle with bounded lifecycle events and an explicit excluded-data manifest; it does
+not probe providers, launch processes, upload data, or replace the canonical journal.
