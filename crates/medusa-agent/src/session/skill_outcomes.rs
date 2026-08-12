@@ -99,6 +99,8 @@ struct MetricAccumulator {
     latest_recorded_at: String,
 }
 
+/// Retains the legacy loaded-skill inventory for compatibility. Production causal attribution is
+/// intentionally owned by `LearningMonitorStore`; this helper is not called by session completion.
 pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<Option<PathBuf>> {
     if !session.completed {
         return Ok(None);
@@ -222,7 +224,8 @@ pub(crate) fn record_terminal_skill_outcome(
         }),
     };
     atomic_json(&destination, &record)?;
-    rebuild_effectiveness_summary(&session.repo)?;
+    // Terminal skill inventories are retained for audit only. Causal effectiveness is recorded
+    // by `LearningMonitorStore`, which links applied exposures to authoritative outcomes.
     Ok(Some(destination))
 }
 
