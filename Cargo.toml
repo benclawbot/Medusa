@@ -76,6 +76,7 @@ verification_gate = "typed-evidence-and-changed-component-authority"
 
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
+medusa-context = { path = "crates/medusa-context" }
 medusa-evidence = { path = "crates/medusa-evidence" }
 medusa-external-contracts = { path = "crates/medusa-external-contracts" }
 medusa-protocol = { path = "crates/medusa-protocol" }

@@ -3,7 +3,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use medusa_context::refinement::{
+    EvidenceKind, EvidenceRef, ProposerMetadata, RefinementArtifactKind, RefinementContent,
+    RefinementProposal, RefinementRisk, RefinementScope,
+};
 use medusa_core::{MedusaResult, learning_policy::LearningAdmissionPolicy};
+use medusa_improvement::refinement_authority::RefinementAuthorityStore;
 use medusa_protocol::{Actor, EventPayload};
 use serde_json::{Value, json};
 
@@ -181,12 +186,109 @@ fn admit_to_canonical_memory(
         "completed_at": session.updated_at,
     });
 
+    admit_to_refinement_authority(session, &proposal, &safe_evidence)?;
+
     let path = session
         .repo
         .join(".medusa/memory/lessons")
         .join(format!("{}.json", session.id));
     write_json_atomic(&path, &proposal)?;
     Ok(path)
+}
+
+fn admit_to_refinement_authority(
+    session: &AgentSession,
+    lesson: &Value,
+    evidence: &[String],
+) -> MedusaResult<()> {
+    let summary = lesson
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("verified completed-session learning");
+    let procedure = lesson
+        .get("procedure")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| !secret_like(value))
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_default();
+    let body = if procedure.trim().is_empty() {
+        summary.to_owned()
+    } else {
+        format!("{summary} Procedure: {procedure}")
+    };
+    if body.trim().is_empty() || evidence.is_empty() {
+        return Ok(());
+    }
+    let mut authority = RefinementAuthorityStore::open(&session.repo).map_err(|error| {
+        medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PersistenceFailed,
+            medusa_core::ErrorCategory::Persistence,
+            format!("canonical refinement authority unavailable: {error}"),
+        )
+    })?;
+    let sequence = session
+        .events
+        .last()
+        .map_or(1, |event| event.sequence.max(1));
+    let session_id = session.id.to_string();
+    let proposal_id = lesson
+        .get("id")
+        .and_then(Value::as_str)
+        .map_or_else(|| session_id.clone(), str::to_owned);
+    let proposal = RefinementProposal {
+        id: proposal_id.clone(),
+        version: 1,
+        artifact_kind: RefinementArtifactKind::RepositoryConvention,
+        scope: RefinementScope::Repository,
+        evidence: vec![EvidenceRef {
+            id: format!("completed-session-evidence-{}", session.id),
+            kind: EvidenceKind::ToolEvent,
+            trajectory_id: session.id.to_string(),
+            start_sequence: 1,
+            end_sequence: sequence,
+        }],
+        before: None,
+        after: RefinementContent::RepositoryConvention {
+            key: format!("lesson.{proposal_id}"),
+            value: body,
+        },
+        rationale: "admitted from an authoritatively verified completed session".to_owned(),
+        expected_outcome: "matching future work can review this verified workflow candidate"
+            .to_owned(),
+        proposer: ProposerMetadata {
+            model: "medusa-agent".to_owned(),
+            route: "completed-session".to_owned(),
+            version: "1".to_owned(),
+        },
+        risk: RefinementRisk::Low,
+    };
+    let revision = authority
+        .snapshot()
+        .map_err(|error| {
+            medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                format!("canonical refinement snapshot unavailable: {error}"),
+            )
+        })?
+        .revision;
+    match authority.propose(proposal, revision) {
+        Ok(_) => Ok(()),
+        Err(medusa_improvement::refinement_authority::RefinementAuthorityError::Conflict {
+            ..
+        }) => Ok(()),
+        Err(error) => Err(medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PersistenceFailed,
+            medusa_core::ErrorCategory::Persistence,
+            format!("canonical refinement proposal rejected: {error}"),
+        )),
+    }
 }
 
 pub(super) fn authoritative_evidence(session: &AgentSession) -> Vec<String> {
@@ -391,6 +493,12 @@ mod tests {
                 .as_array()
                 .is_some_and(|items| items.iter().any(|item| item["kind"] == "completion"))
         );
+        let authority =
+            medusa_improvement::refinement_authority::RefinementAuthorityStore::open(repo.path())
+                .expect("canonical authority");
+        let canonical = authority.snapshot().expect("canonical snapshot");
+        assert_eq!(canonical.records.len(), 1);
+        assert!(canonical.active.is_empty());
         assert!(processed_marker(&session).is_file());
     }
 
@@ -405,6 +513,12 @@ mod tests {
         process(&session).expect("blocked process");
         assert!(!processed_marker(&session).exists());
         assert!(!repo.path().join(".medusa/memory/lessons").exists());
+        assert!(
+            !repo
+                .path()
+                .join(".medusa/refinement-authority/journal.json")
+                .exists()
+        );
     }
 
     #[test]

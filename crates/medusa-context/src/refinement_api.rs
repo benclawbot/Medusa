@@ -7,7 +7,8 @@ use crate::{ContextItem, ContextKind, ContextLedger, refinement_core as core};
 
 pub use core::{
     ApprovalReceipt, EvaluationResult, EvidenceKind, EvidenceRef, ProposerMetadata,
-    RefinementArtifactKind, RefinementContent, RefinementError, RefinementRisk, RefinementScope,
+    RefinementArtifactKind, RefinementContent, RefinementError, RefinementLifecycle,
+    RefinementRisk, RefinementScope,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -61,6 +62,11 @@ pub enum RefinementEvent {
         version: u64,
         receipt: ApprovalReceipt,
     },
+    Deferred {
+        proposal_id: String,
+        version: u64,
+        reason: String,
+    },
     Superseded {
         proposal_id: String,
         version: u64,
@@ -71,6 +77,11 @@ pub enum RefinementEvent {
         proposal_id: String,
         version: u64,
     },
+    Suspended {
+        proposal_id: String,
+        version: u64,
+        reason: String,
+    },
     RolledBack {
         proposal_id: String,
         version: u64,
@@ -79,6 +90,11 @@ pub enum RefinementEvent {
         reason: String,
     },
     Rejected {
+        proposal_id: String,
+        version: u64,
+        reason: String,
+    },
+    Tombstoned {
         proposal_id: String,
         version: u64,
         reason: String,
@@ -112,6 +128,25 @@ pub struct RefinementJournal {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RefinementProjection {
     active: Vec<RefinementProposal>,
+    records: Vec<RefinementRecord>,
+    head_hash: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RefinementRecord {
+    pub proposal_id: String,
+    pub version: u64,
+    pub artifact_kind: RefinementArtifactKind,
+    pub scope: RefinementScope,
+    pub lifecycle: RefinementLifecycle,
+    pub proposal: Option<RefinementProposal>,
+    pub evidence_digest: String,
+    pub approval_receipt_id: Option<String>,
+    pub approval_receipt_digest: Option<String>,
+    pub predecessor_proposal_id: Option<String>,
+    pub predecessor_version: Option<u64>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub last_recorded_at: OffsetDateTime,
 }
 
 impl RefinementProjection {
@@ -139,13 +174,42 @@ impl RefinementProjection {
             .collect()
     }
 
+    #[must_use]
+    pub fn records(&self) -> &[RefinementRecord] {
+        &self.records
+    }
+
+    #[must_use]
+    pub fn head_hash(&self) -> &str {
+        &self.head_hash
+    }
+
+    #[must_use]
+    pub fn conflict_keys(&self) -> Vec<String> {
+        self.records
+            .iter()
+            .filter(|record| record.lifecycle == RefinementLifecycle::Conflict)
+            .filter_map(|record| {
+                record.proposal.as_ref().map(|proposal| {
+                    format!(
+                        "{}:{}",
+                        artifact_kind_key(record.artifact_kind),
+                        identity(&proposal.after),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     pub fn context_items(
         &self,
         mut next_sequence: u64,
         recorded_at: OffsetDateTime,
     ) -> Result<Vec<ContextItem>, &'static str> {
         let mut items = Vec::new();
-        for proposal in &self.active {
+        for proposal in self.active() {
             items.push(context_item(proposal, next_sequence, recorded_at)?);
             next_sequence += 1;
         }
@@ -158,7 +222,7 @@ impl RefinementProjection {
         recorded_at: OffsetDateTime,
     ) -> Result<usize, &'static str> {
         let mut appended = 0;
-        for proposal in &self.active {
+        for proposal in self.active() {
             let id = context_id(proposal);
             if ledger.items().iter().any(|item| item.id == id) {
                 continue;
@@ -291,7 +355,16 @@ impl RefinementJournal {
             .into_iter()
             .map(convert)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(RefinementProjection { active })
+        let records = core
+            .records()
+            .iter()
+            .map(convert_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RefinementProjection {
+            active,
+            records,
+            head_hash: core.head_hash().to_owned(),
+        })
     }
 
     pub fn append_active_to_ledger(
@@ -434,6 +507,33 @@ fn kind_for(content: &RefinementContent) -> RefinementArtifactKind {
         RefinementContent::TeamRoleMetadata { .. } => RefinementArtifactKind::TeamRoleMetadata,
         RefinementContent::PromptGuidance { .. } => RefinementArtifactKind::PromptGuidance,
     }
+}
+
+fn artifact_kind_key(kind: RefinementArtifactKind) -> &'static str {
+    match kind {
+        RefinementArtifactKind::Memory => "memory",
+        RefinementArtifactKind::RepositoryConvention => "repository_convention",
+        RefinementArtifactKind::WorkflowMetadata => "workflow_metadata",
+        RefinementArtifactKind::TeamRoleMetadata => "team_role_metadata",
+        RefinementArtifactKind::PromptGuidance => "prompt_guidance",
+    }
+}
+
+fn convert_record(record: &core::RefinementRecord) -> Result<RefinementRecord, RefinementError> {
+    Ok(RefinementRecord {
+        proposal_id: record.proposal_id.clone(),
+        version: record.version,
+        artifact_kind: record.artifact_kind,
+        scope: record.scope,
+        lifecycle: record.lifecycle,
+        proposal: record.proposal.as_ref().map(convert).transpose()?,
+        evidence_digest: record.evidence_digest.clone(),
+        approval_receipt_id: record.approval_receipt_id.clone(),
+        approval_receipt_digest: record.approval_receipt_digest.clone(),
+        predecessor_proposal_id: record.predecessor_proposal_id.clone(),
+        predecessor_version: record.predecessor_version,
+        last_recorded_at: record.last_recorded_at,
+    })
 }
 
 fn identity(content: &RefinementContent) -> &str {

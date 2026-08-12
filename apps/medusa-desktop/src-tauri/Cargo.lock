@@ -2262,16 +2262,19 @@ dependencies = [
  "medusa-clearops",
  "medusa-confidence",
  "medusa-config",
+ "medusa-context",
  "medusa-continuation",
  "medusa-core",
  "medusa-escalation",
  "medusa-evidence",
  "medusa-extensions",
  "medusa-failure",
+ "medusa-improvement",
  "medusa-intelligence",
  "medusa-memory",
  "medusa-multi-agent-scheduler",
  "medusa-process-containment",
+ "medusa-process-registry",
  "medusa-progress",
  "medusa-protocol",
  "medusa-provider",
@@ -2334,6 +2337,7 @@ name = "medusa-config"
 version = "1.0.0"
 dependencies = [
  "medusa-core",
+ "reqwest 0.12.28",
  "serde",
  "toml 0.8.2",
 ]
@@ -2543,10 +2547,12 @@ dependencies = [
 name = "medusa-improvement"
 version = "1.0.0"
 dependencies = [
+ "medusa-context",
  "medusa-core",
  "serde",
  "serde_json",
  "sha2",
+ "thiserror 2.0.19",
  "time",
  "ulid",
 ]
@@ -2645,6 +2651,7 @@ dependencies = [
 name = "medusa-process-containment"
 version = "1.0.0"
 dependencies = [
+ "libc",
  "windows",
  "windows-sys 0.61.2",
 ]
@@ -2699,9 +2706,12 @@ version = "1.0.0"
 dependencies = [
  "medusa-config",
  "medusa-core",
+ "medusa-prompt-cache",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -2736,11 +2746,13 @@ dependencies = [
  "medusa-config",
  "medusa-context",
  "medusa-continuation",
+ "medusa-core",
  "medusa-evidence",
  "medusa-execution-checkpoint",
  "medusa-execution-replay",
  "medusa-external-provider",
  "medusa-improvement",
+ "medusa-intelligence",
  "medusa-markdown-memory",
  "medusa-mcp-cache",
  "medusa-memory",
@@ -2756,6 +2768,7 @@ dependencies = [
  "medusa-tool-control",
  "medusa-tool-policy",
  "medusa-turn-assembly",
+ "medusa-wakeup",
  "medusa-workers",
  "png 0.17.16",
  "reqwest 0.12.28",
@@ -3855,12 +3868,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams 0.4.2",
  "web-sys",
  "webpki-roots 1.0.9",
 ]
@@ -3895,7 +3910,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
+ "wasm-streams 0.5.0",
  "web-sys",
 ]
 
@@ -5058,7 +5073,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -5623,6 +5650,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

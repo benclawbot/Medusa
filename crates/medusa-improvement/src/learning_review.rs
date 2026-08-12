@@ -590,6 +590,7 @@ pub enum LearningReviewError {
     SensitiveExportBlocked(Vec<String>),
     AuditChainInvalid,
     UnsupportedSchema(u32),
+    Canonical(String),
 }
 
 impl std::fmt::Display for LearningReviewError {
@@ -621,6 +622,7 @@ impl std::fmt::Display for LearningReviewError {
                     "unsupported learning review schema version {version}"
                 )
             }
+            Self::Canonical(message) => formatter.write_str(message),
         }
     }
 }

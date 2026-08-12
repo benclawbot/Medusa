@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "revision": 3,
+  "privacy": {
+    "capture_enabled": true,
+    "user_persistence_enabled": false,
+    "cross_repository_reuse_enabled": false,
+    "telemetry_enabled": false,
+    "automatic_proposals_enabled": true
+  },
+  "items": [
+    {
+      "id": "legacy-review-1",
+      "revision": 2,
+      "state": "active",
+      "kind": "repository_learning",
+      "title": "CI completeness",
+      "source_signal_ids": ["signal-1"],
+      "evidence_digests": ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      "root_cause": "one failure was fixed before the complete CI result was collected",
+      "generalized_rule": "collect every CI failure before making fixes",
+      "scope": "repository",
+      "confidence_milli": 900,
+      "proposed_solution": "wait for the full applicable check set",
+      "non_applicable_contexts": [],
+      "replay": null,
+      "conflicts_with": [],
+      "active_version": "legacy-review-1-r2",
+      "previous_version": null,
+      "created_at_unix_ms": 1,
+      "updated_at_unix_ms": 2
+    }
+  ],
+  "audit_head": "0000000000000000000000000000000000000000000000000000000000000000"
+}

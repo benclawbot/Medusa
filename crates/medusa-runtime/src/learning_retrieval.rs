@@ -11,8 +11,8 @@ use std::{
 
 use medusa_improvement::{
     learning_admission::LearningAdmissionPolicy,
-    retrieval::{RetrievalConfig, RetrievalResult, SelectionDisposition, TaskContext, retrieve},
-    scoped_memory::{RepositoryIdentity, ScopeContext, ScopedMemoryStore},
+    refinement_authority::{SelectionContext, SelectionResult},
+    scoped_memory::RepositoryIdentity,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -21,8 +21,8 @@ use time::OffsetDateTime;
 use crate::{RuntimeEvent, prompt::PromptDraft};
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct RuntimeLearningContext {
-    pub(crate) prompt_context: Option<String>,
+pub struct RuntimeLearningContext {
+    pub prompt_context: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -32,10 +32,10 @@ struct SelectionAudit<'a> {
     objective_digest: String,
     task_kind: &'a str,
     artifact_kind: &'a str,
-    result: &'a RetrievalResult,
+    result: &'a SelectionResult,
 }
 
-pub(crate) fn select(
+pub fn select(
     repo: &Path,
     draft: &PromptDraft,
     session_id: Option<&str>,
@@ -57,52 +57,38 @@ pub(crate) fn select(
         return RuntimeLearningContext::default();
     }
 
-    // User-level data is not even opened unless both user persistence and cross-repository reuse
-    // are authorized. Repository-scoped learnings remain available independently.
-    let user_store = if policy.cross_repository_reuse_enabled() {
-        user_store_path()
-    } else {
-        repo.join(".medusa/learning-disabled-user-store.json")
-    };
-    let repository_store = repo.join(".medusa/learnings.json");
-    if !user_store.exists() && !repository_store.exists() {
-        return RuntimeLearningContext::default();
-    }
-
     let objective = draft.text.trim();
     let task_kind = infer_task_kind(objective);
     let artifact_kind = infer_artifact_kind(draft, objective);
     let now_unix_ms = now_unix_ms();
-    let context = TaskContext {
-        scope: ScopeContext {
-            owner_id: owner_id(),
-            repository: repository_identity(repo),
-            workspace_id: env::var("MEDUSA_WORKSPACE_ID").ok(),
-            organization_id: env::var("MEDUSA_ORGANIZATION_ID").ok(),
-            session_id: session_id.map(str::to_owned),
-            task_id: Some(
-                session_id
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("draft-{}", draft.revision)),
-            ),
-            task_kind: Some(task_kind.to_owned()),
-            artifact_kind: Some(artifact_kind.to_owned()),
-            context_tags: context_tags(objective, task_kind, artifact_kind),
-        },
-        objective: objective.to_owned(),
+    let authority = match crate::learning_authority::open(repo) {
+        Ok(authority) => authority,
+        Err(error) => {
+            let _ = events.send(RuntimeEvent::Notice {
+                title: "Canonical learned behavior unavailable".to_owned(),
+                details: vec![format!("selection failed closed: {error}")],
+            });
+            return RuntimeLearningContext::default();
+        }
+    };
+    let context = SelectionContext {
+        repository: repository_identity(repo),
+        user_id: owner_id(),
+        session_id: session_id.map(str::to_owned),
+        task_kind: Some(task_kind.to_owned()),
+        artifact_kind: Some("repository_convention".to_owned()),
+        context_tags: context_tags(objective, task_kind, artifact_kind),
         explicit_exclusions: explicit_exclusions(objective),
-        suppressed_learning_ids: marker_values(objective, "@suppress-learning:"),
-        approved_high_impact_ids: marker_values(objective, "@approve-learning:"),
+        objective: objective.to_owned(),
         now_unix_ms,
     };
-    let store = ScopedMemoryStore::new(user_store, Some(repository_store));
-    let result = match retrieve(&store, &context, &RetrievalConfig::default()) {
+    let result = match authority.select(&context) {
         Ok(result) => result,
         Err(error) => {
             let _ = events.send(RuntimeEvent::Notice {
-                title: "Learned behavior unavailable".to_owned(),
+                title: "Canonical learned behavior unavailable".to_owned(),
                 details: vec![format!(
-                    "Retrieval failed closed; no learned behavior was applied: {error}"
+                    "Selection failed closed; no learned behavior was applied: {error}"
                 )],
             });
             return RuntimeLearningContext::default();
@@ -131,19 +117,18 @@ pub(crate) fn select(
     }
 }
 
-fn emit_notices(result: &RetrievalResult, events: &Sender<RuntimeEvent>) {
+fn emit_notices(result: &SelectionResult, events: &Sender<RuntimeEvent>) {
     if !result.selected.is_empty() {
         let details = result
             .selected
             .iter()
             .map(|selected| {
                 format!(
-                    "{} v{} ({:?}, score {}): {}",
-                    selected.learning_id,
-                    selected.version,
-                    selected.phase,
-                    selected.score,
-                    selected.explanation
+                    "{} v{} (receipt {}): {}",
+                    selected.proposal.id,
+                    selected.proposal.version,
+                    selected.approval_receipt_id,
+                    selected.selection_rationale
                 )
             })
             .collect();
@@ -153,34 +138,10 @@ fn emit_notices(result: &RetrievalResult, events: &Sender<RuntimeEvent>) {
         });
     }
 
-    let review = result
-        .considered
-        .iter()
-        .filter(|record| record.disposition == SelectionDisposition::ReviewRequired)
-        .map(|record| {
-            format!(
-                "{}: {}. Add @approve-learning:{} to this task to approve only this execution.",
-                record.learning_id, record.explanation, record.learning_id
-            )
-        })
-        .collect::<Vec<_>>();
-    if !review.is_empty() {
-        let _ = events.send(RuntimeEvent::Notice {
-            title: "Learned behavior needs approval".to_owned(),
-            details: review,
-        });
-    }
-
-    let conflicts = result
-        .considered
-        .iter()
-        .filter(|record| record.disposition == SelectionDisposition::Conflict)
-        .map(|record| format!("{}: {}", record.conflict_key, record.explanation))
-        .collect::<Vec<_>>();
-    if !conflicts.is_empty() {
+    if !result.blocked_conflicts.is_empty() {
         let _ = events.send(RuntimeEvent::Notice {
             title: "Conflicting learned behavior blocked".to_owned(),
-            details: conflicts,
+            details: result.blocked_conflicts.clone(),
         });
     }
 }
@@ -191,7 +152,7 @@ fn append_audit(
     task_kind: &str,
     artifact_kind: &str,
     recorded_at_unix_ms: i64,
-    result: &RetrievalResult,
+    result: &SelectionResult,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = repo.join(".medusa/learning-selection-audit.jsonl");
     if let Some(parent) = path.parent() {
@@ -210,22 +171,6 @@ fn append_audit(
     file.write_all(b"\n")?;
     file.sync_data()?;
     Ok(())
-}
-
-fn user_store_path() -> PathBuf {
-    if let Some(path) = env::var_os("MEDUSA_USER_LEARNING_STORE") {
-        return PathBuf::from(path);
-    }
-    if let Some(path) = env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(path).join("medusa/learnings.json");
-    }
-    if let Some(path) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(path).join("Medusa/learnings.json");
-    }
-    if let Some(path) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
-        return PathBuf::from(path).join(".medusa/learnings.json");
-    }
-    env::temp_dir().join("medusa-user/learnings.json")
 }
 
 fn owner_id() -> String {

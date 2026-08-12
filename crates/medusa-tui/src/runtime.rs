@@ -911,6 +911,13 @@ fn slash_command_input(command: &SlashCommand) -> String {
         SlashCommand::Help => "/help".to_owned(),
         SlashCommand::Learning { action } => match action {
             LearningCommand::Show { filter } => option_command("/learning show", filter.as_deref()),
+            LearningCommand::Inspect { id } => format!("/learning inspect {id}"),
+            LearningCommand::Propose { scope, key, value } => {
+                format!("/learning propose {scope} {key} {value}")
+            }
+            LearningCommand::Evaluate { id, passed } => {
+                format!("/learning evaluate {id} {}", if *passed { "pass" } else { "fail" })
+            }
             LearningCommand::Approve { id } => format!("/learning approve {id}"),
             LearningCommand::Reject { id } => format!("/learning reject {id}"),
             LearningCommand::Defer { id } => format!("/learning defer {id}"),

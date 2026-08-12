@@ -80,6 +80,32 @@ export function transitionLearning(
   });
 }
 
+export function inspectLearning(repo: string, id: string) {
+  return invoke<string[]>("runtime_learning_inspect", { repo, id });
+}
+
+export function proposeLearning(
+  repo: string,
+  scope: "repository" | "user" | "session",
+  key: string,
+  value: string,
+) {
+  return invoke<LearningReviewSnapshot>("runtime_learning_propose", {
+    repo,
+    scope,
+    key,
+    value,
+  });
+}
+
+export function evaluateLearning(repo: string, id: string, passed: boolean) {
+  return invoke<LearningReviewSnapshot>("runtime_learning_evaluate", {
+    repo,
+    id,
+    passed,
+  });
+}
+
 export function saveLearningPrivacy(
   repo: string,
   privacy: LearningPrivacy,

@@ -2,6 +2,7 @@
 
 #[allow(clippy::too_many_arguments)]
 pub mod data_lifecycle;
+pub mod refinement_authority_policy;
 pub mod resilience;
 
 use medusa_core::{

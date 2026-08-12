@@ -8,6 +8,9 @@ pub mod learning;
 pub mod learning_admission;
 pub mod learning_review;
 pub mod lesson_inference;
+pub mod refinement_authority;
+pub mod refinement_migration;
+mod refinement_persistence;
 #[allow(clippy::expect_used)]
 pub mod regression_replay;
 pub mod retrieval;

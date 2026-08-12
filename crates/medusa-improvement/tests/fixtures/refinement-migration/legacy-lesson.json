@@ -1,0 +1,13 @@
+{
+  "id": "lesson-1",
+  "source_session_id": "session-1",
+  "repository_fingerprint": "repo-1",
+  "kind": "verification",
+  "title": "Check all results",
+  "summary": "Always collect every check result before fixing.",
+  "procedure": ["wait for terminal checks", "cluster failures", "fix together"],
+  "evidence": ["cargo test --workspace"],
+  "tools": ["shell_run"],
+  "confidence_milli": 900,
+  "status": "probation"
+}

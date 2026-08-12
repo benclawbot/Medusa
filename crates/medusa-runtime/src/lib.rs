@@ -39,7 +39,8 @@ mod config_command;
 mod error;
 pub mod execution_history;
 pub mod frontend;
-mod learning_retrieval;
+pub mod learning_retrieval;
+mod learning_authority;
 pub mod learning_review;
 mod multi_agent_coordinator;
 mod mutating_worker_coordinator;
@@ -1930,81 +1931,81 @@ fn execute_slash_command_with_submission(
             ));
         }
         SlashCommand::Learning { action } => {
-            let snapshot = crate::learning_review::read(&state.repo)
+            let mut authority = crate::learning_authority::open(&state.repo)
+                .map_err(RuntimeError::agent)?;
+            let snapshot = authority
+                .snapshot()
                 .map_err(|error| RuntimeError::agent(error.to_string()))?;
             match action {
                 LearningCommand::Show { filter } => {
-                    let mut details = Vec::new();
-                    details.push(format!(
-                        "privacy: capture={} user_persistence={} cross_repository={} telemetry={} automatic_proposals={}",
-                        snapshot.privacy.capture_enabled,
-                        snapshot.privacy.user_persistence_enabled,
-                        snapshot.privacy.cross_repository_reuse_enabled,
-                        snapshot.privacy.telemetry_enabled,
-                        snapshot.privacy.automatic_proposals_enabled,
-                    ));
-                    for item in &snapshot.items {
-                        let searchable = format!(
-                            "{} {} {} {:?} {:?}",
-                            item.id, item.title, item.scope, item.kind, item.state
-                        )
-                        .to_ascii_lowercase();
-                        if filter
-                            .as_ref()
-                            .is_some_and(|value| !searchable.contains(&value.to_ascii_lowercase()))
-                        {
-                            continue;
-                        }
-                        details.push(format!(
-                            "{} | {:?} | {:?} | {} | confidence {}",
-                            item.id, item.state, item.kind, item.scope, item.confidence_milli
-                        ));
-                        details.push(format!("  learned: {}", item.generalized_rule));
-                        details.push(format!("  why: {}", item.root_cause));
-                        if let Some(replay) = &item.replay {
-                            details.push(format!(
-                                "  replay: reproduced={} resolved={} regressions={}",
-                                replay.reproduced, replay.resolved, replay.regression_count
-                            ));
-                        }
-                        if !item.conflicts_with.is_empty() {
-                            details.push(format!(
-                                "  conflicts: {}",
-                                item.conflicts_with
-                                    .iter()
-                                    .cloned()
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ));
-                        }
-                    }
-                    if snapshot.items.is_empty() {
-                        details.push("No learning proposals are recorded.".to_owned());
-                    }
+                    let details = crate::learning_authority::details(
+                        &snapshot,
+                        filter.as_deref(),
+                    );
                     let _ = events.send(RuntimeEvent::Notice {
-                        title: "Learning review".to_owned(),
+                        title: "Canonical learning authority".to_owned(),
                         details,
                     });
                 }
+                LearningCommand::Inspect { id } => {
+                    let details = crate::learning_authority::inspect(&authority, &id)
+                        .map_err(RuntimeError::agent)?;
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "Canonical refinement inspection".to_owned(),
+                        details,
+                    });
+                }
+                LearningCommand::Propose { scope, key, value } => {
+                    let updated = crate::learning_authority::propose(
+                        &mut authority,
+                        &scope,
+                        &key,
+                        &value,
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "Canonical refinement proposed".to_owned(),
+                        details: vec![format!(
+                            "{} v{} is proposed at authority revision {}",
+                            updated.records.last().map_or("unknown", |record| record.proposal_id.as_str()),
+                            updated.revision,
+                            updated.revision
+                        )],
+                    });
+                }
+                LearningCommand::Evaluate { id, passed } => {
+                    let updated = crate::learning_authority::evaluate(&mut authority, &id, passed)
+                        .map_err(RuntimeError::agent)?;
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "Canonical refinement evaluated".to_owned(),
+                        details: vec![format!(
+                            "evaluation={} at authority revision {}",
+                            if passed { "passed" } else { "failed" },
+                            updated.revision
+                        )],
+                    });
+                }
                 LearningCommand::Privacy => {
+                    let legacy_snapshot = crate::learning_review::read(&state.repo)
+                        .map_err(|error| RuntimeError::agent(error.to_string()))?;
                     let preview = crate::learning_review::redaction_preview(&state.repo)
                         .map_err(|error| RuntimeError::agent(error.to_string()))?;
                     let _ = events.send(RuntimeEvent::Notice {
                         title: "Learning privacy".to_owned(),
                         details: vec![
-                            format!("Capture: {}", snapshot.privacy.capture_enabled),
+                            format!("Capture: {}", legacy_snapshot.privacy.capture_enabled),
                             format!(
                                 "User-level persistence: {}",
-                                snapshot.privacy.user_persistence_enabled
+                                legacy_snapshot.privacy.user_persistence_enabled
                             ),
                             format!(
                                 "Cross-repository reuse: {}",
-                                snapshot.privacy.cross_repository_reuse_enabled
+                                legacy_snapshot.privacy.cross_repository_reuse_enabled
                             ),
-                            format!("Telemetry: {}", snapshot.privacy.telemetry_enabled),
+                            format!("Telemetry: {}", legacy_snapshot.privacy.telemetry_enabled),
                             format!(
                                 "Automatic proposals: {}",
-                                snapshot.privacy.automatic_proposals_enabled
+                                legacy_snapshot.privacy.automatic_proposals_enabled
                             ),
                             format!("Export redaction safe: {}", preview.safe),
                             preview.warnings.join(" "),
@@ -2012,63 +2013,70 @@ fn execute_slash_command_with_submission(
                     });
                 }
                 LearningCommand::Export => {
-                    let export = crate::learning_review::export(&state.repo)
-                        .map_err(|error| RuntimeError::agent(error.to_string()))?;
-                    let json = serde_json::to_string_pretty(&export)
-                        .map_err(|error| RuntimeError::agent(error.to_string()))?;
+                    let json = String::from_utf8(
+                        authority
+                            .export()
+                            .map_err(|error| RuntimeError::agent(error.to_string()))?,
+                    )
+                    .map_err(RuntimeError::agent)?;
                     let _ = events.send(RuntimeEvent::Notice {
-                        title: "Learning audit export".to_owned(),
+                        title: "Canonical refinement authority export".to_owned(),
                         details: json.lines().map(str::to_owned).collect(),
                     });
                 }
-                action => {
-                    let (id, target) = match action {
-                        LearningCommand::Approve { id } => {
-                            (id, crate::learning_review::LearningReviewState::Approved)
-                        }
+                LearningCommand::Approve { id } => {
+                    let updated = crate::learning_authority::transition(
+                        &mut authority,
+                        &id,
+                        crate::learning_authority::RuntimeLearningAction::Approve,
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "Canonical refinement lifecycle updated".to_owned(),
+                        details: vec![format!(
+                            "{} was approved at authority revision {}",
+                            id, updated.revision
+                        )],
+                    });
+                }
+                action @ (LearningCommand::Reject { .. }
+                | LearningCommand::Defer { .. }
+                | LearningCommand::Validate { .. }
+                | LearningCommand::Activate { .. }
+                | LearningCommand::Suspend { .. }
+                | LearningCommand::Rollback { .. }
+                | LearningCommand::Delete { .. }) => {
+                    let (id, action) = match action {
                         LearningCommand::Reject { id } => {
-                            (id, crate::learning_review::LearningReviewState::Rejected)
+                            (id, crate::learning_authority::RuntimeLearningAction::Reject)
                         }
                         LearningCommand::Defer { id } => {
-                            (id, crate::learning_review::LearningReviewState::Deferred)
+                            (id, crate::learning_authority::RuntimeLearningAction::Defer)
                         }
                         LearningCommand::Validate { id } => {
-                            (id, crate::learning_review::LearningReviewState::Validated)
+                            (id, crate::learning_authority::RuntimeLearningAction::Validate)
                         }
                         LearningCommand::Activate { id } => {
-                            (id, crate::learning_review::LearningReviewState::Active)
+                            (id, crate::learning_authority::RuntimeLearningAction::Activate)
                         }
                         LearningCommand::Suspend { id } => {
-                            (id, crate::learning_review::LearningReviewState::Suspended)
+                            (id, crate::learning_authority::RuntimeLearningAction::Suspend)
                         }
                         LearningCommand::Rollback { id } => {
-                            (id, crate::learning_review::LearningReviewState::RolledBack)
+                            (id, crate::learning_authority::RuntimeLearningAction::Rollback)
                         }
                         LearningCommand::Delete { id } => {
-                            (id, crate::learning_review::LearningReviewState::Deleted)
+                            (id, crate::learning_authority::RuntimeLearningAction::Delete)
                         }
-                        LearningCommand::Show { .. }
-                        | LearningCommand::Privacy
-                        | LearningCommand::Export => unreachable!(),
+                        _ => unreachable!(),
                     };
-                    let updated = crate::learning_review::transition(
-                        &state.repo,
-                        &id,
-                        target,
-                        snapshot.revision,
-                        "tui",
-                    )
-                    .map_err(|error| RuntimeError::agent(error.to_string()))?;
-                    let item = updated
-                        .items
-                        .iter()
-                        .find(|item| item.id == id)
-                        .ok_or_else(|| RuntimeError::agent("updated learning item disappeared"))?;
+                    let updated = crate::learning_authority::transition(&mut authority, &id, action)
+                        .map_err(RuntimeError::agent)?;
                     let _ = events.send(RuntimeEvent::Notice {
-                        title: "Learning lifecycle updated".to_owned(),
+                        title: "Canonical refinement lifecycle updated".to_owned(),
                         details: vec![format!(
-                            "{} is now {:?} at revision {}",
-                            item.id, item.state, updated.revision
+                            "{} transitioned at authority revision {}",
+                            id, updated.revision
                         )],
                     });
                 }

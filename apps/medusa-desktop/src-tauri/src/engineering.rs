@@ -7,7 +7,6 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use ulid::Ulid;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -236,48 +235,8 @@ pub fn runtime_engineering_dashboard(
 
 #[tauri::command]
 pub fn runtime_generate_improvement(repo: String) -> Result<ImprovementRecord, String> {
-    let dashboard = runtime_engineering_dashboard(repo.clone(), Some(90))?;
-    let top = dashboard
-        .friction
-        .first()
-        .cloned()
-        .ok_or("not enough recorded friction to generate a proposal")?;
-    let now = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .map_err(|error| error.to_string())?;
-    let record = ImprovementRecord {
-        id: Ulid::new().to_string(),
-        created_at: now.clone(),
-        updated_at: now,
-        title: format!("Reduce {}", top.category),
-        problem: format!("{} appeared in {} recorded task(s).", top.category, top.count),
-        proposed_change: format!(
-            "Add a focused prevention and recovery path for {} and validate it against affected sessions.",
-            top.category
-        ),
-        evidence: vec![format!(
-            "Observed {} occurrence(s) in the selected window",
-            top.count
-        )],
-        source_sessions: top.sessions,
-        risk: "low".into(),
-        status: "pending".into(),
-        benchmark_before: Some(dashboard.success_rate),
-        benchmark_after: None,
-        rollback_note: "Restore the previous configuration and re-run the frozen benchmark.".into(),
-        revision: 1,
-        approval: None,
-        active_version: None,
-        previous_version: None,
-        conflicts_with: BTreeSet::new(),
-        observations: Vec::new(),
-        suspension_reason: None,
-    };
-    let repo = canonical_repo(&repo)?;
-    let mut records = read_improvements(&repo)?;
-    records.push(record.clone());
-    write_improvements(&repo, &records)?;
-    Ok(record)
+    let _ = repo;
+    Err("engineering improvement lifecycle is read-only during canonical authority migration; use /learning propose through medusa-runtime".to_owned())
 }
 
 #[tauri::command]
@@ -286,106 +245,8 @@ pub fn runtime_update_improvement(
     id: String,
     action: String,
 ) -> Result<ImprovementRecord, String> {
-    let repo = canonical_repo(&repo)?;
-    let benchmark_after = if action == "benchmark" {
-        Some(
-            runtime_engineering_dashboard(repo.to_string_lossy().into_owned(), Some(30))?
-                .success_rate,
-        )
-    } else {
-        None
-    };
-    let mut records = read_improvements(&repo)?;
-    let position = records
-        .iter()
-        .position(|item| item.id == id)
-        .ok_or("improvement not found")?;
-    let now = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .map_err(|error| error.to_string())?;
-
-    let conflicts = records
-        .iter()
-        .filter(|other| other.id != id && other.status == "active")
-        .filter(|other| {
-            other.title == records[position].title
-                || other.source_sessions.iter().any(|session| {
-                    records[position].source_sessions.iter().any(|value| value == session)
-                })
-        })
-        .map(|other| other.id.clone())
-        .collect::<BTreeSet<_>>();
-
-    let item = &mut records[position];
-    match action.as_str() {
-        "approve" => {
-            require_status(item, &["pending", "validated"])?;
-            item.approval = Some(ImprovementApproval {
-                reviewer: "local-user".into(),
-                approved_at: now.clone(),
-                proposal_revision: item.revision,
-            });
-            item.status = "approved".into();
-        }
-        "reject" => {
-            require_status(item, &["pending", "validated", "approved"])?;
-            item.status = "rejected".into();
-            item.approval = None;
-        }
-        "benchmark" => {
-            require_status(item, &["pending", "approved", "validated"])?;
-            item.benchmark_after = benchmark_after;
-            item.status = "validated".into();
-        }
-        "adopt" => {
-            require_status(item, &["approved", "validated"])?;
-            let approval = item.approval.as_ref().ok_or(
-                "explicit approval is required before activation",
-            )?;
-            if approval.proposal_revision != item.revision {
-                return Err("approval is stale because the proposal changed".into());
-            }
-            if !conflicts.is_empty() {
-                item.conflicts_with = conflicts;
-                return Err("activation blocked by a conflicting active improvement".into());
-            }
-            item.previous_version = item.active_version.take();
-            item.active_version = Some(format!("{}-r{}", item.id, item.revision));
-            item.status = "active".into();
-            item.suspension_reason = None;
-        }
-        "suspend" => {
-            require_status(item, &["active"])?;
-            item.status = "suspended".into();
-            item.suspension_reason = Some("manual suspension".into());
-        }
-        "rollback" => {
-            require_status(item, &["active", "suspended"])?;
-            item.active_version = item.previous_version.take();
-            item.status = "rolledBack".into();
-            item.suspension_reason = None;
-        }
-        "supersede" => {
-            require_status(item, &["active", "suspended", "approved", "validated"])?;
-            item.status = "superseded".into();
-        }
-        _ => return Err("unsupported improvement action".into()),
-    }
-    item.updated_at = now;
-    let result = item.clone();
-    write_improvements(&repo, &records)?;
-    Ok(result)
-}
-
-fn require_status(item: &ImprovementRecord, allowed: &[&str]) -> Result<(), String> {
-    if allowed.iter().any(|status| *status == item.status) {
-        Ok(())
-    } else {
-        Err(format!(
-            "cannot transition improvement {} from {}",
-            item.id, item.status
-        ))
-    }
+    let _ = (repo, id, action);
+    Err("engineering improvement lifecycle is read-only during canonical authority migration; use /learning commands through medusa-runtime".to_owned())
 }
 
 fn add_friction(
@@ -434,16 +295,6 @@ fn read_improvements(repo: &Path) -> Result<Vec<ImprovementRecord>, String> {
         .map_err(|error| error.to_string())
 }
 
-fn write_improvements(repo: &Path, records: &[ImprovementRecord]) -> Result<(), String> {
-    let path = engineering_path(repo);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let bytes = serde_json::to_vec_pretty(records).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, &path).map_err(|error| error.to_string())
-}
 
 fn session_values(repo: &Path) -> Result<Vec<Value>, String> {
     let mut values = BTreeMap::new();
