@@ -1,6 +1,7 @@
 use std::{path::Path, sync::atomic::AtomicBool, time::Duration};
 
 use medusa_browser_client::{BrowserClient, BrowserResponse};
+use medusa_capabilities::{CapabilityRegistry, CapabilitySurface, SystemProbe};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde_json::Value;
 
@@ -38,6 +39,38 @@ pub(crate) fn run(
     };
     let envelope = wrap(method, body, format, envelope_config)?;
     Ok(format!("{envelope}"))
+}
+
+impl super::ToolManager {
+    /// Execute a model-visible tool with cooperative cancellation.
+    ///
+    /// Browser calls use the same production dispatcher as the agent engine, including
+    /// capability admission, per-call deadlines, and sidecar reset on interrupted requests.
+    pub fn execute_cancellable(
+        &self,
+        repo: &Path,
+        name: &str,
+        input: &Value,
+        cancellation: &AtomicBool,
+    ) -> MedusaResult<String> {
+        let registry = CapabilityRegistry::discover_with_desktop(
+            repo.to_path_buf(),
+            &SystemProbe,
+            self.desktop_commander.clone(),
+        )?;
+        let id = format!("tool.{name}");
+        let entry = registry
+            .entry(&id)
+            .ok_or_else(|| invalid_input(format!("tool is not registered: {name}")))?;
+        if !entry.projected_to(CapabilitySurface::Model) {
+            return Err(MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                format!("tool is unavailable: {name}: {}", entry.readiness.detail),
+            ));
+        }
+        super::execute_tool_cancellable(repo, name, input, cancellation)
+    }
 }
 
 fn invalid_input(message: String) -> MedusaError {
