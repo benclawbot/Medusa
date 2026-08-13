@@ -14,5 +14,9 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
     exclude: [...configDefaults.exclude, "src-tauri/**"],
+    // Packaging jobs run the full jsdom suite beside native bundler prerequisites on bounded
+    // runners. Keep a finite budget, but allow integration-style App renders to survive CPU
+    // contention without turning a successful accessibility assertion into a scheduler timeout.
+    testTimeout: 10_000,
   },
 });
