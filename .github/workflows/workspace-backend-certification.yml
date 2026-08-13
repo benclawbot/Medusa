@@ -1,0 +1,51 @@
+name: Workspace Backend Certification
+
+on:
+  pull_request:
+    paths:
+      - "crates/medusa-runtime/**"
+      - "crates/medusa-workers/**"
+      - "docs/WORKSPACES.md"
+      - "docs/ARCHITECTURE.md"
+      - "docs/MULTI_AGENT_EXECUTION.md"
+      - "docs/PRODUCTION-EXECUTION-TRACE.md"
+      - "README.md"
+      - "Cargo.toml"
+      - ".github/workflows/workspace-backend-certification.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workspace-backend-certification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  directory-workspace:
+    name: Directory workspace (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Test directory mutation backend
+        run: cargo test -p medusa-runtime workspace_worker_manager --locked
+      - name: Test public workspace lifecycle
+        run: cargo test -p medusa-runtime workspace::tests --locked
+
+  architecture:
+    name: Workspace architecture authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Validate architecture claims
+        run: python3 scripts/check-product-architecture.py
+      - name: Validate capability evidence
+        run: python3 scripts/check-capability-evidence.py
