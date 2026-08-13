@@ -6,7 +6,7 @@ This is the change-governance root and final certification record for Medusa arc
 
 Architecture v2 migration is complete. The phase-0 feature freeze is inactive, every production mutation follows one review-before-integration state machine, and no production entrypoint can select the retired conversational review or integrate-before-review compatibility path.
 
-A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree. Bounded browser model actions now have a `certified-production` implementation backed by the production `ToolManager` → `medusa-browserd` dispatcher and cross-platform browser-dispatch certification; their legacy product availability remains `preview` only because activation is explicitly opt-in. Arbitrary browser evaluation remains verifier-internal. Telegram duplex/audio behavior remains quarantined where external behavioral evidence is still incomplete.
+A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree. Browser tools and Telegram duplex/audio behavior remain quarantined where external behavioral evidence is still incomplete; that truthful quarantine does not recreate a legacy execution authority.
 
 ## How to use this index
 
@@ -88,7 +88,7 @@ Executable skill packages are owned by `crates/medusa-skill` and dispatched thro
 | Release trust | production | certified-production | preserve signed manifest v2, protected signer, and reviewed keyring | none |
 | Self-update | production | certified-production | preserve verified prebuilt default and explicit source channel | none |
 | Multi-agent execution | production | certified-production | preserve bounded teammates, isolated mutation, dedicated review, and durable completion | none |
-| Browser tools | preview | certified-production | readiness-gated `medusa-agent::ToolManager` → stateful `medusa-browserd`; bounded model actions are verification-route-bound and `browser_evaluate` stays internal | none for bounded actions; default activation and broader browser automation remain intentionally out of scope |
+| Browser tools | withheld | quarantined | no executable projection until dispatcher and permission behavior are certified | authenticated live browser evidence |
 | Plugins/extensions | managed | preview | managed manifests and instruction-only `SKILL.md`; executable handlers require certification | handler-specific evidence |
 | Telegram remote frontend | partial | quarantined | shared daemon path is authoritative; duplex/audio claims remain withheld | authenticated microphone/audio and live Telegram evidence |
 | Unsafe/FFI boundary | production | certified-production | preserve crate-local allowlist and cross-platform containment proof | none |
@@ -120,7 +120,6 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 - **Provider:** selected route → capability preflight → abortable request → normalized response and usage event → durable route-health update.
 - **External operation:** typed operation → canonical digest and attempt ID → trusted-host and capability check → adapter dispatch → reconciliation-aware normalized receipt.
 - **Evidence:** exact changed components → selected checks → raw command, browser, and artifact outputs → content-addressed artifacts and read receipts → typed claims and decisions → review, scheduler, authorization, integration, report, and UI consumers.
-- **Browser:** runtime capability readiness → bounded model browser tool → repository/route-scoped `BrowserClient` → `medusa-browserd` network policy → Playwright → bounded output/artifact; authoritative browser verification remains a separate receipt-producing consumer of the same sidecar infrastructure.
 - **Persistence:** every mutable concern identifies one journal or aggregate; caches and UI projections are reconstructable and never authoritative.
 - **TypeScript intelligence:** confined target → deterministic workspace discovery and content fingerprints → disposable LSP → normalized semantic result → optional guarded snapshot-bound transaction.
 
@@ -128,7 +127,7 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 
 The indexed boundaries are repository mutation, platform containment, unsafe/FFI, secrets, provider network, GitHub OAuth/API, browser sidecar, plugins, and release/update artifacts.
 
-Repository mutation fails closed unless the prepared commit, exact changed-component scope, typed worktree verification, dedicated review, independent verification, authorization, integration, and reconciliation receipts agree. Raw native FFI remains isolated in the allowlisted containment crate. Secrets are excluded from model-visible context and receipts. Browser model actions cannot author verification authority, cannot access arbitrary JavaScript evaluation, and can access loopback only at the exact configured verification origin; public destination pinning remains enforced by the browser proxy. Release metadata is trusted only after Ed25519 signature verification.
+Repository mutation fails closed unless the prepared commit, exact changed-component scope, typed worktree verification, dedicated review, independent verification, authorization, integration, and reconciliation receipts agree. Raw native FFI remains isolated in the allowlisted containment crate. Secrets are excluded from model-visible context and receipts. Release metadata is trusted only after Ed25519 signature verification.
 
 ## Verified release and update authority
 
@@ -181,7 +180,6 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Decision: [`decisions/0005-transactional-mutation-lifecycle.md`](decisions/0005-transactional-mutation-lifecycle.md)
 - Decision: [`decisions/0006-authoritative-evidence-artifacts-and-verification.md`](decisions/0006-authoritative-evidence-artifacts-and-verification.md)
 - Decision: [`decisions/0007-canonical-frontend-projection.md`](decisions/0007-canonical-frontend-projection.md)
-- Decision: [`decisions/0008-verified-browser-model-actions.md`](decisions/0008-verified-browser-model-actions.md)
 - Final independent audit: [`FINAL-CERTIFICATION-AUDIT.md`](FINAL-CERTIFICATION-AUDIT.md)
 - Machine-readable certification baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)
