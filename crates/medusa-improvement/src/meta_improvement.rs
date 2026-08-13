@@ -60,7 +60,6 @@ impl MetaImprovementTarget {
                 | Self::TestDiscovery
                 | Self::RecoveryPlaybook
                 | Self::OrchestrationPlaybook
-                | Self::ModelRouting
         )
     }
 
@@ -1346,7 +1345,7 @@ mod tests {
     }
 
     #[test]
-    fn model_routing_candidate_stays_inside_the_declared_envelope() {
+    fn model_routing_candidate_requires_engineering_review_until_projection_is_wired() {
         let repo = tempfile::tempdir().expect("repo");
         let mut store = MetaImprovementStore::open(repo.path()).expect("store");
         let proposal = store
@@ -1375,12 +1374,17 @@ mod tests {
             .next()
             .expect("proposal");
         assert_eq!(proposal.target, MetaImprovementTarget::ModelRouting);
-        assert_eq!(proposal.lane, MetaImprovementLane::RuntimeRefinement);
+        assert_eq!(proposal.lane, MetaImprovementLane::EngineeringProposal);
         assert!(
             proposal
                 .minimal_change
                 .contains("approved provider/model/cost envelope")
         );
         assert!(proposal.resource_impact);
+        assert!(matches!(
+            store.route(&proposal.id).expect("route"),
+            MetaImprovementRoute::Engineering(_)
+        ));
+        assert!(proposal.canonical_refinement().is_err());
     }
 }
