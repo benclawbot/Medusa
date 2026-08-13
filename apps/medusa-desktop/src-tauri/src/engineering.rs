@@ -383,7 +383,9 @@ fn quarantine_legacy_if_present(root: &Path, legacy: &Path, digest: &str) -> Res
     }
     let bytes = fs::read(legacy).map_err(|error| error.to_string())?;
     if repository_key_bytes(&bytes) != digest {
-        return Err("legacy improvement source changed after migration receipt was committed".into());
+        return Err(
+            "legacy improvement source changed after migration receipt was committed".into(),
+        );
     }
     let quarantine = root.join("quarantine");
     fs::create_dir_all(&quarantine).map_err(|error| error.to_string())?;
