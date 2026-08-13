@@ -4,8 +4,8 @@ use std::path::Path;
 
 use medusa_core::learning_policy::LearningPrivacyPolicy;
 pub use medusa_improvement::learning_review::{
-    LearningAuditExport, LearningPrivacy, LearningReviewError, LearningReviewItem,
-    LearningReviewSnapshot, LearningReviewState, LearningKind, RedactionPreview,
+    LearningAuditExport, LearningKind, LearningPrivacy, LearningReviewError, LearningReviewItem,
+    LearningReviewSnapshot, LearningReviewState, RedactionPreview,
 };
 use medusa_improvement::refinement_authority::RefinementAuthoritySnapshot;
 
@@ -73,11 +73,19 @@ pub fn propose(
 pub fn evaluate(
     repo: &Path,
     id: &str,
-    passed: bool,
+    validation_passed: bool,
+    regression_passed: bool,
+    effectiveness_passed: bool,
 ) -> Result<LearningReviewSnapshot, LearningReviewError> {
     let mut store = crate::learning_authority::open(repo).map_err(LearningReviewError::Canonical)?;
-    crate::learning_authority::evaluate(&mut store, id, passed)
-        .map_err(LearningReviewError::Canonical)?;
+    crate::learning_authority::evaluate(
+        &mut store,
+        id,
+        validation_passed,
+        regression_passed,
+        effectiveness_passed,
+    )
+    .map_err(LearningReviewError::Canonical)?;
     read(repo)
 }
 
