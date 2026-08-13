@@ -1,0 +1,158 @@
+name: Browser Dispatch Hardening Certification
+
+on:
+  pull_request:
+    paths:
+      - "browser/**"
+      - "crates/medusa-agent/**"
+      - "crates/medusa-browser-client/**"
+      - "crates/medusa-browserd/**"
+      - ".github/workflows/browser-dispatch-hardening-certification.yml"
+  push:
+    branches: [main]
+    paths:
+      - "browser/**"
+      - "crates/medusa-agent/**"
+      - "crates/medusa-browser-client/**"
+      - "crates/medusa-browserd/**"
+      - ".github/workflows/browser-dispatch-hardening-certification.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  browser-dispatch-hardening:
+    name: Browser hardening (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            exe: ""
+            playwright_install: "npx playwright install --with-deps chromium"
+          - os: macos-latest
+            exe: ""
+            playwright_install: "npx playwright install chromium"
+          - os: windows-latest
+            exe: ".exe"
+            playwright_install: "npx playwright install chromium"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Refresh merged dependency lock
+        run: cargo generate-lockfile
+      - name: Install browser fixture dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd browser
+          npm install --ignore-scripts
+          ${{ matrix.playwright_install }}
+      - name: Prove bounded client framing and correlation
+        run: cargo test -p medusa-browser-client --locked
+      - name: Prove bounded browserd framing
+        run: cargo test -p medusa-browserd --locked
+      - name: Build browser sidecar
+        run: cargo build -p medusa-browserd --bin medusa-browserd --locked
+      - name: Start verification fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          node browser/fixture/server.mjs > browser-hardening-fixture.log 2>&1 &
+          node --input-type=module - <<'NODE'
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            try {
+              const response = await fetch('http://127.0.0.1:4173/interactive.html');
+              if (response.ok) process.exit(0);
+            } catch {}
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          throw new Error('browser hardening fixture did not start');
+          NODE
+      # Warm the verified page before the timed action so this measures request execution,
+      # while restart still proves a fresh cold sidecar can recover under the production budget.
+      - name: Prove production per-call deadline and restart
+        env:
+          MEDUSA_BROWSER_HARDENING_E2E: "1"
+          MEDUSA_BROWSER_HARDENING_SCENARIO: timeout
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+      - name: Prove production in-flight cancellation and restart
+        env:
+          MEDUSA_BROWSER_HARDENING_E2E: "1"
+          MEDUSA_BROWSER_HARDENING_SCENARIO: cancel
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+      - name: Prove DOM reference ceiling
+        env:
+          MEDUSA_BROWSER_HARDENING_E2E: "1"
+          MEDUSA_BROWSER_HARDENING_SCENARIO: dom
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/large-dom.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+      - name: Prove snapshot text ceiling
+        env:
+          MEDUSA_BROWSER_HARDENING_E2E: "1"
+          MEDUSA_BROWSER_HARDENING_SCENARIO: text
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/large-text.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+      - name: Prove screenshot ceiling
+        env:
+          MEDUSA_BROWSER_HARDENING_E2E: "1"
+          MEDUSA_BROWSER_HARDENING_SCENARIO: screenshot
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/huge-screenshot.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+      - name: Prove evaluation result ceiling
+        env:
+          MEDUSA_BROWSER_HARDENING_E2E: "1"
+          MEDUSA_BROWSER_HARDENING_SCENARIO: evaluate
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+      - name: Prove successful calls reuse one browser session
+        env:
+          MEDUSA_BROWSER_HARDENING_E2E: "1"
+          MEDUSA_BROWSER_HARDENING_SCENARIO: reuse
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+      - name: Assert unrelated loopback stayed unreachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q 'TRAP_HIT' browser-hardening-fixture.log; then
+            cat browser-hardening-fixture.log
+            echo 'Browser bypassed Medusa proxy and reached an unrelated loopback origin.' >&2
+            exit 1
+          fi
+      - name: Upload browser hardening diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browser-hardening-${{ matrix.os }}
+          path: browser-hardening-fixture.log
+          if-no-files-found: ignore

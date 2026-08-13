@@ -1,29 +1,49 @@
 #![cfg(unix)]
 
-use std::{
-    fs::{self, File},
-    io::Write,
-    os::unix::fs::PermissionsExt,
-};
+use std::{fs, process::Command};
 
 use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
 use medusa_core::ErrorCode;
 
+const SIDECAR_SOURCE: &str = r#"
+use std::io::{self, BufRead, Write};
+
+fn main() {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        let Some(after_id) = line.split("\"request_id\":").nth(1) else { continue };
+        let request_id = after_id
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>();
+        if request_id.is_empty() { continue; }
+        writeln!(stdout, "{{\"request_id\":{request_id},\"kind\":\"ok\"}}")
+            .expect("write response");
+        stdout.flush().expect("flush response");
+    }
+}
+"#;
+
+fn compile_sidecar(directory: &std::path::Path) -> std::path::PathBuf {
+    let source = directory.join("fake_browserd.rs");
+    let executable = directory.join("fake-browserd");
+    fs::write(&source, SIDECAR_SOURCE).expect("write sidecar source");
+    let status = Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .expect("launch rustc for sidecar fixture");
+    assert!(status.success(), "compile sidecar fixture");
+    executable
+}
+
 #[test]
 fn browser_client_spawns_stdio_sidecar_round_trips_and_terminates_it() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let sidecar = directory.path().join("fake-browserd.sh");
-    {
-        let mut file = File::create(&sidecar).expect("create sidecar");
-        file.write_all(
-            b"#!/bin/sh\nread request\nprintf '%s\\n' '{\"kind\":\"ok\"}'\nread request || true\n",
-        )
-        .expect("write sidecar");
-        file.sync_all().expect("flush sidecar");
-    }
-    let mut permissions = fs::metadata(&sidecar).expect("metadata").permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&sidecar, permissions).expect("make executable");
+    let sidecar = compile_sidecar(directory.path());
 
     let mut client = BrowserClient::spawn(sidecar.to_str().expect("sidecar path"))
         .expect("spawn browser client");

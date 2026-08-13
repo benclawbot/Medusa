@@ -1,5 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+pub const MAX_BROWSER_REQUEST_FRAME_BYTES: usize = 64 * 1024;
+pub const MAX_BROWSER_RESPONSE_FRAME_BYTES: usize = 12 * 1024 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BrowserRpcRequest {
+    pub request_id: u64,
+    #[serde(flatten)]
+    pub request: BrowserRequest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BrowserRpcResponse {
+    pub request_id: u64,
+    #[serde(flatten)]
+    pub response: BrowserResponse,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum BrowserRequest {
