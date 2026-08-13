@@ -66,7 +66,7 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.number == 847 && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
