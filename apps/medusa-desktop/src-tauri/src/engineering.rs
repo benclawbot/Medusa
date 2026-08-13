@@ -146,6 +146,7 @@ pub fn runtime_engineering_dashboard(
     let mut verification_passed = 0;
     let mut retries = 0;
     let mut interventions = 0;
+    let mut latency_millis = 0_u64;
     for outcome in outcomes
         .values()
         .filter(|outcome| outcome.recorded_at_unix_ms >= cutoff_unix_ms)
@@ -161,6 +162,7 @@ pub fn runtime_engineering_dashboard(
             entry.1 += 1;
         }
         retries += outcome.retries;
+        latency_millis = latency_millis.saturating_add(outcome.latency_millis);
         if outcome.user_correction_count > 0 || outcome.parent_review_revisions > 0 {
             interventions += 1;
         }
@@ -247,7 +249,7 @@ pub fn runtime_engineering_dashboard(
         },
         human_intervention_rate: rate(interventions, total),
         rollback_rate: rate(rolled_back, improvements.len() as u32),
-        average_duration_minutes: 0.0,
+        average_duration_minutes: average_duration_minutes(latency_millis, total),
         trend,
         friction,
         improvements,
@@ -320,13 +322,14 @@ fn meta_record(
 fn read_legacy_compatibility(repo: &Path) -> Result<Vec<ImprovementRecord>, String> {
     let root = repo.join(".medusa/engineering");
     let receipt_path = root.join("migration-receipt.json");
+    let legacy = root.join("improvements.json");
     if receipt_path.is_file() {
         let receipt: LegacyMigrationReceipt =
-            serde_json::from_slice(&fs::read(receipt_path).map_err(|error| error.to_string())?)
+            serde_json::from_slice(&fs::read(&receipt_path).map_err(|error| error.to_string())?)
                 .map_err(|error| error.to_string())?;
+        quarantine_legacy_if_present(&root, &legacy, &receipt.source_digest)?;
         return Ok(receipt.records);
     }
-    let legacy = root.join("improvements.json");
     if !legacy.is_file() {
         return Ok(Vec::new());
     }
@@ -354,27 +357,43 @@ fn read_legacy_compatibility(repo: &Path) -> Result<Vec<ImprovementRecord>, Stri
         ),
         Err(error) => (Vec::new(), Some(error.to_string())),
     };
-    let quarantine = root.join("quarantine");
-    fs::create_dir_all(&quarantine).map_err(|error| error.to_string())?;
-    fs::rename(
-        &legacy,
-        quarantine.join(format!("improvements-{digest}.json")),
-    )
-    .map_err(|error| error.to_string())?;
     let receipt = LegacyMigrationReceipt {
         schema_version: LEGACY_SCHEMA_VERSION,
         source_path: legacy.display().to_string(),
-        source_digest: digest,
+        source_digest: digest.clone(),
         imported_at,
         records: records.clone(),
         error,
     };
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let temporary_receipt = root.join(format!("migration-receipt.tmp-{}.json", std::process::id()));
     fs::write(
-        &receipt_path,
+        &temporary_receipt,
         serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
+    fs::rename(&temporary_receipt, &receipt_path).map_err(|error| error.to_string())?;
+    quarantine_legacy_if_present(&root, &legacy, &digest)?;
     Ok(records)
+}
+
+fn quarantine_legacy_if_present(root: &Path, legacy: &Path, digest: &str) -> Result<(), String> {
+    if !legacy.is_file() {
+        return Ok(());
+    }
+    let bytes = fs::read(legacy).map_err(|error| error.to_string())?;
+    if repository_key_bytes(&bytes) != digest {
+        return Err("legacy improvement source changed after migration receipt was committed".into());
+    }
+    let quarantine = root.join("quarantine");
+    fs::create_dir_all(&quarantine).map_err(|error| error.to_string())?;
+    let destination = quarantine.join(format!("improvements-{digest}.json"));
+    if destination.is_file() {
+        fs::remove_file(legacy).map_err(|error| error.to_string())?;
+    } else {
+        fs::rename(legacy, destination).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn add_friction(map: &mut BTreeMap<String, (u32, Vec<String>)>, category: &str, id: &str) {
@@ -390,6 +409,14 @@ fn rate(part: u32, total: u32) -> f64 {
         0.0
     } else {
         part as f64 / total as f64 * 100.0
+    }
+}
+
+fn average_duration_minutes(total_latency_millis: u64, total: u32) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        total_latency_millis as f64 / total as f64 / 60_000.0
     }
 }
 
@@ -474,6 +501,12 @@ mod tests {
     }
 
     #[test]
+    fn average_duration_uses_authoritative_outcome_latency() {
+        assert_eq!(average_duration_minutes(120_000, 2), 1.0);
+        assert_eq!(average_duration_minutes(0, 0), 0.0);
+    }
+
+    #[test]
     fn legacy_records_are_quarantined_and_never_reported_as_active() {
         let repo = crate::tempfile::tempdir().expect("repo");
         let root = repo.path().join(".medusa/engineering");
@@ -493,5 +526,45 @@ mod tests {
         assert!(!root.join("improvements.json").exists());
         assert!(root.join("migration-receipt.json").is_file());
         assert!(root.join("quarantine").is_dir());
+    }
+
+    #[test]
+    fn interrupted_legacy_quarantine_is_recovered_from_receipt() {
+        let repo = crate::tempfile::tempdir().expect("repo");
+        let root = repo.path().join(".medusa/engineering");
+        fs::create_dir_all(&root).expect("engineering");
+        let legacy = root.join("improvements.json");
+        let bytes = serde_json::to_vec(&vec![legacy_record()]).expect("legacy json");
+        fs::write(&legacy, &bytes).expect("legacy record");
+        let digest = repository_key_bytes(&bytes);
+        let mut record = legacy_record();
+        record.status = "legacyUntrusted".into();
+        record.approval = None;
+        record.active_version = None;
+        record.previous_version = None;
+        record.benchmark_before = None;
+        record.benchmark_after = None;
+        let receipt = LegacyMigrationReceipt {
+            schema_version: LEGACY_SCHEMA_VERSION,
+            source_path: legacy.display().to_string(),
+            source_digest: digest.clone(),
+            imported_at: "2026-08-13T00:00:00Z".into(),
+            records: vec![record],
+            error: None,
+        };
+        fs::write(
+            root.join("migration-receipt.json"),
+            serde_json::to_vec_pretty(&receipt).expect("receipt json"),
+        )
+        .expect("receipt");
+
+        let records = read_legacy_compatibility(repo.path()).expect("recover migration");
+        assert_eq!(records.len(), 1);
+        assert!(!legacy.exists());
+        assert!(
+            root.join("quarantine")
+                .join(format!("improvements-{digest}.json"))
+                .is_file()
+        );
     }
 }
