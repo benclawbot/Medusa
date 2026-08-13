@@ -33,7 +33,7 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        run: cargo metadata --locked --format-version 1
       - name: Check workspace formatting
         id: formatting
         run: cargo fmt --all -- --check
