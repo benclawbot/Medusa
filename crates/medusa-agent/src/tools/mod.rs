@@ -14,7 +14,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, OnceLock, mpsc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -37,14 +37,21 @@ const MAX_BROWSER_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 type BrowserSessionKey = (PathBuf, String);
 type SharedBrowserSession = Arc<Mutex<BrowserToolSession>>;
 
+enum BrowserIdleCommand {
+    Busy,
+    Reset(Duration),
+    Stop,
+}
+
 struct BrowserToolSession {
     client: BrowserClient,
     initialized: bool,
-    generation: u64,
+    idle_tx: mpsc::Sender<BrowserIdleCommand>,
 }
 
 static BROWSER_SESSIONS: OnceLock<Mutex<BTreeMap<BrowserSessionKey, SharedBrowserSession>>> =
     OnceLock::new();
+static BROWSER_NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Single policy-aware registry for built-in tools shared by every agent frontend.
 #[derive(Clone, Debug)]
@@ -122,7 +129,7 @@ pub(crate) fn built_in_tools(
 
 pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
     if is_model_browser_tool(name) {
-        return execute_browser_tool(repo, name, input);
+        return execute_browser_tool(repo, name, input, &BROWSER_NEVER_CANCELLED);
     }
     match name {
         "fs_read" => filesystem::read(repo, input_string(input, "path")?),
@@ -279,6 +286,7 @@ fn browser_envelope_config(
 fn create_browser_session(
     runtime: &medusa_config::MedusaConfig,
     route: &str,
+    key: &BrowserSessionKey,
 ) -> MedusaResult<SharedBrowserSession> {
     if !runtime.browser.enabled {
         return Err(browser_policy_denied(
@@ -301,11 +309,21 @@ fn create_browser_session(
         .ok_or_else(|| invalid_tool("browser sidecar path must be UTF-8"))?;
     let client =
         BrowserClient::spawn_with_env(command, &[(BROWSER_VERIFICATION_ORIGIN_ENV, route)])?;
-    Ok(Arc::new(Mutex::new(BrowserToolSession {
+    let (idle_tx, idle_rx) = mpsc::channel();
+    let session = Arc::new(Mutex::new(BrowserToolSession {
         client,
         initialized: false,
-        generation: 0,
-    })))
+        idle_tx,
+    }));
+    let weak_session = Arc::downgrade(&session);
+    let idle_key = key.clone();
+    thread::Builder::new()
+        .name("medusa-browser-idle-lifecycle".to_owned())
+        .spawn(move || browser_idle_worker(idle_key, weak_session, idle_rx))
+        .map_err(|error| {
+            browser_dependency_error(format!("could not start browser idle lifecycle: {error}"))
+        })?;
+    Ok(session)
 }
 
 fn get_browser_session(
@@ -324,20 +342,29 @@ fn get_browser_session(
     let session = if let Some(session) = sessions.get(&key) {
         Arc::clone(session)
     } else {
-        let session = create_browser_session(runtime, route)?;
+        let session = create_browser_session(runtime, route, &key)?;
         sessions.insert(key.clone(), Arc::clone(&session));
         session
     };
     Ok((key, session))
 }
 
-fn ensure_browser_initialized(session: &mut BrowserToolSession, route: &str) -> MedusaResult<()> {
+fn ensure_browser_initialized(
+    session: &mut BrowserToolSession,
+    route: &str,
+    timeout: Duration,
+    cancellation: &AtomicBool,
+) -> MedusaResult<()> {
     if session.initialized {
         return Ok(());
     }
-    match session.client.request(BrowserRequest::Navigate {
-        url: route.to_owned(),
-    })? {
+    match session.client.request_with_control(
+        BrowserRequest::Navigate {
+            url: route.to_owned(),
+        },
+        timeout,
+        cancellation,
+    )? {
         BrowserResponse::Navigate { status, .. } if status < 400 => {
             session.initialized = true;
             Ok(())
@@ -372,32 +399,43 @@ fn remove_browser_session(key: &BrowserSessionKey, expected: &SharedBrowserSessi
     }
 }
 
-fn schedule_browser_cleanup(
+fn browser_idle_worker(
     key: BrowserSessionKey,
-    session: SharedBrowserSession,
-    generation: u64,
-    timeout: Duration,
+    session: std::sync::Weak<Mutex<BrowserToolSession>>,
+    receiver: mpsc::Receiver<BrowserIdleCommand>,
 ) {
-    let cleanup_key = key.clone();
-    let cleanup_session = Arc::clone(&session);
-    let spawned = thread::Builder::new()
-        .name("medusa-browser-idle-cleanup".to_owned())
-        .spawn(move || {
-            thread::sleep(timeout);
-            let current = cleanup_session
-                .lock()
-                .ok()
-                .is_some_and(|state| state.generation == generation);
-            if current {
-                remove_browser_session(&cleanup_key, &cleanup_session);
-            }
-        });
-    if spawned.is_err() {
-        remove_browser_session(&key, &session);
+    let mut idle_timeout = None;
+    loop {
+        let command = match idle_timeout {
+            None => match receiver.recv() {
+                Ok(command) => command,
+                Err(_) => break,
+            },
+            Some(timeout) => match receiver.recv_timeout(timeout) {
+                Ok(command) => command,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if let Some(session) = session.upgrade() {
+                        remove_browser_session(&key, &session);
+                    }
+                    break;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            },
+        };
+        match command {
+            BrowserIdleCommand::Busy => idle_timeout = None,
+            BrowserIdleCommand::Reset(timeout) => idle_timeout = Some(timeout),
+            BrowserIdleCommand::Stop => break,
+        }
     }
 }
 
-fn execute_browser_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
+fn execute_browser_tool(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
     validate_browser_model_input(name, input)?;
     let route = browser_verification_route()?;
     let runtime = medusa_config::MedusaConfig::from_env();
@@ -406,6 +444,7 @@ fn execute_browser_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<
             "model browser actions remain quarantined until the verified browser sidecar is explicitly configured",
         ));
     }
+    let timeout = Duration::from_millis(runtime.browser.timeout_ms.max(1));
     let key = browser_session_key(repo, &route);
     if name == "browser_close" {
         let session = browser_sessions()
@@ -413,17 +452,24 @@ fn execute_browser_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<
             .ok()
             .and_then(|mut sessions| sessions.remove(&key));
         if let Some(session) = session {
-            if let Ok(mut state) = session.lock() {
-                let _ = state.client.request(BrowserRequest::Close);
-            }
+            let mut state = session.lock().map_err(|_| {
+                MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Internal,
+                    "browser session lock was poisoned",
+                )
+            })?;
+            let _ = state.idle_tx.send(BrowserIdleCommand::Stop);
+            state
+                .client
+                .request_with_control(BrowserRequest::Close, timeout, cancellation)?;
         }
         return Ok("browser verification session closed".to_owned());
     }
 
     let (key, session) = get_browser_session(repo, &route, &runtime)?;
     let envelope_config = browser_envelope_config(repo, &runtime);
-    let timeout = Duration::from_millis(runtime.browser.timeout_ms.max(1_000));
-    let (result, generation) = {
+    let result = {
         let mut state = session.lock().map_err(|_| {
             MedusaError::new(
                 ErrorCode::InternalInvariant,
@@ -431,27 +477,44 @@ fn execute_browser_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<
                 "browser session lock was poisoned",
             )
         })?;
-        ensure_browser_initialized(&mut state, &route)?;
-        state.generation = state.generation.saturating_add(1);
-        let generation = state.generation;
-        let effective_input = if name == "browser_navigate" {
-            serde_json::json!({"url": route})
+        state
+            .idle_tx
+            .send(BrowserIdleCommand::Busy)
+            .map_err(|_| browser_dependency_error("browser idle lifecycle stopped unexpectedly"))?;
+        let result = (|| {
+            ensure_browser_initialized(&mut state, &route, timeout, cancellation)?;
+            let effective_input = if name == "browser_navigate" {
+                serde_json::json!({"url": route})
+            } else {
+                input.clone()
+            };
+            browser::run(
+                repo,
+                &mut state.client,
+                &envelope_config,
+                name,
+                &effective_input,
+                timeout,
+                cancellation,
+            )
+        })();
+        if result.is_ok() {
+            if state
+                .idle_tx
+                .send(BrowserIdleCommand::Reset(timeout))
+                .is_err()
+            {
+                return Err(browser_dependency_error(
+                    "browser idle lifecycle stopped unexpectedly",
+                ));
+            }
         } else {
-            input.clone()
-        };
-        let result = browser::run(
-            repo,
-            &mut state.client,
-            &envelope_config,
-            name,
-            &effective_input,
-        );
-        (result, generation)
+            let _ = state.idle_tx.send(BrowserIdleCommand::Stop);
+        }
+        result
     };
     if result.is_err() {
         remove_browser_session(&key, &session);
-    } else {
-        schedule_browser_cleanup(key, Arc::clone(&session), generation, timeout);
     }
     result
 }
@@ -467,6 +530,9 @@ pub(crate) fn execute_tool_cancellable(
     }
     if name == "skill_execute" {
         return executable_skills::run(repo, input, cancellation);
+    }
+    if is_model_browser_tool(name) {
+        return execute_browser_tool(repo, name, input, cancellation);
     }
     if name != "shell_run" {
         return execute_tool(repo, name, input);
