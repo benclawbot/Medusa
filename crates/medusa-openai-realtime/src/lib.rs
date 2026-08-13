@@ -625,7 +625,10 @@ mod tests {
             transport.queue_input_audio("AAA=".to_owned()),
             Err(TransportError::Wire(_))
         ));
-        assert_eq!(transport.pending_audio.front().map(String::as_str), Some("AAA="));
+        assert_eq!(
+            transport.pending_audio.front().map(String::as_str),
+            Some("AAA=")
+        );
         transport.commit_input_audio().expect("retry and commit");
         assert!(transport.pending_audio.is_empty());
         let kinds = transport
