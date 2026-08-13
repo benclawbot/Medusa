@@ -68,9 +68,7 @@ pub fn send_and_receive<T: Transport + ?Sized>(
     if json.len() > MAX_BROWSER_REQUEST_FRAME_BYTES {
         return Err(protocol_error(
             "request_too_large",
-            format!(
-                "browser request frame exceeds {MAX_BROWSER_REQUEST_FRAME_BYTES} bytes"
-            ),
+            format!("browser request frame exceeds {MAX_BROWSER_REQUEST_FRAME_BYTES} bytes"),
         ));
     }
     transport
