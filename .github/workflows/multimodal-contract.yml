@@ -25,12 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo update --workspace
+      - name: Validate committed dependency authority
+        run: cargo metadata --locked --format-version 1
       - name: Recording-provider multimodal contract
-        run: cargo test -p medusa-provider --test multimodal_contract
+        run: cargo test -p medusa-provider --test multimodal_contract --locked
       - name: Shared attachment and TUI controls
-        run: cargo test -p medusa-tui clipboard::tests
+        run: cargo test -p medusa-tui clipboard::tests --locked
 
   desktop:
     name: desktop attachment UX
