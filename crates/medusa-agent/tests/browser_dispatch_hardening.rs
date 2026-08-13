@@ -8,6 +8,7 @@ use std::{
 };
 
 use medusa_agent::tools::ToolManager;
+use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
 use medusa_extensions::DesktopCommanderSettings;
 use serde_json::json;
 
@@ -143,6 +144,46 @@ fn production_browser_dispatch_hardening() {
             );
             close(&manager, repository.path());
         }
+        "evaluate" => {
+            let browserd = std::env::var("MEDUSA_BROWSER_PATH").expect("browser sidecar path");
+            let route = std::env::var("MEDUSA_BROWSER_VERIFY_URL").expect("verification route");
+            let mut client = BrowserClient::spawn_with_env(
+                &browserd,
+                &[("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route.as_str())],
+            )
+            .expect("spawn browser sidecar");
+            let cancellation = AtomicBool::new(false);
+            client
+                .request_with_control(
+                    BrowserRequest::Navigate { url: route },
+                    Duration::from_secs(10),
+                    &cancellation,
+                )
+                .expect("navigate before evaluation limit proof");
+            let response = client
+                .request_with_control(
+                    BrowserRequest::Evaluate {
+                        expression: "'x'.repeat(1048577)".to_owned(),
+                    },
+                    Duration::from_secs(10),
+                    &cancellation,
+                )
+                .expect("bounded evaluation response");
+            assert!(
+                matches!(
+                    response,
+                    BrowserResponse::Error { ref code, .. } if code == "evaluation_too_large"
+                ),
+                "{response:?}"
+            );
+            client
+                .request_with_control(
+                    BrowserRequest::Close,
+                    Duration::from_secs(10),
+                    &cancellation,
+                )
+                .expect("close evaluation sidecar");
+        }
         "reuse" => {
             for _ in 0..64 {
                 manager
@@ -152,7 +193,7 @@ fn production_browser_dispatch_hardening() {
             let tabs = manager
                 .execute(repository.path(), "browser_tabs", &json!({}))
                 .expect("stateful browser session remains usable");
-            assert!(tabs.contains("hang-once") || tabs.contains("interactive"), "{tabs}");
+            assert!(tabs.contains("interactive"), "{tabs}");
             close(&manager, repository.path());
         }
         other => panic!("unknown browser hardening scenario: {other}"),
