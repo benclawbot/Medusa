@@ -14,8 +14,9 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock, mpsc,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     thread,
     time::Duration,
