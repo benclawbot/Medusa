@@ -18,6 +18,6 @@ mod parent_reviewer;
 mod parallel_mutation;
 mod parallel_mutation_batch;
 
-pub mod workspace;
 pub mod openai_realtime_session;
 pub mod openai_realtime_websocket;
+pub mod workspace;
