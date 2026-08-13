@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import re
 import subprocess
 import sys
 import urllib.parse
+import zlib
 from pathlib import Path
 
 
@@ -108,6 +110,8 @@ def validate_inventory(root: Path, expected: dict[str, object], write: bool) -> 
     except FileNotFoundError as error:
         raise DocumentationError("missing docs/documentation-inventory.json") from error
     if current != rendered:
+        payload = base64.b64encode(zlib.compress(rendered.encode("utf-8"), 9)).decode("ascii")
+        print(f"documentation-expected-zlib-base64:{payload}", file=sys.stderr)
         raise DocumentationError(
             "documentation inventory is stale; review the changed documents and run "
             "python scripts/check-documentation.py --write"
