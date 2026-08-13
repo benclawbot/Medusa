@@ -99,6 +99,13 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def lockfile_hashes(root: Path) -> dict[str, str]:
+    return {
+        "cargo": sha256_file(root / "Cargo.lock"),
+        "desktop": sha256_file(root / "apps/medusa-desktop/package-lock.json"),
+    }
+
+
 def cargo_components(root: Path) -> list[dict]:
     lock = read_toml(root / "Cargo.lock")
     components: list[dict] = []
@@ -161,6 +168,7 @@ def npm_components(root: Path) -> list[dict]:
 
 def generate_sbom(root: Path, output: Path) -> dict:
     version = next(iter(load_versions(root).values()))
+    hashes = lockfile_hashes(root)
     components = cargo_components(root) + npm_components(root)
     components.sort(
         key=lambda item: (
@@ -187,7 +195,9 @@ def generate_sbom(root: Path, output: Path) -> dict:
                 "purl": f"pkg:github/benclawbot/Medusa@v{version}",
             },
             "properties": [
-                {"name": "medusa:source-locks", "value": "Cargo.lock,package-lock.json"}
+                {"name": "medusa:source-locks", "value": "Cargo.lock,package-lock.json"},
+                {"name": "medusa:cargo-lock-sha256", "value": hashes["cargo"]},
+                {"name": "medusa:desktop-lock-sha256", "value": hashes["desktop"]},
             ],
         },
         "components": components,
@@ -257,6 +267,7 @@ def generate_manifest(
     if rollout_percentage < 1 or rollout_percentage > 100:
         raise EvidenceError("rollout percentage must be in 1..=100")
 
+    hashes = lockfile_hashes(root)
     evidence = [
         {
             "name": path.name,
@@ -289,8 +300,8 @@ def generate_manifest(
             "repository": "benclawbot/Medusa",
             "revision": revision,
             "rust_toolchain": "1.88.0",
-            "cargo_lock_sha256": sha256_file(root / "Cargo.lock"),
-            "desktop_lock_sha256": sha256_file(root / "apps/medusa-desktop/package-lock.json"),
+            "cargo_lock_sha256": hashes["cargo"],
+            "desktop_lock_sha256": hashes["desktop"],
         },
         "rollout": {
             "channel": "stable",
@@ -442,11 +453,18 @@ def self_test() -> None:
         else:
             raise AssertionError("mismatched release tag was accepted")
 
+        expected_hashes = lockfile_hashes(root)
         first = root / "first-sbom.json"
         second = root / "second-sbom.json"
-        generate_sbom(root, first)
-        generate_sbom(root, second)
+        first_sbom = generate_sbom(root, first)
+        second_sbom = generate_sbom(root, second)
+        assert first_sbom == second_sbom
         assert first.read_bytes() == second.read_bytes()
+        sbom_properties = {
+            entry["name"]: entry["value"] for entry in first_sbom["metadata"]["properties"]
+        }
+        assert sbom_properties["medusa:cargo-lock-sha256"] == expected_hashes["cargo"]
+        assert sbom_properties["medusa:desktop-lock-sha256"] == expected_hashes["desktop"]
 
         assets = root / "assets"
         populate_assets(assets)
@@ -461,6 +479,8 @@ def self_test() -> None:
         )
         assert first_manifest == second_manifest
         assert first_bytes == manifest.read_bytes()
+        assert first_manifest["source"]["cargo_lock_sha256"] == expected_hashes["cargo"]
+        assert first_manifest["source"]["desktop_lock_sha256"] == expected_hashes["desktop"]
 
         private_key = root / "private.pem"
         public_key = root / "public.pem"
