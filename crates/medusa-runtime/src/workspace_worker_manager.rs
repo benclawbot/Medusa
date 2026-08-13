@@ -7,8 +7,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -245,7 +244,10 @@ impl WorkspaceWorkerManager {
         }
     }
 
-    pub fn integrate_successful(&self, workers: &[Worker]) -> MedusaResult<Vec<IntegrationReceipt>> {
+    pub fn integrate_successful(
+        &self,
+        workers: &[Worker],
+    ) -> MedusaResult<Vec<IntegrationReceipt>> {
         match &self.git {
             Some(manager) => manager.integrate_successful(workers),
             None => {
@@ -303,7 +305,8 @@ impl WorkspaceWorkerManager {
             Some(manager) => manager.commit_tree_matches_head(commit),
             None => {
                 let snapshot = self.load_snapshot(commit)?;
-                Ok(self.repository_head()? == format!("{DIRECTORY_REVISION_PREFIX}{}", snapshot.tree))
+                Ok(self.repository_head()?
+                    == format!("{DIRECTORY_REVISION_PREFIX}{}", snapshot.tree))
             }
         }
     }
@@ -520,7 +523,9 @@ impl WorkspaceWorkerManager {
         }
         let snapshot = self.load_snapshot(authorized_commit)?;
         if snapshot.base != expected_base {
-            return Err(policy("authorized directory snapshot has a different base revision"));
+            return Err(policy(
+                "authorized directory snapshot has a different base revision",
+            ));
         }
         if self.commit_is_integrated(authorized_commit)? {
             return Ok(IntegrationReceipt {
@@ -541,10 +546,11 @@ impl WorkspaceWorkerManager {
         }
 
         let snapshot_tree = self.snapshot_root(authorized_commit).join("tree");
-        let rollback = self
-            .worktree_root
-            .join("rollback")
-            .join(format!("{}-{}", worker.id, next_worker_suffix()));
+        let rollback = self.worktree_root.join("rollback").join(format!(
+            "{}-{}",
+            worker.id,
+            next_worker_suffix()
+        ));
         fs::create_dir_all(&rollback)?;
         let mut existed = BTreeSet::new();
         let changed_paths = component_paths(&snapshot.changed_components);
@@ -587,7 +593,9 @@ impl WorkspaceWorkerManager {
                 Err(rollback_error) => Err(MedusaError::new(
                     ErrorCode::InternalInvariant,
                     ErrorCategory::Internal,
-                    format!("directory integration failed and rollback also failed: {error}; rollback={rollback_error}"),
+                    format!(
+                        "directory integration failed and rollback also failed: {error}; rollback={rollback_error}"
+                    ),
                 )),
             };
         }
@@ -702,8 +710,7 @@ fn changed_components(
         };
         if let Some(kind) = kind {
             changes.push(
-                ChangedComponent::new(kind, path)
-                    .map_err(|error| invalid(error.to_string()))?,
+                ChangedComponent::new(kind, path).map_err(|error| invalid(error.to_string()))?,
             );
         }
     }
@@ -721,7 +728,11 @@ fn component_paths(components: &[ChangedComponent]) -> Vec<String> {
     paths
 }
 
-fn copy_manifest_tree(source: &Path, destination: &Path, manifest: &DirectoryManifest) -> MedusaResult<()> {
+fn copy_manifest_tree(
+    source: &Path,
+    destination: &Path,
+    manifest: &DirectoryManifest,
+) -> MedusaResult<()> {
     fs::create_dir_all(destination)?;
     for relative in manifest.files.keys() {
         let source_path = source.join(relative);
@@ -768,7 +779,11 @@ fn render_path_change(before_root: &Path, after_root: &Path, path: &str) -> Medu
                 rendered.push('\n');
             }
         }
-        (None, None) => return Err(invalid(format!("changed path `{path}` is absent from both snapshots"))),
+        (None, None) => {
+            return Err(invalid(format!(
+                "changed path `{path}` is absent from both snapshots"
+            )));
+        }
     }
     Ok(rendered)
 }
@@ -867,7 +882,10 @@ fn verify_directory_workspace(root: &Path) -> MedusaResult<String> {
     if root.join("verify.sh").is_file() && !cfg!(windows) {
         return output_result(
             "directory workspace verification",
-            Command::new("sh").arg("verify.sh").current_dir(root).output()?,
+            Command::new("sh")
+                .arg("verify.sh")
+                .current_dir(root)
+                .output()?,
         );
     }
     if root.join("Cargo.toml").is_file() {
@@ -903,9 +921,9 @@ fn excluded_workspace_path(path: &str) -> bool {
 fn validate_identifier(value: &str, label: &str) -> MedusaResult<()> {
     if value.is_empty()
         || value.len() > 128
-        || value
-            .chars()
-            .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')))
+        || value.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        })
     {
         return Err(invalid(format!("invalid {label}: {value}")));
     }
@@ -915,7 +933,11 @@ fn validate_identifier(value: &str, label: &str) -> MedusaResult<()> {
 fn next_worker_suffix() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQUENCE: AtomicU64 = AtomicU64::new(1);
-    format!("{}-{}", std::process::id(), SEQUENCE.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{}-{}",
+        std::process::id(),
+        SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> MedusaResult<()> {
@@ -940,7 +962,11 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> MedusaResult<T> {
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InternalInvariant, ErrorCategory::Internal, message)
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
+        message,
+    )
 }
 
 fn policy(message: impl Into<String>) -> MedusaError {
@@ -948,7 +974,11 @@ fn policy(message: impl Into<String>) -> MedusaError {
 }
 
 fn execution(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::ToolExecutionFailed, ErrorCategory::Execution, message)
+    MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        message,
+    )
 }
 
 #[cfg(test)]
@@ -971,8 +1001,11 @@ mod tests {
         let worker = manager
             .open_or_create_worker("docs", "worker-docs")
             .expect("worker");
-        fs::write(worker.worktree.join("notes.md"), "# Final\nVerified documentation.\n")
-            .expect("edit");
+        fs::write(
+            worker.worktree.join("notes.md"),
+            "# Final\nVerified documentation.\n",
+        )
+        .expect("edit");
         let changed = manager
             .changed_components_since(&worker, &base)
             .expect("changes");
@@ -982,7 +1015,12 @@ mod tests {
             .expect("snapshot");
         let commit = worker.commit.clone().expect("commit");
         assert!(commit.starts_with(DIRECTORY_REVISION_PREFIX));
-        assert!(manager.commit_patch(&base, &commit).expect("patch").contains("Verified documentation"));
+        assert!(
+            manager
+                .commit_patch(&base, &commit)
+                .expect("patch")
+                .contains("Verified documentation")
+        );
         let verification = root.path().join("verification");
         manager
             .materialize_detached_commit(&commit, &verification)
