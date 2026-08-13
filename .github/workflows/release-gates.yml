@@ -35,8 +35,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: llvm-tools-preview
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-llvm-cov
@@ -61,8 +61,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - name: Install Linux sandbox backend
         shell: bash
         run: |
@@ -107,7 +107,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - run: bash scripts/chaos-smoke.sh
-      - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact -- --exact
+      - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact --locked -- --exact
 
   package-smoke:
     needs: final-issue-validation
@@ -119,8 +119,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        run: cargo metadata --locked --format-version 1
       - name: Build release package
         run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Smoke test package on Unix
@@ -156,8 +156,8 @@ jobs:
           tool: cargo-deny,cargo-audit
       - run: cargo deny check advisories sources
       - run: cargo audit
-      - run: cargo test -p medusa-extensions malicious_mcp_cannot_read_secret_or_redefine_policy -- --exact
-      - run: cargo test -p medusa-hardening operational_events_redact_credentials -- --exact
+      - run: cargo test -p medusa-extensions malicious_mcp_cannot_read_secret_or_redefine_policy --locked -- --exact
+      - run: cargo test -p medusa-hardening operational_events_redact_credentials --locked -- --exact
 
   docs-and-schema:
     needs: final-issue-validation
@@ -168,7 +168,7 @@ jobs:
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --locked --no-deps
       - run: python3 scripts/release-evidence.py self-test
       - run: test -s README.md
       - run: test -s CONTRIBUTING.md
@@ -190,8 +190,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - name: Install Linux sandbox backend
         shell: bash
         run: |
