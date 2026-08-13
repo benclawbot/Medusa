@@ -915,9 +915,17 @@ fn slash_command_input(command: &SlashCommand) -> String {
             LearningCommand::Propose { scope, key, value } => {
                 format!("/learning propose {scope} {key} {value}")
             }
-            LearningCommand::Evaluate { id, passed } => {
-                format!("/learning evaluate {id} {}", if *passed { "pass" } else { "fail" })
-            }
+            LearningCommand::Evaluate {
+                id,
+                validation_passed,
+                regression_passed,
+                effectiveness_passed,
+            } => format!(
+                "/learning evaluate {id} {} {} {}",
+                if *validation_passed { "pass" } else { "fail" },
+                if *regression_passed { "pass" } else { "fail" },
+                if *effectiveness_passed { "pass" } else { "fail" }
+            ),
             LearningCommand::Approve { id } => format!("/learning approve {id}"),
             LearningCommand::Reject { id } => format!("/learning reject {id}"),
             LearningCommand::Defer { id } => format!("/learning defer {id}"),
@@ -1426,6 +1434,17 @@ mod tests {
                 value: "MiniMax-M3".to_owned(),
             })),
             "/config set model.name MiniMax-M3"
+        );
+        assert_eq!(
+            slash_command_input(&SlashCommand::Learning {
+                action: LearningCommand::Evaluate {
+                    id: "proposal-1".to_owned(),
+                    validation_passed: true,
+                    regression_passed: false,
+                    effectiveness_passed: true,
+                },
+            }),
+            "/learning evaluate proposal-1 pass fail pass"
         );
         assert_eq!(
             slash_command_input(&SlashCommand::Model(ModelCommand::SetApiKey(

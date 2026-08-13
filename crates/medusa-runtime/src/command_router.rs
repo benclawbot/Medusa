@@ -73,14 +73,27 @@ pub(super) fn execute_slash_command_with_submission(
                         )],
                     });
                 }
-                LearningCommand::Evaluate { id, passed } => {
-                    let updated = crate::learning_authority::evaluate(&mut authority, &id, passed)
-                        .map_err(RuntimeError::agent)?;
+                LearningCommand::Evaluate {
+                    id,
+                    validation_passed,
+                    regression_passed,
+                    effectiveness_passed,
+                } => {
+                    let updated = crate::learning_authority::evaluate(
+                        &mut authority,
+                        &id,
+                        validation_passed,
+                        regression_passed,
+                        effectiveness_passed,
+                    )
+                    .map_err(RuntimeError::agent)?;
                     let _ = events.send(RuntimeEvent::Notice {
                         title: "Canonical refinement evaluated".to_owned(),
                         details: vec![format!(
-                            "evaluation={} at authority revision {}",
-                            if passed { "passed" } else { "failed" },
+                            "validation={} regression={} effectiveness={} at authority revision {}",
+                            if validation_passed { "pass" } else { "fail" },
+                            if regression_passed { "pass" } else { "fail" },
+                            if effectiveness_passed { "pass" } else { "fail" },
                             updated.revision
                         )],
                     });

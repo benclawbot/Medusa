@@ -119,7 +119,9 @@ pub(crate) fn propose(
 pub(crate) fn evaluate(
     store: &mut RefinementAuthorityStore,
     requested_id: &str,
-    passed: bool,
+    validation_passed: bool,
+    regression_passed: bool,
+    effectiveness_passed: bool,
 ) -> Result<RefinementAuthoritySnapshot, String> {
     let (id, version) = resolve(store, requested_id)?;
     let revision = store.snapshot().map_err(|error| error.to_string())?.revision;
@@ -129,10 +131,15 @@ pub(crate) fn evaluate(
             version,
             EvaluationResult {
                 evaluator: "runtime-command".into(),
-                validation_passed: passed,
-                regression_passed: passed,
-                effectiveness_passed: passed,
-                notes: if passed { "passed" } else { "failed" }.into(),
+                validation_passed,
+                regression_passed,
+                effectiveness_passed,
+                notes: format!(
+                    "manual evaluation: validation={} regression={} effectiveness={}",
+                    pass_label(validation_passed),
+                    pass_label(regression_passed),
+                    pass_label(effectiveness_passed)
+                ),
             },
             revision,
         )
@@ -236,6 +243,10 @@ pub(crate) enum RuntimeLearningAction {
     Suspend,
     Rollback,
     Delete,
+}
+
+fn pass_label(passed: bool) -> &'static str {
+    if passed { "pass" } else { "fail" }
 }
 
 fn parse_scope(value: &str) -> Result<RefinementScope, String> {

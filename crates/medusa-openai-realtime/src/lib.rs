@@ -391,20 +391,22 @@ impl<W: Wire> Transport<W> {
         if self.closed {
             return Ok(());
         }
+        self.wire.close().map_err(TransportError::Wire)?;
         self.muted = true;
         self.pending_audio.clear();
         self.active_response_id = None;
         self.active_item_id = None;
         self.closed = true;
-        self.wire.close().map_err(TransportError::Wire)
+        Ok(())
     }
 
     fn flush_audio(&mut self) -> Result<(), TransportError> {
-        while let Some(audio) = self.pending_audio.pop_front() {
+        while let Some(audio) = self.pending_audio.front().cloned() {
             self.send(json!({
                 "type": "input_audio_buffer.append",
                 "audio": audio,
             }))?;
+            self.pending_audio.pop_front();
         }
         Ok(())
     }
@@ -519,10 +521,16 @@ mod tests {
         incoming: VecDeque<Value>,
         reconnects: usize,
         closes: usize,
+        send_failures_remaining: usize,
+        close_failures_remaining: usize,
     }
 
     impl Wire for MockWire {
         fn send_json(&mut self, payload: Value) -> Result<(), String> {
+            if self.send_failures_remaining > 0 {
+                self.send_failures_remaining -= 1;
+                return Err("simulated send failure".to_owned());
+            }
             self.sent.push(payload);
             Ok(())
         }
@@ -538,6 +546,10 @@ mod tests {
 
         fn close(&mut self) -> Result<(), String> {
             self.closes += 1;
+            if self.close_failures_remaining > 0 {
+                self.close_failures_remaining -= 1;
+                return Err("simulated close failure".to_owned());
+            }
             Ok(())
         }
     }
@@ -600,6 +612,39 @@ mod tests {
             ]
         );
         assert_eq!(transport.wire.reconnects, 1);
+    }
+
+    #[test]
+    fn failed_audio_send_retains_frame_for_retry() {
+        let mut transport =
+            Transport::new(MockWire::default(), capability(), SessionConfig::default())
+                .expect("transport");
+        transport.activate().expect("activate");
+        transport.wire.send_failures_remaining = 1;
+        assert!(matches!(
+            transport.queue_input_audio("AAA=".to_owned()),
+            Err(TransportError::Wire(_))
+        ));
+        assert_eq!(
+            transport.pending_audio.front().map(String::as_str),
+            Some("AAA=")
+        );
+        transport.commit_input_audio().expect("retry and commit");
+        assert!(transport.pending_audio.is_empty());
+        let kinds = transport
+            .wire
+            .sent
+            .iter()
+            .filter_map(|value| value["type"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                "session.update",
+                "input_audio_buffer.append",
+                "input_audio_buffer.commit"
+            ]
+        );
     }
 
     #[test]
@@ -672,6 +717,20 @@ mod tests {
         transport.close().expect("close");
         transport.close().expect("close again");
         assert_eq!(transport.wire.closes, 1);
+        assert_eq!(transport.request_response(), Err(TransportError::Closed));
+    }
+
+    #[test]
+    fn failed_close_can_be_retried_before_transport_is_marked_closed() {
+        let mut transport =
+            Transport::new(MockWire::default(), capability(), SessionConfig::default())
+                .expect("transport");
+        transport.activate().expect("activate");
+        transport.wire.close_failures_remaining = 1;
+        assert!(matches!(transport.close(), Err(TransportError::Wire(_))));
+        assert!(!transport.closed);
+        transport.close().expect("retry close");
+        assert_eq!(transport.wire.closes, 2);
         assert_eq!(transport.request_response(), Err(TransportError::Closed));
     }
 }
