@@ -13,7 +13,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_evidence::{ChangeKind, ChangedComponent};
+use medusa_evidence::{ChangeKind, ChangedComponent, normalize_components};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -187,7 +187,12 @@ impl WorkspaceWorkerManager {
             None => {
                 let baseline = self.load_baseline_manifest(base_commit)?;
                 let current = directory_manifest(&worker.worktree)?;
-                changed_components(&baseline, &current)
+                let components = changed_components(&baseline, &current)?;
+                if components.is_empty() {
+                    return Ok(Vec::new());
+                }
+                normalize_components(&worker.worktree, &components)
+                    .map_err(|error| invalid(error.to_string()))
             }
         }
     }
@@ -572,8 +577,8 @@ impl WorkspaceWorkerManager {
                 let destination = self.repo.join(path);
                 if prepared.is_file() {
                     copy_file_atomic(&prepared, &destination)?;
-                } else if destination.exists() {
-                    fs::remove_file(&destination)?;
+                } else {
+                    remove_path(&destination)?;
                 }
             }
             let integrated = self.repository_head()?;
@@ -629,13 +634,23 @@ impl WorkspaceWorkerManager {
 #[must_use]
 pub fn is_git_repository(path: &Path) -> bool {
     let Ok(output) = Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
+        .args(["rev-parse", "--show-toplevel"])
         .current_dir(path)
         .output()
     else {
         return false;
     };
-    output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
+    if !output.status.success() {
+        return false;
+    }
+    let top_level = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    let Ok(selected) = path.canonicalize() else {
+        return false;
+    };
+    let Ok(top_level) = top_level.canonicalize() else {
+        return false;
+    };
+    selected == top_level
 }
 
 fn directory_revision(path: &Path) -> MedusaResult<String> {
@@ -810,12 +825,32 @@ fn read_bounded_text(path: &Path) -> MedusaResult<Option<String>> {
     }))
 }
 
+fn remove_path(path: &Path) -> MedusaResult<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 fn copy_file_atomic(source: &Path, destination: &Path) -> MedusaResult<()> {
     let parent = destination
         .parent()
         .ok_or_else(|| invalid("workspace destination has no parent"))?;
+    if destination.is_dir() {
+        fs::remove_dir_all(destination)?;
+    }
+    if parent.exists() && !parent.is_dir() {
+        remove_path(parent)?;
+    }
     fs::create_dir_all(parent)?;
     let temporary = destination.with_extension("medusa-tmp");
+    remove_path(&temporary)?;
     fs::copy(source, &temporary)?;
     #[cfg(windows)]
     if destination.exists() {
@@ -831,12 +866,20 @@ fn restore_paths(
     paths: &[String],
     existed: &BTreeSet<String>,
 ) -> MedusaResult<()> {
+    let mut removal = paths.to_vec();
+    removal.sort_by(|left, right| {
+        Path::new(right)
+            .components()
+            .count()
+            .cmp(&Path::new(left).components().count())
+            .then_with(|| right.cmp(left))
+    });
+    for path in removal {
+        remove_path(&repo.join(path))?;
+    }
     for path in paths {
-        let destination = repo.join(path);
         if existed.contains(path) {
-            copy_file_atomic(&rollback.join(path), &destination)?;
-        } else if destination.exists() {
-            fs::remove_file(destination)?;
+            copy_file_atomic(&rollback.join(path), &repo.join(path))?;
         }
     }
     Ok(())
@@ -1072,5 +1115,101 @@ mod tests {
             fs::read_to_string(workspace.join("report.md")).expect("primary"),
             "user edit\n"
         );
+    }
+
+    #[test]
+    fn directory_components_are_normalized_for_package_scope() {
+        let root = tempfile::tempdir().expect("root");
+        let workspace = root.path().join("workspace");
+        fs::create_dir_all(workspace.join("src")).expect("workspace");
+        fs::write(
+            workspace.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("manifest");
+        fs::write(workspace.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n").expect("source");
+        let manager = WorkspaceWorkerManager::new(
+            &workspace,
+            workspace.join(".medusa/executions/package-scope/worktrees"),
+        )
+        .expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker = manager
+            .open_or_create_worker("package", "worker-package")
+            .expect("worker");
+        fs::write(
+            worker.worktree.join("src/lib.rs"),
+            "pub fn value() -> u8 { 2 }\n",
+        )
+        .expect("edit");
+        let changed = manager
+            .changed_components_since(&worker, &base)
+            .expect("changes");
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].path, "src/lib.rs");
+        assert_eq!(changed[0].package_owner.as_deref(), Some("."));
+        assert!(changed[0].content_hash.is_some());
+    }
+
+    #[test]
+    fn nested_git_directory_uses_bounded_directory_backend() {
+        let root = tempfile::tempdir().expect("root");
+        let repository = root.path().join("repository");
+        fs::create_dir(&repository).expect("repository");
+        let output = Command::new("git")
+            .arg("init")
+            .arg(&repository)
+            .output()
+            .expect("git init");
+        assert!(output.status.success());
+        let nested = repository.join("nested");
+        fs::create_dir(&nested).expect("nested");
+        assert!(is_git_repository(&repository));
+        assert!(!is_git_repository(&nested));
+        let manager = WorkspaceWorkerManager::new(
+            &nested,
+            nested.join(".medusa/executions/nested/worktrees"),
+        )
+        .expect("manager");
+        assert_eq!(manager.backend(), WorkspaceMutationBackend::Directory);
+    }
+
+    #[test]
+    fn directory_rollback_restores_file_after_file_to_directory_change() {
+        let root = tempfile::tempdir().expect("root");
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).expect("workspace");
+        fs::write(workspace.join("config"), "original\n").expect("base file");
+        let manager = WorkspaceWorkerManager::new(
+            &workspace,
+            workspace.join(".medusa/executions/type-change/worktrees"),
+        )
+        .expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker = manager
+            .open_or_create_worker("type-change", "worker-type-change")
+            .expect("worker");
+        fs::remove_file(worker.worktree.join("config")).expect("remove file");
+        fs::create_dir(worker.worktree.join("config")).expect("create directory");
+        fs::write(worker.worktree.join("config/value"), "prepared\n").expect("prepare");
+        let worker = manager
+            .finalize_worker(worker, &base, "type change")
+            .expect("snapshot");
+        let commit = worker.commit.clone().expect("commit");
+        fs::write(
+            manager.snapshot_root(&commit).join("tree/config/value"),
+            "tampered\n",
+        )
+        .expect("tamper snapshot");
+        let error = manager
+            .integrate_authorized(&worker, &base, &commit)
+            .expect_err("tree mismatch must roll back");
+        assert!(error.to_string().contains("does not match authorized snapshot"));
+        assert!(workspace.join("config").is_file());
+        assert_eq!(
+            fs::read_to_string(workspace.join("config")).expect("restored file"),
+            "original\n"
+        );
+        assert!(!workspace.join("config/value").exists());
     }
 }
