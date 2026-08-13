@@ -661,43 +661,66 @@ fn complete_repository_state_fingerprint(
     components: &[ChangedComponent],
 ) -> MedusaResult<String> {
     let paths = filtered_repository_state_paths(repo, evidence_root, components)?;
+    let worker_count = thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(paths.len().max(1));
+    let chunk_size = paths.len().div_ceil(worker_count).max(1);
+    let chunks = thread::scope(|scope| {
+        paths
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|relative| repository_state_entry(repo, relative))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(std::thread::ScopedJoinHandle::join)
+            .collect::<Vec<_>>()
+    });
+
     let mut hasher = Sha256::new();
-    for relative in paths {
-        let path = repo.join(&relative);
-        let relative = relative.to_string_lossy();
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => match fs::read_link(&path) {
-                Ok(target) => hash_repository_state_entry(
-                    &mut hasher,
-                    relative.as_bytes(),
-                    b"symlink",
-                    target.to_string_lossy().as_bytes(),
-                ),
-                Err(_) => hash_repository_state_entry(
-                    &mut hasher,
-                    relative.as_bytes(),
-                    b"symlink",
-                    b"unreadable",
-                ),
-            },
-            Ok(metadata) if metadata.is_file() => match fs::read(&path) {
-                Ok(bytes) => {
-                    hash_repository_state_entry(&mut hasher, relative.as_bytes(), b"file", &bytes)
-                }
-                Err(_) => hash_repository_state_entry(
-                    &mut hasher,
-                    relative.as_bytes(),
-                    b"file",
-                    b"unreadable",
-                ),
-            },
-            Ok(_) => hash_repository_state_entry(&mut hasher, relative.as_bytes(), b"other", b""),
-            Err(_) => {
-                hash_repository_state_entry(&mut hasher, relative.as_bytes(), b"missing", b"")
-            }
+    hasher.update(b"medusa-repository-state-v2");
+    for chunk in chunks {
+        let entries = chunk.map_err(|_| invalid("repository state hashing worker panicked"))?;
+        for (relative, kind, payload_digest) in entries {
+            hash_repository_state_entry(
+                &mut hasher,
+                relative.to_string_lossy().as_bytes(),
+                kind,
+                &payload_digest,
+            );
         }
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn repository_state_entry(repo: &Path, relative: &Path) -> (PathBuf, &'static [u8], Vec<u8>) {
+    let path = repo.join(relative);
+    let (kind, payload) = match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => match fs::read_link(&path) {
+            Ok(target) => (
+                b"symlink".as_slice(),
+                target.to_string_lossy().as_bytes().to_vec(),
+            ),
+            Err(_) => (b"symlink".as_slice(), b"unreadable".to_vec()),
+        },
+        Ok(metadata) if metadata.is_file() => match fs::read(&path) {
+            Ok(bytes) => (b"file".as_slice(), bytes),
+            Err(_) => (b"file".as_slice(), b"unreadable".to_vec()),
+        },
+        Ok(_) => (b"other".as_slice(), Vec::new()),
+        Err(_) => (b"missing".as_slice(), Vec::new()),
+    };
+    (
+        relative.to_path_buf(),
+        kind,
+        Sha256::digest(payload).to_vec(),
+    )
 }
 
 fn filtered_repository_state_paths(
@@ -884,6 +907,40 @@ mod tests {
                 .expect("after fingerprint");
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn parallel_repository_fingerprint_is_order_stable_and_content_sensitive() {
+        let directory = tempfile::tempdir().expect("repository");
+        let evidence_root = directory.path().join(".medusa/evidence");
+        fs::create_dir_all(&evidence_root).expect("evidence root");
+        let mut components = (0..16)
+            .map(|index| {
+                let relative = format!("artifact-{index:02}.txt");
+                fs::write(
+                    directory.path().join(&relative),
+                    format!("value-{index:02}\n"),
+                )
+                .expect("artifact");
+                ChangedComponent::new(ChangeKind::Modified, relative).expect("component")
+            })
+            .collect::<Vec<_>>();
+
+        let before =
+            complete_repository_state_fingerprint(directory.path(), &evidence_root, &components)
+                .expect("before fingerprint");
+        components.reverse();
+        let reordered =
+            complete_repository_state_fingerprint(directory.path(), &evidence_root, &components)
+                .expect("reordered fingerprint");
+        assert_eq!(before, reordered);
+
+        fs::write(directory.path().join("artifact-08.txt"), "changed!\n")
+            .expect("same-length mutation");
+        let changed =
+            complete_repository_state_fingerprint(directory.path(), &evidence_root, &components)
+                .expect("changed fingerprint");
+        assert_ne!(before, changed);
     }
 
     #[test]
