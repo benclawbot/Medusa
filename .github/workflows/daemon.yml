@@ -32,8 +32,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - name: Check workspace formatting
         id: formatting
         run: cargo fmt --all -- --check
@@ -58,7 +58,7 @@ jobs:
           cargo clippy -p medusa-daemon -p medusa-tui --all-targets --locked -- -D warnings 2>&1 | tee daemon-clippy.log
       - name: Upload daemon Clippy diagnostics
         if: failure() && steps.daemon_clippy.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75fa02 # v4
         with:
           name: daemon-clippy-${{ matrix.os }}
           path: daemon-clippy.log
