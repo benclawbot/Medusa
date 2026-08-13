@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "725a6d8022296b59e0668c974d783c4a4615e77bf249def3e389e5ae3a16611f"
+      "sha256": "2c082c489da7a92b50b9d7e65823bcae64b329d5ab25028ded73cbf95a83a502"
     },
     {
       "path": "SECURITY.md",
@@ -86,7 +86,7 @@
     {
       "path": "docs/ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "1dd5d44a596d6e0e94e30d0a2bfcf19526ad2cf07110914e1a583badc0a9e20c"
+      "sha256": "d79862e0748ee644833f58c20c2fad7ecf02fbf9262b722684fe69c48a7e0d18"
     },
     {
       "path": "docs/AUTOMATIC-LESSON-EXTRACTION.md",
@@ -106,7 +106,7 @@
     {
       "path": "docs/CAPABILITY-EVIDENCE.md",
       "disposition": "current",
-      "sha256": "549f0fcb57a1ff6deb2cc1e66de32d433d4ecca396804652710ff0c003c3476a"
+      "sha256": "ce3829bcf1eb48a23699e60c12f8806bcc1ca2f1ab6776eb5d1dd2a35257f1bf"
     },
     {
       "path": "docs/CHATGPT-OAUTH.md",
@@ -131,7 +131,7 @@
     {
       "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "4f1d2e7fea1fbeb4f847cc30c03bdc35ff75afdff692613a947046e9c11a44dd"
+      "sha256": "9c64aa7cdc187417201b0060c8ef5f369046c67af96075d2d2474626b2ea39a8"
     },
     {
       "path": "docs/DAEMON-CONCURRENCY.md",
@@ -211,12 +211,12 @@
     {
       "path": "docs/MULTI_AGENT_EXECUTION.md",
       "disposition": "current",
-      "sha256": "24ffa52bc86e51c74d5d8089528d001d1aeecf6f66f75973dc5e651d1160d22c"
+      "sha256": "e5514fbb48ca073b4cdef09522d5cf2d4e86181b5307eb8c3a010044cd5460c6"
     },
     {
       "path": "docs/MUTATING-WORKTREE-INTEGRATION.md",
       "disposition": "current",
-      "sha256": "b46845d67e53c555b1557ebc68b9be9959ac8343935cc40c7ef07711f0bc8f8d"
+      "sha256": "9993ba2b893aa342f1dd8dab8e4788e6d7cc3f300354c71bdac2ec369f8391ae"
     },
     {
       "path": "docs/OBSERVABILITY.md",
@@ -231,7 +231,7 @@
     {
       "path": "docs/PRODUCTION-EXECUTION-TRACE.md",
       "disposition": "current",
-      "sha256": "c06198712f94013b63a7a4a21f83aa609bd14f09cc1fe4ff798574b5b2cc4b6b"
+      "sha256": "a54d23dfc7c79362bb5f06f4b7623246bd33ca727888e1b78910c744f2181832"
     },
     {
       "path": "docs/PRODUCT_EVIDENCE_ROADMAP.md",
@@ -372,6 +372,11 @@
       "path": "docs/WINDOWS-DESKTOP-NODE.md",
       "disposition": "current",
       "sha256": "e8ada547e0564ca45c7dbee909f22f9742b84bb63be4e768d5fa80688adf7dd2"
+    },
+    {
+      "path": "docs/WORKSPACES.md",
+      "disposition": "current",
+      "sha256": "6836ec702f947238331de18eb70a8bde85d01f88114631abafcfff57f872bb13"
     },
     {
       "path": "docs/architecture-policy.md",
