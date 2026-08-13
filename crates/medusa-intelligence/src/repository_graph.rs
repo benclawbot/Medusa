@@ -356,9 +356,10 @@ fn persist(path: &Path, snapshot: &RepositoryGraphSnapshot) -> MedusaResult<()> 
 
 fn unique_cache_temporary(path: &Path) -> PathBuf {
     let sequence = CACHE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let file_name = path
-        .file_name()
-        .map_or_else(|| "repository-graph.json".into(), |name| name.to_string_lossy());
+    let file_name = path.file_name().map_or_else(
+        || "repository-graph.json".into(),
+        |name| name.to_string_lossy(),
+    );
     path.with_file_name(format!(".{file_name}.tmp.{}.{}", process::id(), sequence))
 }
 
@@ -441,12 +442,7 @@ fn is_policy_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs,
-        process::Command,
-        sync::Barrier,
-        thread,
-    };
+    use std::{fs, process::Command, sync::Barrier, thread};
 
     use super::*;
 
@@ -540,7 +536,10 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .filter(|name| name.contains("repository-graph-v1.json.tmp"))
             .collect::<Vec<_>>();
-        assert!(leftovers.is_empty(), "temporary cache files remain: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temporary cache files remain: {leftovers:?}"
+        );
     }
 
     #[test]
