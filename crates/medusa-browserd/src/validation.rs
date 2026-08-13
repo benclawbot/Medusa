@@ -2,10 +2,10 @@
 
 use medusa_browser_client::network_policy::resolve_public_target;
 
+const VERIFICATION_ORIGIN_ENV: &str = "MEDUSA_BROWSER_VERIFICATION_ORIGIN";
+
 pub fn validate_public_url(url: &url::Url) -> Result<(), String> {
-    if std::env::var_os("MEDUSA_BROWSER_ALLOW_LOOPBACK").is_some()
-        && validate_loopback_url(url).is_ok()
-    {
+    if configured_loopback_url(url)? {
         return Ok(());
     }
     let host = url
@@ -20,6 +20,43 @@ pub fn validate_public_url(url: &url::Url) -> Result<(), String> {
         url.port_or_known_default().unwrap_or(443),
     )
     .map(|_| ())
+}
+
+/// Returns true only when `url` is loopback and matches the exact origin of the
+/// Medusa-owned verification route. A configured origin never grants access to
+/// a different localhost host/port/scheme.
+pub(crate) fn configured_loopback_url(url: &url::Url) -> Result<bool, String> {
+    if validate_loopback_url(url).is_err() {
+        return Ok(false);
+    }
+    let Some(allowed) = configured_loopback_origin()? else {
+        return Ok(false);
+    };
+    if same_origin(url, &allowed) {
+        Ok(true)
+    } else {
+        Err("local browser URL is outside the configured verification origin".to_owned())
+    }
+}
+
+fn configured_loopback_origin() -> Result<Option<url::Url>, String> {
+    let Some(raw) = std::env::var_os(VERIFICATION_ORIGIN_ENV) else {
+        return Ok(None);
+    };
+    let raw = raw.to_string_lossy();
+    let origin = url::Url::parse(raw.trim())
+        .map_err(|error| format!("invalid browser verification origin: {error}"))?;
+    if validate_loopback_url(&origin).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(origin))
+}
+
+fn same_origin(left: &url::Url, right: &url::Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host_str().map(str::to_ascii_lowercase)
+            == right.host_str().map(str::to_ascii_lowercase)
+        && left.port_or_known_default() == right.port_or_known_default()
 }
 
 pub(crate) fn validate_loopback_url(url: &url::Url) -> Result<(), String> {
@@ -47,7 +84,7 @@ mod tests {
 
     use medusa_browser_client::network_policy::is_public_ip;
 
-    use super::validate_public_url;
+    use super::{same_origin, validate_public_url};
 
     fn parse(input: &str) -> url::Url {
         url::Url::parse(input).expect("test URL")
@@ -101,5 +138,14 @@ mod tests {
                 Err("web URL must resolve to a public host".to_owned())
             );
         }
+    }
+
+    #[test]
+    fn verification_origin_matching_is_scheme_host_and_port_exact() {
+        let origin = parse("http://localhost:4173/app");
+        assert!(same_origin(&origin, &parse("http://LOCALHOST:4173/other")));
+        assert!(!same_origin(&origin, &parse("http://localhost:5173/")));
+        assert!(!same_origin(&origin, &parse("https://localhost:4173/")));
+        assert!(!same_origin(&origin, &parse("http://127.0.0.1:4173/")));
     }
 }

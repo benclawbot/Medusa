@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Medusa Browser Dispatch</title>
+</head>
+<body>
+  <main aria-label="browser dispatch fixture">
+    <h1>Browser dispatcher ready</h1>
+    <label for="name">Name</label>
+    <input id="name" name="name" value="">
+    <button id="apply" type="button">Apply</button>
+    <p id="result" aria-live="polite">Waiting</p>
+  </main>
+  <script>
+    document.querySelector('#apply').addEventListener('click', () => {
+      document.querySelector('#result').textContent = document.querySelector('#name').value;
+    });
+    void fetch('http://127.0.0.1:4174/trap', { mode: 'no-cors' }).catch(() => {});
+  </script>
+</body>
+</html>

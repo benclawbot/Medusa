@@ -8,6 +8,11 @@ fn main() -> io::Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("--stdio") | None => server::run(),
+        Some("--check") => {
+            server::check_readiness()?;
+            println!("medusa-browserd ready");
+            Ok(())
+        }
         Some("--version") => {
             println!("medusa-browserd {}", env!("CARGO_PKG_VERSION"));
             Ok(())

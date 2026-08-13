@@ -1,9 +1,13 @@
 use std::io::{self, BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
 
 use crate::{proxy, validation::validate_public_url};
+
+const BROWSER_BRIDGE_PATH_ENV: &str = "MEDUSA_BROWSER_BRIDGE_PATH";
+const BROWSER_BRIDGE_RELATIVE_PATH: &str = "browser/playwright_bridge.mjs";
 
 pub fn run() -> io::Result<()> {
     let proxy = proxy::spawn()?;
@@ -74,6 +78,10 @@ pub fn run() -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn check_readiness() -> io::Result<()> {
+    resolve_bridge_path().map(|_| ())
+}
+
 struct Bridge {
     child: Child,
     stdin: ChildStdin,
@@ -81,8 +89,9 @@ struct Bridge {
 }
 
 fn spawn_bridge(proxy: &proxy::Proxy) -> io::Result<Bridge> {
+    let bridge_path = resolve_bridge_path()?;
     let mut child = Command::new("node")
-        .arg("browser/playwright_bridge.mjs")
+        .arg(bridge_path)
         .env("MEDUSA_BROWSER_PROXY", proxy.server())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -94,6 +103,50 @@ fn spawn_bridge(proxy: &proxy::Proxy) -> io::Result<Bridge> {
         stdin,
         stdout,
     })
+}
+
+fn resolve_bridge_path() -> io::Result<PathBuf> {
+    if let Some(configured) = std::env::var_os(BROWSER_BRIDGE_PATH_ENV) {
+        let configured = PathBuf::from(configured);
+        if configured.is_file() {
+            return Ok(configured);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "configured Playwright bridge does not exist: {}",
+                configured.display()
+            ),
+        ));
+    }
+
+    let current_dir = std::env::current_dir()?;
+    let executable = std::env::current_exe()?;
+    for candidate in bridge_path_candidates(&current_dir, &executable) {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "Playwright bridge was not found; set {BROWSER_BRIDGE_PATH_ENV} to the installed {BROWSER_BRIDGE_RELATIVE_PATH} asset"
+        ),
+    ))
+}
+
+fn bridge_path_candidates(current_dir: &Path, executable: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![current_dir.join(BROWSER_BRIDGE_RELATIVE_PATH)];
+    if let Some(parent) = executable.parent() {
+        for ancestor in parent.ancestors().take(4) {
+            let candidate = ancestor.join(BROWSER_BRIDGE_RELATIVE_PATH);
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
 }
 
 fn take_bridge_stdio(child: &mut Child) -> io::Result<(ChildStdin, BufReader<ChildStdout>)> {
@@ -163,11 +216,12 @@ fn write_response<W: Write>(out: &mut W, response: &BrowserResponse) -> io::Resu
 #[cfg(test)]
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Write};
+    use std::path::Path;
     use std::process::{Command, Stdio};
 
     use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
 
-    use super::{forward_to_bridge, take_bridge_stdio, write_response};
+    use super::{bridge_path_candidates, forward_to_bridge, take_bridge_stdio, write_response};
 
     #[derive(Default)]
     struct FailingWriter {
@@ -214,6 +268,19 @@ mod tests {
             BrowserResponse::Error { code, .. } => code,
             other => panic!("expected error response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn bridge_candidates_include_repo_root_from_target_binary() {
+        let candidates = bridge_path_candidates(
+            Path::new("/work/repo/crates/medusa-agent"),
+            Path::new("/work/repo/target/debug/medusa-browserd"),
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path == Path::new("/work/repo/browser/playwright_bridge.mjs"))
+        );
     }
 
     #[test]

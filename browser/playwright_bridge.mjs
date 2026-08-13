@@ -13,7 +13,12 @@ async function ensurePage() {
   if (!browser) {
     const proxyServer = process.env.MEDUSA_BROWSER_PROXY;
     if (!proxyServer) throw new Error('MEDUSA_BROWSER_PROXY is required');
-    browser = await chromium.launch({ proxy: { server: proxyServer } });
+    // Chromium implicitly bypasses proxies for localhost/link-local destinations.
+    // The special <-loopback> subtraction rule keeps those requests inside
+    // medusa-browserd, where the exact verification-origin policy is enforced.
+    browser = await chromium.launch({
+      proxy: { server: proxyServer, bypass: '<-loopback>' },
+    });
     context = await browser.newContext({ serviceWorkers: 'block' });
     await context.addInitScript(() => {
       globalThis.__MEDUSA_CONSOLE_ERRORS__ = [];

@@ -1,0 +1,110 @@
+name: Browser Dispatch Certification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "browser/**"
+      - "crates/medusa-agent/src/tools/**"
+      - "crates/medusa-agent/src/verification.rs"
+      - "crates/medusa-agent/tests/browser_dispatch.rs"
+      - "crates/medusa-browser-client/**"
+      - "crates/medusa-browserd/**"
+      - "crates/medusa-capabilities/**"
+      - ".github/workflows/browser-dispatch-certification.yml"
+  pull_request:
+    paths:
+      - "browser/**"
+      - "crates/medusa-agent/src/tools/**"
+      - "crates/medusa-agent/src/verification.rs"
+      - "crates/medusa-agent/tests/browser_dispatch.rs"
+      - "crates/medusa-browser-client/**"
+      - "crates/medusa-browserd/**"
+      - "crates/medusa-capabilities/**"
+      - ".github/workflows/browser-dispatch-certification.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-dispatch-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-dispatch:
+    name: Browser dispatch (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            exe: ""
+            playwright_install: "npx playwright install --with-deps chromium"
+          - os: macos-latest
+            exe: ""
+            playwright_install: "npx playwright install chromium"
+          - os: windows-latest
+            exe: ".exe"
+            playwright_install: "npx playwright install chromium"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - name: Install browser fixture dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd browser
+          npm install --ignore-scripts
+          ${{ matrix.playwright_install }}
+      - name: Build browser sidecar
+        shell: bash
+        run: cargo build -p medusa-browserd --locked
+      - name: Check browser sidecar readiness
+        shell: bash
+        run: ./target/debug/medusa-browserd${{ matrix.exe }} --check
+      - name: Start verification fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          node browser/fixture/server.mjs > browser-fixture.log 2>&1 &
+          echo $! > browser-fixture.pid
+          node --input-type=module - <<'NODE'
+          for (let attempt = 0; attempt < 100; attempt += 1) {
+            try {
+              const response = await fetch('http://127.0.0.1:4173/interactive.html');
+              if (response.ok) process.exit(0);
+            } catch {}
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          throw new Error('browser fixture did not start');
+          NODE
+      - name: Run production browser dispatcher proof
+        shell: bash
+        env:
+          MEDUSA_BROWSER_DISPATCH_E2E: "1"
+          MEDUSA_BROWSER_ENABLED: "true"
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
+        run: cargo test -p medusa-agent --test browser_dispatch --locked -- --nocapture
+      - name: Assert unrelated loopback stayed unreachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q 'TRAP_HIT' browser-fixture.log; then
+            cat browser-fixture.log
+            echo 'Browser bypassed Medusa proxy and reached an unrelated loopback origin.' >&2
+            exit 1
+          fi
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-dispatch-${{ matrix.os }}
+          path: browser-fixture.log
+          if-no-files-found: ignore
