@@ -114,7 +114,10 @@ mod tests {
         fs::write(root.path().join("brief.md"), "research brief\n").expect("brief");
         let workspace = Workspace::open(root.path()).expect("open workspace");
         assert_eq!(workspace.kind(), WorkspaceKind::Directory);
-        assert_eq!(workspace.root(), root.path().canonicalize().expect("canonical"));
+        assert_eq!(
+            workspace.root(),
+            root.path().canonicalize().expect("canonical")
+        );
     }
 
     #[test]
