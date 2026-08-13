@@ -319,17 +319,10 @@ impl CapabilityRegistry {
             "GitHub CLI authentication probe",
         );
         let browser = medusa_config::BrowserConfig::default();
-        let sidecar_present =
-            browser.enabled && browser.path.as_ref().is_some_and(|path| path.exists());
-        insert_state(
-            &mut capabilities,
+        let verification_route = std::env::var("MEDUSA_BROWSER_VERIFY_URL").ok();
+        capabilities.insert(
             Capability::Browser,
-            false,
-            if sidecar_present {
-                "browser sidecar exists but no certified production dispatcher is registered"
-            } else {
-                "browser sidecar is disabled or unavailable"
-            },
+            browser_capability_state(&browser, verification_route.as_deref(), probe),
         );
         let desktop_enabled = desktop.enabled();
         insert_state(
@@ -465,6 +458,7 @@ impl CapabilityRegistry {
         self.entries
             .values()
             .filter(|entry| entry.projected_to(CapabilitySurface::Model))
+            .filter(|entry| !read_only || entry.capability != Capability::Browser)
             .filter(|entry| !read_only || !mutating(entry))
             .filter_map(|entry| entry.tool.clone())
             .collect()
@@ -496,6 +490,57 @@ impl CapabilityRegistry {
     }
 }
 
+fn browser_capability_state(
+    browser: &medusa_config::BrowserConfig,
+    verification_route: Option<&str>,
+    probe: &impl CommandProbe,
+) -> CapabilityState {
+    if !browser.enabled {
+        return CapabilityState {
+            available: false,
+            detail: "browser model actions are explicitly disabled".into(),
+        };
+    }
+    let Some(path) = browser.path.as_ref() else {
+        return CapabilityState {
+            available: false,
+            detail: "browser model actions require an explicit MEDUSA_BROWSER_PATH sidecar".into(),
+        };
+    };
+    let Some(program) = path.to_str() else {
+        return CapabilityState {
+            available: false,
+            detail: "browser sidecar path is not UTF-8".into(),
+        };
+    };
+    if !probe.available(program, &["--version"]) {
+        return CapabilityState {
+            available: false,
+            detail: "configured browser sidecar failed its readiness probe".into(),
+        };
+    }
+    if !probe.available("node", &["--version"]) {
+        return CapabilityState {
+            available: false,
+            detail: "browser sidecar requires Node.js for the Playwright bridge".into(),
+        };
+    }
+    if verification_route
+        .map(str::trim)
+        .filter(|route| !route.is_empty())
+        .is_none()
+    {
+        return CapabilityState {
+            available: false,
+            detail: "browser model actions require a Medusa-owned verification route".into(),
+        };
+    }
+    CapabilityState {
+        available: true,
+        detail: "browser sidecar is bound to the Medusa-owned verification route".into(),
+    }
+}
+
 fn build_entries(
     states: &BTreeMap<Capability, CapabilityState>,
     desktop: &DesktopCommanderSettings,
@@ -511,42 +556,94 @@ fn build_entries(
         "browser_fill",
         "browser_press",
         "browser_screenshot",
-        "browser_evaluate",
         "browser_tabs",
         "browser_close",
         "browser_ping",
     ] {
-        let entry = RegistryEntry {
-            id: format!("tool.{name}"),
-            capability: Capability::Browser,
-            kind: RegistryKind::Tool,
-            status: CapabilityStatus::Partial,
-            description: "Browser action withheld until a certified production dispatcher exists"
-                .into(),
-            owner: "browser maintainers".into(),
-            lifecycle_owner: "medusa-browserd".into(),
-            surfaces: BTreeSet::from([
-                CapabilitySurface::Protocol,
-                CapabilitySurface::Documentation,
-            ]),
-            permissions: BTreeSet::from([RegistryPermission::Read, RegistryPermission::Network]),
-            explicit_approval: BTreeSet::new(),
-            dependencies: vec!["browser sidecar".into()],
-            supported_platforms: supported_platforms(),
-            readiness: ReadinessContract {
-                ready: false,
-                detail: states.get(&Capability::Browser).map_or_else(
-                    || "browser was not discovered".into(),
-                    |state| state.detail.clone(),
-                ),
-                evidence: vec!["no registered medusa-agent production handler".into()],
-            },
-            handler: None,
-            tool: None,
-            provenance: Some("architecture-v2 quarantine".into()),
+        let (description, input_schema) = match name {
+            "browser_navigate" => (
+                "Navigate the isolated verification browser to Medusa's configured verification route.",
+                json!({"type":"object","properties":{},"additionalProperties":false}),
+            ),
+            "browser_snapshot" => (
+                "Read a bounded text/accessibility snapshot from the isolated verification browser.",
+                json!({"type":"object","properties":{},"additionalProperties":false}),
+            ),
+            "browser_click" => (
+                "Click one element in the isolated verification browser by snapshot ref or selector.",
+                json!({"type":"object","properties":{"ref":{"type":"integer","minimum":0},"selector":{"type":"string"}},"additionalProperties":false}),
+            ),
+            "browser_fill" => (
+                "Fill one control in the isolated verification browser by snapshot ref or selector.",
+                json!({"type":"object","properties":{"ref":{"type":"integer","minimum":0},"selector":{"type":"string"},"value":{"type":"string"}},"required":["value"],"additionalProperties":false}),
+            ),
+            "browser_press" => (
+                "Press one keyboard key in the isolated verification browser.",
+                json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}),
+            ),
+            "browser_screenshot" => (
+                "Capture a screenshot artifact from the isolated verification browser.",
+                json!({"type":"object","properties":{"full_page":{"type":"boolean"}},"additionalProperties":false}),
+            ),
+            "browser_tabs" => (
+                "List tabs in the isolated verification browser.",
+                json!({"type":"object","properties":{},"additionalProperties":false}),
+            ),
+            "browser_close" => (
+                "Close and forget the repository-scoped isolated verification browser.",
+                json!({"type":"object","properties":{},"additionalProperties":false}),
+            ),
+            "browser_ping" => (
+                "Check that the isolated verification browser sidecar is responsive.",
+                json!({"type":"object","properties":{},"additionalProperties":false}),
+            ),
+            _ => unreachable!("browser tool list is exhaustive"),
         };
+        let handler = format!("medusa-agent::tools::browser::{name}");
+        let entry = tool_entry(
+            ToolIdentity { states, name },
+            Capability::Browser,
+            description,
+            input_schema,
+            &handler,
+            [
+                RegistryPermission::Read,
+                RegistryPermission::Network,
+                RegistryPermission::ProcessSpawn,
+                RegistryPermission::RuntimeMutation,
+            ],
+            false,
+        );
         entries.insert(entry.id.clone(), entry);
     }
+    let evaluate = RegistryEntry {
+        id: "tool.browser_evaluate".into(),
+        capability: Capability::Browser,
+        kind: RegistryKind::Tool,
+        status: CapabilityStatus::Partial,
+        description:
+            "Arbitrary JavaScript evaluation is reserved for Medusa's authoritative verifier"
+                .into(),
+        owner: "browser maintainers".into(),
+        lifecycle_owner: "medusa-browserd".into(),
+        surfaces: BTreeSet::from([
+            CapabilitySurface::Protocol,
+            CapabilitySurface::Documentation,
+        ]),
+        permissions: BTreeSet::from([RegistryPermission::Read, RegistryPermission::Network]),
+        explicit_approval: BTreeSet::new(),
+        dependencies: vec!["browser sidecar".into()],
+        supported_platforms: supported_platforms(),
+        readiness: ReadinessContract {
+            ready: false,
+            detail: "browser_evaluate is verifier-internal and never model-executable".into(),
+            evidence: vec!["authoritative verifier owns JavaScript evaluation".into()],
+        },
+        handler: None,
+        tool: None,
+        provenance: Some("verified-browser least-privilege boundary".into()),
+    };
+    entries.insert(evaluate.id.clone(), evaluate);
     entries
 }
 
@@ -1000,6 +1097,17 @@ mod tests {
         .expect("registry")
     }
 
+    fn registry_with_browser_state(state: CapabilityState) -> CapabilityRegistry {
+        let mut registry = ready_registry();
+        registry.capabilities.insert(Capability::Browser, state);
+        registry.entries = build_entries(
+            &registry.capabilities,
+            &DesktopCommanderSettings::from_env(),
+        );
+        registry.validate().expect("browser registry");
+        registry
+    }
+
     #[test]
     fn every_model_tool_has_one_ready_handler() {
         let registry = ready_registry();
@@ -1063,20 +1171,105 @@ mod tests {
     }
 
     #[test]
-    fn browser_tools_are_absent_from_executable_surfaces() {
-        let registry = ready_registry();
+    fn browser_tools_remain_quarantined_without_medusa_verification_route() {
+        let browser = medusa_config::BrowserConfig {
+            enabled: true,
+            path: Some(PathBuf::from("test-browserd")),
+            timeout_ms: 30_000,
+        };
+        let probe = FakeProbe(BTreeSet::from(["test-browserd".into(), "node".into()]));
+        let state = browser_capability_state(&browser, None, &probe);
+        assert!(!state.available);
+        let registry = registry_with_browser_state(state);
         assert!(
             registry
                 .model_tools(false)
                 .iter()
                 .all(|tool| !tool.name.starts_with("browser_"))
         );
+    }
+
+    #[test]
+    fn verified_browser_state_exposes_only_bounded_model_actions() {
+        let browser = medusa_config::BrowserConfig {
+            enabled: true,
+            path: Some(PathBuf::from("test-browserd")),
+            timeout_ms: 30_000,
+        };
+        let probe = FakeProbe(BTreeSet::from(["test-browserd".into(), "node".into()]));
+        let state = browser_capability_state(
+            &browser,
+            Some("http://127.0.0.1:4173/app"),
+            &probe,
+        );
+        assert!(state.available);
+        let registry = registry_with_browser_state(state);
+        let names = registry
+            .model_tools(false)
+            .into_iter()
+            .filter(|tool| tool.name.starts_with("browser_"))
+            .map(|tool| tool.name)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "browser_close".to_owned(),
+                "browser_click".to_owned(),
+                "browser_fill".to_owned(),
+                "browser_navigate".to_owned(),
+                "browser_ping".to_owned(),
+                "browser_press".to_owned(),
+                "browser_screenshot".to_owned(),
+                "browser_snapshot".to_owned(),
+                "browser_tabs".to_owned(),
+            ])
+        );
+        assert!(!names.contains("browser_evaluate"));
         assert!(
             registry
-                .entries
-                .values()
-                .filter(|entry| entry.capability == Capability::Browser)
-                .all(|entry| !entry.readiness.ready && entry.handler.is_none())
+                .model_tools(true)
+                .iter()
+                .all(|tool| !tool.name.starts_with("browser_"))
+        );
+        for name in &names {
+            let entry = registry
+                .entry(&format!("tool.{name}"))
+                .expect("browser entry");
+            assert!(entry.readiness.ready);
+            assert!(entry.handler.is_some());
+            let schema = &entry.tool.as_ref().expect("tool schema").input_schema;
+            assert_eq!(schema.get("additionalProperties"), Some(&Value::Bool(false)));
+            assert!(
+                !schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .is_some_and(|properties| properties.contains_key("verified"))
+            );
+        }
+    }
+
+    #[test]
+    fn browser_readiness_requires_sidecar_and_node_probes() {
+        let browser = medusa_config::BrowserConfig {
+            enabled: true,
+            path: Some(PathBuf::from("test-browserd")),
+            timeout_ms: 30_000,
+        };
+        assert!(
+            !browser_capability_state(
+                &browser,
+                Some("http://127.0.0.1:4173"),
+                &FakeProbe(BTreeSet::from(["node".into()])),
+            )
+            .available
+        );
+        assert!(
+            !browser_capability_state(
+                &browser,
+                Some("http://127.0.0.1:4173"),
+                &FakeProbe(BTreeSet::from(["test-browserd".into()])),
+            )
+            .available
         );
     }
 

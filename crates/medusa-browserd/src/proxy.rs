@@ -7,7 +7,7 @@ use std::{
 
 use medusa_browser_client::network_policy::{ResolvedTarget, resolve_public_target};
 
-use crate::validation::validate_loopback_url;
+use crate::validation::configured_loopback_url;
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 
@@ -108,9 +108,7 @@ fn handle_http(
 }
 
 fn resolve_url(url: &url::Url) -> Result<ResolvedTarget, String> {
-    if std::env::var_os("MEDUSA_BROWSER_ALLOW_LOOPBACK").is_some()
-        && validate_loopback_url(url).is_ok()
-    {
+    if configured_loopback_url(url)? {
         let host = url
             .host_str()
             .ok_or_else(|| "local browser URL must include a host".to_owned())?;

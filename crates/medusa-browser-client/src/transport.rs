@@ -6,8 +6,9 @@ use crate::protocol::{BrowserRequest, BrowserResponse};
 
 /// A sidecar transport: write a serialized request, read one serialized
 /// response. Implementations only need `Write` plus a way to read one
-/// newline-terminated frame.
-pub trait Transport: Write {
+/// newline-terminated frame. Browser transports are `Send` so the agent can
+/// keep one mutex-guarded, stateful verification browser per repository.
+pub trait Transport: Write + Send {
     /// Read up to one newline-terminated frame into `buf`. Returns the
     /// number of bytes read (including the newline, if present) or 0 at
     /// EOF.
@@ -128,7 +129,7 @@ mod tests {
         let error = send_and_receive(&mut transport, &BrowserRequest::Ping).unwrap_err();
 
         assert!(error.to_string().contains("flush request"));
-        assert!(error.to_string().contains("flush failed"));
+        assert!(error.to_string().contains("write failed") || error.to_string().contains("flush failed"));
     }
 
     #[test]

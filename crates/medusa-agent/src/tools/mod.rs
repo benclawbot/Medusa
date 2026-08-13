@@ -10,10 +10,18 @@ pub(crate) mod skills;
 mod web;
 
 use std::{
+    collections::BTreeMap,
+    fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
 };
 
+use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
 use medusa_capabilities::{CapabilityRegistry, SystemProbe};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::DesktopCommanderSettings;
@@ -21,6 +29,22 @@ use medusa_provider::ToolDefinition;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
+
+const BROWSER_VERIFY_URL_ENV: &str = "MEDUSA_BROWSER_VERIFY_URL";
+const BROWSER_VERIFICATION_ORIGIN_ENV: &str = "MEDUSA_BROWSER_VERIFICATION_ORIGIN";
+const MAX_BROWSER_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
+
+type BrowserSessionKey = (PathBuf, String);
+type SharedBrowserSession = Arc<Mutex<BrowserToolSession>>;
+
+struct BrowserToolSession {
+    client: BrowserClient,
+    initialized: bool,
+    generation: u64,
+}
+
+static BROWSER_SESSIONS: OnceLock<Mutex<BTreeMap<BrowserSessionKey, SharedBrowserSession>>> =
+    OnceLock::new();
 
 /// Single policy-aware registry for built-in tools shared by every agent frontend.
 #[derive(Clone, Debug)]
@@ -97,6 +121,9 @@ pub(crate) fn built_in_tools(
 }
 
 pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
+    if is_model_browser_tool(name) {
+        return execute_browser_tool(repo, name, input);
+    }
     match name {
         "fs_read" => filesystem::read(repo, input_string(input, "path")?),
         "fs_create_dir" => filesystem::create_dir(repo, input_string(input, "path")?),
@@ -155,6 +182,281 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
         "git_checkpoint" => git::checkpoint(repo, input_string(input, "message")?),
         _ => Err(invalid_tool(format!("unknown tool: {name}"))),
     }
+}
+
+fn is_model_browser_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "browser_navigate"
+            | "browser_snapshot"
+            | "browser_click"
+            | "browser_fill"
+            | "browser_press"
+            | "browser_screenshot"
+            | "browser_tabs"
+            | "browser_close"
+            | "browser_ping"
+    )
+}
+
+fn browser_sessions() -> &'static Mutex<BTreeMap<BrowserSessionKey, SharedBrowserSession>> {
+    BROWSER_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn browser_policy_denied(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::PolicyDenied,
+        ErrorCategory::Policy,
+        message,
+    )
+}
+
+fn browser_dependency_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        message,
+    )
+}
+
+fn browser_verification_route() -> MedusaResult<String> {
+    std::env::var(BROWSER_VERIFY_URL_ENV)
+        .ok()
+        .map(|route| route.trim().to_owned())
+        .filter(|route| !route.is_empty())
+        .ok_or_else(|| {
+            browser_policy_denied(
+                "model browser actions require a Medusa-owned MEDUSA_BROWSER_VERIFY_URL route",
+            )
+        })
+}
+
+fn validate_browser_model_input(name: &str, input: &Value) -> MedusaResult<()> {
+    let object = input
+        .as_object()
+        .ok_or_else(|| invalid_tool("browser tool input must be an object"))?;
+    for reserved in ["verified", "verification", "trusted", "trust", "authority"] {
+        if object.contains_key(reserved) {
+            return Err(browser_policy_denied(
+                "browser verification authority is Medusa-owned and cannot be supplied by the model",
+            ));
+        }
+    }
+    let allowed: &[&str] = match name {
+        "browser_navigate" | "browser_snapshot" | "browser_tabs" | "browser_close"
+        | "browser_ping" => &[],
+        "browser_click" => &["ref", "selector"],
+        "browser_fill" => &["ref", "selector", "value"],
+        "browser_press" => &["key"],
+        "browser_screenshot" => &["full_page"],
+        _ => return Err(invalid_tool(format!("unknown model browser tool: {name}"))),
+    };
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(invalid_tool(format!(
+            "browser tool {name} does not accept field `{key}`"
+        )));
+    }
+    Ok(())
+}
+
+fn browser_session_key(repo: &Path, route: &str) -> BrowserSessionKey {
+    (
+        fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf()),
+        route.to_owned(),
+    )
+}
+
+fn browser_envelope_config(repo: &Path, runtime: &medusa_config::MedusaConfig) -> crate::output_envelope::EnvelopeConfig {
+    crate::output_envelope::EnvelopeConfig {
+        head_bytes: runtime.envelope.head_bytes,
+        tail_bytes: runtime.envelope.tail_bytes,
+        max_artifact_bytes: runtime
+            .daemon_max_artifact_bytes
+            .min(MAX_BROWSER_ARTIFACT_BYTES),
+        session_root: repo.join(".medusa"),
+    }
+}
+
+fn create_browser_session(
+    runtime: &medusa_config::MedusaConfig,
+    route: &str,
+) -> MedusaResult<SharedBrowserSession> {
+    if !runtime.browser.enabled {
+        return Err(browser_policy_denied(
+            "model browser actions are quarantined until MEDUSA_BROWSER_ENABLED is explicitly enabled",
+        ));
+    }
+    let path = runtime.browser.path.as_ref().ok_or_else(|| {
+        browser_policy_denied(
+            "model browser actions require an explicit MEDUSA_BROWSER_PATH sidecar",
+        )
+    })?;
+    if !path.is_file() {
+        return Err(browser_dependency_error(format!(
+            "configured browser sidecar does not exist: {}",
+            path.display()
+        )));
+    }
+    let command = path
+        .to_str()
+        .ok_or_else(|| invalid_tool("browser sidecar path must be UTF-8"))?;
+    let client = BrowserClient::spawn_with_env(
+        command,
+        &[(BROWSER_VERIFICATION_ORIGIN_ENV, route)],
+    )?;
+    Ok(Arc::new(Mutex::new(BrowserToolSession {
+        client,
+        initialized: false,
+        generation: 0,
+    })))
+}
+
+fn get_browser_session(
+    repo: &Path,
+    route: &str,
+    runtime: &medusa_config::MedusaConfig,
+) -> MedusaResult<(BrowserSessionKey, SharedBrowserSession)> {
+    let key = browser_session_key(repo, route);
+    let mut sessions = browser_sessions().lock().map_err(|_| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            "browser session registry lock was poisoned",
+        )
+    })?;
+    let session = if let Some(session) = sessions.get(&key) {
+        Arc::clone(session)
+    } else {
+        let session = create_browser_session(runtime, route)?;
+        sessions.insert(key.clone(), Arc::clone(&session));
+        session
+    };
+    Ok((key, session))
+}
+
+fn ensure_browser_initialized(session: &mut BrowserToolSession, route: &str) -> MedusaResult<()> {
+    if session.initialized {
+        return Ok(());
+    }
+    match session.client.request(BrowserRequest::Navigate {
+        url: route.to_owned(),
+    })? {
+        BrowserResponse::Navigate { status, .. } if status < 400 => {
+            session.initialized = true;
+            Ok(())
+        }
+        BrowserResponse::Navigate { status, .. } => Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("browser verification route returned HTTP {status}"),
+        )),
+        BrowserResponse::Error { code, message } => Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("browser verification route failed: {code}: {message}"),
+        )),
+        other => Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("unexpected browser navigation response: {other:?}"),
+        )),
+    }
+}
+
+fn remove_browser_session(key: &BrowserSessionKey, expected: &SharedBrowserSession) {
+    let Ok(mut sessions) = browser_sessions().lock() else {
+        return;
+    };
+    if sessions
+        .get(key)
+        .is_some_and(|current| Arc::ptr_eq(current, expected))
+    {
+        sessions.remove(key);
+    }
+}
+
+fn schedule_browser_cleanup(
+    key: BrowserSessionKey,
+    session: SharedBrowserSession,
+    generation: u64,
+    timeout: Duration,
+) {
+    let cleanup_key = key.clone();
+    let cleanup_session = Arc::clone(&session);
+    let spawned = thread::Builder::new()
+        .name("medusa-browser-idle-cleanup".to_owned())
+        .spawn(move || {
+            thread::sleep(timeout);
+            let current = cleanup_session
+                .lock()
+                .ok()
+                .is_some_and(|state| state.generation == generation);
+            if current {
+                remove_browser_session(&cleanup_key, &cleanup_session);
+            }
+        });
+    if spawned.is_err() {
+        remove_browser_session(&key, &session);
+    }
+}
+
+fn execute_browser_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
+    validate_browser_model_input(name, input)?;
+    let route = browser_verification_route()?;
+    let runtime = medusa_config::MedusaConfig::from_env();
+    if !runtime.browser.enabled || runtime.browser.path.is_none() {
+        return Err(browser_policy_denied(
+            "model browser actions remain quarantined until the verified browser sidecar is explicitly configured",
+        ));
+    }
+    let key = browser_session_key(repo, &route);
+    if name == "browser_close" {
+        let session = browser_sessions()
+            .lock()
+            .ok()
+            .and_then(|mut sessions| sessions.remove(&key));
+        if let Some(session) = session {
+            if let Ok(mut state) = session.lock() {
+                let _ = state.client.request(BrowserRequest::Close);
+            }
+        }
+        return Ok("browser verification session closed".to_owned());
+    }
+
+    let (key, session) = get_browser_session(repo, &route, &runtime)?;
+    let envelope_config = browser_envelope_config(repo, &runtime);
+    let timeout = Duration::from_millis(runtime.browser.timeout_ms.max(1_000));
+    let (result, generation) = {
+        let mut state = session.lock().map_err(|_| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                "browser session lock was poisoned",
+            )
+        })?;
+        ensure_browser_initialized(&mut state, &route)?;
+        state.generation = state.generation.saturating_add(1);
+        let generation = state.generation;
+        let effective_input = if name == "browser_navigate" {
+            serde_json::json!({"url": route})
+        } else {
+            input.clone()
+        };
+        let result = browser::run(
+            repo,
+            &mut state.client,
+            &envelope_config,
+            name,
+            &effective_input,
+        );
+        (result, generation)
+    };
+    if result.is_err() {
+        remove_browser_session(&key, &session);
+    } else {
+        schedule_browser_cleanup(key, Arc::clone(&session), generation, timeout);
+    }
+    result
 }
 
 pub(crate) fn execute_tool_cancellable(
@@ -367,5 +669,46 @@ mod tests {
                 .expect_err("present non-string mode must fail");
             assert!(error.to_string().contains("output_mode must be a string"));
         }
+    }
+
+    #[test]
+    fn browser_model_tools_are_explicit_and_evaluate_stays_internal() {
+        for name in [
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_fill",
+            "browser_press",
+            "browser_screenshot",
+            "browser_tabs",
+            "browser_close",
+            "browser_ping",
+        ] {
+            assert!(is_model_browser_tool(name), "{name}");
+        }
+        assert!(!is_model_browser_tool("browser_evaluate"));
+        assert!(!is_model_browser_tool("fs_read"));
+    }
+
+    #[test]
+    fn model_cannot_supply_browser_verification_authority() {
+        for key in ["verified", "verification", "trusted", "trust", "authority"] {
+            let input = json!({key: true});
+            let error = validate_browser_model_input("browser_snapshot", &input)
+                .expect_err("model trust metadata must fail closed");
+            assert_eq!(error.code, ErrorCode::PolicyDenied);
+        }
+    }
+
+    #[test]
+    fn browser_navigation_accepts_no_model_selected_url() {
+        validate_browser_model_input("browser_navigate", &json!({}))
+            .expect("empty navigation input");
+        let error = validate_browser_model_input(
+            "browser_navigate",
+            &json!({"url": "http://127.0.0.1:9"}),
+        )
+        .expect_err("model-selected URL must be rejected");
+        assert!(error.to_string().contains("does not accept field `url`"));
     }
 }
