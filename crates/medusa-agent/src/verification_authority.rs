@@ -728,7 +728,19 @@ fn filtered_repository_state_paths(
     evidence_root: &Path,
     components: &[ChangedComponent],
 ) -> MedusaResult<Vec<PathBuf>> {
-    let mut paths = repository_state_paths(repo, components)?;
+    // Exclude the authority's own evidence tree before a fallback filesystem walk. Filtering only
+    // after recursion lets the concurrent evidence publisher change directory contents mid-walk,
+    // which can falsely look like repository drift and trigger an unnecessary verification rerun.
+    let evidence_relative = evidence_root
+        .strip_prefix(repo)
+        .ok()
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            let repo = repo.canonicalize().ok()?;
+            let evidence = evidence_root.canonicalize().ok()?;
+            evidence.strip_prefix(repo).ok().map(Path::to_path_buf)
+        });
+    let mut paths = repository_state_paths(repo, components, evidence_relative.as_deref())?;
     paths.sort();
     paths.dedup();
     let repo_root = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
@@ -748,6 +760,7 @@ fn filtered_repository_state_paths(
 fn repository_state_paths(
     repo: &Path,
     components: &[ChangedComponent],
+    excluded: Option<&Path>,
 ) -> MedusaResult<Vec<PathBuf>> {
     let mut result = if is_revisioned_git_repository_root(repo) {
         let output = Command::new("git")
@@ -768,10 +781,10 @@ fn repository_state_paths(
                 .map(|entry| PathBuf::from(String::from_utf8_lossy(entry).into_owned()))
                 .collect()
         } else {
-            collect_repository_paths(repo)?
+            collect_repository_paths(repo, excluded)?
         }
     } else {
-        collect_repository_paths(repo)?
+        collect_repository_paths(repo, excluded)?
     };
 
     for component in components {
@@ -780,19 +793,26 @@ fn repository_state_paths(
     Ok(result)
 }
 
-fn collect_repository_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
-    fn collect(root: &Path, directory: &Path, result: &mut Vec<PathBuf>) -> MedusaResult<()> {
+fn collect_repository_paths(repo: &Path, excluded: Option<&Path>) -> MedusaResult<Vec<PathBuf>> {
+    fn collect(
+        root: &Path,
+        directory: &Path,
+        excluded: Option<&Path>,
+        result: &mut Vec<PathBuf>,
+    ) -> MedusaResult<()> {
         let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let path = entry.path();
             let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-            if relative.starts_with(".git") {
+            if relative.starts_with(".git")
+                || excluded.is_some_and(|excluded| relative.starts_with(excluded))
+            {
                 continue;
             }
             let metadata = fs::symlink_metadata(&path)?;
             if metadata.is_dir() {
-                collect(root, &path, result)?;
+                collect(root, &path, excluded, result)?;
             } else {
                 result.push(relative);
             }
@@ -801,7 +821,7 @@ fn collect_repository_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
     }
 
     let mut result = Vec::new();
-    collect(repo, repo, &mut result)?;
+    collect(repo, repo, excluded, &mut result)?;
     Ok(result)
 }
 
@@ -941,6 +961,20 @@ mod tests {
             complete_repository_state_fingerprint(directory.path(), &evidence_root, &components)
                 .expect("changed fingerprint");
         assert_ne!(before, changed);
+    }
+
+    #[test]
+    fn repository_path_collection_never_enters_the_evidence_tree() {
+        let directory = tempfile::tempdir().expect("repository");
+        fs::write(directory.path().join("artifact.json"), "{\"ok\":true}\n").expect("artifact");
+        let evidence = directory.path().join("durable-evidence");
+        fs::create_dir_all(evidence.join("volatile/nested")).expect("evidence tree");
+        fs::write(evidence.join("volatile/nested/receipt.json"), "{}\n").expect("receipt");
+
+        let paths = collect_repository_paths(directory.path(), Some(Path::new("durable-evidence")))
+            .expect("repository paths");
+
+        assert_eq!(paths, vec![PathBuf::from("artifact.json")]);
     }
 
     #[test]

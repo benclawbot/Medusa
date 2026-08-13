@@ -27,7 +27,6 @@ jobs:
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
       MEDUSA_LIVE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT: ${{ runner.temp }}/live-self-improvement-report.json
       MEDUSA_MODEL: MiniMax-M3
       MEDUSA_PROVIDER: minimax
     steps:
@@ -42,11 +41,15 @@ jobs:
           fi
           echo "::add-mask::$MINIMAX_API_KEY"
       - name: Exercise the production correction loop against MiniMax
+        env:
+          MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT: ${{ runner.temp }}/live-self-improvement-report.json
         run: >-
           cargo test -p medusa-runtime --test live_self_improvement_loop --locked --
           --ignored --nocapture
       - name: Validate and stage the sanitized evidence
         shell: python
+        env:
+          MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT: ${{ runner.temp }}/live-self-improvement-report.json
         run: |
           import json
           import os
