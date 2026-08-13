@@ -34,6 +34,11 @@ pub(crate) fn decomposition_for(
         .planning
         .task(TaskKind::Implementation)
         .ok_or_else(|| "parallel mutation planning requires an implementation task".to_owned())?;
+    if !crate::workspace_worker_manager::is_git_repository(repo) {
+        return Ok(single(
+            "directory workspaces use one isolated content-addressed snapshot implementer; conflict-aware parallel mutation currently requires Git worktree staging",
+        ));
+    }
     let scope = &contract.allowed_write_paths;
     if plan.planning.risk == RiskLevel::High {
         return Ok(single("high-risk mutations remain single-implementer"));
