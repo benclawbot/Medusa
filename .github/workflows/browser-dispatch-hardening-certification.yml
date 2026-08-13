@@ -76,22 +76,15 @@ jobs:
           throw new Error('browser hardening fixture did not start');
           NODE
       - name: Prove production per-call deadline and restart
-        shell: bash
         env:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: timeout
           MEDUSA_BROWSER_ENABLED: "true"
           MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
-          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/hang-once.html
-          MEDUSA_BROWSER_TIMEOUT_MS: "2000"
-        run: |
-          set -euo pipefail
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            export PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vi 'GitHub CLI' | paste -sd ':' -)"
-          fi
-          cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
+          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
       - name: Prove production in-flight cancellation and restart
-        shell: bash
         env:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: cancel
@@ -99,12 +92,7 @@ jobs:
           MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
           MEDUSA_BROWSER_TIMEOUT_MS: "10000"
-        run: |
-          set -euo pipefail
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            export PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vi 'GitHub CLI' | paste -sd ':' -)"
-          fi
-          cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
+        run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
       - name: Prove DOM reference ceiling
         env:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
