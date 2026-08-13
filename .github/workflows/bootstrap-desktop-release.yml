@@ -48,6 +48,9 @@ jobs:
       - name: Install desktop dependencies
         working-directory: apps/medusa-desktop
         run: npm ci
+      - name: Prepare verified Tauri Linux bundler tools
+        if: runner.os == 'Linux'
+        run: python scripts/prepare-tauri-linux-tools.py --cache-dir "$HOME/.cache/tauri"
       - name: Build desktop bundles
         working-directory: apps/medusa-desktop
         env:
