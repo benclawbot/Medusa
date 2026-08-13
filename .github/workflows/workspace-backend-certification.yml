@@ -5,6 +5,11 @@ on:
     paths:
       - "crates/medusa-runtime/**"
       - "crates/medusa-workers/**"
+      - "crates/medusa-cli/**"
+      - "crates/medusa-tui/**"
+      - "crates/medusa-daemon/**"
+      - "apps/medusa-desktop/**"
+      - "scripts/check-workspace-surfaces.py"
       - "docs/WORKSPACES.md"
       - "docs/ARCHITECTURE.md"
       - "docs/MULTI_AGENT_EXECUTION.md"
@@ -37,6 +42,10 @@ jobs:
         run: cargo test -p medusa-runtime workspace_worker_manager --locked
       - name: Test public workspace lifecycle
         run: cargo test -p medusa-runtime workspace::tests --locked
+      - name: Test workspace-scoped daemon paths
+        run: cargo test -p medusa-daemon --test workspace_paths --locked
+      - name: Verify every user surface accepts a filesystem workspace
+        run: python3 scripts/check-workspace-surfaces.py
 
   architecture:
     name: Workspace architecture authority
@@ -49,3 +58,5 @@ jobs:
         run: python3 scripts/check-product-architecture.py
       - name: Validate capability evidence
         run: python3 scripts/check-capability-evidence.py
+      - name: Validate user-surface workspace claims
+        run: python3 scripts/check-workspace-surfaces.py
