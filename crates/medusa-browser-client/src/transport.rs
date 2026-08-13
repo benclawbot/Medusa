@@ -129,7 +129,7 @@ mod tests {
         let error = send_and_receive(&mut transport, &BrowserRequest::Ping).unwrap_err();
 
         assert!(error.to_string().contains("flush request"));
-        assert!(error.to_string().contains("write failed") || error.to_string().contains("flush failed"));
+        assert!(error.to_string().contains("flush failed"));
     }
 
     #[test]
