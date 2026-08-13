@@ -30,8 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - name: Install terminal and containment prerequisites
         shell: bash
         run: |
@@ -55,80 +55,6 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
         run: |
-          # Keep the fixture outside both the checkout and /tmp: Linux containment replaces /tmp.
-          # Preserve the runner HOME so the real Rust toolchain remains usable. The saved MiniMax
-          # profile is isolated through XDG_CONFIG_HOME rather than a synthetic HOME directory.
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          expected = "MEDUSA_TUI_MINIMAX_OK"
-          fixture = (
-              f'pub const RESPONSE: &str = "{expected}";\n\n'
-              "pub fn response() -> &'static str {\n    RESPONSE\n}\n\n"
-              "#[cfg(test)]\nmod tests {\n    use super::*;\n\n"
-              "    #[test]\n    fn response_is_not_empty() {\n"
-              "        assert!(!response().is_empty());\n"
-              "    }\n}\n"
-          )
-          instruction = (
-              "Implement the requested repository change in src/lib.rs. The implementation task must "
-              "use fs_write once on the relative path src/lib.rs and replace the complete file with the "
-              "exact UTF-8 content between the markers below, including the final newline. Planning tasks "
-              "should establish the exact scope, and review or verification tasks should evaluate the prepared "
-              "implementation and authoritative evidence according to their assigned roles.\n<<<FILE\n"
-              f"{fixture}"
-              ">>>FILE\nThe implementation task must not call shell_run, update_plan, team tools, or "
-              "git_checkpoint. Medusa's authoritative host verifier will run formatting, build, lint, and tests "
-              f"before integration. After fs_write succeeds, the implementation task must return exactly {expected}."
-          )
-          path = Path("scripts/live-tui-minimax-e2e.py")
-          text = path.read_text(encoding="utf-8")
-          prompt = f"PROMPT = {instruction!r}"
-          text, count = re.subn(
-              r"PROMPT = \(.*?\n\)\nDEFAULT_TIMEOUT_SECONDS",
-              lambda _: prompt + "\nDEFAULT_TIMEOUT_SECONDS",
-              text,
-              flags=re.S,
-          )
-          if count != 1:
-              raise SystemExit("could not replace live TUI prompt")
-          text = text.replace("max_turns = 8", "max_turns = 24")
-          text = text.replace("        HOME=str(home),\n", "")
-          baseline = '        ["git", "add", "Cargo.toml", "src/lib.rs", ".medusa/config.toml"],'
-          replacement = (
-              '        ["cargo", "generate-lockfile"],\n'
-              '        ["git", "add", "Cargo.toml", "Cargo.lock", "src/lib.rs", ".medusa/config.toml"]'
-          )
-          if baseline not in text:
-              raise SystemExit("could not add Cargo.lock to the live fixture baseline")
-          text = text.replace(baseline, replacement + ",", 1)
-
-          # The session journal schema now records durable assistant completion with
-          # assistant_message_recorded/session_completed. Keep the legacy event for old fixtures.
-          legacy_event = 'event["payload"].get("type") == "model_response_received"'
-          current_events = (
-              'event["payload"].get("type") in '
-              '{"model_response_received", "assistant_message_recorded", "session_completed"}'
-          )
-          if legacy_event not in text:
-              raise SystemExit("could not update live TUI durable-response event predicate")
-          text = text.replace(legacy_event, current_events, 1)
-
-          # The prompt itself contains the marker, so require the TUI's completion banner too.
-          # This avoids the old change-offset race while still proving the real terminal rendered completion.
-          old_completion = (
-              "if submitted and change_offset is not None and EXPECTED in post_change and responses and assistants:"
-          )
-          new_completion = (
-              'if submitted and change_offset is not None and EXPECTED in text and "Task completed" in text '
-              'and responses and assistants:'
-          )
-          if old_completion not in text:
-              raise SystemExit("could not update live TUI rendered-completion predicate")
-          text = text.replace(old_completion, new_completion, 1)
-          path.write_text(text, encoding="utf-8")
-          PY
           python3 scripts/live-tui-minimax-e2e.py \
             --binary target/release/medusa \
             --work-root "${RUNNER_TEMP}/live-tui-minimax-work" \
