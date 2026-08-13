@@ -389,7 +389,8 @@ mod tests {
         let artifact = repository
             .path()
             .join(".medusa/artifacts/tool-output/session-owned.bin");
-        fs::create_dir_all(artifact.parent().expect("artifact parent")).expect("artifact directory");
+        fs::create_dir_all(artifact.parent().expect("artifact parent"))
+            .expect("artifact directory");
         fs::write(&artifact, b"PRIVATE_TOOL_ARTIFACT_MARKER").expect("artifact");
         session.tool_artifacts.push(artifact.clone());
         session.completed = true;
