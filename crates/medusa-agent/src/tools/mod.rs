@@ -54,7 +54,6 @@ static BROWSER_SESSIONS: OnceLock<Mutex<BTreeMap<BrowserSessionKey, SharedBrowse
     OnceLock::new();
 static BROWSER_NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
-/// Single policy-aware registry for built-in tools shared by every agent frontend.
 #[derive(Clone, Debug)]
 pub struct ToolManager {
     desktop_commander: DesktopCommanderSettings,
@@ -66,8 +65,6 @@ impl ToolManager {
         Self { desktop_commander }
     }
 
-    /// Compatibility projection for callers without a repository context. Discovery failure
-    /// fails closed by returning no model tools.
     #[must_use]
     pub fn definitions(&self, read_only: bool) -> Vec<ToolDefinition> {
         CapabilityRegistry::discover_with_desktop(
@@ -483,7 +480,9 @@ fn execute_browser_tool(
             .send(BrowserIdleCommand::Busy)
             .map_err(|_| browser_dependency_error("browser idle lifecycle stopped unexpectedly"))?;
         let result = (|| {
-            ensure_browser_initialized(&mut state, &route, timeout, cancellation)?;
+            if name != "browser_ping" {
+                ensure_browser_initialized(&mut state, &route, timeout, cancellation)?;
+            }
             let effective_input = if name == "browser_navigate" {
                 serde_json::json!({"url": route})
             } else {
@@ -529,253 +528,8 @@ pub(crate) fn execute_tool_cancellable(
     if cancellation.load(Ordering::Acquire) {
         return Err(cancelled_tool(name));
     }
-    if name == "skill_execute" {
-        return executable_skills::run(repo, input, cancellation);
-    }
     if is_model_browser_tool(name) {
         return execute_browser_tool(repo, name, input, cancellation);
     }
-    if name != "shell_run" {
-        return execute_tool(repo, name, input);
-    }
-    let program = input_string(input, "program")?;
-    let args = input
-        .get("args")
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid_tool("args must be an array"))?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| invalid_tool("every arg must be a string"))
-        })
-        .collect::<MedusaResult<Vec<_>>>()?;
-    let output_mode =
-        crate::output_envelope::OutputMode::parse(input_optional_string(input, "output_mode")?)?;
-    shell::run_cancellable(repo, program, &args, output_mode, cancellation)
-}
-
-pub(crate) fn execute_approved_tool_cancellable(
-    repo: &Path,
-    name: &str,
-    input: &Value,
-    cancellation: &AtomicBool,
-) -> MedusaResult<String> {
-    if cancellation.load(Ordering::Acquire) {
-        return Err(cancelled_tool(name));
-    }
-    if name != "shell_run" {
-        return execute_approved_tool(repo, name, input);
-    }
-    let program = input_string(input, "program")?;
-    let args = input
-        .get("args")
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid_tool("args must be an array"))?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| invalid_tool("every arg must be a string"))
-        })
-        .collect::<MedusaResult<Vec<_>>>()?;
-    let output_mode =
-        crate::output_envelope::OutputMode::parse(input_optional_string(input, "output_mode")?)?;
-    shell::run_approved_cancellable(repo, program, &args, output_mode, cancellation)
-}
-
-pub(crate) fn execute_approved_tool(
-    repo: &Path,
-    name: &str,
-    input: &Value,
-) -> MedusaResult<String> {
-    match name {
-        "fs_create_dir" => filesystem::create_dir_approved(input_string(input, "path")?),
-        "fs_write" => filesystem::write_approved(
-            input_string(input, "path")?,
-            input_string(input, "content")?,
-        ),
-        "shell_run" => {
-            let program = input_string(input, "program")?;
-            let args = input
-                .get("args")
-                .and_then(Value::as_array)
-                .ok_or_else(|| invalid_tool("args must be an array"))?
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| invalid_tool("every arg must be a string"))
-                })
-                .collect::<MedusaResult<Vec<_>>>()?;
-            let output_mode = crate::output_envelope::OutputMode::parse(input_optional_string(
-                input,
-                "output_mode",
-            )?)?;
-            shell::run_approved(repo, program, &args, output_mode)
-        }
-        _ => Err(MedusaError::new(
-            ErrorCode::PolicyDenied,
-            ErrorCategory::Policy,
-            format!("{name} cannot be authorized interactively"),
-        )),
-    }
-}
-
-fn input_domains(input: &Value, key: &str) -> MedusaResult<Vec<String>> {
-    let Some(domains) = input.get(key) else {
-        return Ok(Vec::new());
-    };
-    domains
-        .as_array()
-        .ok_or_else(|| invalid_tool(format!("{key} must be an array")))?
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(|domain| domain.trim().to_ascii_lowercase())
-                .filter(|domain| !domain.is_empty())
-                .ok_or_else(|| {
-                    invalid_tool(format!("every {key} entry must be a non-empty string"))
-                })
-        })
-        .collect()
-}
-
-pub(crate) fn input_string<'a>(input: &'a Value, key: &str) -> MedusaResult<&'a str> {
-    input
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid_tool(format!("{key} must be a string")))
-}
-
-fn input_optional_string<'a>(input: &'a Value, key: &str) -> MedusaResult<Option<&'a str>> {
-    match input.get(key) {
-        None => Ok(None),
-        Some(value) => value
-            .as_str()
-            .map(Some)
-            .ok_or_else(|| invalid_tool(format!("{key} must be a string"))),
-    }
-}
-
-pub(crate) fn input_usize(input: &Value, key: &str) -> MedusaResult<usize> {
-    input
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .ok_or_else(|| invalid_tool(format!("{key} must be a non-negative integer")))
-}
-
-pub fn format_command_output(
-    program: &str,
-    args: &[impl AsRef<str>],
-    stdout: &[u8],
-    stderr: &[u8],
-) -> Vec<String> {
-    vec![
-        format!(
-            "command={} {}",
-            program,
-            args.iter()
-                .map(|arg| arg.as_ref())
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        format!("stdout={}", String::from_utf8_lossy(stdout)),
-        format!("stderr={}", String::from_utf8_lossy(stderr)),
-    ]
-}
-
-fn cancelled_tool(name: &str) -> MedusaError {
-    let mut error = MedusaError::new(
-        ErrorCode::ToolExecutionFailed,
-        ErrorCategory::Execution,
-        format!("tool execution cancelled: {name}"),
-    );
-    error
-        .context
-        .insert("cancelled".into(), serde_json::Value::Bool(true));
-    error
-}
-
-pub(crate) fn invalid_tool(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::InvalidConfiguration,
-        ErrorCategory::Validation,
-        message,
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn optional_string_rejects_present_non_string_values() {
-        assert_eq!(
-            input_optional_string(&json!({}), "output_mode").expect("absent mode"),
-            None
-        );
-
-        let normal = json!({"output_mode": "normal"});
-        assert_eq!(
-            input_optional_string(&normal, "output_mode").expect("string mode"),
-            Some("normal")
-        );
-
-        for invalid in [Value::Null, json!(42), json!({"mode": "compact"})] {
-            let input = json!({"output_mode": invalid});
-            let error = input_optional_string(&input, "output_mode")
-                .expect_err("present non-string mode must fail");
-            assert!(error.to_string().contains("output_mode must be a string"));
-        }
-    }
-
-    #[test]
-    fn browser_model_tools_are_explicit_and_evaluate_stays_internal() {
-        for name in [
-            "browser_navigate",
-            "browser_snapshot",
-            "browser_click",
-            "browser_fill",
-            "browser_press",
-            "browser_screenshot",
-            "browser_tabs",
-            "browser_close",
-            "browser_ping",
-        ] {
-            assert!(is_model_browser_tool(name), "{name}");
-        }
-        assert!(!is_model_browser_tool("browser_evaluate"));
-        assert!(!is_model_browser_tool("fs_read"));
-    }
-
-    #[test]
-    fn model_cannot_supply_browser_verification_authority() {
-        for input in [
-            json!({"verified": true}),
-            json!({"verification": true}),
-            json!({"trusted": true}),
-            json!({"trust": true}),
-            json!({"authority": true}),
-        ] {
-            let error = validate_browser_model_input("browser_snapshot", &input)
-                .expect_err("model trust metadata must fail closed");
-            assert_eq!(error.code, ErrorCode::PolicyDenied);
-        }
-    }
-
-    #[test]
-    fn browser_navigation_accepts_no_model_selected_url() {
-        validate_browser_model_input("browser_navigate", &json!({}))
-            .expect("empty navigation input");
-        let error =
-            validate_browser_model_input("browser_navigate", &json!({"url": "http://127.0.0.1:9"}))
-                .expect_err("model-selected URL must be rejected");
-        assert!(error.to_string().contains("does not accept field `url`"));
-    }
+    execute_tool(repo, name, input)
 }
