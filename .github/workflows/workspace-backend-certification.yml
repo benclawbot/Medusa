@@ -73,7 +73,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
-      - name: Regenerate inventory and remove temporary diagnostics
+      - name: Regenerate inventory and restore documentation checker
         shell: bash
         env:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -81,10 +81,9 @@ jobs:
           git show bd32623f618a9f89ba7ecb35df1c0ce624232ee1:scripts/check-documentation.py > /tmp/check-documentation.py
           python3 /tmp/check-documentation.py --root . --write
           git show bd32623f618a9f89ba7ecb35df1c0ce624232ee1:scripts/check-documentation.py > scripts/check-documentation.py
-          git show bd32623f618a9f89ba7ecb35df1c0ce624232ee1:.github/workflows/workspace-backend-certification.yml > .github/workflows/workspace-backend-certification.yml
           git config user.name "BenClawBot (AlphaOM3G1)"
           git config user.email "benclawbot@gmail.com"
-          git add docs/documentation-inventory.json scripts/check-documentation.py .github/workflows/workspace-backend-certification.yml
+          git add docs/documentation-inventory.json scripts/check-documentation.py
           git diff --cached --check
           git commit -m "docs: refresh reviewed documentation inventory"
           git push origin "HEAD:${HEAD_REF}"
