@@ -1,0 +1,102 @@
+name: Live Self Improvement
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-self-improvement-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-loop:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      MEDUSA_LIVE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      MEDUSA_MODEL: MiniMax-M3
+      MEDUSA_PROVIDER: minimax
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Require and mask the live credential
+        shell: bash
+        run: |
+          if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+            echo 'MINIMAX_API_KEY repository secret is required for the live self-improvement gate.' >&2
+            exit 2
+          fi
+          echo "::add-mask::$MINIMAX_API_KEY"
+      - name: Exercise the production correction loop against MiniMax
+        env:
+          MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT: ${{ runner.temp }}/live-self-improvement-report.json
+        run: >-
+          cargo test -p medusa-runtime --test live_self_improvement_loop --locked --
+          --ignored --nocapture
+      - name: Validate and stage the sanitized evidence
+        shell: python
+        env:
+          MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT: ${{ runner.temp }}/live-self-improvement-report.json
+        run: |
+          import json
+          import os
+          import pathlib
+          import shutil
+
+          source = pathlib.Path(os.environ["MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT"])
+          report = json.loads(source.read_text(encoding="utf-8"))
+          assert report["schema_version"] == 1
+          assert report["provider"] == "minimax"
+          assert report["model"] == "MiniMax-M3"
+          assert report["live_request_count"] == 3
+          assert report["production_loop"] == {
+              "correction_candidate_evaluated": True,
+              "approved_and_activated": True,
+              "matching_context_applied": True,
+              "repeated_verified_outcomes": 2,
+              "nonmatching_task_unaffected": True,
+              "rollback_restored_exact_baseline": True,
+          }
+          assert report["privacy"] == {
+              "credential_persisted": False,
+              "raw_transcript_in_report": False,
+              "capture_disabled_blocks_new_candidate": True,
+          }
+          digests = [
+              report["initial_assistant"]["sha256"],
+              report["correction"]["sha256"],
+              *(item["sha256"] for item in report["follow_up_assistants"]),
+              report["authority"]["proposal_id_sha256"],
+              report["authority"]["baseline_active_sha256"],
+              report["authority"]["activated_sha256"],
+              report["authority"]["restored_active_sha256"],
+          ]
+          assert all(len(value) == 64 for value in digests)
+          assert report["authority"]["baseline_active_sha256"] == report["authority"]["restored_active_sha256"]
+          serialized = json.dumps(report)
+          secret = os.environ["MINIMAX_API_KEY"]
+          assert secret not in serialized
+          assert "You missed beta" not in serialized
+
+          destination = pathlib.Path("live-self-improvement-evidence/report.json")
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile(source, destination)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: live-self-improvement-evidence
+          path: live-self-improvement-evidence
+          if-no-files-found: warn

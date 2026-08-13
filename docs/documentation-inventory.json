@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "d5ceed6d38b7f204c8410d5e10e988bd28f0e2c8236bd2289a7a9f284ebcd774"
+      "sha256": "725a6d8022296b59e0668c974d783c4a4615e77bf249def3e389e5ae3a16611f"
     },
     {
       "path": "SECURITY.md",
@@ -197,6 +197,11 @@
       "path": "docs/LIVE-PROVIDER-DOGFOOD.md",
       "disposition": "current",
       "sha256": "930579c5fab0222591e99f8b40fc4f5d5eb02de38efc4e2cfaf8b677f9dfe715"
+    },
+    {
+      "path": "docs/LIVE-SELF-IMPROVEMENT-ACCEPTANCE.md",
+      "disposition": "current",
+      "sha256": "1a3373442aec127cf800e90022c2ee5074f87d8f815a38511311228f1f0856f4"
     },
     {
       "path": "docs/MULTIMODAL-TESTING.md",

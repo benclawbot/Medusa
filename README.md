@@ -588,11 +588,8 @@ Children:
 
 ### Manual live acceptance
 
+- [#817](https://github.com/benclawbot/Medusa/issues/817) Production self-improvement loop proof. The protected live gate and sanitized evidence contract are documented in [Live self-improvement acceptance](docs/LIVE-SELF-IMPROVEMENT-ACCEPTANCE.md).
 - [#719](https://github.com/benclawbot/Medusa/issues/719) OpenAI Realtime voice and Telegram end-to-end proof.
-
-### Deferred
-
-- [#771](https://github.com/benclawbot/Medusa/issues/771) Final architecture concentration hardening after the active issue queue is complete.
 
 ## Project documentation
 
@@ -609,6 +606,7 @@ Children:
 - [Release process](docs/RELEASE.md)
 - [Release compatibility](docs/COMPATIBILITY.md)
 - [Telegram](docs/TELEGRAM.md)
+- [Live self-improvement acceptance](docs/LIVE-SELF-IMPROVEMENT-ACCEPTANCE.md)
 
 ## Development
 
