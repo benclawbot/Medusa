@@ -21,8 +21,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 >/dev/null
+          git diff --exit-code -- Cargo.lock
       - name: Check formatting
         shell: bash
         run: |
@@ -96,6 +100,8 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --all-features --locked --no-deps
+      - name: Assert authoritative validation preserved Cargo.lock
+        run: git diff --exit-code -- Cargo.lock
 
   supply-chain:
     name: Dependency policy
@@ -111,8 +117,14 @@ jobs:
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-deny,cargo-audit
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 >/dev/null
+          git diff --exit-code -- Cargo.lock
+          python3 scripts/check-lockfile-authority.py
+          python3 scripts/test-lockfile-authority.py
       - name: Validate deterministic release evidence
         run: |
           python3 scripts/release-evidence.py self-test
@@ -138,7 +150,7 @@ jobs:
           set -o pipefail
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           git worktree add ../dependency-base FETCH_HEAD
-          cargo generate-lockfile --manifest-path ../dependency-base/Cargo.toml
+          cargo metadata --manifest-path ../dependency-base/Cargo.toml --locked --format-version 1 >/dev/null
           python3 scripts/dependency-metrics.py measure \
             --root ../dependency-base \
             --output dependency-base.json \
@@ -193,3 +205,5 @@ jobs:
           name: cargo-audit-diagnostics
           path: cargo-audit.log
           if-no-files-found: error
+      - name: Assert supply-chain validation preserved Cargo.lock
+        run: git diff --exit-code -- Cargo.lock
