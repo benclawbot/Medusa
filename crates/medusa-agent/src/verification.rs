@@ -63,7 +63,7 @@ pub(crate) fn required_browser_verification(repo: &Path) -> MedusaResult<Verific
     let command = std::env::var("MEDUSA_BROWSERD").unwrap_or_else(|_| "medusa-browserd".into());
     let mut client = BrowserClient::spawn_with_env(
         &command,
-        &[("MEDUSA_BROWSER_ALLOW_LOOPBACK", "1")],
+        &[("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route.as_str())],
     )
     .map_err(|error| {
         MedusaError::new(
