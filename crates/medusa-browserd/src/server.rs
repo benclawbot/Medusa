@@ -2,7 +2,13 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
+use medusa_browser_client::{
+    protocol::{
+        BrowserRequest, BrowserResponse, BrowserRpcRequest, BrowserRpcResponse,
+        MAX_BROWSER_REQUEST_FRAME_BYTES, MAX_BROWSER_RESPONSE_FRAME_BYTES,
+    },
+    transport::{Transport, read_bounded_frame, send_and_receive},
+};
 
 use crate::{proxy, validation::validate_public_url};
 
@@ -13,46 +19,67 @@ pub fn run() -> io::Result<()> {
     let proxy = proxy::spawn()?;
     let mut bridge = spawn_bridge(&proxy).map_err(io::Error::other)?;
     let stdin = io::stdin();
+    let mut stdin = stdin.lock();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
-    let mut line = String::new();
+    let mut frame = Vec::with_capacity(4096);
     loop {
-        line.clear();
-        let n = stdin.lock().read_line(&mut line)?;
-        if n == 0 {
+        let count = read_bounded_frame(&mut stdin, &mut frame, MAX_BROWSER_REQUEST_FRAME_BYTES)?;
+        if count == 0 {
             break;
         }
-        let request: BrowserRequest = match serde_json::from_str(line.trim()) {
-            Ok(req) => req,
-            Err(e) => {
+        let wire: BrowserRpcRequest = match serde_json::from_slice(&frame) {
+            Ok(request) => request,
+            Err(error) => {
                 write_response(
                     &mut stdout,
+                    0,
                     &BrowserResponse::Error {
                         code: "invalid_request".into(),
-                        message: e.to_string(),
+                        message: error.to_string(),
                     },
                 )?;
                 continue;
             }
         };
+        let request_id = wire.request_id;
+        let request = wire.request;
+        if request_id == 0 {
+            write_response(
+                &mut stdout,
+                0,
+                &BrowserResponse::Error {
+                    code: "invalid_request_id".into(),
+                    message: "browser request_id must be non-zero".into(),
+                },
+            )?;
+            continue;
+        }
 
         if matches!(request, BrowserRequest::Ping) {
-            write_response(&mut stdout, &BrowserResponse::Ok)?;
+            write_response(&mut stdout, request_id, &BrowserResponse::Ok)?;
             continue;
         }
         if matches!(request, BrowserRequest::Close) {
-            write_response(&mut stdout, &BrowserResponse::Ok)?;
+            let response = forward_to_bridge(
+                &mut bridge.stdin,
+                &mut bridge.stdout,
+                request_id,
+                &request,
+            );
+            write_response(&mut stdout, request_id, &response)?;
             break;
         }
         if let BrowserRequest::Navigate { ref url } = request {
             let parsed = match url::Url::parse(url) {
                 Ok(parsed) => parsed,
-                Err(e) => {
+                Err(error) => {
                     write_response(
                         &mut stdout,
+                        request_id,
                         &BrowserResponse::Error {
                             code: "invalid_url".into(),
-                            message: e.to_string(),
+                            message: error.to_string(),
                         },
                     )?;
                     continue;
@@ -61,6 +88,7 @@ pub fn run() -> io::Result<()> {
             if let Err(message) = validate_public_url(&parsed) {
                 write_response(
                     &mut stdout,
+                    request_id,
                     &BrowserResponse::Error {
                         code: "invalid_url".into(),
                         message,
@@ -70,8 +98,13 @@ pub fn run() -> io::Result<()> {
             }
         }
 
-        let response = forward_to_bridge(&mut bridge.stdin, &mut bridge.stdout, &request);
-        write_response(&mut stdout, &response)?;
+        let response = forward_to_bridge(
+            &mut bridge.stdin,
+            &mut bridge.stdout,
+            request_id,
+            &request,
+        );
+        write_response(&mut stdout, request_id, &response)?;
     }
     let _ = bridge.child.kill();
     let _ = bridge.child.wait();
@@ -93,6 +126,7 @@ fn spawn_bridge(proxy: &proxy::Proxy) -> io::Result<Bridge> {
     let mut child = Command::new("node")
         .arg(bridge_path)
         .env("MEDUSA_BROWSER_PROXY", proxy.server())
+        .env("MEDUSA_BROWSER_PARENT_PID", std::process::id().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -163,53 +197,72 @@ fn take_bridge_stdio(child: &mut Child) -> io::Result<(ChildStdin, BufReader<Chi
     }
 }
 
-fn forward_to_bridge<W: Write, R: BufRead>(
+struct SplitTransport<'a, W, R> {
+    writer: &'a mut W,
+    reader: &'a mut R,
+}
+
+impl<W: Write, R> Write for SplitTransport<'_, W, R> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl<W: Write + Send, R: BufRead + Send> Transport for SplitTransport<'_, W, R> {
+    fn read_frame(&mut self, buf: &mut Vec<u8>, max_bytes: usize) -> io::Result<usize> {
+        read_bounded_frame(self.reader, buf, max_bytes)
+    }
+}
+
+fn forward_to_bridge<W: Write + Send, R: BufRead + Send>(
     writer: &mut W,
     reader: &mut R,
+    request_id: u64,
     request: &BrowserRequest,
 ) -> BrowserResponse {
-    let mut line = match serde_json::to_string(request) {
-        Ok(s) => s,
-        Err(e) => {
-            return BrowserResponse::Error {
-                code: "internal".into(),
-                message: e.to_string(),
-            };
-        }
-    };
-    line.push('\n');
-    if let Err(e) = writer.write_all(line.as_bytes()) {
-        return BrowserResponse::Error {
-            code: "sidecar_write_failed".into(),
-            message: e.to_string(),
-        };
-    }
-    if let Err(e) = writer.flush() {
-        return BrowserResponse::Error {
-            code: "sidecar_flush_failed".into(),
-            message: e.to_string(),
-        };
-    }
-    let mut response = String::new();
-    if let Err(e) = reader.read_line(&mut response) {
-        return BrowserResponse::Error {
-            code: "sidecar_read_failed".into(),
-            message: e.to_string(),
-        };
-    }
-    match serde_json::from_str(response.trim()) {
-        Ok(parsed) => parsed,
-        Err(e) => BrowserResponse::Error {
-            code: "sidecar_parse_failed".into(),
-            message: e.to_string(),
+    let mut transport = SplitTransport { writer, reader };
+    match send_and_receive(&mut transport, request_id, request) {
+        Ok(response) => response,
+        Err(error) => BrowserResponse::Error {
+            code: error
+                .context
+                .get("browser_error_kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("sidecar_transport_failed")
+                .to_owned(),
+            message: error.to_string(),
         },
     }
 }
 
-fn write_response<W: Write>(out: &mut W, response: &BrowserResponse) -> io::Result<()> {
-    let mut line = serde_json::to_string(response).map_err(io::Error::other)?;
-    line.push('\n');
-    out.write_all(line.as_bytes())?;
+fn write_response<W: Write>(
+    out: &mut W,
+    request_id: u64,
+    response: &BrowserResponse,
+) -> io::Result<()> {
+    let wire = BrowserRpcResponse {
+        request_id,
+        response: response.clone(),
+    };
+    let mut line = serde_json::to_vec(&wire).map_err(io::Error::other)?;
+    if line.len().saturating_add(1) > MAX_BROWSER_RESPONSE_FRAME_BYTES {
+        line = serde_json::to_vec(&BrowserRpcResponse {
+            request_id,
+            response: BrowserResponse::Error {
+                code: "response_too_large".into(),
+                message: format!(
+                    "browser response exceeds {MAX_BROWSER_RESPONSE_FRAME_BYTES} bytes"
+                ),
+            },
+        })
+        .map_err(io::Error::other)?;
+    }
+    line.push(b'\n');
+    out.write_all(&line)?;
     out.flush()
 }
 
@@ -300,14 +353,17 @@ mod tests {
     }
 
     #[test]
-    fn successful_forward_writes_request_and_parses_response() {
+    fn successful_forward_writes_correlated_request_and_parses_response() {
         let mut writer = FailingWriter::default();
-        let mut reader = Cursor::new(b"{\"kind\":\"ok\"}\n".to_vec());
+        let mut reader = Cursor::new(b"{\"request_id\":4,\"kind\":\"ok\"}\n".to_vec());
 
-        let response = forward_to_bridge(&mut writer, &mut reader, &BrowserRequest::Ping);
+        let response = forward_to_bridge(&mut writer, &mut reader, 4, &BrowserRequest::Ping);
 
         assert!(matches!(response, BrowserResponse::Ok));
-        assert_eq!(writer.bytes, b"{\"method\":\"ping\"}\n");
+        assert_eq!(
+            writer.bytes,
+            b"{\"request_id\":4,\"method\":\"ping\"}\n"
+        );
     }
 
     #[test]
@@ -321,9 +377,10 @@ mod tests {
             error_code(forward_to_bridge(
                 &mut write_failure,
                 &mut empty,
+                1,
                 &BrowserRequest::Ping,
             )),
-            "sidecar_write_failed"
+            "request_write"
         );
 
         let mut flush_failure = FailingWriter {
@@ -334,9 +391,10 @@ mod tests {
             error_code(forward_to_bridge(
                 &mut flush_failure,
                 &mut empty,
+                1,
                 &BrowserRequest::Ping,
             )),
-            "sidecar_flush_failed"
+            "request_flush"
         );
 
         let mut writer = FailingWriter::default();
@@ -345,9 +403,10 @@ mod tests {
             error_code(forward_to_bridge(
                 &mut writer,
                 &mut read_failure,
+                1,
                 &BrowserRequest::Ping,
             )),
-            "sidecar_read_failed"
+            "response_frame"
         );
 
         let mut malformed = Cursor::new(b"not-json\n".to_vec());
@@ -355,18 +414,19 @@ mod tests {
             error_code(forward_to_bridge(
                 &mut writer,
                 &mut malformed,
+                1,
                 &BrowserRequest::Ping,
             )),
-            "sidecar_parse_failed"
+            "response_parse"
         );
     }
 
     #[test]
-    fn response_writer_emits_one_json_line() {
+    fn response_writer_emits_one_correlated_json_line() {
         let mut output = Vec::new();
 
-        write_response(&mut output, &BrowserResponse::Ok).unwrap();
+        write_response(&mut output, 9, &BrowserResponse::Ok).unwrap();
 
-        assert_eq!(output, b"{\"kind\":\"ok\"}\n");
+        assert_eq!(output, b"{\"request_id\":9,\"kind\":\"ok\"}\n");
     }
 }
