@@ -24,7 +24,7 @@ jobs:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        run: cargo metadata --locked --format-version 1
       - name: Install Linux sandbox backend
         shell: bash
         run: |
@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        run: cargo metadata --locked --format-version 1
       - name: Install Linux sandbox backend
         if: runner.os == 'Linux'
         shell: bash
