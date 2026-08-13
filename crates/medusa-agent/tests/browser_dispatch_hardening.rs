@@ -65,18 +65,22 @@ fn production_browser_dispatch_hardening() {
             close(&manager, repository.path());
         }
         "cancel" => {
+            manager
+                .execute(repository.path(), "browser_ping", &json!({}))
+                .expect("initialize browser before cancellation proof");
+
             let cancellation = Arc::new(AtomicBool::new(false));
             let trigger = Arc::clone(&cancellation);
             let toggler = thread::spawn(move || {
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(500));
                 trigger.store(true, Ordering::Release);
             });
             let started = Instant::now();
             let error = manager
                 .execute_cancellable(
                     repository.path(),
-                    "browser_snapshot",
-                    &json!({}),
+                    "browser_click",
+                    &json!({"selector": "#medusa-never-exists"}),
                     cancellation.as_ref(),
                 )
                 .expect_err("in-flight browser request must be cancellable");
