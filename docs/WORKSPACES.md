@@ -12,6 +12,14 @@ Medusa operates on a bounded **workspace root**. A workspace may be a Git reposi
 
 The shared `RuntimeController`, provider routing, session lifecycle, teammate coordination, review, verification, and recovery authorities are the same across workspace modes. Only the mutation-storage and integration backend changes.
 
+## Programmatic workspace APIs
+
+`medusa_runtime::workspace::Workspace` is the high-level API for selecting or creating a bounded workspace and starting a runtime against it. It exposes the stable `Git`, `Directory`, and `Ephemeral` workspace kinds.
+
+`medusa_runtime::WorkerManager` is the lower-level mutation API used by the production runtime. It is workspace-aware: Git roots delegate to the existing Git worker manager, while ordinary directories use the content-addressed snapshot backend. `WorkerManager::backend()` reports `WorkspaceMutationBackend::Git` or `WorkspaceMutationBackend::Directory`. The same `Worker`, `WorkerState`, and `IntegrationReceipt` types are re-exported from `medusa_runtime` so embedders do not need to depend on the runtime's internal dependency aliasing.
+
+The lower-level manager does **not** bypass Medusa's safety model. Production task execution still owns task admission, write-scope validation, parent review, independent verification, authorization, integration, reconciliation, and final success reporting. Embedders using the manager directly are responsible for preserving those authorities rather than treating snapshot creation alone as task completion.
+
 ## User surfaces
 
 Workspace semantics are shared across every production frontend rather than implemented separately by each UI.
