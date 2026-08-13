@@ -115,7 +115,21 @@ jobs:
       - name: Test cross-platform documentation hashing
         run: python3 scripts/test-documentation.py
       - name: Validate every tracked Markdown document
-        run: python3 scripts/check-documentation.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          if python3 scripts/check-documentation.py; then
+            exit 0
+          fi
+          committed="$(mktemp)"
+          cp docs/documentation-inventory.json "$committed"
+          python3 scripts/check-documentation.py --write
+          echo "::group::Exact stale documentation inventory diff"
+          diff -u "$committed" docs/documentation-inventory.json || true
+          echo "::endgroup::"
+          cp "$committed" docs/documentation-inventory.json
+          echo "committed documentation inventory is stale" >&2
+          exit 1
 
   release-keyring:
     name: Release signing remains redundant and rotation-ready
