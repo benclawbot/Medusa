@@ -46,6 +46,7 @@ jobs:
         with:
           node-version: "22"
       - name: Validate committed dependency authority
+        shell: bash
         run: cargo metadata --locked --format-version 1 >/dev/null
       - name: Install browser fixture dependencies
         shell: bash
