@@ -1,8 +1,4 @@
-use std::{
-    path::Path,
-    sync::atomic::AtomicBool,
-    time::Duration,
-};
+use std::{path::Path, sync::atomic::AtomicBool, time::Duration};
 
 use medusa_browser_client::{BrowserClient, BrowserResponse};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
