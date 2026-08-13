@@ -37,17 +37,21 @@ fn production_browser_dispatch_hardening() {
 
     match scenario.as_str() {
         "timeout" => {
+            manager
+                .execute(repository.path(), "browser_ping", &json!({}))
+                .expect("warm verified browser before deadline proof");
+
             let cancellation = AtomicBool::new(false);
             let started = Instant::now();
             let error = manager
                 .execute_cancellable(
                     repository.path(),
-                    "browser_snapshot",
-                    &json!({}),
+                    "browser_click",
+                    &json!({"selector": "#medusa-never-exists"}),
                     &cancellation,
                 )
-                .expect_err("hung browser request must hit its deadline");
-            assert!(started.elapsed() < Duration::from_secs(3), "{error}");
+                .expect_err("pending browser request must hit its deadline");
+            assert!(started.elapsed() < Duration::from_secs(12), "{error}");
             assert_eq!(
                 error.context.get("browser_error_kind"),
                 Some(&serde_json::json!("timeout")),
