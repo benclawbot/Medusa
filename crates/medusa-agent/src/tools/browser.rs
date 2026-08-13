@@ -1,4 +1,8 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::atomic::AtomicBool,
+    time::Duration,
+};
 
 use medusa_browser_client::{BrowserClient, BrowserResponse};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -13,9 +17,11 @@ pub(crate) fn run(
     envelope_config: &EnvelopeConfig,
     method: &str,
     input: &Value,
+    timeout: Duration,
+    cancellation: &AtomicBool,
 ) -> MedusaResult<String> {
     let request = build(method, input).map_err(invalid_input)?;
-    let response = client.request(request)?;
+    let response = client.request_with_control(request, timeout, cancellation)?;
     if let BrowserResponse::Error { code, message } = response {
         return Err(MedusaError::new(
             ErrorCode::ToolExecutionFailed,
