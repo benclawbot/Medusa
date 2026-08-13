@@ -60,3 +60,19 @@ jobs:
         run: python3 scripts/check-capability-evidence.py
       - name: Validate user-surface workspace claims
         run: python3 scripts/check-workspace-surfaces.py
+
+  documentation-inventory-diagnostic:
+    name: Documentation inventory diagnostic
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Generate exact reviewed documentation inventory
+        shell: bash
+        run: |
+          python3 scripts/check-documentation.py --write
+          python3 - <<'PY'
+          import base64, pathlib, zlib
+          data = pathlib.Path('docs/documentation-inventory.json').read_bytes()
+          print('MEDUSA_DOC_INVENTORY_ZLIB_BASE64=' + base64.b64encode(zlib.compress(data, 9)).decode())
+          PY
