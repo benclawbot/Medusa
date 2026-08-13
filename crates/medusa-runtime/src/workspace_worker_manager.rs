@@ -1204,7 +1204,11 @@ mod tests {
         let error = manager
             .integrate_authorized(&worker, &base, &commit)
             .expect_err("tree mismatch must roll back");
-        assert!(error.to_string().contains("does not match authorized snapshot"));
+        assert!(
+            error
+                .to_string()
+                .contains("does not match authorized snapshot")
+        );
         assert!(workspace.join("config").is_file());
         assert_eq!(
             fs::read_to_string(workspace.join("config")).expect("restored file"),
