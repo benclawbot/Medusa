@@ -75,6 +75,8 @@ jobs:
           }
           throw new Error('browser hardening fixture did not start');
           NODE
+      # Warm the verified page before the timed action so this measures request execution,
+      # while restart still proves a fresh cold sidecar can recover under the production budget.
       - name: Prove production per-call deadline and restart
         env:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
