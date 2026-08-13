@@ -12,6 +12,22 @@ Medusa operates on a bounded **workspace root**. A workspace may be a Git reposi
 
 The shared `RuntimeController`, provider routing, session lifecycle, teammate coordination, review, verification, and recovery authorities are the same across workspace modes. Only the mutation-storage and integration backend changes.
 
+## User surfaces
+
+Workspace semantics are shared across every production frontend rather than implemented separately by each UI.
+
+| Surface | Workspace entry | Non-Git behavior |
+|---|---|---|
+| **Headless CLI** | `medusa --repo /path/to/workspace run ...` | The compatibility-named `--repo` argument is resolved as a filesystem root and passed directly to `RuntimeController`; `.git` is not required. |
+| **TUI** | `medusa --repo /path/to/workspace` or launch from the current directory | `TuiOptions` scopes daemon/session state under `<workspace>/.medusa` and uses the same runtime backend. |
+| **Desktop** | Selected directory, or no directory for General Chat | `runtime_start` canonicalizes any directory. General Chat creates a Medusa-owned non-Git application-data workspace. |
+| **Daemon** | Workspace root supplied by CLI, TUI, Desktop, or Telegram | `DaemonPaths` scopes IPC and durable state under `<workspace>/.medusa/daemon`; startup does not inspect Git metadata. |
+| **Telegram** | The workspace root used to start `medusa telegram` | Telegram creates transport state under `<workspace>/.medusa/telegram` and attaches to the same workspace-scoped daemon. |
+
+Git-specific actions remain capability-specific. For example, creating branches, commits, pull requests, Git diffs, or GitHub repository operations require a Git workspace even though the conversation, research, documentation, file, artifact, and directory-mutation paths do not.
+
+The repository contains an executable `scripts/check-workspace-surfaces.py` conformance gate. It verifies that all five entrypoints continue handing a filesystem root to the shared runtime/daemon without introducing a Git-only startup requirement. The Workspace Backend Certification runs this gate together with backend tests.
+
 ## Git workspace mutation
 
 Git-backed mutation keeps Medusa's strongest coding workflow. Low- or medium-risk implementation scope may be decomposed into a conflict-aware DAG when all of the following are true:
@@ -67,13 +83,15 @@ mkdir -p /tmp/medusa-report
 medusa --repo /tmp/medusa-report --prompt "Create report.md from the supplied material"
 ```
 
+The Desktop General Chat path is also backed by a Medusa-owned directory and therefore provides a user-facing non-Git workspace without asking the user to create a repository first. Explicit ephemeral-workspace creation remains a programmatic API; persistent user surfaces intentionally keep their normal durable session directory unless the user selects another workspace.
+
 ## Research, documentation, and general knowledge work
 
 Git is not required for read-only or artifact-oriented work. Examples include:
 
 - analyze files in a working directory and produce a report;
 - create or revise documentation;
-- synthesize attachments or repository material;
+- synthesize attachments or workspace material;
 - compare specifications or source sets;
 - perform bounded multi-agent research over sources already available to Medusa;
 - generate structured artifacts in an ordinary or ephemeral workspace.
