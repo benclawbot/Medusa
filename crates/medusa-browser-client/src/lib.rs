@@ -48,17 +48,11 @@ impl BrowserClient {
         })
     }
 
-    /// Compatibility entrypoint for callers without an explicit runtime deadline.
     pub fn request(&mut self, request: BrowserRequest) -> MedusaResult<BrowserResponse> {
         static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
         self.request_with_control(request, Duration::from_secs(30), &NEVER_CANCELLED)
     }
 
-    /// Executes one correlated request under a real wall-clock deadline.
-    ///
-    /// Cancellation or timeout terminates the sidecar before returning. The owning agent session
-    /// discards this client after any such failure, so a late response can never be consumed by a
-    /// later request.
     pub fn request_with_control(
         &mut self,
         request: BrowserRequest,
@@ -288,9 +282,7 @@ mod tests {
             .stdout(Stdio::null())
             .spawn()
             .expect("spawn pipe-less child");
-
         let error = take_stdio(&mut child, "test-browser").expect_err("missing pipes must fail");
-
         assert_eq!(error.code, ErrorCode::DependencyUnavailable);
         assert_eq!(error.category, ErrorCategory::Transient);
         assert!(error.retryable);
@@ -303,7 +295,11 @@ mod tests {
         let cancellation = AtomicBool::new(false);
         let started = Instant::now();
         let error = client
-            .request_with_control(BrowserRequest::Ping, Duration::from_millis(20), &cancellation)
+            .request_with_control(
+                BrowserRequest::Ping,
+                Duration::from_millis(20),
+                &cancellation,
+            )
             .expect_err("blocked request must time out");
         assert!(started.elapsed() < Duration::from_millis(200));
         assert!(error.message.contains("deadline"));
