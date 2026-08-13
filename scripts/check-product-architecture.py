@@ -69,10 +69,16 @@ def validate(root: Path) -> None:
     contributor = read(root, "docs/CONTRIBUTOR-ARCHITECTURE.md")
     evidence = read(root, "docs/CAPABILITY-EVIDENCE.md")
     trace = read(root, "docs/PRODUCTION-EXECUTION-TRACE.md")
+    workspaces = read(root, "docs/WORKSPACES.md")
+    multi_agent = read(root, "docs/MULTI_AGENT_EXECUTION.md")
     planning = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
     read_only_coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
     mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
     mutation_transaction = read(root, "crates/medusa-runtime/src/mutation_transaction_state.rs")
+    parallel_mutation = read(root, "crates/medusa-runtime/src/parallel_mutation.rs")
+    parallel_batch = read(root, "crates/medusa-runtime/src/parallel_mutation_batch.rs")
+    workspace_backend = read(root, "crates/medusa-runtime/src/workspace_worker_manager.rs")
+    workspace_api = read(root, "crates/medusa-runtime/src/workspace.rs")
     workers = read(root, "crates/medusa-workers/src/lib.rs")
     runtime = read(root, "crates/medusa-runtime/src/lib.rs")
     readme = read(root, "README.md")
@@ -80,6 +86,7 @@ def validate(root: Path) -> None:
 
     require(readme, "docs/ARCHITECTURE.md", "README.md")
     require(readme, "docs/CONTRIBUTOR-ARCHITECTURE.md", "README.md")
+    require(readme, "docs/WORKSPACES.md", "README.md")
     for heading in REQUIRED_HEADINGS:
         require(architecture, heading, "docs/ARCHITECTURE.md")
     for concept in REQUIRED_CONCEPTS:
@@ -98,10 +105,10 @@ def validate(root: Path) -> None:
 
     metadata = tomllib.loads(cargo_text).get("workspace", {}).get("metadata", {}).get("medusa", {})
     expected = {
-        "production_execution_model": "bounded-teammates-with-worktree-isolated-mutation",
-        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> typed worktree verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence",
-        "orchestration_planning": "production runtime path; task contracts drive durable read-only preflight and worktree-isolated implementer execution",
-        "subagent_delegation": "production; bounded read-only planner and risk-reviewer teammates plus one worktree-isolated implementer contract for explicit mutation objectives",
+        "production_execution_model": "bounded-teammates-with-workspace-isolated-mutation",
+        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> workspace-isolated candidate verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence",
+        "orchestration_planning": "production runtime path; task contracts drive durable read-only preflight, conflict-aware bounded Git parallel mutation when safe, and isolated Git or directory implementation",
+        "subagent_delegation": "production; bounded read-only planner and risk-reviewer teammates plus centrally scheduled Git mutation DAG children when safe; directory mutation remains one isolated snapshot implementer; nested delegation is denied",
         "verification_gate": "typed-evidence-and-changed-component-authority",
     }
     if metadata != expected:
@@ -115,9 +122,20 @@ def validate(root: Path) -> None:
         for needle in ("RuntimeController", "run_prompt", "AgentEngine", "read-only", "parent"):
             require(document, needle, context)
 
-    for needle in ("MultiAgentCoordinator", "MutatingWorktreeCoordinator", "isolated Git worktree", "repository verification gate"):
+    for needle in (
+        "MultiAgentCoordinator",
+        "conflict-aware mutation DAG",
+        "content-addressed",
+        "workspace verification gate",
+        "IntegrationBarrier",
+    ):
         require(architecture, needle, "docs/ARCHITECTURE.md")
-    forbid(architecture, "sole mutation authority", "docs/ARCHITECTURE.md")
+    for stale in (
+        "Current boundary:** the shipped path supports the current single implementer contract",
+        "current production mutation slice dispatches exactly one implementer contract",
+        "Dynamic multi-implementer decomposition remains a later promotion boundary",
+    ):
+        forbid(architecture + trace + multi_agent, stale, "production architecture documentation")
 
     require(contributor, "Production multi-agent coordinator", "docs/CONTRIBUTOR-ARCHITECTURE.md")
     require(contributor, "Production mutating worker coordinator", "docs/CONTRIBUTOR-ARCHITECTURE.md")
@@ -166,8 +184,41 @@ def validate(root: Path) -> None:
         "finalize_worker",
         "discard_untracked_runtime_state",
         "recover_interrupted",
+        "run_parallel_implementations",
     ):
         require(mutating_coordinator, needle, "production mutating coordinator")
+
+    for needle in (
+        "MAX_PARALLEL_MUTATORS",
+        "MutationDag::build",
+        "MutationResourceKind::Manifest",
+        "MutationResourceKind::Lockfile",
+        "MutationResourceKind::Migration",
+        "directory workspaces use one isolated content-addressed snapshot implementer",
+    ):
+        require(parallel_mutation, needle, "parallel mutation planner")
+
+    for needle in (
+        "IntegrationBarrier",
+        "run_parallel_implementations",
+        "deterministic_integration_order",
+        "parallel-mutation-metrics.json",
+        "aggregate verification",
+    ):
+        require(parallel_batch, needle, "parallel mutation aggregate authority")
+
+    for needle in (
+        "WorkspaceMutationBackend",
+        "Directory",
+        "directory_manifest",
+        "materialize_detached_commit",
+        "integrate_authorized",
+        "drifted before integration",
+        "fails closed on symlink",
+    ):
+        require(workspace_backend, needle, "workspace mutation backend")
+    for needle in ("WorkspaceKind", "Ephemeral", "start_workspace", "cleanup"):
+        require(workspace_api, needle, "workspace API")
 
     for needle in (
         "verify_independently",
@@ -189,7 +240,7 @@ def validate(root: Path) -> None:
         "branch",
         "-D",
     ):
-        require(workers, needle, "worktree manager")
+        require(workers, needle, "Git worktree manager")
 
     for needle in (
         "read_only_objective",
@@ -207,11 +258,21 @@ def validate(root: Path) -> None:
     for needle in (
         "multi_agent_coordinator::run_preflight",
         "mutating_worker_coordinator::run_implementation",
-        "execution-specific Git branch and worktree",
-        "read-only reviewer",
+        "parallel_mutation::decomposition_for",
+        "content-addressed snapshot",
+        "zero-tool parent review",
         "rollback",
     ):
         require(trace, needle, "production execution trace")
+
+    for needle in (
+        "Git workspace",
+        "Directory workspace",
+        "Ephemeral workspace",
+        "Parallel **mutating** implementers are intentionally Git-only",
+        "nested autonomous delegation remains disabled",
+    ):
+        require(workspaces, needle, "docs/WORKSPACES.md")
 
     require(evidence, "## Planned and scaffolding behavior", "docs/CAPABILITY-EVIDENCE.md")
     maturity_heading = "## Capability maturity matrix"
@@ -221,7 +282,6 @@ def validate(root: Path) -> None:
     shipped = evidence.split(maturity_heading, 1)[1].split(certification_heading, 1)[0]
     for needle in (
         "`multi-agent-research` | `production`",
-        "coordinated `run_prompt` preflight and worktree implementation",
         "Linux, macOS, Windows",
     ):
         require(shipped, needle, "docs/CAPABILITY-EVIDENCE.md production section")
