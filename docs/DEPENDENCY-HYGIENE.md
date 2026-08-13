@@ -2,6 +2,14 @@
 
 > Historical record — retained as implementation evidence for the dependency-pruning change; it is not a current workspace inventory. Start at [the documentation index](README.md) and current Cargo manifests.
 
+## Committed lockfile authority
+
+The committed root `Cargo.lock` is the dependency authority for pull-request CI, certification, reproducibility checks, SBOM generation, packaging, and release builds. Those jobs validate the checkout with `cargo metadata --locked` and do not replace the checkout lockfile before validation.
+
+If a manifest change makes the committed lock stale, locked validation must fail until the matching lockfile update is committed. A freshly resolved graph is only a non-authoritative comparison when it runs in an isolated worktree and reports its lockfile diff separately; it must not replace the graph used for acceptance or release evidence.
+
+Generated SBOM and release-manifest evidence records the SHA-256 identity of the committed Cargo lock and desktop package lock, so Linux, macOS, and Windows results can be tied to the same dependency graph.
+
 ## Scope
 
 This document records the conservative dependency-pruning increment delivered through PR #52. The goal was to remove proven-unused direct manifest edges without refreshing unrelated transitive versions or claiming build improvements that the resolved graph does not support.
@@ -67,7 +75,7 @@ The practical benefits are narrower:
 - per-crate external direct dependencies
 - the full `cargo tree -d --locked` duplicate report
 
-The CI comparison is published in the dependency-policy job summary and retained as the `dependency-metrics` artifact. Metrics failures have their own diagnostic artifact and cannot be confused with cargo-deny or cargo-audit failures.
+The CI comparison is published in the dependency-policy job summary and retained as the `dependency-metrics` artifact. Metrics failures have their own diagnostic artifact and are reported independently of other dependency checks.
 
 ## Further pruning policy
 
@@ -81,4 +89,4 @@ A future increment is worthwhile only when it produces at least one of these out
 - fewer enabled features
 - a documented platform-specific dependency reduction
 
-`cargo deny check advisories sources` and `cargo audit` remain mandatory gates regardless of graph size.
+Existing dependency validation gates remain mandatory regardless of graph size.
