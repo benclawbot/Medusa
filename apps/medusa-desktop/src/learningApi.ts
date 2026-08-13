@@ -98,11 +98,19 @@ export function proposeLearning(
   });
 }
 
-export function evaluateLearning(repo: string, id: string, passed: boolean) {
+export function evaluateLearning(
+  repo: string,
+  id: string,
+  validationPassed: boolean,
+  regressionPassed: boolean,
+  effectivenessPassed: boolean,
+) {
   return invoke<LearningReviewSnapshot>("runtime_learning_evaluate", {
     repo,
     id,
-    passed,
+    validationPassed,
+    regressionPassed,
+    effectivenessPassed,
   });
 }
 
