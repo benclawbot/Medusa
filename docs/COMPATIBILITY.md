@@ -20,7 +20,7 @@ The packages are built by GitHub-hosted runners for the runner architecture used
 
 - Git is required for repository operations.
 - Provider-backed execution requires `MINIMAX_API_KEY` in the user's environment.
-- Browser verification and Desktop Commander require Node.js 22 and their pinned packages.
+- Required UI-change browser verification and Desktop Commander require Node.js 22 and their pinned packages; model-executable browser actions are not advertised while the architecture quarantine remains active.
 - Linux desktop packages require the WebKitGTK runtime expected by the generated Tauri package.
 
 ## Repository state

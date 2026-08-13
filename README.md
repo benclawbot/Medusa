@@ -12,9 +12,9 @@ The product model is **Plan, Execute Safely, Recover**:
 - **Execute Safely.** Read-only teammates scout the change; a worktree-isolated implementer mutates only inside its own branch; integration is guarded and rolls back on conflict.
 - **Recover.** Sessions, plans, events, approvals, worker leases, commits, and verification live under `.medusa` as authoritative state. Interruption, cancellation, or crash never gets rewritten as success.
 
-**Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, worktree-isolated mutation, platform containment, durable sessions, browser verification, voice interaction foundations, and the Telegram frontend are shipped and verified against the canonical capability ledger (`docs/CAPABILITY-CLAIMS.json`).
+**Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, worktree-isolated mutation, platform containment, and durable sessions are shipped. Voice and Telegram implementation foundations are present but their real account/hardware acceptance remains quarantined; browser actions remain withheld from executable surfaces. The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
 
-**Out of scope today:** unconstrained dynamic agent teams, autonomous nested delegation, consensus voting, distributed multi-worker transactions, and an authenticated OpenAI Realtime endpoint on the ChatGPT OAuth gateway. See [Roadmap](#roadmap) for the open work.
+**Out of scope today:** unconstrained dynamic agent teams, autonomous nested delegation, consensus voting, distributed multi-worker transactions, and any browser, voice, or remote-frontend claim that lacks its required authenticated live evidence. See [Roadmap](#roadmap) for the open work.
 
 ---
 
@@ -59,9 +59,9 @@ The interface changes presentation and interaction style; it does not create a s
 | **CLI** | Shipped | Automation, CI/CD, scripts, diagnostics, repository utilities, headless objectives. |
 | **Terminal UI (TUI)** | Shipped | Interactive coding, plans, questions, approvals, activity, sessions, attachments, recovery, metrics, keyboard-first workflows. |
 | **Desktop application** | Shipped | A graphical multi-pane workspace with sessions, chat, plans, activity, settings, review, attachments, and voice controls. |
-| **Telegram frontend** | Shipped | Remote session attachment, mobile status and control, approvals, progressive rendering, files, voice notes, and the Mini App voice surface. |
+| **Telegram frontend** | Foundation shipped; live acceptance pending | Remote session attachment, mobile status and control, approvals, progressive rendering, files, voice notes, and the Mini App voice surface. |
 | **Daemon** | Shipped | Bounded concurrency, reconnect, cancel-and-drain, IPC control plane for other clients. |
-| **Full-duplex voice** | Foundation shipped | Provider-neutral realtime core; usable wherever a supported authenticated Realtime route is available. |
+| **Full-duplex voice** | Foundation shipped; live acceptance pending | Provider-neutral realtime core; microphone streaming remains gated to an established supported route. |
 
 ### CLI
 
@@ -135,7 +135,7 @@ The desktop app is a Tauri/React shell over the same Medusa runtime. It provides
 
 ### Telegram
 
-Telegram is a frontend to the same authoritative Medusa session, not a separate bot-owned agent. The Telegram frontend closes issue [#568](https://github.com/benclawbot/Medusa/issues/568) and ships the Hermes-style rendering, action card, approval, and full-duplex voice Mini App surface.
+Telegram is a frontend to the same authoritative Medusa session, not a separate bot-owned agent. The implementation from issue [#568](https://github.com/benclawbot/Medusa/issues/568) ships the Hermes-style rendering, action card, approval, and full-duplex voice Mini App surface. Real bot/chat/Mini App acceptance remains part of the quarantined live evidence tracked by the current provider-support authority.
 
 Shipped today:
 
@@ -147,7 +147,7 @@ Shipped today:
 - durable chat/topic/user bindings, update offsets, event cursors, display preferences, and voice-mode preferences;
 - routing through the daemon frontend control plane and shared runtime session authority;
 - Telegram-native voice notes and TTS voice bubbles;
-- authenticated Mini App access to the shared full-duplex voice session.
+- authenticated Mini App access to the shared full-duplex voice session, pending real network/audio acceptance evidence.
 
 See [Telegram](docs/TELEGRAM.md) for setup, service operation, and Mini App wiring.
 
@@ -161,7 +161,7 @@ Medusa has one provider-neutral realtime voice model rather than a separate voic
 | **Desktop** | Compact voice entry beside the composer, explicit microphone permission, mute and speaker controls, device selection, refresh/reconnect, transcripts, transmitting state, barge-in, and deterministic track/transport cleanup. |
 | **Telegram** | Durable voice-mode preferences, voice notes, TTS voice bubbles, and the authenticated Mini App exposing the shared full-duplex voice session. |
 
-The provider transport is capability-gated. The current local `openai-oauth` ChatGPT/Codex gateway exposes text endpoints but not an authenticated Realtime endpoint. Medusa refuses microphone streaming on that route and does not request a separate voice API key. The shared voice core and frontend controls remain ready for a supported authenticated route.
+The provider transport is capability-gated. Live OpenAI Realtime evidence requires the active `chatgpt-oauth` / `openai-oauth` profile and an existing ChatGPT login whose trusted Codex account state can mint a bounded short-lived Realtime credential. Medusa establishes that credential before microphone permission and does not request or persist a separate voice API key. Until a real account, microphone/speaker, and sanitized result complete issue #719, the route remains `external-acceptance-pending` in `docs/provider-support.json`.
 
 ## Installation
 
@@ -170,7 +170,7 @@ The provider transport is capability-gated. The current local `openai-oauth` Cha
 - Git
 - Rust 1.88 or newer; the repository pins Rust 1.88.0
 - A supported model connection
-- Node.js 22 for ChatGPT OAuth, browser verification, desktop development, or desktop packaging
+- Node.js 22 for ChatGPT OAuth, required UI-change browser verification, desktop development, or desktop packaging
 - The platform containment backend required for guarded shell execution
 
 ### Install the CLI from `main`
@@ -229,6 +229,8 @@ API keys are read from the environment and are not written to `provider.toml`.
 
 Direct provider routes include:
 
+The canonical selectable-route, support-tier, credential, live-dogfood, and Realtime status matrix is [`docs/provider-support.json`](docs/provider-support.json); the rendered [provider support guide](docs/PROVIDER-SUPPORT.md) is checked against it in CI.
+
 | Route | Credential |
 |---|---|
 | MiniMax | `MINIMAX_API_KEY` |
@@ -237,7 +239,7 @@ Direct provider routes include:
 
 The setup and provider layer also support configured OpenAI-compatible gateways, local model runtimes, OmniRoute, the OpenAI API, and ChatGPT OAuth where their advertised capabilities meet the selected workflow.
 
-ChatGPT OAuth is supplied through the separately distributed `openai-oauth` loopback gateway:
+ChatGPT OAuth is supplied through the separately distributed `openai-oauth` loopback gateway. See the [ChatGPT OAuth setup and Realtime boundary](docs/CHATGPT-OAUTH.md):
 
 ```bash
 npx --yes openai-oauth@latest --detach
@@ -414,11 +416,11 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 - guarded repository file operations;
 - Git-aware change and integration workflows;
 - policy-controlled command execution;
-- browser verification through the Playwright sidecar;
+- required UI-change browser verification through the internal sidecar, while model-executable browser actions remain quarantined;
 - image and file prompt attachments when provider capabilities permit them;
 - MCP and extension boundaries;
 - provider routing and fallback chains;
-- GitHub, browser, update, and optional Desktop Commander integrations.
+- GitHub, update, and optional Desktop Commander integrations.
 
 ### Verification
 
@@ -427,7 +429,7 @@ After mutation, Medusa can:
 - inspect changed paths and public API risk;
 - select impacted checks when semantic evidence is sufficient;
 - run broader checks when a narrow selection would be unsafe;
-- require browser verification for effective UI changes;
+- require visible UI evidence for effective interface changes through an available certified or manual route;
 - record commands, assertions, routes, screenshots, console errors, overrides, and results;
 - reject completion when required evidence is absent or failed.
 
@@ -539,9 +541,9 @@ Platform support does not imply identical containment, audio, browser, credentia
 
 ## Current limitations
 
-- The current ChatGPT/Codex OAuth gateway does not expose an authenticated OpenAI Realtime endpoint; microphone streaming fails closed even though the shared voice core, TUI/desktop controls, and Telegram Mini App surface are shipped.
+- OpenAI Realtime and Telegram end-to-end acceptance still require real ChatGPT OAuth, audio hardware, bot/chat/Mini App access, and sanitized evidence; microphone streaming fails closed before those route prerequisites are established.
 - ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
-- Browser verification depends on Node.js, the Playwright sidecar, and a reachable development route.
+- Browser crates remain quarantined from advertised executable actions until dispatcher, permission, and authenticated behavioral evidence are certified.
 - Native Anthropic-compatible provider requests are currently non-streaming even though streaming is represented in capability contracts.
 - Screenshot input is accepted only when the selected provider declares compatible image support and limits.
 - Desktop release packages are unsigned at the operating-system level.

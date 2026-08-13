@@ -19,7 +19,7 @@ import uuid
 MANIFEST_SCHEMA = "medusa-release-manifest-v2"
 SIGNATURE_SCHEMA = "medusa-release-signature-v1"
 SIGNATURE_NAME = "medusa-release-manifest.sig.json"
-DEFAULT_KEY_ID = "medusa-release-2026-01"
+DEFAULT_KEY_ID = "medusa-release-2026-08-primary"
 
 REQUIRED_ASSETS = {
     "linux CLI archive": "medusa-cli-linux.tar.gz",

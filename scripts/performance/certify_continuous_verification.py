@@ -95,11 +95,13 @@ def main() -> int:
     minimum_speedup = float(baseline["minimum_warm_speedup_ratio"])
     if median_speedup < minimum_speedup:
         raise RuntimeError(
-            f"warm median speedup {median_speedup:.3f} is below {minimum_speedup:.3f}"
+            f"warm median speedup {median_speedup:.6f} is below {minimum_speedup:.6f}; "
+            f"cold_median_ns={int(cold_median)} warm_median_ns={int(warm_median)}"
         )
     if p95_speedup < minimum_speedup:
         raise RuntimeError(
-            f"warm p95 speedup {p95_speedup:.3f} is below {minimum_speedup:.3f}"
+            f"warm p95 speedup {p95_speedup:.6f} is below {minimum_speedup:.6f}; "
+            f"cold_p95_ns={int(cold_p95)} warm_p95_ns={int(warm_p95)}"
         )
     if exact_rerun_ratio > float(baseline["maximum_exact_rerun_ratio"]):
         raise RuntimeError("exact-check rerun ratio exceeds acceptance threshold")

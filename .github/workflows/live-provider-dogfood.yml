@@ -10,6 +10,9 @@ on:
       - "scripts/live-coding-e2e.sh"
       - "scripts/live-dogfood-report.py"
       - "scripts/test-live-dogfood.py"
+      - "scripts/check-provider-support.py"
+      - "docs/provider-support.json"
+      - "docs/PROVIDER-SUPPORT.md"
       - "docs/LIVE-PROVIDER-DOGFOOD.md"
       - ".github/workflows/live-provider-dogfood.yml"
 
@@ -31,7 +34,8 @@ jobs:
           python-version: "3.13"
       - name: Compile and test the evidence contract
         run: |
-          python -m py_compile scripts/live-coding-e2e.py scripts/live-dogfood-report.py scripts/test-live-dogfood.py
+          python -m py_compile scripts/live-coding-e2e.py scripts/live-dogfood-report.py scripts/test-live-dogfood.py scripts/check-provider-support.py
+          python scripts/check-provider-support.py
           python scripts/test-live-dogfood.py
 
   live-provider:

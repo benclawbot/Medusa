@@ -1,5 +1,7 @@
 # Provider delivery contract
 
+Selectable route support and live-dogfood status are governed by `docs/provider-support.json`. This document describes the first-run diagnostic contract and must not promote a route beyond that manifest.
+
 Medusa keeps first-run provider setup intentionally small and separates deterministic compatibility checks from optional live-provider tests.
 
 ## Supported first-run routes

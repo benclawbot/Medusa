@@ -1,5 +1,7 @@
 # Issue 307 source-splicing removal
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](README.md).
+
 This branch removes the first hidden build edge from `medusa-agent`:
 
 - `medusa-multi-agent-scheduler` is now a normal Cargo dependency.

@@ -1,5 +1,7 @@
 # Full-System Remediation
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](README.md).
+
 This document records implementation-backed repairs discovered during the repository-wide audit.
 
 ## Phase 1

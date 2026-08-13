@@ -2,6 +2,32 @@ use std::collections::BTreeSet;
 
 use crate::ProviderProfile;
 
+/// User-facing support tier for a selectable provider route.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderSupportTier {
+    /// Direct vendor route supported by the production provider adapter.
+    ProductionSupported,
+    /// User-supplied endpoint that follows a supported wire protocol.
+    Custom,
+    /// Managed local gateway with its own operational dependency.
+    Managed,
+    /// User-operated local model runtime.
+    Local,
+}
+
+impl ProviderSupportTier {
+    /// Stable machine-readable value used by the provider support manifest.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProductionSupported => "production-supported",
+            Self::Custom => "custom",
+            Self::Managed => "managed",
+            Self::Local => "local",
+        }
+    }
+}
+
 /// Canonical provider/route metadata shared by setup and in-session model selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProviderCatalogEntry {
@@ -204,6 +230,29 @@ pub fn provider_catalog_entry_for_profile(
     })
 }
 
+/// Returns the production request protocol for a selectable provider route.
+#[must_use]
+pub fn provider_runtime_protocol(provider: &str) -> Option<&'static str> {
+    provider_catalog_entry(provider).map(|entry| match entry.profile_provider {
+        "anthropic" | "anthropic-compatible" => "anthropic",
+        _ => "openai",
+    })
+}
+
+/// Returns the reviewed support tier for a selectable provider route.
+#[must_use]
+pub fn provider_support_tier(provider: &str) -> Option<ProviderSupportTier> {
+    provider_catalog_entry(provider).map(|entry| match entry.id {
+        "minimax" | "anthropic" | "openai" | "openai-oauth" => {
+            ProviderSupportTier::ProductionSupported
+        }
+        "anthropic-compatible" | "openai-compatible" => ProviderSupportTier::Custom,
+        "omniroute" => ProviderSupportTier::Managed,
+        "local" => ProviderSupportTier::Local,
+        _ => unreachable!("provider catalog entries have an exhaustive support tier"),
+    })
+}
+
 /// Returns catalog provider ids while preserving an already configured custom provider.
 #[must_use]
 pub fn provider_ids_with_current(current_provider: &str) -> Vec<String> {
@@ -275,6 +324,39 @@ mod tests {
         assert_eq!(ids.len(), provider_catalog().len());
         for id in ids {
             assert_eq!(provider_catalog_entry(id).map(|entry| entry.id), Some(id));
+        }
+    }
+
+    #[test]
+    fn machine_readable_support_manifest_matches_the_catalog() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../../../docs/provider-support.json"))
+                .expect("provider support manifest");
+        assert_eq!(manifest["schema_version"], 1);
+        let providers = manifest["providers"].as_array().expect("providers array");
+        assert_eq!(providers.len(), provider_catalog().len());
+
+        for entry in provider_catalog() {
+            let provider = providers
+                .iter()
+                .find(|provider| provider["id"] == entry.id)
+                .unwrap_or_else(|| panic!("missing provider support entry for {}", entry.id));
+            assert_eq!(provider["display_name"], entry.display_name);
+            assert_eq!(provider["connection"], entry.connection);
+            assert_eq!(provider["profile_provider"], entry.profile_provider);
+            assert_eq!(
+                provider["runtime_protocol"].as_str(),
+                provider_runtime_protocol(entry.id)
+            );
+            assert_eq!(
+                provider["credential_environment"].as_str(),
+                crate::credential_environment(entry.profile_provider)
+            );
+            assert_eq!(
+                provider["support_tier"].as_str(),
+                provider_support_tier(entry.id).map(ProviderSupportTier::as_str)
+            );
+            assert_eq!(provider["default_model"], entry.default_model);
         }
     }
 

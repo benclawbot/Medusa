@@ -71,6 +71,7 @@ pub enum StepOutcome {
 }
 
 const MAX_PARALLEL_TOOL_CALLS: usize = 8;
+const MIN_READ_ONLY_PHASE_OUTPUT_TOKENS: u32 = 2_048;
 
 pub(crate) fn parallel_tool_limit(configured_workers: u16) -> usize {
     usize::from(configured_workers).clamp(1, MAX_PARALLEL_TOOL_CALLS)
@@ -83,7 +84,15 @@ fn phase_output_token_budget(phase: ProviderExecutionPhase, configured: u32) -> 
         ProviderExecutionPhase::Planning | ProviderExecutionPhase::HighRiskReview => 4,
         ProviderExecutionPhase::Summarization | ProviderExecutionPhase::Formatting => 8,
     };
-    configured.div_ceil(divisor).max(1)
+    let budget = configured.div_ceil(divisor).max(1);
+    if matches!(
+        phase,
+        ProviderExecutionPhase::Planning | ProviderExecutionPhase::HighRiskReview
+    ) {
+        budget.max(configured.min(MIN_READ_ONLY_PHASE_OUTPUT_TOKENS))
+    } else {
+        budget
+    }
 }
 
 fn messages_with_turn_instruction(
@@ -1823,6 +1832,18 @@ mod phase_budget_tests {
         assert_eq!(
             phase_output_token_budget(ProviderExecutionPhase::Formatting, configured),
             4_096
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::Planning, 2_048),
+            2_048
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::HighRiskReview, 4_096),
+            2_048
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::Planning, 1_024),
+            1_024
         );
     }
 

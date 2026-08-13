@@ -32,39 +32,13 @@ Architecture v2 adds a separate certification status: `certified-production`, `l
 
 The manifest records current production paths, behavioral test paths, canonical gates, observability references, public documentation, promotion evidence, default activation, explicit opt-ins, and capability dependencies. The v2 baseline additionally records dispositions, exact blockers, source-of-truth ownership, trust boundaries, migration consumers, and legacy deletion targets.
 
-## Architecture v2 certification baseline
+## Architecture v2 certification authority
 
-| Capability | Legacy availability | V2 certification | Blocking evidence |
-|---|---|---|---|
-| Shared runtime | production | legacy-uncertified | lifecycle and mutable authority remain implicit across runtime and projections |
-| Durable sessions and memory | production | legacy-uncertified | multiple projections require one declared authority per concern |
-| GitHub service | production | legacy-uncertified | migrate OAuth/backend operations behind the final versioned integration boundary |
-| Provider/context resilience | production | quarantined | streaming, cancellation, fallback-health, and readiness claims do not fully match wire behavior |
-| Identity/approval/transactions | production | legacy-uncertified | mutation authority and receipts remain split |
-| Daemon | production | legacy-uncertified | daemon and remote contracts are not yet versioned |
-| Release trust | production | legacy-uncertified | updater does not consume the verified prebuilt channel until #655 |
-| Self-update | production | quarantined | the default path compiles from source and takes minutes |
-| Multi-agent research | production | quarantined | integration precedes independent parent review; changed paths are not explicit verification input; task/reviewer state is partly decorative |
-| Browser tools | advertised outside this legacy claim set | quarantined | production `execute_tool` dispatch is absent |
-| Plugins/extensions | structural | design-only | no certified manifest, permissions, dispatcher, lifecycle, or durable result contract |
-| Telegram remote frontend | partial | quarantined | shared-path and operator conformance are incomplete |
-| Unsafe/FFI boundary | partial | legacy-uncertified | #653 owns the explicit unsafe allowlist and audit boundary |
-| TypeScript/JavaScript code intelligence | production | certified-production | none; final issue-closing certification binds dispatcher, freshness, benchmarks, architecture, and cross-platform evidence |
+Architecture-v2 migration and certification are governed only by [`architecture/INDEX.md`](architecture/INDEX.md) and [`architecture/baseline.json`](architecture/baseline.json). This legacy availability ledger no longer reproduces a second certification table or migration-status narrative; doing so previously left completed work described as pending.
 
-These downgrades prevent current gaps from being presented as architecture-v2 guarantees while preserving truthful evidence about existing entrypoints.
+The architecture authority records the certified shared runtime, durable state, guarded mutation lifecycle, provider health, release trust, containment, frontend projection, and other production boundaries. It also records the current exceptions: model-executable browser actions remain quarantined, plugins/extensions remain preview unless individually certified, and Telegram duplex/audio behavior remains quarantined pending real external evidence.
 
-## Production capability evidence
-
-- `shared-runtime`: `crates/medusa-runtime`, `crates/medusa-tui`, and `apps/medusa-desktop`; validated by CI, Desktop, and Refactor Guardrails. V2 will replace implicit lifecycle ownership with versioned command, event, evidence, and artifact contracts.
-- `durable-sessions-memory`: session persistence and `crates/medusa-memory`; validated by CI and Release Gates. UI and process-local projections are not independent authorities.
-- `github-service`: `crates/medusa-github`, the approval-gated repository-creation entrypoint, and the backend-neutral operation entrypoint. Repository management uses serialized, repository-confined typed operations, normalized receipts, bounded and redacted payloads, approval tiers, and durable audit evidence. Validated by CI and Release Gates.
-- `provider-context-resilience`: provider, runtime, and agent layers; validated by current CI and Release Gates for legacy availability. The production contract now also exposes validated role/phase route pins and a bounded provider-agnostic reasoning handoff, while opaque native continuation remains fail-closed until a reviewed adapter advertises exact wire semantics. V2 certification remains quarantined because configuration can claim streaming while requests force `stream=false`, cancellation can return while a blocking request thread remains active, and route health/readiness has competing projections.
-- `identity-approval-transactions`: identity guard, approval, transaction, and engine wiring with named safety tests; validated by CI, Release Gates, and Refactor Guardrails. V2 must centralize mutation authority and receipts.
-- `daemon`: `crates/medusa-daemon`; validated by Daemon, Desktop, and CI. Remote frontend certification remains separate.
-- `release-trust`: release evidence scripts and publish workflows; validated by CI, Desktop, Release Gates, and Refactor Guardrails. #655 connects immutable Ed25519-verified prebuilt artifacts to the updater without requiring paid platform signing.
-- `self-update`: current CLI entrypoint in `crates/medusa-cli` and `crates/medusa-update`; available on supported platforms, but quarantined for v2 because the default update path compiles from source.
-- `multi-agent-research`: `run_prompt` dispatches independent read-only planner and risk-reviewer `AgentEngine` sessions under durable leases. Explicit mutation objectives then run an implementer `AgentEngine` in an execution-specific isolated worktree, reject out-of-scope or overlapping changes, verify the worktree, prepare a commit, integrate it, and only then hand evidence to the read-only parent reviewer. The current manager can roll back integration conflicts, but the review-after-integration order and changed-path verification gap are known failures, not v2 guarantees. Validated as legacy availability by CI, Daemon, Desktop, and Refactor Guardrails.
-- `truthful-code-intelligence-levels`: `semantic_capabilities` reports exact Rust, Python, and TypeScript/JavaScript depth. `typescript_semantic` dispatches repository-scoped definitions, references, diagnostics, and workspace symbols. `symbol_rename` routes TypeScript/JavaScript through an exact workspace symbol, `prepareRename`, independent references, normalized workspace-edit validation, deterministic repository/workspace fingerprints, exact touched-file snapshots, and the guarded `PatchTransaction`. Monorepo, ignored/generated, repository-switching, stale-state, Unicode cross-file, large-workspace, benchmark, and cross-platform certification evidence are retained in the code-intelligence architecture record and final gate.
+Provider route, dogfood, credential, and Realtime status are separately governed by [`provider-support.json`](provider-support.json). A legacy `production` availability entry here cannot promote a route or capability beyond either machine-readable authority.
 
 ## Planned and scaffolding behavior
 

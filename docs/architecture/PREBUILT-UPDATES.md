@@ -13,7 +13,7 @@ A release is eligible only when it contains:
 
 The release updater verifies the Ed25519 signature over the exact manifest bytes before parsing or trusting the version, source revision, URLs, platform mapping, sizes, hashes, rollout sequence, minimum updater version, or artifact names. GitHub release metadata is only a transport bootstrap for the two fixed manifest asset names.
 
-The embedded public key and the reviewed key lifecycle are recorded in `release/keys/keyring.json`. The private key is not stored in the repository. It is provided only to the protected `release-signing` environment through `MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM`.
+The embedded primary, recovery, and revoked-history public keys and their reviewed lifecycle are recorded in `release/keys/keyring.json`. Private keys are not stored in the repository. The independently generated active authorities are provided only through the separately named primary and recovery secrets in the protected `release-signing` environment.
 
 The embedded trust root is compiled as a fixed 32-byte value. Platform discovery is fallible, so an unsupported operating system or architecture fails closed instead of panicking.
 
@@ -80,7 +80,7 @@ No source compilation is used as a fallback for a failed `--release` update. Net
 
 The signed manifest contains a monotonically increasing rollout sequence and a rollout percentage. Cohort selection is deterministic per repository path. A candidate below the installed sequence is rejected unless the operator explicitly passes `medusa update --release --allow-downgrade`. A semantic-version downgrade also requires that release-only flag.
 
-Key rotation uses non-overlapping or explicitly bounded sequence windows in `release/keys/keyring.json`. A replacement key must be embedded and active before a release uses it. Revoked keys are rejected even when the signature is cryptographically valid. The rotation policy requires at least two release overlaps before retiring the previous key.
+Key rotation uses explicitly bounded sequence windows in `release/keys/keyring.json`. A replacement key must be embedded and active before a release uses it. Revoked keys are rejected even when the signature is cryptographically valid. The policy and CI require independently referenced primary and recovery authorities with at least two overlapping release sequences before either active authority may be retired.
 
 ## Main-branch source path
 

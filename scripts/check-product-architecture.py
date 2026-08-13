@@ -72,6 +72,7 @@ def validate(root: Path) -> None:
     planning = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
     read_only_coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
     mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
+    mutation_transaction = read(root, "crates/medusa-runtime/src/mutation_transaction_state.rs")
     workers = read(root, "crates/medusa-workers/src/lib.rs")
     runtime = read(root, "crates/medusa-runtime/src/lib.rs")
     readme = read(root, "README.md")
@@ -98,10 +99,10 @@ def validate(root: Path) -> None:
     metadata = tomllib.loads(cargo_text).get("workspace", {}).get("metadata", {}).get("medusa", {})
     expected = {
         "production_execution_model": "bounded-teammates-with-worktree-isolated-mutation",
-        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> read-only parent medusa-agent::AgentEngine",
+        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> typed worktree verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence",
         "orchestration_planning": "production runtime path; task contracts drive durable read-only preflight and worktree-isolated implementer execution",
         "subagent_delegation": "production; bounded read-only planner and risk-reviewer teammates plus one worktree-isolated implementer contract for explicit mutation objectives",
-        "verification_gate": "repository",
+        "verification_gate": "typed-evidence-and-changed-component-authority",
     }
     if metadata != expected:
         raise ArchitectureError(f"workspace.metadata.medusa must remain the exact production architecture authority: expected {expected!r}, got {metadata!r}")
@@ -127,12 +128,16 @@ def validate(root: Path) -> None:
     forbid(runtime, "pub mod production_orchestrator;", "runtime root")
     require(runtime, "fn run_prompt(", "runtime implementation")
     require(runtime, "AgentEngine::new_with_cancellation", "runtime implementation")
-    require(runtime, ".step_with_observer_and_context(", "runtime implementation")
+    require(
+        runtime,
+        ".step_with_observer_and_context_and_turn_instruction_for_phase(",
+        "runtime implementation",
+    )
 
     for needle in (
         "multi_agent_coordinator::run_preflight",
         "mutating_worker_coordinator::run_implementation",
-        "multi_agent_coordinator::verify_repository",
+        "mutation_transaction::complete_after_parent_review",
         "production_orchestrator::requires_mutation",
         "TeamRole::Reviewer",
         "implementation_evidence",
@@ -156,14 +161,23 @@ def validate(root: Path) -> None:
         "TeamRole::Implementer",
         "open_or_create_worker",
         "validate_changed_paths",
-        "targeted_verification",
+        "prepare_components_for_verification",
+        "authoritative_verification_for_components_at",
         "finalize_worker",
-        "integrate_successful",
-        "commit_tree_matches_head",
         "discard_untracked_runtime_state",
         "recover_interrupted",
     ):
         require(mutating_coordinator, needle, "production mutating coordinator")
+
+    for needle in (
+        "verify_independently",
+        "record_authoritative_verification",
+        "authorize",
+        "integrate_authorized",
+        "reconcile",
+        "commit_tree_matches_head",
+    ):
+        require(mutation_transaction, needle, "production mutation transaction")
 
     for needle in (
         "open_or_create_worker",
@@ -178,10 +192,13 @@ def validate(root: Path) -> None:
         require(workers, needle, "worktree manager")
 
     for needle in (
-        "Independent read-only teammates are dispatched",
-        "isolated Git worktree",
-        "no mutating implementer or worktree",
+        "read_only_objective",
+        "TaskKind::Analysis",
+        "TaskKind::RiskReview",
+        "TaskKind::Implementation",
+        "AgentRole::Planner",
         "AgentRole::Researcher",
+        "DelegationPolicy",
         "requires_mutation",
     ):
         require(planning, needle, "production orchestration planning")
@@ -197,9 +214,16 @@ def validate(root: Path) -> None:
         require(trace, needle, "production execution trace")
 
     require(evidence, "## Planned and scaffolding behavior", "docs/CAPABILITY-EVIDENCE.md")
-    require(evidence, "`multi-agent-research` | `production`", "docs/CAPABILITY-EVIDENCE.md")
-    shipped = evidence.split("## Production capability evidence", 1)[1].split("## Planned and scaffolding behavior", 1)[0]
-    for needle in ("read-only planner and risk-reviewer", "isolated worktree", "roll back integration conflicts"):
+    maturity_heading = "## Capability maturity matrix"
+    certification_heading = "## Architecture v2 certification authority"
+    require(evidence, maturity_heading, "docs/CAPABILITY-EVIDENCE.md")
+    require(evidence, certification_heading, "docs/CAPABILITY-EVIDENCE.md")
+    shipped = evidence.split(maturity_heading, 1)[1].split(certification_heading, 1)[0]
+    for needle in (
+        "`multi-agent-research` | `production`",
+        "coordinated `run_prompt` preflight and worktree implementation",
+        "Linux, macOS, Windows",
+    ):
         require(shipped, needle, "docs/CAPABILITY-EVIDENCE.md production section")
 
 

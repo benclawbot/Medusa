@@ -10,6 +10,7 @@ mod evidence;
 mod identity_guard;
 pub mod output_envelope;
 mod policy;
+mod repository_boundary;
 mod session;
 pub mod session_browser;
 pub mod team;

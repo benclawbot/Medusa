@@ -26,8 +26,32 @@ def configure_utf8_stdio() -> None:
         if reconfigure is not None:
             reconfigure(encoding="utf-8", errors="replace")
 
-PROVIDER = "minimax"
-MODEL = "MiniMax-M3"
+
+def load_primary_dogfood_route() -> tuple[dict[str, object], dict[str, object]]:
+    manifest_path = Path(__file__).resolve().parents[1] / "docs/provider-support.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    primary = [
+        provider
+        for provider in manifest.get("providers", [])
+        if provider.get("dogfood", {}).get("status") == "primary"
+    ]
+    if len(primary) != 1:
+        raise RuntimeError("provider support manifest must declare exactly one primary dogfood route")
+    provider = primary[0]
+    dogfood = provider.get("dogfood", {})
+    required = ("model", "protocol", "base_url", "auth")
+    if not provider.get("credential_environment") or any(not dogfood.get(key) for key in required):
+        raise RuntimeError("primary dogfood route is incomplete")
+    return provider, dogfood
+
+
+PRIMARY_PROVIDER, PRIMARY_DOGFOOD = load_primary_dogfood_route()
+PROVIDER = str(PRIMARY_PROVIDER["id"])
+MODEL = str(PRIMARY_DOGFOOD["model"])
+CREDENTIAL_ENVIRONMENT = str(PRIMARY_PROVIDER["credential_environment"])
+DOGFOOD_PROTOCOL = str(PRIMARY_DOGFOOD["protocol"])
+DOGFOOD_BASE_URL = str(PRIMARY_DOGFOOD["base_url"])
+DOGFOOD_AUTH = str(PRIMARY_DOGFOOD["auth"])
 ASSERTION_COUNT = 3
 DEFAULT_TIMEOUT_SECONDS = 1500
 DEFAULT_HEARTBEAT_SECONDS = 60
@@ -74,7 +98,7 @@ def classify_failure(message: str) -> str:
     )):
         return "flaky-test"
     if any(token in lowered for token in (
-        "401", "403", "429", "rate limit", "provider", "minimax", "timed out",
+        "401", "403", "429", "rate limit", "provider", PROVIDER.lower(), "timed out",
         "connection reset", "service unavailable",
     )):
         return "provider"
@@ -186,7 +210,7 @@ class Harness:
                 "APPDATA": str(self.isolated_home / "AppData" / "Roaming"),
                 "LOCALAPPDATA": str(self.isolated_home / "AppData" / "Local"),
                 "PYTHONUTF8": "1",
-                "MINIMAX_API_KEY": self.api_key,
+                CREDENTIAL_ENVIRONMENT: self.api_key,
                 "MEDUSA_INPUT_COST_MICROUSD_PER_MILLION": str(INPUT_COST_MICROUSD_PER_MILLION),
                 "MEDUSA_OUTPUT_COST_MICROUSD_PER_MILLION": str(OUTPUT_COST_MICROUSD_PER_MILLION),
                 "MEDUSA_CACHE_READ_COST_MICROUSD_PER_MILLION": str(INPUT_COST_MICROUSD_PER_MILLION),
@@ -328,11 +352,11 @@ class Harness:
             "--set",
             f"model.name={MODEL}",
             "--set",
-            "model.protocol=anthropic",
+            f"model.protocol={DOGFOOD_PROTOCOL}",
             "--set",
-            "model.base_url=https://api.minimax.io/anthropic",
+            f"model.base_url={DOGFOOD_BASE_URL}",
             "--set",
-            "model.auth=api-key",
+            f"model.auth={DOGFOOD_AUTH}",
             "--set",
             "model.tool_calling=true",
             "--set",
@@ -607,9 +631,12 @@ def main() -> int:
     if args.timeout_seconds <= 0 or args.heartbeat_seconds <= 0:
         print("timeouts must be positive", file=sys.stderr)
         return 2
-    api_key = os.environ.get("MINIMAX_API_KEY", "")
+    api_key = os.environ.get(CREDENTIAL_ENVIRONMENT, "")
     if not api_key:
-        print("MINIMAX_API_KEY is required for live coding end-to-end tests", file=sys.stderr)
+        print(
+            f"{CREDENTIAL_ENVIRONMENT} is required for live coding end-to-end tests",
+            file=sys.stderr,
+        )
         return 2
     repo_root = Path(
         run_checked(["git", "rev-parse", "--show-toplevel"], cwd=Path.cwd(), capture=True).stdout.strip()

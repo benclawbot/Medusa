@@ -1,6 +1,6 @@
 # OpenAI Realtime live evidence
 
-This developer-only acceptance surface proves the remaining end-to-end slice for issue #482:
+This developer-only acceptance surface proves the OpenAI Realtime portion of issue #719:
 
 ```text
 existing ChatGPT/Codex account state
@@ -14,7 +14,7 @@ It does not add an API-key field or a voice-specific credential store. The norma
 
 ## Preconditions
 
-- The active Medusa provider is `openai-oauth`.
+- The active Medusa connection is `chatgpt-oauth` and its provider is `openai-oauth`.
 - The existing Codex authentication file represents a ChatGPT login that automatically provisioned an OpenAI API credential capable of minting a Realtime client secret.
 - A microphone and speaker are available to the desktop WebView.
 - The account can use the configured `gpt-realtime` and transcription models.
@@ -78,9 +78,9 @@ A passing report records only:
 
 The report never contains the long-lived account credential, short-lived Realtime credential, raw audio, or complete transcript.
 
-## Closure evidence for #482
+## Closure evidence for #719
 
-Do not close #482 from deterministic tests alone. Attach the passing sanitized JSON to the issue or the final pull request and include:
+Do not close #719 from deterministic tests alone. Attach the passing sanitized JSON to the issue or the final pull request and include:
 
 - the commit SHA that produced the desktop build;
 - operating system and desktop WebView version;
@@ -88,4 +88,4 @@ Do not close #482 from deterministic tests alone. Attach the passing sanitized J
 - confirmation that the spoken prompt was heard as assistant audio;
 - the passing evidence JSON.
 
-If the report is `FAILED`, keep #482 open and fix the reported live boundary before rerunning it.
+If the report is `FAILED`, keep #719 open and fix the reported live boundary before rerunning it.

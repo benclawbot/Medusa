@@ -25,6 +25,7 @@ const COMMAND_PREVIEW_MAX_LINES: usize = 32;
 mod verification_schedule;
 
 use crate::{
+    repository_boundary::is_revisioned_git_repository_root,
     verification::{
         ExecutedVerificationCommand, VerificationResult, execute_verification_command,
         required_browser_verification,
@@ -731,7 +732,7 @@ fn hash_repository_state_entry(hasher: &mut Sha256, path: &[u8], kind: &[u8], pa
 }
 
 fn repository_state_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
-    if git_repository(repo) {
+    if is_revisioned_git_repository_root(repo) {
         let output = Command::new("git")
             .args([
                 "ls-files",
@@ -807,7 +808,7 @@ fn graph_verification_assessment(
     commit: &str,
     plan: &VerificationPlan,
 ) -> MedusaResult<Vec<String>> {
-    if !git_repository(repo) {
+    if !is_revisioned_git_repository_root(repo) {
         return Ok(Vec::new());
     }
 
@@ -957,14 +958,6 @@ fn cargo_scope_covers(check: &VerificationCheck, command: &str) -> bool {
                 .any(|pair| pair[0] == "-p" && pair[1] == package);
     }
     check.working_directory == "."
-}
-
-fn git_repository(repo: &Path) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(repo)
-        .output()
-        .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
 }
 
 #[allow(clippy::too_many_arguments)]

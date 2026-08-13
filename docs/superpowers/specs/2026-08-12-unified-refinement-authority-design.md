@@ -1,5 +1,7 @@
 # Unified Refinement Authority Design
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](../../README.md).
+
 Status: Accepted for implementation after user review
 
 Issue: [#819](https://github.com/benclawbot/Medusa/issues/819)

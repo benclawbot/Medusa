@@ -98,26 +98,14 @@ pub(super) fn turns_for_effort(effort: Effort) -> u32 {
     }
 }
 
-pub(super) const SUPPORTED_PROVIDERS: [&str; 8] = [
-    "minimax",
-    "anthropic",
-    "anthropic-compatible",
-    "openai",
-    "openai-oauth",
-    "openai-compatible",
-    "omniroute",
-    "local",
-];
+pub(super) const SUPPORTED_PROVIDERS: [&str; 8] = medusa_config::PROVIDER_CATALOG_IDS;
 
 pub(super) fn is_supported_provider(provider: &str) -> bool {
     SUPPORTED_PROVIDERS.contains(&provider)
 }
 
 pub(super) fn protocol_for_provider(provider: &str) -> &'static str {
-    match provider {
-        "anthropic" | "anthropic-compatible" => "anthropic",
-        _ => "openai",
-    }
+    medusa_config::provider_runtime_protocol(provider).unwrap_or("openai")
 }
 
 pub(super) fn model_context_window_tokens(model: &str, configured_default: u64) -> u64 {
@@ -161,14 +149,7 @@ pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
 }
 
 pub(super) fn credential_environment(provider: &str) -> Option<&'static str> {
-    match provider {
-        "minimax" => Some("MINIMAX_API_KEY"),
-        "anthropic" => Some("ANTHROPIC_API_KEY"),
-        "anthropic-compatible" | "openai-compatible" => Some("MEDUSA_API_KEY"),
-        "openai" => Some("OPENAI_API_KEY"),
-        "openai-oauth" | "omniroute" | "local" => None,
-        _ => None,
-    }
+    medusa_config::credential_environment(provider)
 }
 
 pub(super) fn discover_skills(repo: &Path) -> Vec<String> {

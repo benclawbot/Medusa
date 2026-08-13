@@ -1,6 +1,12 @@
-# ChatGPT OAuth gateway
+# ChatGPT OAuth
 
 Medusa's ChatGPT OAuth route depends on the external `openai-oauth` loopback gateway. Medusa does not read, copy, or store the user's private OAuth credential files.
+
+## Setup
+
+Run `medusa config` and choose **ChatGPT OAuth via local openai-oauth gateway**. The gateway owns browser login, token refresh, credential storage, and account-aware model access. If the loopback gateway is not running, Medusa starts it with `npx --yes openai-oauth@latest --detach`.
+
+The gateway can also be managed directly with `npx openai-oauth@latest login`, `npx openai-oauth@latest status`, and `npx openai-oauth@latest stop`. Keep it bound to loopback; port `10531` must not be exposed to a LAN or the internet.
 
 Before an interactive, `run`, or `resume` coding session starts, Medusa verifies the configured gateway at the profile `base_url` (default `http://127.0.0.1:10531/v1`). The preflight runs once at process startup, before the coding runtime accepts work, and:
 
@@ -18,3 +24,13 @@ Set `MEDUSA_OAUTH_PREFLIGHT=off` to skip network verification. Medusa prints an 
 ## Authentication safety
 
 A real end-to-end OAuth test requires a user-authorized local gateway. Private OAuth credentials must not be copied into repository secrets. Automated contract tests exercise response parsing and failure classification without user credentials.
+
+## Realtime voice boundary
+
+OpenAI Realtime live evidence is available only when the active profile is the `chatgpt-oauth` connection with provider `openai-oauth` and the gateway advertises the required Realtime capability. The desktop app explains this requirement before beginning live evidence, keeps the start action disabled until the route is ready, and requests microphone permission only after a bounded short-lived Realtime credential is established.
+
+Medusa does not request or persist a separate voice API key. Direct OpenAI API-key profiles are valid text-provider routes but are not accepted by the ChatGPT OAuth Realtime evidence flow. The current evidence status remains `external-acceptance-pending` in `docs/provider-support.json` until a real account, microphone/speaker, and sanitized result complete the acceptance issue.
+
+## OpenAI API alternative
+
+The separate `openai-api` connection uses `https://api.openai.com/v1` with `OPENAI_API_KEY`. MiniMax, Anthropic, OmniRoute, local runtimes, and compatible custom endpoints remain separately selectable according to `docs/provider-support.json`.

@@ -26,7 +26,7 @@ The source-build updater and verified release updater remain independent. Neithe
 - End users using the verified release path do not need Rust or Cargo.
 - GitHub Releases remains the free artifact transport; trust does not depend on mutable release prose or unsigned asset metadata.
 - A release is not update-eligible until its signed manifest assets are present.
-- Release signing requires the protected `release-signing` environment and the `MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM` secret.
+- Release signing requires the protected `release-signing` environment and independently named primary/recovery Ed25519 secrets governed by `release/keys/keyring.json`.
 - The repository public-key keyring and embedded updater trust store must change before a signing-key rotation becomes active.
 - Downgrades and rollout-sequence rollback require explicit local approval on the release path.
 - Package-managed installations are never silently replaced or upgraded through a package manager.

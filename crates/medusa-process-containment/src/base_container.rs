@@ -43,6 +43,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const PROCESSMODEL_DLL: &str = "processmodel.dll";
 const SANDBOX_EXPORT: &[u8] = b"Experimental_CreateProcessInSandbox\0";
 const BROKEN_PIPE: u32 = 109;
+const ERROR_CALL_NOT_IMPLEMENTED: i32 = 120;
 // Win32 JOB_OBJECT_LIMIT_PROCESS_TIME (winnt.h). Kept local because this windows-sys feature surface does not export it.
 const JOB_OBJECT_LIMIT_PROCESS_TIME_FLAG: u32 = 0x0000_0002;
 // Reserved by Experimental_CreateProcessInSandbox and required to be FALSE.
@@ -251,11 +252,7 @@ unsafe fn launch(
         )
     };
     if created == 0 {
-        let error = io::Error::last_os_error();
-        return Err(io::Error::new(
-            error.kind(),
-            format!("Windows composable sandbox process creation failed: {error}"),
-        ));
+        return Err(sandbox_process_creation_error(io::Error::last_os_error()));
     }
 
     let process_handle = OwnedHandle::new(process.hProcess)?;
@@ -323,6 +320,19 @@ unsafe fn launch(
         stdout,
         stderr,
     })
+}
+
+fn sandbox_process_creation_error(error: io::Error) -> io::Error {
+    if error.raw_os_error() == Some(ERROR_CALL_NOT_IMPLEMENTED) {
+        return io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows composable sandbox API is unavailable; Windows 11 support is required",
+        );
+    }
+    io::Error::new(
+        error.kind(),
+        format!("Windows composable sandbox process creation failed: {error}"),
+    )
 }
 
 fn create_inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
@@ -640,5 +650,17 @@ mod tests {
     #[test]
     fn sandbox_process_does_not_request_reserved_handle_inheritance() {
         assert_eq!(INHERIT_HANDLES, 0);
+    }
+
+    #[test]
+    fn unsupported_process_creation_has_a_locale_independent_error() {
+        let error = sandbox_process_creation_error(io::Error::from_raw_os_error(
+            ERROR_CALL_NOT_IMPLEMENTED,
+        ));
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(
+            error.to_string(),
+            "Windows composable sandbox API is unavailable; Windows 11 support is required"
+        );
     }
 }

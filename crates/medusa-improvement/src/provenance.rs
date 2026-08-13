@@ -9,6 +9,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use crate::scoped_memory::RepositoryIdentity;
@@ -20,6 +21,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use ulid::Ulid;
 
 pub const PROVENANCE_SCHEMA_VERSION: u32 = 1;
+
+static PROVENANCE_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// Every currently recorded event source is listed here. The adapter below is exhaustive over
 /// `EventPayload`, so adding a new protocol variant requires an explicit disposition in CI.
@@ -308,6 +311,7 @@ pub struct ProvenanceGraphStore {
 
 impl ProvenanceGraphStore {
     pub fn open(repo: &Path) -> Result<Self, ProvenanceError> {
+        let _guard = lock_provenance_store();
         let directory = repo.join(".medusa/provenance");
         fs::create_dir_all(&directory)?;
         let path = directory.join("observations.jsonl");
@@ -324,6 +328,8 @@ impl ProvenanceGraphStore {
         policy: &LearningAdmissionPolicy,
         ingested_at: OffsetDateTime,
     ) -> Result<usize, ProvenanceError> {
+        let _guard = lock_provenance_store();
+        self.graph = read_graph(&self.path)?;
         let mut new_observations = Vec::new();
         for event in events {
             if !policy.capture_enabled() {
@@ -347,14 +353,16 @@ impl ProvenanceGraphStore {
         if new_observations.is_empty() {
             return Ok(0);
         }
+        let mut serialized = Vec::new();
+        for observation in &new_observations {
+            serde_json::to_writer(&mut serialized, observation)?;
+            serialized.push(b'\n');
+        }
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
-        for observation in &new_observations {
-            serde_json::to_writer(&mut file, observation)?;
-            file.write_all(b"\n")?;
-        }
+        file.write_all(&serialized)?;
         file.sync_data()?;
         Ok(new_observations.len())
     }
@@ -363,6 +371,13 @@ impl ProvenanceGraphStore {
     pub fn graph(&self) -> &ProvenanceGraph {
         &self.graph
     }
+}
+
+fn lock_provenance_store() -> MutexGuard<'static, ()> {
+    PROVENANCE_STORE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub fn repository_identity(repo: &Path) -> Option<RepositoryIdentity> {
@@ -746,7 +761,12 @@ fn read_origin(common: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{
+        fs,
+        path::Path,
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use medusa_core::{CorrelationId, SessionId, learning_policy::LearningPrivacyPolicy};
     use medusa_protocol::{Actor, EventEnvelope, EventPayload};
@@ -908,6 +928,51 @@ mod tests {
         let error = ProvenanceGraphStore::open(repo.path()).expect_err("quarantine");
         assert!(matches!(error, ProvenanceError::Quarantined(_)));
         assert!(repo.path().join(".medusa/provenance/quarantine").is_dir());
+    }
+
+    #[test]
+    fn concurrent_stores_publish_complete_observations() {
+        const WORKERS: usize = 32;
+
+        let repo = tempfile::tempdir().expect("repo");
+        let repo_path = repo.path().to_path_buf();
+        let barrier = Arc::new(Barrier::new(WORKERS));
+        let handles = (0..WORKERS)
+            .map(|worker| {
+                let repo_path = repo_path.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    let mut store = ProvenanceGraphStore::open(&repo_path).expect("store");
+                    let source = event(
+                        worker as u64 + 1,
+                        EventPayload::VerificationCompleted {
+                            passed: true,
+                            evidence: vec![format!("worker-{worker}")],
+                        },
+                        Actor::Worker(format!("worker-{worker}")),
+                    );
+                    barrier.wait();
+                    store
+                        .ingest_events(
+                            &[source],
+                            &format!("root-{worker}"),
+                            None,
+                            None,
+                            &policy(),
+                            OffsetDateTime::UNIX_EPOCH,
+                        )
+                        .expect("concurrent ingestion");
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("worker");
+        }
+
+        let store = ProvenanceGraphStore::open(&repo_path).expect("reopen complete store");
+        assert_eq!(store.graph().observations.len(), WORKERS);
+        assert!(!repo_path.join(".medusa/provenance/quarantine").exists());
     }
 
     #[test]

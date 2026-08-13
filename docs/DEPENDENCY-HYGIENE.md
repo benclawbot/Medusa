@@ -1,5 +1,7 @@
 # Dependency hygiene evidence
 
+> Historical record — retained as implementation evidence for the dependency-pruning change; it is not a current workspace inventory. Start at [the documentation index](README.md) and current Cargo manifests.
+
 ## Scope
 
 This document records the conservative dependency-pruning increment delivered through PR #52. The goal was to remove proven-unused direct manifest edges without refreshing unrelated transitive versions or claiming build improvements that the resolved graph does not support.

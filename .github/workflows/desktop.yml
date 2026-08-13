@@ -147,6 +147,9 @@ jobs:
       - name: Run responsive and accessibility frontend acceptance
         working-directory: apps/medusa-desktop
         run: npm test
+      - name: Prepare verified Tauri Linux bundler tools
+        if: runner.os == 'Linux'
+        run: python scripts/prepare-tauri-linux-tools.py --cache-dir "$HOME/.cache/tauri"
       - name: Build unsigned desktop bundles
         working-directory: apps/medusa-desktop
         env:

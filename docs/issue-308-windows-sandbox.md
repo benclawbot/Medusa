@@ -1,5 +1,7 @@
 # Issue 308: Windows sandbox boundary
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](README.md).
+
 The command API now fails closed on Windows and every platform without a verified containment backend. `sandboxed_command` never launches a bare child process. The structured `sandbox_unavailable` error includes the active backend and effective restrictions for diagnostics.
 
 No unsandboxed fallback is exposed by the sandbox API. Unsupported platforms return before process launch.
