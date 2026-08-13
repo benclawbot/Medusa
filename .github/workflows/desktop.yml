@@ -76,7 +76,23 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Validate committed dependency authority
-        run: cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked --format-version 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=apps/medusa-desktop/src-tauri/Cargo.toml
+          lock=apps/medusa-desktop/src-tauri/Cargo.lock
+          if cargo metadata --manifest-path "$manifest" --locked --format-version 1; then
+            exit 0
+          fi
+          committed="$(mktemp)"
+          cp "$lock" "$committed"
+          cargo generate-lockfile --manifest-path "$manifest"
+          echo "::group::Exact stale desktop Cargo.lock diff"
+          diff -u "$committed" "$lock" || true
+          echo "::endgroup::"
+          cp "$committed" "$lock"
+          echo "committed desktop Cargo.lock is stale" >&2
+          exit 1
       - name: Check desktop formatting
         run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
       - name: Lint desktop adapter
