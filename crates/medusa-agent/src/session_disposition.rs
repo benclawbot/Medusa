@@ -20,6 +20,8 @@ const JOURNAL_TOMBSTONE_PREFIX: &str = "MEDUSA_SESSION_DISPOSED_V1\n";
 struct DispositionMarker {
     schema_version: u32,
     session_id: String,
+    #[serde(default)]
+    tool_artifacts: Vec<PathBuf>,
     #[serde(with = "time::serde::rfc3339")]
     disposed_at: OffsetDateTime,
 }
@@ -33,8 +35,8 @@ struct DispositionMarker {
 pub fn dispose_completed_session(repo: &Path, session_id: &str) -> MedusaResult<()> {
     let id = SessionId::parse(session_id).map_err(validation_error)?;
     if journal_is_tombstoned(repo, &id)? {
-        validate_marker(repo, &id)?;
-        return purge_agent_owned_state(repo, &id);
+        let marker = validate_marker(repo, &id)?;
+        return purge_agent_owned_state(repo, &id, &marker.tool_artifacts);
     }
 
     let session = session::load(repo, id.as_str())?;
@@ -51,9 +53,9 @@ pub fn dispose_completed_session(repo: &Path, session_id: &str) -> MedusaResult<
             ));
         }
         preflight_agent_owned_state(committed)?;
-        write_marker(repo, &id)?;
+        write_marker(repo, committed)?;
         write_journal_tombstone(repo, &id)?;
-        purge_agent_owned_state(repo, &id)
+        purge_agent_owned_state(repo, &id, &committed.tool_artifacts)
     })?;
     Ok(())
 }
@@ -69,6 +71,7 @@ fn preflight_agent_owned_state(session: &AgentSession) -> MedusaResult<()> {
     if let Some(reference) = &session.world_model {
         validate_relative_path(&reference.relative_path)?;
     }
+    validate_tool_artifacts(&session.repo, &session.tool_artifacts)?;
     // A corrupt branch-summary record cannot be classified safely. Fail before tombstoning rather
     // than claiming deletion while an unclassified content-addressed artifact remains.
     for path in branch_summary_paths(&session.repo)? {
@@ -78,7 +81,11 @@ fn preflight_agent_owned_state(session: &AgentSession) -> MedusaResult<()> {
     Ok(())
 }
 
-fn purge_agent_owned_state(repo: &Path, id: &SessionId) -> MedusaResult<()> {
+fn purge_agent_owned_state(
+    repo: &Path,
+    id: &SessionId,
+    tool_artifacts: &[PathBuf],
+) -> MedusaResult<()> {
     // Keep the primary tombstone. The fallback journal is a recoverable materialized copy and must
     // disappear so it cannot be selected by tooling that bypasses normal journal resolution.
     remove_file_if_present(&fallback_journal_path(repo, id))?;
@@ -86,10 +93,56 @@ fn purge_agent_owned_state(repo: &Path, id: &SessionId) -> MedusaResult<()> {
     remove_file_if_present(&fallback_snapshot_path(repo, id))?;
     remove_file_if_present(&repo.join(".medusa/escalations").join(format!("{id}.json")))?;
 
+    purge_tool_artifacts(repo, tool_artifacts)?;
     medusa_memory::delete_session_recall(repo, id.as_str())?;
     purge_world_model(repo, id)?;
     purge_branch_summaries(repo, id)?;
     purge_nonfatal_diagnostics(repo, id)?;
+    Ok(())
+}
+
+fn validate_tool_artifacts(repo: &Path, tool_artifacts: &[PathBuf]) -> MedusaResult<()> {
+    let artifact_root = repo.join(".medusa/artifacts");
+    for path in tool_artifacts {
+        validate_tool_artifact_path(&artifact_root, path)?;
+    }
+    Ok(())
+}
+
+fn validate_tool_artifact_path(artifact_root: &Path, path: &Path) -> MedusaResult<()> {
+    if !path.starts_with(artifact_root) {
+        return Err(persistence_error(
+            "session tool artifact is outside the admitted artifact store",
+        ));
+    }
+    let relative = path.strip_prefix(artifact_root).map_err(|_| {
+        persistence_error("session tool artifact is outside the admitted artifact store")
+    })?;
+    validate_relative_path(relative)?;
+
+    if path.exists() {
+        let canonical_root = fs::canonicalize(artifact_root)?;
+        let canonical_path = fs::canonicalize(path)?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(persistence_error(
+                "session tool artifact resolves outside the admitted artifact store",
+            ));
+        }
+        if !canonical_path.is_file() {
+            return Err(persistence_error(
+                "session tool artifact does not resolve to a regular file",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn purge_tool_artifacts(repo: &Path, tool_artifacts: &[PathBuf]) -> MedusaResult<()> {
+    let artifact_root = repo.join(".medusa/artifacts");
+    for path in tool_artifacts {
+        validate_tool_artifact_path(&artifact_root, path)?;
+        remove_file_if_present(path)?;
+    }
     Ok(())
 }
 
@@ -151,16 +204,17 @@ fn purge_nonfatal_diagnostics(repo: &Path, id: &SessionId) -> MedusaResult<()> {
     atomic_write_json(&path, &diagnostics)
 }
 
-fn write_marker(repo: &Path, id: &SessionId) -> MedusaResult<()> {
+fn write_marker(repo: &Path, session: &AgentSession) -> MedusaResult<()> {
     let marker = DispositionMarker {
         schema_version: DISPOSITION_SCHEMA_VERSION,
-        session_id: id.to_string(),
+        session_id: session.id.to_string(),
+        tool_artifacts: session.tool_artifacts.clone(),
         disposed_at: OffsetDateTime::now_utc(),
     };
-    atomic_write_json(&marker_path(repo, id), &marker)
+    atomic_write_json(&marker_path(repo, &session.id), &marker)
 }
 
-fn validate_marker(repo: &Path, id: &SessionId) -> MedusaResult<()> {
+fn validate_marker(repo: &Path, id: &SessionId) -> MedusaResult<DispositionMarker> {
     let path = marker_path(repo, id);
     let marker: DispositionMarker = serde_json::from_slice(&fs::read(path)?)?;
     if marker.schema_version != DISPOSITION_SCHEMA_VERSION || marker.session_id != id.as_str() {
@@ -168,7 +222,8 @@ fn validate_marker(repo: &Path, id: &SessionId) -> MedusaResult<()> {
             "session disposition marker identity is invalid",
         ));
     }
-    Ok(())
+    validate_tool_artifacts(repo, &marker.tool_artifacts)?;
+    Ok(marker)
 }
 
 fn write_journal_tombstone(repo: &Path, id: &SessionId) -> MedusaResult<()> {
@@ -331,6 +386,12 @@ mod tests {
                 "PRIVATE_SESSION_DELETE_MARKER".to_owned(),
             )
             .expect("session");
+        let artifact = repository
+            .path()
+            .join(".medusa/artifacts/tool-output/session-owned.bin");
+        fs::create_dir_all(artifact.parent().expect("artifact parent")).expect("artifact directory");
+        fs::write(&artifact, b"PRIVATE_TOOL_ARTIFACT_MARKER").expect("artifact");
+        session.tool_artifacts.push(artifact.clone());
         session.completed = true;
         persist_session(&session).expect("persist completed session");
         let stale = session.clone();
@@ -338,6 +399,7 @@ mod tests {
 
         dispose_completed_session(repository.path(), id.as_str()).expect("dispose");
         assert!(is_session_disposed(repository.path(), &id));
+        assert!(!artifact.exists());
         assert!(!primary_snapshot_path(repository.path(), &id).exists());
         assert!(!fallback_snapshot_path(repository.path(), &id).exists());
         assert!(!fallback_journal_path(repository.path(), &id).exists());
@@ -346,5 +408,26 @@ mod tests {
         assert!(list_sessions(repository.path()).is_ok());
 
         dispose_completed_session(repository.path(), id.as_str()).expect("idempotent retry");
+    }
+
+    #[test]
+    fn disposition_rejects_tool_artifact_outside_admitted_store_before_tombstone() {
+        let repository = tempfile::tempdir().expect("repository");
+        let external = tempfile::tempdir().expect("external");
+        let external_artifact = external.path().join("must-survive.bin");
+        fs::write(&external_artifact, b"OUTSIDE_ARTIFACT").expect("external artifact");
+
+        let engine = AgentEngine::new(UnusedProvider, Config::default());
+        let mut session = engine
+            .create_session(repository.path(), "completed objective".to_owned())
+            .expect("session");
+        session.tool_artifacts.push(external_artifact.clone());
+        session.completed = true;
+        persist_session(&session).expect("persist completed session");
+
+        assert!(dispose_completed_session(repository.path(), session.id.as_str()).is_err());
+        assert!(external_artifact.exists());
+        assert!(!is_session_disposed(repository.path(), &session.id));
+        assert!(session::load(repository.path(), session.id.as_str()).is_ok());
     }
 }
