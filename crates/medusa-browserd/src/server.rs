@@ -61,12 +61,8 @@ pub fn run() -> io::Result<()> {
             continue;
         }
         if matches!(request, BrowserRequest::Close) {
-            let response = forward_to_bridge(
-                &mut bridge.stdin,
-                &mut bridge.stdout,
-                request_id,
-                &request,
-            );
+            let response =
+                forward_to_bridge(&mut bridge.stdin, &mut bridge.stdout, request_id, &request);
             write_response(&mut stdout, request_id, &response)?;
             break;
         }
@@ -98,12 +94,8 @@ pub fn run() -> io::Result<()> {
             }
         }
 
-        let response = forward_to_bridge(
-            &mut bridge.stdin,
-            &mut bridge.stdout,
-            request_id,
-            &request,
-        );
+        let response =
+            forward_to_bridge(&mut bridge.stdin, &mut bridge.stdout, request_id, &request);
         write_response(&mut stdout, request_id, &response)?;
     }
     let _ = bridge.child.kill();
@@ -360,10 +352,7 @@ mod tests {
         let response = forward_to_bridge(&mut writer, &mut reader, 4, &BrowserRequest::Ping);
 
         assert!(matches!(response, BrowserResponse::Ok));
-        assert_eq!(
-            writer.bytes,
-            b"{\"request_id\":4,\"method\":\"ping\"}\n"
-        );
+        assert_eq!(writer.bytes, b"{\"request_id\":4,\"method\":\"ping\"}\n");
     }
 
     #[test]
