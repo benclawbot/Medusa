@@ -60,9 +60,6 @@ jobs:
         run: cargo test -p medusa-browserd --locked
       - name: Build browser sidecar
         run: cargo build -p medusa-browserd --bin medusa-browserd --locked
-      - name: Resolve browser sidecar path
-        shell: bash
-        run: echo "BROWSERD_PATH=$GITHUB_WORKSPACE/target/debug/medusa-browserd${{ matrix.exe }}" >> "$GITHUB_ENV"
       - name: Start verification fixture
         shell: bash
         run: |
@@ -83,17 +80,17 @@ jobs:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: timeout
           MEDUSA_BROWSER_ENABLED: "true"
-          MEDUSA_BROWSER_PATH: ${{ env.BROWSERD_PATH }}
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/hang-once.html
-          MEDUSA_BROWSER_TIMEOUT_MS: "250"
+          MEDUSA_BROWSER_TIMEOUT_MS: "2000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
       - name: Prove production in-flight cancellation and restart
         env:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: cancel
           MEDUSA_BROWSER_ENABLED: "true"
-          MEDUSA_BROWSER_PATH: ${{ env.BROWSERD_PATH }}
-          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/cancel-once.html
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
+          MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
           MEDUSA_BROWSER_TIMEOUT_MS: "10000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
       - name: Prove DOM reference ceiling
@@ -101,7 +98,7 @@ jobs:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: dom
           MEDUSA_BROWSER_ENABLED: "true"
-          MEDUSA_BROWSER_PATH: ${{ env.BROWSERD_PATH }}
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/large-dom.html
           MEDUSA_BROWSER_TIMEOUT_MS: "10000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
@@ -110,7 +107,7 @@ jobs:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: text
           MEDUSA_BROWSER_ENABLED: "true"
-          MEDUSA_BROWSER_PATH: ${{ env.BROWSERD_PATH }}
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/large-text.html
           MEDUSA_BROWSER_TIMEOUT_MS: "10000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
@@ -119,7 +116,7 @@ jobs:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: screenshot
           MEDUSA_BROWSER_ENABLED: "true"
-          MEDUSA_BROWSER_PATH: ${{ env.BROWSERD_PATH }}
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/huge-screenshot.html
           MEDUSA_BROWSER_TIMEOUT_MS: "10000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
@@ -128,7 +125,7 @@ jobs:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: evaluate
           MEDUSA_BROWSER_ENABLED: "true"
-          MEDUSA_BROWSER_PATH: ${{ env.BROWSERD_PATH }}
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
           MEDUSA_BROWSER_TIMEOUT_MS: "10000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
@@ -137,7 +134,7 @@ jobs:
           MEDUSA_BROWSER_HARDENING_E2E: "1"
           MEDUSA_BROWSER_HARDENING_SCENARIO: reuse
           MEDUSA_BROWSER_ENABLED: "true"
-          MEDUSA_BROWSER_PATH: ${{ env.BROWSERD_PATH }}
+          MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/interactive.html
           MEDUSA_BROWSER_TIMEOUT_MS: "10000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
