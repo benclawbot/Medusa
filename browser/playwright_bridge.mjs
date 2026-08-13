@@ -250,6 +250,16 @@ process.stdin.on('data', (chunk) => {
     requestChain = requestChain.then(() => emitResponse(0, { kind: 'error', code: 'request_too_large', message: `unterminated browser request exceeds ${MAX_REQUEST_FRAME_BYTES} bytes` }));
   }
 });
+process.stdin.on('end', () => {
+  void close().finally(() => process.exit(0));
+});
+process.stdout.on('error', (error) => {
+  if (error?.code === 'EPIPE') {
+    void close().finally(() => process.exit(0));
+    return;
+  }
+  throw error;
+});
 
 const expectedParentPid = Number.parseInt(process.env.MEDUSA_BROWSER_PARENT_PID ?? '', 10);
 if (Number.isSafeInteger(expectedParentPid) && expectedParentPid > 0) {
