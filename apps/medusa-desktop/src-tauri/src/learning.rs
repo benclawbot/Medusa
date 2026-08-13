@@ -53,10 +53,19 @@ pub fn runtime_learning_propose(
 pub fn runtime_learning_evaluate(
     repo: String,
     id: String,
-    passed: bool,
+    validation_passed: bool,
+    regression_passed: bool,
+    effectiveness_passed: bool,
 ) -> Result<LearningReviewSnapshot, String> {
     let repo = canonical_repo(&repo)?;
-    learning_review::evaluate(&repo, &id, passed).map_err(|error| error.to_string())
+    learning_review::evaluate(
+        &repo,
+        &id,
+        validation_passed,
+        regression_passed,
+        effectiveness_passed,
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
