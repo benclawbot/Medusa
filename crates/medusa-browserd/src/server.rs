@@ -8,6 +8,7 @@ use medusa_browser_client::{
         MAX_BROWSER_REQUEST_FRAME_BYTES, MAX_BROWSER_RESPONSE_FRAME_BYTES,
     },
     transport::{Transport, read_bounded_frame, send_and_receive},
+    verification_route::{VERIFY_URL_ENV, VerificationRoute},
 };
 
 use crate::{proxy, validation::validate_public_url};
@@ -16,6 +17,7 @@ const BROWSER_BRIDGE_PATH_ENV: &str = "MEDUSA_BROWSER_BRIDGE_PATH";
 const BROWSER_BRIDGE_RELATIVE_PATH: &str = "browser/playwright_bridge.mjs";
 
 pub fn run() -> io::Result<()> {
+    let _verification_route = configured_verification_route()?;
     let proxy = proxy::spawn()?;
     let mut bridge = spawn_bridge(&proxy).map_err(io::Error::other)?;
     let stdin = io::stdin();
@@ -104,7 +106,29 @@ pub fn run() -> io::Result<()> {
 }
 
 pub(crate) fn check_readiness() -> io::Result<()> {
-    resolve_bridge_path().map(|_| ())
+    resolve_bridge_path()?;
+    configured_verification_route().map(|_| ())
+}
+
+fn configured_verification_route() -> io::Result<VerificationRoute> {
+    let raw = std::env::var_os(VERIFY_URL_ENV).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{VERIFY_URL_ENV} is required for browser readiness"),
+        )
+    })?;
+    let raw = raw.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{VERIFY_URL_ENV} must be valid UTF-8"),
+        )
+    })?;
+    admit_verification_route(raw)
+}
+
+fn admit_verification_route(raw: &str) -> io::Result<VerificationRoute> {
+    VerificationRoute::parse(raw)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
 struct Bridge {
@@ -266,7 +290,10 @@ mod tests {
 
     use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
 
-    use super::{bridge_path_candidates, forward_to_bridge, take_bridge_stdio, write_response};
+    use super::{
+        admit_verification_route, bridge_path_candidates, forward_to_bridge, take_bridge_stdio,
+        write_response,
+    };
 
     #[derive(Default)]
     struct FailingWriter {
@@ -313,6 +340,17 @@ mod tests {
             BrowserResponse::Error { code, .. } => code,
             other => panic!("expected error response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn production_entrypoint_admits_the_same_normalized_route_contract() {
+        let route = admit_verification_route(" HTTP://LOCALHOST:4173/app?mode=verify ")
+            .expect("verification route");
+        assert_eq!(route.normalized(), "http://localhost:4173/app?mode=verify");
+        assert_eq!(route.origin(), "http://localhost:4173");
+        assert!(admit_verification_route("file:///tmp/index.html").is_err());
+        assert!(admit_verification_route("http://user:secret@localhost:4173/").is_err());
+        assert!(admit_verification_route("http://10.0.0.1/").is_err());
     }
 
     #[test]
