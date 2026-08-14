@@ -74,6 +74,25 @@ if old not in s:
     raise SystemExit('App image compatibility anchor missing')
 app.write_text(s.replace(old, new, 1))
 
+partial_mock_old = '''vi.mock("./providerCatalog", () => ({
+  loadProviderCatalog: vi.fn(),
+}));'''
+partial_mock_new = '''vi.mock("./providerCatalog", async () => {
+  const actual = await vi.importActual<typeof import("./providerCatalog")>("./providerCatalog");
+  return {
+    ...actual,
+    loadProviderCatalog: vi.fn(),
+  };
+});'''
+for test_path in [
+    Path('apps/medusa-desktop/src/App.test.tsx'),
+    Path('apps/medusa-desktop/src/DesktopMiniMax.test.tsx'),
+]:
+    test_source = test_path.read_text()
+    if partial_mock_old not in test_source:
+        raise SystemExit(f'provider catalog mock anchor missing in {test_path}')
+    test_path.write_text(test_source.replace(partial_mock_old, partial_mock_new, 1))
+
 tests = Path('apps/medusa-desktop/src/App.test.tsx')
 s = tests.read_text()
 addition = '''
