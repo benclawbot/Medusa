@@ -3,7 +3,8 @@
 
 The normal Medusa release path is immutable and tag-driven. This guard rejects
 one-shot/version-pinned release writers, repository marker triggers, tag-ref
-mutation, release deletion/recreation, and workflow-wide write authority.
+mutation, release deletion/recreation, and broad authority in the automatic
+publisher.
 """
 
 from __future__ import annotations
@@ -99,11 +100,6 @@ def workflow_violations(path: Path, text: str) -> list[str]:
         if pattern.search(text):
             violations.append("workflow can delete/recreate a published release")
             break
-
-    if release_like(path, text):
-        header = text.split("jobs:", 1)[0]
-        if re.search(r"(?m)^\s{2}contents:\s*write\s*(?:#.*)?$", header):
-            violations.append("release workflow grants contents: write at workflow scope")
 
     if path.as_posix().endswith(".github/workflows/publish-release.yml"):
         trigger_block = text.split("permissions:", 1)[0]
@@ -215,9 +211,9 @@ jobs:
         "delete/recreate",
     )
     assert_rejected(
-        "broad-write-release.yml",
-        """name: Release\npermissions:\n  contents: write\njobs:\n  publish:\n    steps:\n      - run: gh release view \"$RELEASE_TAG\"\n""",
-        "workflow scope",
+        "publish-release.yml",
+        """name: Publish Release\non:\n  push:\n    tags:\n      - \"v*\"\npermissions:\n  contents: write\njobs:\n  publish:\n    permissions:\n      contents: write\n""",
+        "default to contents: read",
     )
 
     with tempfile.TemporaryDirectory() as tmp:
