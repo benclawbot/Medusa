@@ -93,6 +93,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let audit_path = prepare_audit()?;
+    let authorization_events = authorizer.events().to_vec();
+    if let Some(receipt) = replay_idempotent_operation(&audit_path, &request)? {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&OperationOutput {
+                receipt,
+                audit_path,
+                audit_error: None,
+                authorization_events,
+            })?
+        );
+        return Ok(());
+    }
+
     let service = GitHubService::enterprise(
         request.repository.clone(),
         request.hostname.clone(),
@@ -100,8 +114,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         SystemExecutor,
     );
     let receipt = service.execute_operation(&request)?;
-    let authorization_events = authorizer.events().to_vec();
-    match append_audit(&audit_path, &receipt, &authorization_events) {
+    match append_audit(&audit_path, &request, &receipt, &authorization_events) {
         Ok(()) => {
             println!(
                 "{}",
@@ -128,12 +141,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 medusa_core::ErrorCode::PersistenceFailed,
                 medusa_core::ErrorCategory::Persistence,
                 format!(
-                    "GitHub operation {} completed, but its audit receipt could not be persisted at {}: {error}",
+                    "GitHub operation {} completed, but its audit receipt could not be persisted at {}: {error}; retry is unsafe because the remote mutation may already be durable",
                     receipt.operation_id,
                     audit_path.display()
                 ),
             )
-            .with_retryable(request.risk().requires_approval())
+            .with_retryable(false)
             .into())
         }
     }
@@ -194,12 +207,67 @@ fn prepare_audit_at(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> 
     Ok(path)
 }
 
+fn replay_idempotent_operation(
+    path: &Path,
+    request: &GitHubOperationRequest,
+) -> Result<Option<GitHubOperationReceipt>, Box<dyn std::error::Error>> {
+    let Some(key) = request.idempotency_key.as_deref() else {
+        return Ok(None);
+    };
+    let digest = request.request_digest()?;
+    let content = fs::read_to_string(path)?;
+    for line in content.lines().rev() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: serde_json::Value = serde_json::from_str(line)?;
+        if record.get("idempotencyKey").and_then(serde_json::Value::as_str) != Some(key) {
+            continue;
+        }
+        let stored_digest = record
+            .get("requestDigest")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                medusa_core::MedusaError::new(
+                    medusa_core::ErrorCode::PersistenceFailed,
+                    medusa_core::ErrorCategory::Persistence,
+                    "idempotent GitHub audit record is missing its request digest",
+                )
+            })?;
+        if stored_digest != digest {
+            return Err(medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::InvalidInput,
+                medusa_core::ErrorCategory::Validation,
+                "GitHub idempotencyKey was already used for a different operation request",
+            )
+            .into());
+        }
+        let receipt = serde_json::from_value(
+            record
+                .get("receipt")
+                .cloned()
+                .ok_or_else(|| {
+                    medusa_core::MedusaError::new(
+                        medusa_core::ErrorCode::PersistenceFailed,
+                        medusa_core::ErrorCategory::Persistence,
+                        "idempotent GitHub audit record is missing its receipt",
+                    )
+                })?,
+        )?;
+        return Ok(Some(receipt));
+    }
+    Ok(None)
+}
+
 fn append_audit(
     path: &Path,
+    request: &GitHubOperationRequest,
     receipt: &GitHubOperationReceipt,
     authorization_events: &[medusa_capabilities::CapabilityAuditEvent],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let record = serde_json::json!({
+        "idempotencyKey": request.idempotency_key,
+        "requestDigest": request.request_digest()?,
         "receipt": receipt,
         "authorizationEvents": authorization_events,
     });
@@ -264,6 +332,29 @@ mod tests {
             backend: GitHubBackendKind::RestApi,
             paginate: false,
             max_response_bytes: 1024,
+            idempotency_key: None,
+            expected_head: None,
+        }
+    }
+
+    fn receipt(operation: &GitHubOperationRequest) -> GitHubOperationReceipt {
+        GitHubOperationReceipt {
+            operation_id: "github-1".into(),
+            repository: operation.repository.clone(),
+            hostname: operation.hostname.clone(),
+            resource: operation.resource,
+            action: operation.action.clone(),
+            method: operation.method,
+            endpoint: operation.endpoint.clone(),
+            risk: operation.risk(),
+            backend: operation.backend,
+            transport: "gh_api".into(),
+            mutated: operation.method.mutates(),
+            resource_identity: Some("7".into()),
+            resource_url: None,
+            canonical: Value::Object(Default::default()),
+            payload: Value::Object(Default::default()),
+            truncated: false,
         }
     }
 
@@ -330,28 +421,39 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = prepare_audit_at(directory.path()).expect("audit");
         let operation = request(GitHubOperationRisk::Secret);
-        let risk = operation.risk();
-        let receipt = GitHubOperationReceipt {
-            operation_id: "github-1".into(),
-            repository: operation.repository,
-            hostname: operation.hostname,
-            resource: operation.resource,
-            action: operation.action,
-            method: operation.method,
-            endpoint: operation.endpoint,
-            risk,
-            backend: operation.backend,
-            transport: "gh_api".into(),
-            mutated: true,
-            resource_identity: Some("DEPLOY_TOKEN".into()),
-            resource_url: None,
-            canonical: Value::Object(Default::default()),
-            payload: serde_json::json!({"name":"DEPLOY_TOKEN","value":"[REDACTED]"}),
-            truncated: false,
-        };
-        append_audit(&path, &receipt, &[]).expect("append");
+        append_audit(&path, &operation, &receipt(&operation), &[]).expect("append");
         let content = fs::read_to_string(path).expect("read");
         assert_eq!(content.lines().count(), 1);
         assert!(!content.contains("super-secret"));
+    }
+
+    #[test]
+    fn idempotent_replay_returns_prior_receipt_without_new_audit_record() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = prepare_audit_at(directory.path()).expect("audit");
+        let mut operation = request(GitHubOperationRisk::Mutation);
+        operation.action = "create".into();
+        operation.idempotency_key = Some("issue-create-7".into());
+        let original = receipt(&operation);
+        append_audit(&path, &operation, &original, &[]).expect("append");
+        let replay = replay_idempotent_operation(&path, &operation)
+            .expect("replay")
+            .expect("receipt");
+        assert_eq!(replay, original);
+        assert_eq!(fs::read_to_string(path).expect("read").lines().count(), 1);
+    }
+
+    #[test]
+    fn idempotency_key_reuse_for_different_request_fails_closed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = prepare_audit_at(directory.path()).expect("audit");
+        let mut operation = request(GitHubOperationRisk::Mutation);
+        operation.action = "create".into();
+        operation.idempotency_key = Some("issue-create-7".into());
+        append_audit(&path, &operation, &receipt(&operation), &[]).expect("append");
+
+        operation.body = Some(serde_json::json!({"title":"changed"}));
+        let error = replay_idempotent_operation(&path, &operation).expect_err("conflict");
+        assert!(error.to_string().contains("already used"));
     }
 }
