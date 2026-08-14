@@ -2,7 +2,63 @@
 
 use medusa_browser_client::network_policy::resolve_public_target;
 
-const VERIFICATION_ORIGIN_ENV: &str = "MEDUSA_BROWSER_VERIFICATION_ORIGIN";
+pub(crate) const VERIFY_URL_ENV: &str = "MEDUSA_BROWSER_VERIFY_URL";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VerificationRoute {
+    url: url::Url,
+}
+
+impl VerificationRoute {
+    pub(crate) fn parse(raw: &str) -> Result<Self, String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(format!(
+                "{VERIFY_URL_ENV} must contain a Medusa-owned HTTP(S) verification route"
+            ));
+        }
+        let url = url::Url::parse(raw)
+            .map_err(|error| format!("{VERIFY_URL_ENV} is not a valid absolute URL: {error}"))?;
+        if url.fragment().is_some() {
+            return Err(format!("{VERIFY_URL_ENV} must not include a fragment"));
+        }
+        if validate_loopback_url(&url).is_err() {
+            let host = url
+                .host_str()
+                .ok_or_else(|| format!("{VERIFY_URL_ENV} must include a host"))?;
+            resolve_public_target(
+                url.scheme(),
+                url.username(),
+                url.password().is_some(),
+                url.port(),
+                host,
+                url.port_or_known_default().unwrap_or(443),
+            )
+            .map_err(|error| format!("{VERIFY_URL_ENV} targets a disallowed origin: {error}"))?;
+        }
+        Ok(Self { url })
+    }
+
+    pub(crate) fn from_env() -> Result<Self, String> {
+        let raw = std::env::var_os(VERIFY_URL_ENV).ok_or_else(|| {
+            format!("{VERIFY_URL_ENV} is required for browser readiness")
+        })?;
+        let raw = raw
+            .to_str()
+            .ok_or_else(|| format!("{VERIFY_URL_ENV} must be valid UTF-8"))?;
+        Self::parse(raw)
+    }
+
+    #[must_use]
+    pub(crate) fn normalized(&self) -> &str {
+        self.url.as_str()
+    }
+
+    #[must_use]
+    pub(crate) fn origin(&self) -> String {
+        self.url.origin().ascii_serialization()
+    }
+}
 
 pub fn validate_public_url(url: &url::Url) -> Result<(), String> {
     if configured_loopback_url(url)? {
@@ -23,33 +79,21 @@ pub fn validate_public_url(url: &url::Url) -> Result<(), String> {
 }
 
 /// Returns true only when `url` is loopback and matches the exact origin of the
-/// Medusa-owned verification route. A configured origin never grants access to
-/// a different localhost host/port/scheme.
+/// admitted Medusa-owned verification route. The verification route is the
+/// single authority; a second origin environment variable cannot widen it.
 pub(crate) fn configured_loopback_url(url: &url::Url) -> Result<bool, String> {
     if validate_loopback_url(url).is_err() {
         return Ok(false);
     }
-    let Some(allowed) = configured_loopback_origin()? else {
+    let allowed = VerificationRoute::from_env()?;
+    if validate_loopback_url(&allowed.url).is_err() {
         return Ok(false);
-    };
-    if same_origin(url, &allowed) {
+    }
+    if same_origin(url, &allowed.url) {
         Ok(true)
     } else {
         Err("local browser URL is outside the configured verification origin".to_owned())
     }
-}
-
-fn configured_loopback_origin() -> Result<Option<url::Url>, String> {
-    let Some(raw) = std::env::var_os(VERIFICATION_ORIGIN_ENV) else {
-        return Ok(None);
-    };
-    let raw = raw.to_string_lossy();
-    let origin = url::Url::parse(raw.trim())
-        .map_err(|error| format!("invalid browser verification origin: {error}"))?;
-    if validate_loopback_url(&origin).is_err() {
-        return Ok(None);
-    }
-    Ok(Some(origin))
 }
 
 fn same_origin(left: &url::Url, right: &url::Url) -> bool {
@@ -84,10 +128,39 @@ mod tests {
 
     use medusa_browser_client::network_policy::is_public_ip;
 
-    use super::{same_origin, validate_public_url};
+    use super::{VerificationRoute, same_origin, validate_public_url};
 
     fn parse(input: &str) -> url::Url {
         url::Url::parse(input).expect("test URL")
+    }
+
+    #[test]
+    fn verification_route_rejects_invalid_route_classes() {
+        for route in [
+            " ",
+            "not a url",
+            "file:///tmp/index.html",
+            "http://user:secret@localhost:4173/app",
+            "http://localhost:4173/app#fragment",
+            "http://10.0.0.1/verify",
+            "http://169.254.1.1/verify",
+            "http://[fc00::1]/verify",
+            "http://service.localhost/verify",
+            "C:\\work\\app\\index.html",
+            "/tmp/app/index.html",
+        ] {
+            assert!(VerificationRoute::parse(route).is_err(), "{route}");
+        }
+    }
+
+    #[test]
+    fn verification_route_normalizes_valid_loopback_and_public_urls() {
+        let loopback = VerificationRoute::parse(" HTTP://LOCALHOST:4173/app?mode=verify ")
+            .expect("loopback route");
+        assert_eq!(loopback.normalized(), "http://localhost:4173/app?mode=verify");
+        assert_eq!(loopback.origin(), "http://localhost:4173");
+        assert!(VerificationRoute::parse("https://8.8.8.8/verify").is_ok());
+        assert!(VerificationRoute::parse("http://[::1]:4173/app").is_ok());
     }
 
     #[test]
@@ -133,10 +206,7 @@ mod tests {
     #[test]
     fn localhost_names_are_rejected_without_dns() {
         for url in ["http://localhost/", "https://service.localhost/"] {
-            assert_eq!(
-                validate_public_url(&parse(url)),
-                Err("web URL must resolve to a public host".to_owned())
-            );
+            assert!(validate_public_url(&parse(url)).is_err());
         }
     }
 
