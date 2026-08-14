@@ -67,8 +67,8 @@ pub fn discover_models(
         .trim_end_matches('/');
     let endpoint = format!("{base_url}/models");
 
-    let environment_key = credential_environment(catalog.profile_provider)
-        .and_then(|name| env::var(name).ok());
+    let environment_key =
+        credential_environment(catalog.profile_provider).and_then(|name| env::var(name).ok());
     let api_key = session_api_key
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
@@ -148,9 +148,18 @@ mod tests {
 
     #[test]
     fn status_classification_distinguishes_auth_route_and_temporary_failures() {
-        assert_eq!(classify_status(StatusCode::UNAUTHORIZED), ModelDiscoveryError::NotAuthorized);
-        assert_eq!(classify_status(StatusCode::FORBIDDEN), ModelDiscoveryError::NotAuthorized);
-        assert_eq!(classify_status(StatusCode::NOT_FOUND), ModelDiscoveryError::Unsupported);
+        assert_eq!(
+            classify_status(StatusCode::UNAUTHORIZED),
+            ModelDiscoveryError::NotAuthorized
+        );
+        assert_eq!(
+            classify_status(StatusCode::FORBIDDEN),
+            ModelDiscoveryError::NotAuthorized
+        );
+        assert_eq!(
+            classify_status(StatusCode::NOT_FOUND),
+            ModelDiscoveryError::Unsupported
+        );
         assert_eq!(
             classify_status(StatusCode::TOO_MANY_REQUESTS),
             ModelDiscoveryError::TemporarilyUnavailable

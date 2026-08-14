@@ -156,7 +156,9 @@ pub fn model_registry(
 ) -> ModelRegistry {
     let catalog = provider_catalog_entry(provider);
     let provider_id = catalog.map_or(provider, |entry| entry.id).to_owned();
-    let profile_provider = catalog.map_or(provider, |entry| entry.profile_provider).to_owned();
+    let profile_provider = catalog
+        .map_or(provider, |entry| entry.profile_provider)
+        .to_owned();
     let supports_discovery = catalog.is_some_and(|entry| entry.discover_models);
 
     let (live_models, availability, used_cached_discovery) = match discovered {
@@ -167,11 +169,7 @@ pub fn model_registry(
                 cached.provider_id == provider_id && cached.fresh_at(now_unix_seconds)
             });
             if let Some(cached) = cached {
-                (
-                    cached.models.as_slice(),
-                    ModelAvailability::Available,
-                    true,
-                )
+                (cached.models.as_slice(), ModelAvailability::Available, true)
             } else {
                 let availability = match failure {
                     DiscoveryFailure::NotAuthorized => ModelAvailability::NotAuthorized,
@@ -203,9 +201,9 @@ pub fn model_registry(
         if discovered_model.id.trim().is_empty() {
             continue;
         }
-        let entry = by_id
-            .entry(discovered_model.id.clone())
-            .or_insert_with(|| curated_model(&provider_id, &profile_provider, &discovered_model.id));
+        let entry = by_id.entry(discovered_model.id.clone()).or_insert_with(|| {
+            curated_model(&provider_id, &profile_provider, &discovered_model.id)
+        });
         entry.display_name = discovered_model
             .display_name
             .clone()
@@ -301,8 +299,14 @@ mod tests {
         }];
         let registry = model_registry("openai-oauth", "private-model", Ok(&discovered), None, 10);
         assert_eq!(registry.models[0].id, "private-model");
-        assert_eq!(registry.find("gpt-live").unwrap().source, ModelSource::Discovered);
-        assert_eq!(registry.find("private-model").unwrap().source, ModelSource::Custom);
+        assert_eq!(
+            registry.find("gpt-live").unwrap().source,
+            ModelSource::Discovered
+        );
+        assert_eq!(
+            registry.find("private-model").unwrap().source,
+            ModelSource::Custom
+        );
         assert!(registry.find("gpt-5").is_some());
     }
 
@@ -311,7 +315,10 @@ mod tests {
         let cache = ModelDiscoveryCache {
             provider_id: "openai-oauth".to_owned(),
             fetched_at_unix_seconds: 100,
-            models: vec![DiscoveredModel { id: "cached-model".to_owned(), display_name: None }],
+            models: vec![DiscoveredModel {
+                id: "cached-model".to_owned(),
+                display_name: None,
+            }],
         };
         let cached = model_registry(
             "openai-oauth",
@@ -321,7 +328,10 @@ mod tests {
             200,
         );
         assert!(cached.used_cached_discovery);
-        assert_eq!(cached.find("cached-model").unwrap().source, ModelSource::Cached);
+        assert_eq!(
+            cached.find("cached-model").unwrap().source,
+            ModelSource::Cached
+        );
 
         let stale = model_registry(
             "openai-oauth",
@@ -343,15 +353,26 @@ mod tests {
             None,
             1,
         );
-        assert_eq!(registry.find("gpt-5").unwrap().availability, ModelAvailability::NotAuthorized);
-        assert_eq!(registry.find("configured-private").unwrap().availability, ModelAvailability::Available);
+        assert_eq!(
+            registry.find("gpt-5").unwrap().availability,
+            ModelAvailability::NotAuthorized
+        );
+        assert_eq!(
+            registry.find("configured-private").unwrap().availability,
+            ModelAvailability::Available
+        );
     }
 
     #[test]
     fn search_hides_non_recommended_models_until_show_all() {
         let registry = model_registry("openai", "gpt-5.1-codex", Ok(&[]), None, 1);
         assert_eq!(registry.search("", false).len(), 1);
-        assert!(registry.search("mini", true).iter().any(|model| model.id == "gpt-5-mini"));
+        assert!(
+            registry
+                .search("mini", true)
+                .iter()
+                .any(|model| model.id == "gpt-5-mini")
+        );
     }
 
     #[test]
@@ -368,7 +389,10 @@ mod tests {
         let cache = ModelDiscoveryCache {
             provider_id: "different-provider".to_owned(),
             fetched_at_unix_seconds: 100,
-            models: vec![DiscoveredModel { id: "wrong".to_owned(), display_name: None }],
+            models: vec![DiscoveredModel {
+                id: "wrong".to_owned(),
+                display_name: None,
+            }],
         };
         let registry = model_registry(
             "openai-oauth",
@@ -383,11 +407,21 @@ mod tests {
     #[test]
     fn sources_are_unique_after_merge() {
         let discovered = [
-            DiscoveredModel { id: "gpt-5".to_owned(), display_name: None },
-            DiscoveredModel { id: "gpt-5".to_owned(), display_name: None },
+            DiscoveredModel {
+                id: "gpt-5".to_owned(),
+                display_name: None,
+            },
+            DiscoveredModel {
+                id: "gpt-5".to_owned(),
+                display_name: None,
+            },
         ];
         let registry = model_registry("openai-oauth", "gpt-5", Ok(&discovered), None, 1);
-        let ids = registry.models.iter().map(|model| &model.id).collect::<BTreeSet<_>>();
+        let ids = registry
+            .models
+            .iter()
+            .map(|model| &model.id)
+            .collect::<BTreeSet<_>>();
         assert_eq!(ids.len(), registry.models.len());
     }
 }

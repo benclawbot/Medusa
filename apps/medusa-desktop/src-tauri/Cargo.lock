@@ -2511,6 +2511,7 @@ dependencies = [
  "medusa-improvement",
  "medusa-memory",
  "medusa-protocol",
+ "medusa-provider",
  "medusa-review-model",
  "medusa-runtime",
  "medusa-update",
