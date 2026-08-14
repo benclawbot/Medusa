@@ -1,0 +1,33 @@
+name: Issue 855 documentation inventory refresh
+
+on:
+  push:
+    branches:
+      - codex/855-remove-external-github
+    paths:
+      - .github/workflows/855-refresh-doc-inventory.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: codex/855-remove-external-github
+      - name: Refresh documentation inventory
+        run: python3 scripts/check-documentation.py --write
+      - name: Commit generated inventory only
+        run: |
+          set -euo pipefail
+          git diff -- docs/documentation-inventory.json
+          git add docs/documentation-inventory.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Refresh documentation inventory for GitHub authority docs"
+          git push origin HEAD:codex/855-remove-external-github
