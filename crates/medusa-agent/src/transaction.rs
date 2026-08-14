@@ -417,11 +417,10 @@ pub fn apply_selective_revert(
                 "selective revert scope changed during authorization",
             ));
         }
-        let restore = record
-            .scope
-            .retained_preimage
-            .as_deref()
-            .ok_or_else(|| provenance_boundary_error("selective revert preimage is unavailable"))?;
+        let restore =
+            record.scope.retained_preimage.as_deref().ok_or_else(|| {
+                provenance_boundary_error("selective revert preimage is unavailable")
+            })?;
         let content = String::from_utf8(restore.to_vec()).map_err(|_| {
             provenance_boundary_error("selective revert of non-UTF-8 content is unavailable")
         })?;
@@ -440,9 +439,10 @@ pub fn apply_selective_revert(
         .start_byte
         .checked_add(preview.remove_len)
         .ok_or_else(|| provenance_boundary_error("selective revert scope overflow"))?;
-    let expected = record.scope.retained_postimage.as_deref().ok_or_else(|| {
-        provenance_boundary_error("selective revert postimage is unavailable")
-    })?;
+    let expected =
+        record.scope.retained_postimage.as_deref().ok_or_else(|| {
+            provenance_boundary_error("selective revert postimage is unavailable")
+        })?;
     if current.get(preview.start_byte..end) != Some(expected) {
         return Err(provenance_boundary_error(
             "selective revert scope changed during authorization",
@@ -501,9 +501,7 @@ fn apply_delete_with_context(
             return Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Execution,
-                format!(
-                    "mutation fingerprint failed after delete; rollback={rollback}: {error}"
-                ),
+                format!("mutation fingerprint failed after delete; rollback={rollback}: {error}"),
             ));
         }
     };
