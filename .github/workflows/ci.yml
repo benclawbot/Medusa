@@ -16,33 +16,17 @@ jobs:
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.head_ref }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
-      - name: Regenerate lockfile for dependency pruning
+      - name: Validate committed dependency authority
         shell: bash
-        run: cargo metadata --format-version 1 >/dev/null
-      - name: Commit Cargo-generated lockfile to PR branch
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        shell: bash
-        env:
-          BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- Cargo.lock; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock
-          git commit -m "Refresh Cargo.lock after dependency pruning (#857)"
-          git push origin "HEAD:$BRANCH"
+          cargo metadata --locked --format-version 1 >/dev/null
+          git diff --exit-code -- Cargo.lock
       - name: Check formatting
         shell: bash
         run: |
