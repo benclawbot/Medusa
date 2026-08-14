@@ -54,7 +54,7 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
     app.handle_event(key(KeyCode::Down)).expect("select model");
     assert_eq!(
         app.model_modal().expect("modal").selected_model(),
-        "claude-haiku-4-5"
+        "claude-sonnet-4-6"
     );
 
     app.handle_event(key(KeyCode::Tab)).expect("focus effort");
@@ -78,7 +78,7 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
         panic!("expected model configuration");
     };
     assert_eq!(configuration.provider, "anthropic");
-    assert_eq!(configuration.model, "claude-haiku-4-5");
+    assert_eq!(configuration.model, "claude-sonnet-4-6");
     assert_eq!(configuration.effort, Effort::Auto);
     assert_eq!(configuration.api_key.as_deref(), Some("keywithspace"));
 }
