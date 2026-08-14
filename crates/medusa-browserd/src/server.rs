@@ -17,7 +17,7 @@ const BROWSER_BRIDGE_PATH_ENV: &str = "MEDUSA_BROWSER_BRIDGE_PATH";
 const BROWSER_BRIDGE_RELATIVE_PATH: &str = "browser/playwright_bridge.mjs";
 
 pub fn run() -> io::Result<()> {
-    let _verification_route = configured_verification_route()?;
+    let verification_route = configured_verification_route()?;
     let proxy = proxy::spawn()?;
     let mut bridge = spawn_bridge(&proxy).map_err(io::Error::other)?;
     let stdin = io::stdin();
@@ -68,33 +68,13 @@ pub fn run() -> io::Result<()> {
             write_response(&mut stdout, request_id, &response)?;
             break;
         }
-        if let BrowserRequest::Navigate { ref url } = request {
-            let parsed = match url::Url::parse(url) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    write_response(
-                        &mut stdout,
-                        request_id,
-                        &BrowserResponse::Error {
-                            code: "invalid_url".into(),
-                            message: error.to_string(),
-                        },
-                    )?;
-                    continue;
-                }
-            };
-            if let Err(message) = validate_public_url(&parsed) {
-                write_response(
-                    &mut stdout,
-                    request_id,
-                    &BrowserResponse::Error {
-                        code: "invalid_url".into(),
-                        message,
-                    },
-                )?;
+        let request = match normalize_navigation_request(request, &verification_route) {
+            Ok(request) => request,
+            Err(response) => {
+                write_response(&mut stdout, request_id, &response)?;
                 continue;
             }
-        }
+        };
 
         let response =
             forward_to_bridge(&mut bridge.stdin, &mut bridge.stdout, request_id, &request);
@@ -129,6 +109,31 @@ fn configured_verification_route() -> io::Result<VerificationRoute> {
 fn admit_verification_route(raw: &str) -> io::Result<VerificationRoute> {
     VerificationRoute::parse(raw)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+}
+
+fn normalize_navigation_request(
+    request: BrowserRequest,
+    verification_route: &VerificationRoute,
+) -> Result<BrowserRequest, BrowserResponse> {
+    let BrowserRequest::Navigate { url } = request else {
+        return Ok(request);
+    };
+    let parsed = url::Url::parse(&url).map_err(|error| BrowserResponse::Error {
+        code: "invalid_url".into(),
+        message: error.to_string(),
+    })?;
+    if parsed.as_str() == verification_route.normalized() {
+        return Ok(BrowserRequest::Navigate {
+            url: verification_route.normalized().to_owned(),
+        });
+    }
+    validate_public_url(&parsed).map_err(|message| BrowserResponse::Error {
+        code: "invalid_url".into(),
+        message,
+    })?;
+    Ok(BrowserRequest::Navigate {
+        url: parsed.to_string(),
+    })
 }
 
 struct Bridge {
@@ -291,8 +296,8 @@ mod tests {
     use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
 
     use super::{
-        admit_verification_route, bridge_path_candidates, forward_to_bridge, take_bridge_stdio,
-        write_response,
+        admit_verification_route, bridge_path_candidates, forward_to_bridge,
+        normalize_navigation_request, take_bridge_stdio, write_response,
     };
 
     #[derive(Default)]
@@ -351,6 +356,24 @@ mod tests {
         assert!(admit_verification_route("file:///tmp/index.html").is_err());
         assert!(admit_verification_route("http://user:secret@localhost:4173/").is_err());
         assert!(admit_verification_route("http://10.0.0.1/").is_err());
+    }
+
+    #[test]
+    fn verification_navigation_is_normalized_to_the_admitted_route() {
+        let route = admit_verification_route("HTTP://LOCALHOST:4173/app?mode=verify")
+            .expect("verification route");
+        let request = normalize_navigation_request(
+            BrowserRequest::Navigate {
+                url: "http://LOCALHOST:4173/app?mode=verify".to_owned(),
+            },
+            &route,
+        )
+        .expect("normalized navigation");
+        assert!(matches!(
+            request,
+            BrowserRequest::Navigate { ref url }
+                if url == "http://localhost:4173/app?mode=verify"
+        ));
     }
 
     #[test]
