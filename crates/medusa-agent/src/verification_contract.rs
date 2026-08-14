@@ -59,11 +59,6 @@ impl VerificationBudgetReservation {
             reserved_time_ms: DEFAULT_RESERVED_TIME_MS,
         }
     }
-
-    #[must_use]
-    pub fn nonessential_output_limit(&self, total_output_tokens: u32) -> u32 {
-        total_output_tokens.saturating_sub(self.reserved_output_tokens)
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -205,6 +200,7 @@ impl VerificationContract {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn record_user_reduced_scope(
         &mut self,
         requested_scope: Vec<String>,
@@ -217,6 +213,7 @@ impl VerificationContract {
         });
     }
 
+    #[cfg(test)]
     pub fn waive_check(&mut self, check_id: &str, reason: impl Into<String>) -> MedusaResult<()> {
         let reason = reason.into();
         if reason.trim().is_empty() {
@@ -239,6 +236,7 @@ impl VerificationContract {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn supersede_check(&mut self, check_id: &str) -> MedusaResult<()> {
         let check = self
             .checks
@@ -252,6 +250,7 @@ impl VerificationContract {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn mark_unavailable(&mut self, check_id: &str) -> MedusaResult<()> {
         let check = self
             .checks
@@ -265,6 +264,7 @@ impl VerificationContract {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn record_check_result(
         &mut self,
         repo: &Path,
@@ -703,10 +703,7 @@ mod tests {
                 check.receipt_scope_fingerprint = None;
             }
         }
-        assert_eq!(
-            contract.checks[0].resolution,
-            VerificationResolution::Stale
-        );
+        assert_eq!(contract.checks[0].resolution, VerificationResolution::Stale);
         assert_eq!(contract.checks[1].resolution, VerificationResolution::Passed);
         assert_eq!(contract.checks[1].receipt_scope_fingerprint, old_b);
     }
@@ -741,11 +738,7 @@ mod tests {
         let directory = repository();
         let repo = directory.path();
         fs::create_dir_all(repo.join(".medusa")).expect("medusa");
-        let unavailable = if current_platform() == "windows" {
-            "linux"
-        } else {
-            "windows"
-        };
+        let unavailable = if current_platform() == "windows" { "linux" } else { "windows" };
         fs::write(
             repo.join(".medusa/verification-platforms.json"),
             format!("{{\"required\":[\"{}\",\"{unavailable}\"]}}", current_platform()),
@@ -771,7 +764,8 @@ mod tests {
         let reservation = VerificationBudgetReservation::for_output_budget(4096);
         assert!(reservation.reserved_output_tokens >= MIN_RESERVED_OUTPUT_TOKENS);
         assert_eq!(
-            reservation.nonessential_output_limit(4096) + reservation.reserved_output_tokens,
+            4096_u32.saturating_sub(reservation.reserved_output_tokens)
+                + reservation.reserved_output_tokens,
             4096
         );
     }
@@ -813,12 +807,8 @@ mod tests {
             completion_identity: None,
             authoritative_passed: false,
         };
-        contract
-            .record_check_result(repo, "focused", true)
-            .expect("focused pass");
-        contract
-            .record_check_result(repo, "workspace", false)
-            .expect("workspace fail");
+        contract.record_check_result(repo, "focused", true).expect("focused pass");
+        contract.record_check_result(repo, "workspace", false).expect("workspace fail");
         contract.authoritative_passed = false;
         assert!(!contract.completion_ready(repo).expect("not ready"));
     }
