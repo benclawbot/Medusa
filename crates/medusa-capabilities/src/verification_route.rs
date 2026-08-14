@@ -88,7 +88,7 @@ impl VerificationRoute {
 
     #[must_use]
     pub fn safe_fingerprint(&self) -> String {
-        let digest = Sha256::digest(self.normalized.as_bytes());
+        let digest = Sha256::digest(self.normalized().as_bytes());
         format!("sha256:{}", hex::encode(digest))
     }
 }
