@@ -14,6 +14,7 @@ type RecordedCalls = Arc<Mutex<Vec<(String, Vec<String>)>>>;
 #[derive(Clone, Debug, Default)]
 struct FakeExecutor {
     calls: RecordedCalls,
+    inputs: Arc<Mutex<Vec<String>>>,
     outputs: Arc<Mutex<Vec<CommandOutput>>>,
 }
 
@@ -21,6 +22,7 @@ impl FakeExecutor {
     fn with_outputs(outputs: Vec<CommandOutput>) -> Self {
         Self {
             calls: Arc::default(),
+            inputs: Arc::default(),
             outputs: Arc::new(Mutex::new(outputs.into_iter().rev().collect())),
         }
     }
@@ -37,6 +39,14 @@ impl CommandExecutor for FakeExecutor {
             .lock()
             .expect("calls")
             .push((program.into(), arguments.to_vec()));
+        if let Some(index) = arguments.iter().position(|value| value == "--input") {
+            if let Some(path) = arguments.get(index + 1) {
+                self.inputs
+                    .lock()
+                    .expect("inputs")
+                    .push(std::fs::read_to_string(path).expect("operation input"));
+            }
+        }
         self.outputs
             .lock()
             .expect("outputs")
@@ -74,11 +84,94 @@ fn request() -> GitHubOperationRequest {
         backend: GitHubBackendKind::RestApi,
         paginate: false,
         max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+        idempotency_key: Some("issue-create-7".into()),
+        expected_head: None,
     }
 }
 
 fn service(executor: FakeExecutor) -> GitHubService<FakeExecutor> {
     GitHubService::enterprise("acme/project", "github.example", None, executor)
+}
+
+#[test]
+fn non_idempotent_create_requires_replay_key() {
+    let mut operation = request();
+    operation.idempotency_key = None;
+    let error = operation.validate().expect_err("missing key");
+    assert_eq!(error.code, ErrorCode::InvalidInput);
+    assert!(error.message.contains("idempotencyKey"));
+}
+
+#[test]
+fn request_digest_is_stable_and_binds_request_content() {
+    let first = request();
+    let second = first.clone();
+    assert_eq!(
+        first.request_digest().expect("first digest"),
+        second.request_digest().expect("second digest")
+    );
+
+    let mut changed = second;
+    changed.body = Some(serde_json::json!({"title":"Different","body":"Details"}));
+    assert_ne!(
+        first.request_digest().expect("first digest"),
+        changed.request_digest().expect("changed digest")
+    );
+}
+
+#[test]
+fn expected_head_is_forwarded_as_atomic_merge_precondition() {
+    let executor = FakeExecutor::with_outputs(vec![output(
+        r#"{"sha":"0123456789abcdef0123456789abcdef01234567","merged":true}"#,
+    )]);
+    let mut operation = request();
+    operation.resource = GitHubResource::PullRequests;
+    operation.action = "merge".into();
+    operation.method = GitHubHttpMethod::Put;
+    operation.endpoint = "pulls/7/merge".into();
+    operation.body = Some(serde_json::json!({"merge_method":"squash"}));
+    operation.idempotency_key = None;
+    operation.expected_head = Some("abcdef0123456789abcdef0123456789abcdef01".into());
+
+    service(executor.clone())
+        .execute_operation(&operation)
+        .expect("merge");
+    let inputs = executor.inputs.lock().expect("inputs");
+    let body: Value = serde_json::from_str(&inputs[0]).expect("merge body");
+    assert_eq!(
+        body.get("sha").and_then(Value::as_str),
+        operation.expected_head.as_deref()
+    );
+    assert_eq!(
+        body.get("merge_method").and_then(Value::as_str),
+        Some("squash")
+    );
+}
+
+#[test]
+fn expected_head_is_rejected_outside_pull_request_merge() {
+    let mut operation = request();
+    operation.expected_head = Some("abcdef0123456789abcdef0123456789abcdef01".into());
+    assert!(operation.validate().is_err());
+}
+
+#[test]
+fn conflicting_merge_sha_fails_before_dispatch() {
+    let executor = FakeExecutor::with_outputs(vec![output("{}")]);
+    let mut operation = request();
+    operation.resource = GitHubResource::PullRequests;
+    operation.action = "merge".into();
+    operation.method = GitHubHttpMethod::Put;
+    operation.endpoint = "pulls/7/merge".into();
+    operation.body = Some(serde_json::json!({"sha":"1111111111111111111111111111111111111111"}));
+    operation.idempotency_key = None;
+    operation.expected_head = Some("abcdef0123456789abcdef0123456789abcdef01".into());
+    assert!(
+        service(executor.clone())
+            .execute_operation(&operation)
+            .is_err()
+    );
+    assert!(executor.calls.lock().expect("calls").is_empty());
 }
 
 #[test]
@@ -121,6 +214,7 @@ fn native_and_rest_backends_produce_the_same_canonical_repository_payload() {
     operation.method = GitHubHttpMethod::Get;
     operation.endpoint.clear();
     operation.body = None;
+    operation.idempotency_key = None;
     operation.backend = GitHubBackendKind::NativeCli;
     let native_receipt = service(native)
         .execute_operation(&operation)
@@ -184,6 +278,7 @@ fn search_requires_one_exact_repository_scope_and_uses_global_search_endpoint() 
     operation.method = GitHubHttpMethod::Get;
     operation.endpoint = "issues".into();
     operation.body = None;
+    operation.idempotency_key = None;
     operation
         .query
         .insert("q".into(), "bug repo:acme/project".into());
@@ -214,6 +309,7 @@ fn pagination_is_read_only_and_uses_slurped_pages() {
     operation.method = GitHubHttpMethod::Get;
     operation.action = "list".into();
     operation.body = None;
+    operation.idempotency_key = None;
     operation.paginate = true;
     service(executor.clone())
         .execute_operation(&operation)
@@ -237,6 +333,7 @@ fn administration_secrets_and_delete_are_high_risk() {
     assert_eq!(operation.risk(), GitHubOperationRisk::Secret);
     operation.method = GitHubHttpMethod::Delete;
     operation.body = None;
+    operation.idempotency_key = None;
     assert_eq!(operation.risk(), GitHubOperationRisk::Destructive);
 }
 
@@ -275,6 +372,7 @@ fn secret_preview_receipt_and_failure_never_echo_request_values() {
     operation.method = GitHubHttpMethod::Put;
     operation.endpoint = "actions/secrets/DEPLOY_TOKEN".into();
     operation.body = Some(serde_json::json!({"encrypted_value":"super-secret","key_id":"7"}));
+    operation.idempotency_key = None;
     let preview = operation.redacted_preview().to_string();
     assert!(!preview.contains("super-secret"));
     let receipt = service(executor)
@@ -315,6 +413,7 @@ fn empty_mutation_response_does_not_invent_a_resource_url() {
     operation.method = GitHubHttpMethod::Delete;
     operation.endpoint = "issues/7".into();
     operation.body = None;
+    operation.idempotency_key = None;
     let receipt = service(FakeExecutor::with_outputs(vec![output("")]))
         .execute_operation(&operation)
         .expect("delete");

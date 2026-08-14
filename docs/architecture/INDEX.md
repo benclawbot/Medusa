@@ -65,7 +65,7 @@ V2 invariants:
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | protocol v2 routes shared frontend commands and canonical replay batches |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | daemon protocol v2 commands, artifacts, transient events, and canonical replay |
 | Telegram | `medusa telegram` | `medusa-daemon::telegram` | daemon-client protocol v2 commands, bounded artifacts, canonical replay, and transport-only durable state |
-| GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
+| GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | typed guarded operation request, confirmation tiers, normalized receipts, and audit evidence |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 
 CLI, TUI, daemon, desktop, and remote adapters share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics. Telegram microphone/audio and live operator evidence remain separately tracked external certification work; the gateway does not own execution state.
@@ -110,7 +110,7 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 | Provider route/readiness | selected provider profile plus durable `ProviderHealthStore` | frontend readiness | claims equal actual wire and cancellation behavior |
 | Capability availability | generated versioned registry snapshot | model, CLI, UI, protocol, and docs projections | no advertised action lacks certified dispatch |
 | Evidence/artifacts | typed `EvidenceBundle` and content-addressed `ArtifactStore` | reports and UI | conclusions resolve exact sources and durable read receipts |
-| GitHub operations | guarded attempt-bound operation lifecycle | CLI presentation | credentials never enter receipts |
+| GitHub operations | `medusa-github` guarded operation lifecycle | CLI presentation | credentials never enter receipts |
 | Updates/releases | signed manifest v2 and protected signing workflow | release metadata | signature is verified before metadata is trusted |
 
 ## Dataflows
@@ -118,7 +118,7 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 - **Session:** frontend command → versioned runtime envelope → session aggregate and journal → durable projection → frontend event.
 - **Execution:** plan aggregate → immutable task contract → lease → isolated implementation → changed-path verification → dedicated review receipt → independent verification → authorization → integration → reconciliation → canonical terminal completion.
 - **Provider:** selected route → capability preflight → abortable request → normalized response and usage event → durable route-health update.
-- **External operation:** typed operation → canonical digest and attempt ID → trusted-host and capability check → adapter dispatch → reconciliation-aware normalized receipt.
+- **External operation:** typed GitHub operation request → capability and confirmation checks → `medusa-github` dispatch → redacted normalized receipt → durable audit record.
 - **Evidence:** exact changed components → selected checks → raw command, browser, and artifact outputs → content-addressed artifacts and read receipts → typed claims and decisions → review, scheduler, authorization, integration, report, and UI consumers.
 - **Persistence:** every mutable concern identifies one journal or aggregate; caches and UI projections are reconstructable and never authoritative.
 - **TypeScript intelligence:** confined target → deterministic workspace discovery and content fingerprints → disposable LSP → normalized semantic result → optional guarded snapshot-bound transaction.
