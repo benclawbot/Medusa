@@ -15,6 +15,6 @@ jobs:
       - name: Locate remaining model capability consumers
         run: |
           echo '=== realtime gateway consumers ==='
-          rg -n "probe_gateway|GatewayCapability|medusa_openai_realtime" crates apps || true
+          grep -RInE "probe_gateway|GatewayCapability|medusa_openai_realtime" crates apps || true
           echo '=== capability gates ==='
-          rg -n "image_input|audio_input|realtime|structured_output|tool_calling|reasoning_effort" crates apps | head -n 400 || true
+          grep -RInE "image_input|audio_input|realtime|structured_output|tool_calling|reasoning_effort" crates apps | head -n 400 || true
