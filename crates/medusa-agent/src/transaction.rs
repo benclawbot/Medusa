@@ -334,7 +334,33 @@ pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<
         .iter()
         .find(|record| record.id == mutation_id)
         .ok_or_else(|| provenance_boundary_error("mutation provenance record is missing"))?;
-    let current = fs::read(safe_path(repo, &record.path)?)?;
+    let path = safe_path(repo, &record.path)?;
+    let current = match &record.kind {
+        MutationKind::Added | MutationKind::Modified => fs::read(&path)?,
+        MutationKind::Deleted => {
+            if path.exists() {
+                return Err(provenance_boundary_error(
+                    "selective revert rejected because a deleted path was recreated",
+                ));
+            }
+            Vec::new()
+        }
+        MutationKind::Renamed { .. } => {
+            return Err(provenance_boundary_error(
+                "selective revert is unavailable for rename provenance",
+            ));
+        }
+        MutationKind::Generated => {
+            return Err(provenance_boundary_error(
+                "selective revert is unavailable for generated-file provenance",
+            ));
+        }
+        MutationKind::BinaryUnavailable => {
+            return Err(provenance_boundary_error(
+                "selective revert is unavailable when binary inverse evidence is unavailable",
+            ));
+        }
+    };
     match journal.validate_scope(mutation_id, &current) {
         ScopeValidation::Current => {}
         ScopeValidation::MissingEvidence => {
@@ -377,15 +403,46 @@ pub fn apply_selective_revert(
         .find(|record| record.id == mutation_id)
         .ok_or_else(|| provenance_boundary_error("mutation provenance record disappeared"))?;
     let path = safe_path(repo, &preview.path)?;
+
+    if matches!(record.kind, MutationKind::Added) {
+        let expected = record.scope.retained_postimage.as_deref().ok_or_else(|| {
+            provenance_boundary_error("selective revert postimage is unavailable")
+        })?;
+        return apply_delete_with_context(repo, &preview.path, expected, context);
+    }
+
+    if matches!(record.kind, MutationKind::Deleted) {
+        if path.exists() {
+            return Err(provenance_boundary_error(
+                "selective revert scope changed during authorization",
+            ));
+        }
+        let restore = record
+            .scope
+            .retained_preimage
+            .as_deref()
+            .ok_or_else(|| provenance_boundary_error("selective revert preimage is unavailable"))?;
+        let content = String::from_utf8(restore.to_vec()).map_err(|_| {
+            provenance_boundary_error("selective revert of non-UTF-8 content is unavailable")
+        })?;
+        return apply_atomic_with_context(
+            repo,
+            &[FileMutation {
+                path: preview.path,
+                content,
+            }],
+            context,
+        );
+    }
+
     let current = fs::read(&path)?;
     let end = preview
         .start_byte
         .checked_add(preview.remove_len)
         .ok_or_else(|| provenance_boundary_error("selective revert scope overflow"))?;
-    let expected =
-        record.scope.retained_postimage.as_deref().ok_or_else(|| {
-            provenance_boundary_error("selective revert postimage is unavailable")
-        })?;
+    let expected = record.scope.retained_postimage.as_deref().ok_or_else(|| {
+        provenance_boundary_error("selective revert postimage is unavailable")
+    })?;
     if current.get(preview.start_byte..end) != Some(expected) {
         return Err(provenance_boundary_error(
             "selective revert scope changed during authorization",
@@ -411,6 +468,79 @@ pub fn apply_selective_revert(
         }],
         context,
     )
+}
+
+fn apply_delete_with_context(
+    repo: &Path,
+    relative: &str,
+    expected_current: &[u8],
+    context: &MutationContext,
+) -> MedusaResult<TransactionOutcome> {
+    let path = safe_path(repo, relative)?;
+    let metadata = fs::metadata(&path)?;
+    let current = fs::read(&path)?;
+    if current != expected_current {
+        return Err(provenance_boundary_error(
+            "selective revert scope changed during authorization",
+        ));
+    }
+
+    let repository_before = repository_fingerprint(repo)?;
+    let mut journal = load_provenance(repo)?;
+    let backup = Backup {
+        path: path.clone(),
+        content: Some(current.clone()),
+        permissions: Some(metadata.permissions()),
+    };
+    fs::remove_file(&path)?;
+
+    let repository_after = match repository_fingerprint(repo) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            let rollback = rollback(std::slice::from_ref(&backup));
+            return Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Execution,
+                format!(
+                    "mutation fingerprint failed after delete; rollback={rollback}: {error}"
+                ),
+            ));
+        }
+    };
+    let record = build_record(
+        context.clone(),
+        relative.to_owned(),
+        MutationKind::Deleted,
+        repository_before,
+        repository_after,
+        0,
+        &current,
+        &[],
+    );
+    let mutation_id = record.id.clone();
+    if let Err(error) = journal.append(record) {
+        let rollback = rollback(std::slice::from_ref(&backup));
+        return Err(MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Execution,
+            format!("delete provenance conflict; rollback={rollback}: {error}"),
+        ));
+    }
+    if let Err(error) = persist_provenance(repo, &journal) {
+        let rollback = rollback(std::slice::from_ref(&backup));
+        return Err(MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Execution,
+            format!("delete provenance persistence failed; rollback={rollback}: {error}"),
+        ));
+    }
+
+    Ok(TransactionOutcome {
+        affected_files: vec![relative.to_owned()],
+        rolled_back: false,
+        detail: "file removed by selective revert with authoritative provenance".to_owned(),
+        mutation_ids: vec![mutation_id],
+    })
 }
 
 fn minimal_scope<'a>(before: &'a [u8], after: &'a [u8]) -> (usize, &'a [u8], &'a [u8]) {
@@ -572,6 +702,96 @@ mod tests {
             fs::read_to_string(directory.path().join("value.txt")).unwrap(),
             "USER-BEFORE\nold\nuser-after\n"
         );
+    }
+
+    #[test]
+    fn added_file_revert_removes_file_and_deleted_revert_restores_it() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        let added = apply_atomic_with_context(
+            directory.path(),
+            &[FileMutation {
+                path: "new.txt".into(),
+                content: "created\n".into(),
+            }],
+            &context(1),
+        )
+        .unwrap();
+        assert!(directory.path().join("new.txt").exists());
+
+        let deleted =
+            apply_selective_revert(directory.path(), &added.mutation_ids[0], &context(2)).unwrap();
+        assert!(!directory.path().join("new.txt").exists());
+        assert_eq!(deleted.mutation_ids.len(), 1);
+
+        apply_selective_revert(directory.path(), &deleted.mutation_ids[0], &context(3)).unwrap();
+        assert_eq!(
+            fs::read_to_string(directory.path().join("new.txt")).unwrap(),
+            "created\n"
+        );
+    }
+
+    #[test]
+    fn line_ending_change_round_trips_exactly() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        fs::write(directory.path().join("value.txt"), b"alpha\r\nbeta\r\n").unwrap();
+        let outcome = apply_atomic_with_context(
+            directory.path(),
+            &[FileMutation {
+                path: "value.txt".into(),
+                content: "alpha\nbeta\n".into(),
+            }],
+            &context(1),
+        )
+        .unwrap();
+        apply_selective_revert(directory.path(), &outcome.mutation_ids[0], &context(2)).unwrap();
+        assert_eq!(
+            fs::read(directory.path().join("value.txt")).unwrap(),
+            b"alpha\r\nbeta\r\n"
+        );
+    }
+
+    #[test]
+    fn unsupported_provenance_kinds_fail_closed() {
+        for kind in [
+            MutationKind::Renamed {
+                previous_path: "old.txt".into(),
+            },
+            MutationKind::Generated,
+            MutationKind::BinaryUnavailable,
+        ] {
+            let directory = tempfile::tempdir().expect("tempdir");
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(directory.path())
+                .status()
+                .unwrap();
+            fs::write(directory.path().join("value.txt"), "after").unwrap();
+            let mut journal = load_provenance(directory.path()).unwrap();
+            let record = build_record(
+                context(1),
+                "value.txt".into(),
+                kind,
+                "before".into(),
+                "after".into(),
+                0,
+                b"before",
+                b"after",
+            );
+            let mutation_id = record.id.clone();
+            journal.append(record).unwrap();
+            persist_provenance(directory.path(), &journal).unwrap();
+            assert!(preview_selective_revert(directory.path(), &mutation_id).is_err());
+        }
     }
 
     #[test]
