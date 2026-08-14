@@ -4,7 +4,7 @@
 //! command, delegates attachment and replay to `LiveSessionBroker`, and routes mutations through the
 //! existing `RuntimeController`. It does not create a second transcript or policy implementation.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, path::{Path, PathBuf}};
 
 use medusa_config::Config;
 use medusa_protocol::frontend::{
@@ -1006,7 +1006,7 @@ fn fingerprint(envelope: &FrontendCommandEnvelope) -> Result<String, FrontendCon
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
-fn repository_review_fingerprint(repo: &std::path::Path) -> Result<String, FrontendControlError> {
+fn repository_review_fingerprint(repo: &Path) -> Result<String, FrontendControlError> {
     let output = std::process::Command::new("git")
         .args(["diff", "--binary", "--no-ext-diff", "--", "."])
         .current_dir(repo)
