@@ -19,6 +19,7 @@ mod github_pull_request_mutations;
 mod github_repository;
 mod learning;
 mod memories;
+mod model_registry;
 mod mutations;
 mod pull_requests;
 mod review;
@@ -61,6 +62,7 @@ use learning::{
     runtime_learning_review, runtime_learning_transition,
 };
 use memories::runtime_list_memories;
+use model_registry::desktop_model_registry;
 use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
 };
@@ -87,6 +89,7 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             desktop_shared_configuration,
             desktop_provider_catalog,
+            desktop_model_registry,
             desktop_realtime_capability,
             desktop_establish_realtime_session,
             runtime_start,
