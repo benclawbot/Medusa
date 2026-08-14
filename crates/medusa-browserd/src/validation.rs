@@ -40,9 +40,8 @@ impl VerificationRoute {
     }
 
     pub(crate) fn from_env() -> Result<Self, String> {
-        let raw = std::env::var_os(VERIFY_URL_ENV).ok_or_else(|| {
-            format!("{VERIFY_URL_ENV} is required for browser readiness")
-        })?;
+        let raw = std::env::var_os(VERIFY_URL_ENV)
+            .ok_or_else(|| format!("{VERIFY_URL_ENV} is required for browser readiness"))?;
         let raw = raw
             .to_str()
             .ok_or_else(|| format!("{VERIFY_URL_ENV} must be valid UTF-8"))?;
@@ -110,13 +109,12 @@ pub(crate) fn validate_loopback_url(url: &url::Url) -> Result<(), String> {
     if !url.username().is_empty() || url.password().is_some() {
         return Err("local browser URLs must not include credentials".to_owned());
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| "local browser URL must include a host".to_owned())?;
-    let loopback = host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback());
+    let loopback = match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    };
     loopback
         .then_some(())
         .ok_or_else(|| "local browser URL must target loopback".to_owned())
@@ -157,7 +155,10 @@ mod tests {
     fn verification_route_normalizes_valid_loopback_and_public_urls() {
         let loopback = VerificationRoute::parse(" HTTP://LOCALHOST:4173/app?mode=verify ")
             .expect("loopback route");
-        assert_eq!(loopback.normalized(), "http://localhost:4173/app?mode=verify");
+        assert_eq!(
+            loopback.normalized(),
+            "http://localhost:4173/app?mode=verify"
+        );
         assert_eq!(loopback.origin(), "http://localhost:4173");
         assert!(VerificationRoute::parse("https://8.8.8.8/verify").is_ok());
         assert!(VerificationRoute::parse("http://[::1]:4173/app").is_ok());
