@@ -12,7 +12,7 @@ The product model is **Plan, Execute Safely, Recover**:
 - **Execute Safely.** Read-only teammates scout the work. Git mutation can use a conflict-aware bounded implementation DAG with isolated worktrees; ordinary directories use one isolated content-addressed snapshot implementer. Review, independent verification, authorization, and integration remain separate runtime authorities.
 - **Recover.** Sessions, plans, events, approvals, worker leases, immutable candidates, transactions, and verification live under `.medusa` as authoritative state. Interruption, cancellation, or crash never gets rewritten as success.
 
-**Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, and durable sessions are shipped. Voice and Telegram implementation foundations are present but their real account/hardware acceptance remains quarantined; model-executable browser actions remain withheld. The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
+**Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, and durable sessions are shipped. Voice and Telegram implementation foundations are present but their real account/hardware acceptance remains quarantined; browser actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled. Activation requires `MEDUSA_BROWSER_ENABLED=true`, an explicit `MEDUSA_BROWSER_PATH`, and an admitted `MEDUSA_BROWSER_VERIFY_URL`. The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
 
 **Out of scope today:** autonomous nested delegation, unconstrained model-driven agent teams, consensus voting, distributed multi-host mutation transactions, non-Git parallel mutation, and any browser, voice, or remote-frontend claim that lacks its required authenticated live evidence.
 
@@ -293,7 +293,7 @@ Directory mutation snapshots the bounded workspace, rejects symlinks, validates 
 
 Programmatic callers can create `medusa_runtime::workspace::Workspace::ephemeral()` for scratch artifacts without starting from a repository. Cleanup is explicit and can only delete a Medusa-owned ephemeral root.
 
-Git is not required for documentation, analysis, supplied-source research, reports, or other bounded artifact work. A non-Git workspace does **not** grant ambient network/browser capabilities: external research still depends on explicitly supported and policy-authorized integrations. Model-executable browser actions remain quarantined.
+Git is not required for documentation, analysis, supplied-source research, reports, or other bounded artifact work. A non-Git workspace does **not** grant ambient network/browser capabilities: external research still depends on explicitly supported and policy-authorized integrations. Model-executable browser actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled.
 
 See [Workspace modes](docs/WORKSPACES.md) and [Multi-agent execution](docs/MULTI_AGENT_EXECUTION.md) for the exact safety rules.
 
@@ -394,7 +394,7 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 - guarded workspace file operations;
 - Git-aware change and integration workflows where Git is present;
 - policy-controlled command execution;
-- required UI-change browser verification through the internal sidecar, while model-executable browser actions remain quarantined;
+- required UI-change browser verification through the internal sidecar; model browser actions are a readiness-gated, explicit-opt-in preview with a certified dispatcher; not default-enabled;
 - image/file prompt attachments when provider capabilities permit;
 - MCP and extension boundaries;
 - provider routing/fallback chains;
@@ -502,7 +502,7 @@ Platform support does not imply identical containment, audio, browser, credentia
 - Directory mutation fails closed on symlink-bearing workspaces; use Git mutation when symlink semantics must be preserved.
 - OpenAI Realtime and Telegram end-to-end acceptance still require real ChatGPT OAuth, audio hardware, bot/chat/Mini App access, and sanitized evidence.
 - ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
-- Browser crates remain quarantined from advertised executable model actions until dispatcher, permission, and authenticated behavioral evidence are certified.
+- Browser model actions are readiness-gated, explicit-opt-in preview; the dispatcher is certified-production, but the capability is not default-enabled and remains bounded by route admission, permissions, and required verification authority.
 - Native Anthropic-compatible provider requests are currently non-streaming even though streaming is represented in capability contracts.
 - Screenshot input is accepted only when the selected provider declares compatible image support and limits.
 - Desktop release packages are unsigned at the operating-system level.

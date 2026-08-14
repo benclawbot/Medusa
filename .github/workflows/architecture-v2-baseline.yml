@@ -38,6 +38,10 @@ jobs:
         run: python scripts/test-architecture-index.py
       - name: Validate living architecture index
         run: python scripts/check-architecture-index.py
+      - name: Test browser status drift guard
+        run: python scripts/test-browser-status.py
+      - name: Validate browser status authorities
+        run: python scripts/check-browser-status.py
       - name: Validate transactional mutation ordering
         run: python scripts/check-mutation-lifecycle.py
       - name: Validate evidence and verification authority

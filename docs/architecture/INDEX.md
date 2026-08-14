@@ -6,7 +6,7 @@ This is the change-governance root and final certification record for Medusa arc
 
 Architecture v2 migration is complete. The phase-0 feature freeze is inactive, every production mutation follows one review-before-integration state machine, and no production entrypoint can select the retired conversational review or integrate-before-review compatibility path.
 
-A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree. Browser tools and Telegram duplex/audio behavior remain quarantined where external behavioral evidence is still incomplete; that truthful quarantine does not recreate a legacy execution authority.
+A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree. Browser tools have a certified production dispatcher while the product surface remains a readiness-gated, explicit opt-in preview. Telegram duplex/audio behavior remains quarantined where external behavioral evidence is still incomplete; neither status creates a legacy execution authority.
 
 ## How to use this index
 
@@ -88,7 +88,7 @@ Executable skill packages are owned by `crates/medusa-skill` and dispatched thro
 | Release trust | production | certified-production | preserve signed manifest v2, protected signer, and reviewed keyring | none |
 | Self-update | production | certified-production | preserve verified prebuilt default and explicit source channel | none |
 | Multi-agent execution | production | certified-production | preserve bounded teammates, isolated mutation, dedicated review, and durable completion | none |
-| Browser tools | withheld | quarantined | no executable projection until dispatcher and permission behavior are certified | authenticated live browser evidence |
+| Browser tools | preview | certified-production | readiness-gated, explicit opt-in via `medusa-agent::ToolManager` -> `medusa-browserd`; see [`0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md) | none for certified dispatcher; product remains preview |
 | Plugins/extensions | managed | preview | managed manifests and instruction-only `SKILL.md`; executable handlers require certification | handler-specific evidence |
 | Telegram remote frontend | partial | quarantined | shared daemon path is authoritative; duplex/audio claims remain withheld | authenticated microphone/audio and live Telegram evidence |
 | Unsafe/FFI boundary | production | certified-production | preserve crate-local allowlist and cross-platform containment proof | none |
@@ -180,6 +180,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Decision: [`decisions/0005-transactional-mutation-lifecycle.md`](decisions/0005-transactional-mutation-lifecycle.md)
 - Decision: [`decisions/0006-authoritative-evidence-artifacts-and-verification.md`](decisions/0006-authoritative-evidence-artifacts-and-verification.md)
 - Decision: [`decisions/0007-canonical-frontend-projection.md`](decisions/0007-canonical-frontend-projection.md)
+- Decision: [`decisions/0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md)
 - Final independent audit: [`FINAL-CERTIFICATION-AUDIT.md`](FINAL-CERTIFICATION-AUDIT.md)
 - Machine-readable certification baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)
@@ -188,6 +189,8 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Capability evidence: [`../CAPABILITY-EVIDENCE.md`](../CAPABILITY-EVIDENCE.md)
 - Architecture checker: `python scripts/check-architecture-index.py`
 - Adversarial checker fixtures: `python scripts/test-architecture-index.py`
+- Browser status checker: `python scripts/check-browser-status.py`
+- Browser status fixtures: `python scripts/test-browser-status.py`
 - Headless conformance harness: `python scripts/architecture-conformance.py --all --binary <medusa> --json`
 
 The architecture baseline workflow runs governance checks on Linux, macOS, and Windows.
