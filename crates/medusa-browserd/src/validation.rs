@@ -53,6 +53,7 @@ impl VerificationRoute {
         self.url.as_str()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn origin(&self) -> String {
         self.url.origin().ascii_serialization()
