@@ -2,7 +2,8 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{self, Command},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use medusa_core::MedusaResult;
@@ -16,6 +17,8 @@ use crate::{
 
 const SCHEMA_VERSION: u32 = 1;
 const CACHE_RELATIVE_PATH: &str = ".medusa/cache/repository-graph-v1.json";
+static CACHE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static CACHE_REPLACE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -341,16 +344,57 @@ fn persist(path: &Path, snapshot: &RepositoryGraphSnapshot) -> MedusaResult<()> 
         .parent()
         .ok_or_else(|| internal("repository graph cache path has no parent"))?;
     fs::create_dir_all(parent)?;
-    let temporary = path.with_extension("json.tmp");
+    let temporary = unique_cache_temporary(path);
     let bytes = serde_json::to_vec_pretty(snapshot)
         .map_err(|error| internal(format!("serialize repository graph: {error}")))?;
-    fs::write(&temporary, bytes)?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
+    let result = fs::write(&temporary, bytes).and_then(|()| {
+        let _guard = CACHE_REPLACE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        replace_cache(&temporary, path)
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    fs::rename(temporary, path)?;
+    result?;
     Ok(())
+}
+
+fn unique_cache_temporary(path: &Path) -> PathBuf {
+    let sequence = CACHE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let file_name = path.file_name().map_or_else(
+        || "repository-graph.json".into(),
+        |name| name.to_string_lossy(),
+    );
+    path.with_file_name(format!(".{file_name}.tmp.{}.{}", process::id(), sequence))
+}
+
+fn replace_cache(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        fs::rename(temporary, path)
+    }
+    #[cfg(windows)]
+    {
+        const REPLACE_ATTEMPTS: usize = 8;
+        for _ in 0..REPLACE_ATTEMPTS {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+            match fs::rename(temporary, path) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::PermissionDenied
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        fs::rename(temporary, path)
+    }
 }
 
 fn language(path: &str) -> &'static str {
@@ -404,7 +448,7 @@ fn is_policy_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, process::Command};
+    use std::{fs, process::Command, sync::Barrier, thread};
 
     use super::*;
 
@@ -463,6 +507,48 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_cache_persistence_uses_independent_temporary_files() {
+        const WRITERS: usize = 8;
+        const WRITES_PER_THREAD: usize = 4;
+
+        let repo = repository();
+        let snapshot = capture(repo.path()).expect("snapshot");
+        let cache_path = repo.path().join(CACHE_RELATIVE_PATH);
+        let barrier = Barrier::new(WRITERS);
+        thread::scope(|scope| {
+            let handles = (0..WRITERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        for _ in 0..WRITES_PER_THREAD {
+                            persist(&cache_path, &snapshot).expect("concurrent cache persist");
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                handle.join().expect("cache writer thread");
+            }
+        });
+
+        let persisted: RepositoryGraphSnapshot = serde_json::from_slice(
+            &fs::read(&cache_path).expect("persisted repository graph cache"),
+        )
+        .expect("valid repository graph cache");
+        assert_eq!(persisted, snapshot);
+        let leftovers = fs::read_dir(cache_path.parent().expect("cache parent"))
+            .expect("cache directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("repository-graph-v1.json.tmp"))
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "temporary cache files remain: {leftovers:?}"
+        );
+    }
+
+    #[test]
     fn external_change_marks_queries_stale_until_refresh() {
         let repo = repository();
         let mut graph = RepositoryGraph::open(repo.path()).expect("graph");
@@ -510,6 +596,7 @@ mod tests {
         assert_eq!(impact.freshness, RepositoryGraphFreshness::Current);
         assert!(!impact.value.commands.is_empty());
     }
+
     #[test]
     fn test_impact_does_not_invent_cargo_without_a_manifest() {
         let repo = repository();

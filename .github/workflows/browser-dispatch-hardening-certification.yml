@@ -45,8 +45,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
-      - name: Refresh merged dependency lock
-        run: cargo generate-lockfile
+      - name: Validate committed dependency authority
+        shell: bash
+        run: cargo metadata --locked --format-version 1 >/dev/null
       - name: Install browser fixture dependencies
         shell: bash
         run: |
@@ -149,6 +150,8 @@ jobs:
             echo 'Browser bypassed Medusa proxy and reached an unrelated loopback origin.' >&2
             exit 1
           fi
+      - name: Assert hardening preserved Cargo.lock
+        run: git diff --exit-code -- Cargo.lock
       - name: Upload browser hardening diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

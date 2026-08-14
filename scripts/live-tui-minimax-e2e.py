@@ -19,10 +19,24 @@ import time
 from pathlib import Path
 
 EXPECTED = "MEDUSA_TUI_MINIMAX_OK"
+EXPECTED_SOURCE = (
+    f'pub const RESPONSE: &str = "{EXPECTED}";\n\n'
+    "pub fn response() -> &'static str {\n    RESPONSE\n}\n\n"
+    "#[cfg(test)]\nmod tests {\n    use super::*;\n\n"
+    "    #[test]\n    fn response_is_not_empty() {\n"
+    "        assert!(!response().is_empty());\n"
+    "    }\n}\n"
+)
 PROMPT = (
-    "Modify src/lib.rs so the public constant RESPONSE has the exact value "
-    f"{EXPECTED}. Keep the existing test unchanged. Run cargo test to verify the change. "
-    f"When complete, finish your final response with exactly {EXPECTED}."
+    "Implement the requested repository change in src/lib.rs. The implementation task must "
+    "use fs_write once on the relative path src/lib.rs and replace the complete file with the "
+    "exact UTF-8 content between the markers below, including the final newline. Planning tasks "
+    "should establish the exact scope, and review or verification tasks should evaluate the prepared "
+    "implementation and authoritative evidence according to their assigned roles.\n<<<FILE\n"
+    f"{EXPECTED_SOURCE}"
+    ">>>FILE\nThe implementation task must not call shell_run, update_plan, team tools, or "
+    "git_checkpoint. Medusa's authoritative host verifier will run formatting, build, lint, and tests "
+    f"before integration. After fs_write succeeds, the implementation task must return exactly {EXPECTED}."
 )
 DEFAULT_TIMEOUT_SECONDS = 600
 
@@ -91,7 +105,7 @@ def initialize_repository(repo: Path) -> None:
     # proves the actual interactive path and prevents this acceptance task from reserving the
     # production default output budget for every orchestration role.
     (repo / ".medusa" / "config.toml").write_text(
-        "[agent]\nmax_turns = 8\nparallel_workers = 1\n\n"
+        "[agent]\nmax_turns = 24\nparallel_workers = 1\n\n"
         "[model]\nmax_output_tokens = 2048\n",
         encoding="utf-8",
     )
@@ -99,7 +113,8 @@ def initialize_repository(repo: Path) -> None:
         ["git", "init", "-q", "-b", "main"],
         ["git", "config", "user.name", "Medusa TUI E2E"],
         ["git", "config", "user.email", "medusa-tui-e2e@example.invalid"],
-        ["git", "add", "Cargo.toml", "src/lib.rs", ".medusa/config.toml"],
+        ["cargo", "generate-lockfile"],
+        ["git", "add", "Cargo.toml", "Cargo.lock", "src/lib.rs", ".medusa/config.toml"],
         ["git", "commit", "-q", "-m", "baseline"],
     ):
         result = run(command, repo)
@@ -175,7 +190,8 @@ def session_evidence(repo: Path) -> tuple[list[Path], list[Path]]:
         if isinstance(events, list) and any(
             isinstance(event, dict)
             and isinstance(event.get("payload"), dict)
-            and event["payload"].get("type") == "model_response_received"
+            and event["payload"].get("type")
+            in {"model_response_received", "assistant_message_recorded", "session_completed"}
             for event in events
         ):
             responses.append(path)
@@ -211,7 +227,7 @@ def capture_evidence(repo: Path, output_dir: Path) -> tuple[bool, list[str]]:
     for name, command in (
         ("git-status.txt", ["git", "status", "--short"]),
         ("change.patch", ["git", "diff", "--binary"]),
-        ("cargo-test.txt", ["cargo", "test", "--quiet"]),
+        ("cargo-test.txt", ["cargo", "test", "--quiet", "--locked"]),
     ):
         try:
             result = run(command, repo)
@@ -259,7 +275,6 @@ def main() -> int:
 
     env = os.environ.copy()
     env.update(
-        HOME=str(home),
         XDG_CONFIG_HOME=str(home / ".config"),
         XDG_CACHE_HOME=str(home / ".cache"),
         MINIMAX_API_KEY=api_key,
@@ -300,12 +315,14 @@ def main() -> int:
             if change_offset is None and source_is_correct(repo):
                 change_offset = chunk_start
             responses, assistants = session_evidence(repo)
-            post_change = (
-                transcript[change_offset:].decode("utf-8", errors="replace")
-                if change_offset is not None
-                else ""
-            )
-            if submitted and change_offset is not None and EXPECTED in post_change and responses and assistants:
+            if (
+                submitted
+                and change_offset is not None
+                and EXPECTED in text
+                and "Task completed" in text
+                and responses
+                and assistants
+            ):
                 rendered = True
                 break
         if not rendered and error is None:

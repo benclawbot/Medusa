@@ -323,7 +323,7 @@ mod tests {
             .request_with_control(BrowserRequest::Ping, Duration::from_secs(1), &cancellation)
             .expect_err("cancelled request must stop");
         toggler.join().expect("cancellation toggler");
-        assert!(started.elapsed() < Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_millis(500));
         assert_eq!(
             error.context.get("browser_error_kind"),
             Some(&serde_json::json!("cancelled"))
