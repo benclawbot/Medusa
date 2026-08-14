@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use medusa_config::{
     Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
-    ProviderProfile, ProviderProfileCatalog, ProviderProfileUpdate, credential_environment,
+    ProviderCatalogEntry, ProviderProfile, ProviderProfileCatalog, ProviderProfileUpdate,
+    apply_provider_defaults, credential_environment, provider_catalog, provider_catalog_entry,
+    provider_catalog_entry_for_profile, provider_model_options,
 };
 use serde::Serialize;
 
@@ -21,6 +23,26 @@ pub struct DesktopSharedConfiguration {
     pub base_url: Option<String>,
     pub configured: bool,
     pub credential_configured: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopProviderCatalogEntry {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub connection: String,
+    pub profile_provider: String,
+    pub auth_methods: Vec<String>,
+    pub default_auth: String,
+    pub default_model: String,
+    pub model_options: Vec<String>,
+    pub base_url: Option<String>,
+    pub browser_oauth: bool,
+    pub discover_models: bool,
+    pub custom_values: bool,
+    pub disabled_reason: Option<String>,
+    pub current_custom: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -70,6 +92,8 @@ impl PreparedProviderProfile {
                     "provider".to_owned(),
                     "model".to_owned(),
                     "reasoning".to_owned(),
+                    "auth".to_owned(),
+                    "base_url".to_owned(),
                     "configured".to_owned(),
                 ],
                 ConfigurationApplyTiming::Immediate,
@@ -83,6 +107,12 @@ pub fn desktop_shared_configuration() -> Result<DesktopSharedConfiguration, Stri
     let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;
     let credentials = SystemCredentialStore;
     shared_configuration(&catalog, |provider| credentials.load(provider))
+}
+
+#[tauri::command]
+pub fn desktop_provider_catalog() -> Result<Vec<DesktopProviderCatalogEntry>, String> {
+    let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;
+    provider_catalog_for(&catalog)
 }
 
 pub(crate) fn active_config() -> Result<Config, String> {
@@ -121,16 +151,42 @@ fn prepare_with_catalog(
     let update = catalog
         .begin_active_profile_update(expected_revision)
         .map_err(|error| error.to_string())?;
-    let mut profile = update.profile().clone();
-    profile
-        .set_value("connection", connection_for_provider(provider))
-        .map_err(|error| error.to_string())?;
-    profile
-        .set_value("provider", provider)
-        .map_err(|error| error.to_string())?;
-    profile
-        .set_value("model", model)
-        .map_err(|error| error.to_string())?;
+    let previous = update.profile();
+    let mut profile = previous.clone();
+
+    if let Some(entry) = provider_catalog_entry(provider) {
+        if let Some(reason) = entry.disabled_reason {
+            return Err(format!("provider {} is unavailable: {reason}", entry.display_name));
+        }
+        let same_route = provider_catalog_entry_for_profile(previous)
+            .is_some_and(|current| current.id == entry.id);
+        if !same_route {
+            apply_provider_defaults(entry, &mut profile);
+        } else {
+            profile.connection = entry.connection.to_owned();
+            profile.provider = entry.profile_provider.to_owned();
+            if !entry.auth_methods.contains(&profile.auth.as_str()) {
+                profile.auth = entry.default_auth.to_owned();
+            }
+            if !entry.custom_values {
+                profile.base_url = entry.base_url.map(str::to_owned);
+            }
+        }
+        if !model.trim().is_empty() {
+            profile.model = model.trim().to_owned();
+        }
+    } else {
+        let current_provider = previous.provider.trim();
+        if provider.trim() != current_provider {
+            return Err(format!(
+                "unknown provider `{provider}`; only an already configured custom provider may be preserved"
+            ));
+        }
+        if !model.trim().is_empty() {
+            profile.model = model.trim().to_owned();
+        }
+    }
+
     profile
         .set_value("reasoning", reasoning_for_effort(effort))
         .map_err(|error| error.to_string())?;
@@ -176,14 +232,66 @@ fn shared_configuration(
     })
 }
 
-fn connection_for_provider(provider: &str) -> &'static str {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "openai-oauth" => "chatgpt-oauth",
-        "openai" => "openai-api",
-        "openai-compatible" => "openai-compatible",
-        "omniroute" => "omniroute",
-        "local" => "local",
-        _ => "direct",
+fn provider_catalog_for(
+    catalog: &ProviderProfileCatalog,
+) -> Result<Vec<DesktopProviderCatalogEntry>, String> {
+    let snapshot = catalog.snapshot().map_err(|error| error.to_string())?;
+    let current = snapshot.profile;
+    let current_entry = provider_catalog_entry_for_profile(&current);
+    let mut entries = provider_catalog()
+        .iter()
+        .map(|entry| desktop_catalog_entry(entry, &current, current_entry))
+        .collect::<Vec<_>>();
+
+    if current_entry.is_none() && !current.provider.trim().is_empty() {
+        entries.insert(
+            0,
+            DesktopProviderCatalogEntry {
+                id: current.provider.clone(),
+                display_name: current.provider.clone(),
+                description: "Current custom provider profile".to_owned(),
+                connection: current.connection.clone(),
+                profile_provider: current.provider.clone(),
+                auth_methods: vec![current.auth.clone()],
+                default_auth: current.auth.clone(),
+                default_model: current.model.clone(),
+                model_options: vec![current.model.clone()],
+                base_url: current.base_url.clone(),
+                browser_oauth: false,
+                discover_models: false,
+                custom_values: true,
+                disabled_reason: None,
+                current_custom: true,
+            },
+        );
+    }
+    Ok(entries)
+}
+
+fn desktop_catalog_entry(
+    entry: &ProviderCatalogEntry,
+    current: &ProviderProfile,
+    current_entry: Option<&ProviderCatalogEntry>,
+) -> DesktopProviderCatalogEntry {
+    let current_model = current_entry
+        .filter(|candidate| candidate.id == entry.id)
+        .map_or("", |_| current.model.as_str());
+    DesktopProviderCatalogEntry {
+        id: entry.id.to_owned(),
+        display_name: entry.display_name.to_owned(),
+        description: entry.description.to_owned(),
+        connection: entry.connection.to_owned(),
+        profile_provider: entry.profile_provider.to_owned(),
+        auth_methods: entry.auth_methods.iter().map(|value| (*value).to_owned()).collect(),
+        default_auth: entry.default_auth.to_owned(),
+        default_model: entry.default_model.to_owned(),
+        model_options: provider_model_options(entry.id, current_model, &[]),
+        base_url: entry.base_url.map(str::to_owned),
+        browser_oauth: entry.browser_oauth,
+        discover_models: entry.discover_models,
+        custom_values: entry.custom_values,
+        disabled_reason: entry.disabled_reason.map(str::to_owned),
+        current_custom: false,
     }
 }
 
@@ -230,6 +338,68 @@ mod tests {
     }
 
     #[test]
+    fn desktop_uses_catalog_mapping_for_omniroute() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        prepare_with_catalog(catalog.clone(), "auto/coding", "auto/coding", "medium", 0)
+            .expect("prepare")
+            .commit()
+            .expect("commit");
+
+        let configuration = shared_configuration(&catalog, |_| Ok(None)).expect("configuration");
+        assert_eq!(configuration.connection, "omniroute");
+        assert_eq!(configuration.provider, "auto/coding");
+        assert_eq!(configuration.auth, "none");
+    }
+
+    #[test]
+    fn desktop_catalog_serialization_matches_canonical_provider_metadata() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let entries = provider_catalog_for(&catalog).expect("catalog");
+        assert_eq!(entries.len(), provider_catalog().len());
+        for canonical in provider_catalog() {
+            let desktop = entries
+                .iter()
+                .find(|entry| entry.id == canonical.id)
+                .expect(canonical.id);
+            assert_eq!(desktop.connection, canonical.connection);
+            assert_eq!(desktop.profile_provider, canonical.profile_provider);
+            assert_eq!(desktop.default_auth, canonical.default_auth);
+            assert_eq!(desktop.default_model, canonical.default_model);
+            assert_eq!(desktop.base_url.as_deref(), canonical.base_url);
+            assert_eq!(desktop.disabled_reason.as_deref(), canonical.disabled_reason);
+        }
+    }
+
+    #[test]
+    fn desktop_preserves_an_existing_custom_provider() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let update = catalog.begin_active_profile_update(0).expect("update");
+        let mut profile = update.profile().clone();
+        profile.connection = "direct".to_owned();
+        profile.provider = "private-gateway".to_owned();
+        profile.model = "private-model".to_owned();
+        profile.auth = "none".to_owned();
+        profile.configured = true;
+        update
+            .commit(
+                &profile,
+                ConfigurationChangeOrigin::System,
+                ["provider".to_owned()],
+                ConfigurationApplyTiming::Immediate,
+            )
+            .expect("commit");
+
+        let entries = provider_catalog_for(&catalog).expect("catalog");
+        let custom = entries.first().expect("custom provider");
+        assert!(custom.current_custom);
+        assert_eq!(custom.profile_provider, "private-gateway");
+        assert_eq!(custom.model_options, vec!["private-model"]);
+    }
+
+    #[test]
     fn desktop_rejects_a_stale_revision_before_persistence() {
         let directory = tempfile::tempdir().expect("tempdir");
         let catalog = ProviderProfileCatalog::at(directory.path());
@@ -254,5 +424,21 @@ mod tests {
         assert!(!encoded.contains("top-secret"));
         assert!(!encoded.to_ascii_lowercase().contains("api_key"));
         assert!(!encoded.to_ascii_lowercase().contains("token"));
+    }
+
+    #[test]
+    fn selecting_a_catalog_provider_applies_canonical_defaults() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let prepared = prepare_with_catalog(catalog, "openai-oauth", "", "medium", 0)
+            .expect("prepare");
+        assert_eq!(prepared.profile.connection, "chatgpt-oauth");
+        assert_eq!(prepared.profile.provider, "openai-oauth");
+        assert_eq!(prepared.profile.model, "gpt-5");
+        assert_eq!(prepared.profile.auth, "none");
+        assert_eq!(
+            prepared.profile.base_url.as_deref(),
+            Some("http://127.0.0.1:10531/v1")
+        );
     }
 }
