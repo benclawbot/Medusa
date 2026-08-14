@@ -1,4 +1,6 @@
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use crate::desktop_command::hidden_command;
 
 fn browser_oauth_spec(provider: &str) -> Result<(&'static str, [&'static str; 6]), String> {
     if provider != "openai-oauth" {
@@ -23,7 +25,7 @@ fn browser_oauth_spec(provider: &str) -> Result<(&'static str, [&'static str; 6]
 pub async fn desktop_browser_oauth(provider: String) -> Result<(), String> {
     let (program, args) = browser_oauth_spec(&provider)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let status = Command::new(program)
+        let status = hidden_command(program)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
