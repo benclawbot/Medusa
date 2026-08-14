@@ -1,0 +1,79 @@
+name: Temporary issue 869 capability migration
+
+on:
+  push:
+    branches: [codex/issue-869-model-registry]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-869-model-registry
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Migrate remaining capability gates to model registry
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected source block not found in {path}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace(
+              "crates/medusa-external-provider/src/lib.rs",
+              "use medusa_config::{Config, FallbackProviderConfig};",
+              "use medusa_config::{Config, FallbackProviderConfig, model_capabilities};",
+          )
+          replace(
+              "crates/medusa-external-provider/src/lib.rs",
+              '''    let protocol = config.model.protocol.trim().to_ascii_lowercase();\n    let image_input = provider == "openai"\n        || provider == "anthropic"\n        || config.model.auth.eq_ignore_ascii_case("chatgpt-oauth")\n        || (provider == "minimax" && enabled("MINIMAX_IMAGE_INPUT"));\n    ProviderCapabilitySet {\n        image_input,\n        tool_calling: config.model.tool_calling\n            && matches!(\n''',
+              '''    let protocol = config.model.protocol.trim().to_ascii_lowercase();\n    let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);\n    let image_input = registry_capabilities.image_input\n        || (provider == "minimax" && enabled("MINIMAX_IMAGE_INPUT"));\n    ProviderCapabilitySet {\n        image_input,\n        tool_calling: config.model.tool_calling\n            && registry_capabilities.tool_calling\n            && matches!(\n''',
+          )
+
+          replace(
+              "crates/medusa-provider/src/anthropic.rs",
+              "use medusa_config::Config;",
+              "use medusa_config::{Config, model_capabilities};",
+          )
+          replace(
+              "crates/medusa-provider/src/anthropic.rs",
+              '''        let mut capabilities = (settings.capabilities)();\n        capabilities.tool_calling = config.model.tool_calling;\n        capabilities.streaming = false;\n''',
+              '''        let mut capabilities = (settings.capabilities)();\n        let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);\n        capabilities.image_input = capabilities.image_input && registry_capabilities.image_input;\n        capabilities.tool_calling = config.model.tool_calling && registry_capabilities.tool_calling;\n        capabilities.streaming = false;\n''',
+          )
+
+          replace(
+              "crates/medusa-runtime/src/openai_realtime.rs",
+              "use medusa_config::Config;",
+              "use medusa_config::{Config, model_capabilities};",
+          )
+          marker = '''pub fn resolve_openai_realtime_route(config: &Config) -> OpenAiRealtimeRoute {\n'''
+          replacement = marker + '''    let capabilities = model_capabilities(OPENAI_OAUTH_PROVIDER, OPENAI_REALTIME_MODEL);\n    if !capabilities.realtime || !capabilities.audio_input {\n        return OpenAiRealtimeRoute::ExistingRouteUnsupported {\n            provider: config.model.provider.clone(),\n        };\n    }\n'''
+          replace("crates/medusa-runtime/src/openai_realtime.rs", marker, replacement)
+
+          marker = '''pub fn resolve_openai_realtime_route_with_auth_file(\n    config: &Config,\n    auth_file: &Path,\n    api_base_url: &str,\n) -> OpenAiRealtimeRoute {\n'''
+          replacement = marker + '''    let capabilities = model_capabilities(OPENAI_OAUTH_PROVIDER, OPENAI_REALTIME_MODEL);\n    if !capabilities.realtime || !capabilities.audio_input {\n        return OpenAiRealtimeRoute::ExistingRouteUnsupported {\n            provider: config.model.provider.clone(),\n        };\n    }\n'''
+          replace("crates/medusa-runtime/src/openai_realtime.rs", marker, replacement)
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p medusa-config model_registry::tests --lib
+          cargo test -p medusa-provider
+          cargo test -p medusa-external-provider
+          cargo test -p medusa-runtime openai_realtime --lib
+      - name: Commit verified migration and remove temporary workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/temp-audit-869.yml
+          git add crates/medusa-external-provider/src/lib.rs crates/medusa-provider/src/anthropic.rs crates/medusa-runtime/src/openai_realtime.rs
+          git commit -m 'Use model registry for capability preflight'
+          git push origin HEAD:codex/issue-869-model-registry
