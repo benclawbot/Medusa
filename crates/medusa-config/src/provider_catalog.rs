@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use crate::ProviderProfile;
 
 /// User-facing support tier for a selectable provider route.
@@ -303,6 +301,8 @@ pub fn apply_provider_defaults(entry: &ProviderCatalogEntry, profile: &mut Provi
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::Config;
 
