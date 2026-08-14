@@ -1,0 +1,96 @@
+name: Temporary issue 873 transition test helper
+
+on:
+  push:
+    branches:
+      - codex/issue-873-verification-contract
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: codex/issue-873-verification-contract
+          fetch-depth: 0
+      - name: Add transition coverage
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-agent/src/verification_contract.rs')
+          text = path.read_text(encoding='utf-8')
+          if 'fn explicit_terminal_state_transitions_are_typed_and_auditable()' in text:
+              raise SystemExit(0)
+          marker = '\n}\n'
+          pos = text.rfind(marker)
+          if pos < 0:
+              raise SystemExit('test module closing brace not found')
+          test = r'''
+
+    #[test]
+    fn explicit_terminal_state_transitions_are_typed_and_auditable() {
+        let directory = repository();
+        let repo = directory.path();
+        let paths = BTreeSet::from(["a.txt".to_owned()]);
+        let identity = workspace_identity(repo, &paths).expect("identity");
+        let mut contract = VerificationContract {
+            schema_version: 1,
+            session_id: "session".to_owned(),
+            changed_paths: paths.clone(),
+            checks: vec![
+                check("waived", &["a.txt"]),
+                check("superseded", &["a.txt"]),
+                check("unavailable", &["a.txt"]),
+            ],
+            constraints: Vec::new(),
+            budget: VerificationBudgetReservation::for_output_budget(4096),
+            planned_identity: identity,
+            completion_identity: None,
+            authoritative_passed: false,
+        };
+
+        contract
+            .waive_check("waived", "user explicitly accepted this verification gap")
+            .expect("waive");
+        contract.supersede_check("superseded").expect("supersede");
+        contract
+            .mark_unavailable("unavailable")
+            .expect("unavailable");
+
+        assert_eq!(
+            contract.checks[0].resolution,
+            VerificationResolution::Superseded
+        );
+        assert_eq!(
+            contract.checks[1].resolution,
+            VerificationResolution::Unavailable
+        );
+        assert_eq!(
+            contract.checks[2].resolution,
+            VerificationResolution::ExplicitlyWaived
+        );
+        assert_eq!(contract.constraints.len(), 1);
+        assert_eq!(contract.constraints[0].source, "explicit_waiver");
+        assert!(contract
+            .unresolved_required()
+            .iter()
+            .any(|check| check.id == "unavailable"));
+    }
+'''
+          path.write_text(text[:pos] + test + text[pos:], encoding='utf-8')
+          PY
+          cargo fmt --all
+      - name: Commit transition coverage
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/verification_contract.rs
+          git diff --cached --quiet && exit 0
+          git commit -m 'Test verification contract terminal states'
+          git push origin HEAD:codex/issue-873-verification-contract
