@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -104,7 +104,6 @@ impl ModelRegistry {
         self.models.iter().find(|model| model.id == model_id)
     }
 
-    #[must_use]
     pub fn recommended(&self) -> impl Iterator<Item = &ModelMetadata> {
         self.models.iter().filter(|model| model.recommended)
     }
@@ -289,6 +288,8 @@ fn curated_model(provider_id: &str, profile_provider: &str, model: &str) -> Mode
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]

@@ -34,8 +34,13 @@ pub fn desktop_model_registry(refresh: Option<bool>) -> Result<ModelRegistry, St
     let cache = DISCOVERY_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
 
     if refresh != Some(true) {
-        let guard = cache.lock().map_err(|_| "model discovery cache is poisoned")?;
-        if let Some(cached) = guard.get(&provider_id).filter(|cached| cached.fresh_at(now)) {
+        let guard = cache
+            .lock()
+            .map_err(|_| "model discovery cache is poisoned")?;
+        if let Some(cached) = guard
+            .get(&provider_id)
+            .filter(|cached| cached.fresh_at(now))
+        {
             return Ok(model_registry_for_profile(
                 &profile,
                 Err(medusa_config::DiscoveryFailure::Offline),
@@ -49,7 +54,9 @@ pub fn desktop_model_registry(refresh: Option<bool>) -> Result<ModelRegistry, St
     match discover_models(&config, credential.as_deref()) {
         Ok(models) => {
             let registry = model_registry_for_profile(&profile, Ok(&models), None, now);
-            let mut guard = cache.lock().map_err(|_| "model discovery cache is poisoned")?;
+            let mut guard = cache
+                .lock()
+                .map_err(|_| "model discovery cache is poisoned")?;
             guard.insert(
                 provider_id.clone(),
                 ModelDiscoveryCache {
@@ -61,7 +68,9 @@ pub fn desktop_model_registry(refresh: Option<bool>) -> Result<ModelRegistry, St
             Ok(registry)
         }
         Err(error) => {
-            let guard = cache.lock().map_err(|_| "model discovery cache is poisoned")?;
+            let guard = cache
+                .lock()
+                .map_err(|_| "model discovery cache is poisoned")?;
             Ok(model_registry_for_profile(
                 &profile,
                 Err(error.fallback_kind()),
