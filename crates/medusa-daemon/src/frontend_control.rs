@@ -1087,4 +1087,39 @@ mod tests {
             Some(FrontendTransientEvent::Failed { .. })
         ));
     }
+
+    #[test]
+    fn repository_review_fingerprint_refreshes_when_review_diff_changes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git init");
+        std::fs::write(directory.path().join("value.txt"), "base\n").expect("fixture");
+        std::process::Command::new("git")
+            .args(["add", "value.txt"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Medusa Test",
+                "-c",
+                "user.email=medusa@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ])
+            .current_dir(directory.path())
+            .status()
+            .expect("git commit");
+
+        let clean = repository_review_fingerprint(directory.path()).expect("clean fingerprint");
+        std::fs::write(directory.path().join("value.txt"), "changed\n").expect("change");
+        let changed =
+            repository_review_fingerprint(directory.path()).expect("changed fingerprint");
+        assert_ne!(clean, changed);
+    }
 }
