@@ -277,30 +277,18 @@ pub fn provider_model_options(
     current_model: &str,
     discovered: &[String],
 ) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut models = Vec::new();
-    let mut push = |model: &str| {
-        if !model.trim().is_empty() && seen.insert(model.to_owned()) {
-            models.push(model.to_owned());
-        }
-    };
-
-    // A configured current value is always retained, even if live discovery is unavailable.
-    push(current_model);
-    for model in discovered {
-        push(model);
-    }
-    if let Some(entry) = provider_catalog_entry(provider) {
-        for model in entry.known_models {
-            push(model);
-        }
-        push(entry.default_model);
-    } else if current_model.trim().is_empty()
-        && discovered.iter().all(|model| model.trim().is_empty())
-    {
-        push("custom-model");
-    }
-    models
+    let discovered = discovered
+        .iter()
+        .map(|id| crate::DiscoveredModel {
+            id: id.clone(),
+            display_name: None,
+        })
+        .collect::<Vec<_>>();
+    crate::model_registry(provider, current_model, Ok(&discovered), None, 0)
+        .models
+        .into_iter()
+        .map(|model| model.id)
+        .collect()
 }
 
 /// Applies the catalog defaults for a newly selected provider route.

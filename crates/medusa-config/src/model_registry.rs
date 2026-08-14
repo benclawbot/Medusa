@@ -161,8 +161,7 @@ pub fn model_registry(
     let supports_discovery = catalog.is_some_and(|entry| entry.discover_models);
 
     let (live_models, availability, used_cached_discovery) = match discovered {
-        Ok(models) if supports_discovery => (models, ModelAvailability::Available, false),
-        Ok(_) => (&[][..], ModelAvailability::Unsupported, false),
+        Ok(models) => (models, ModelAvailability::Available, false),
         Err(failure) => {
             let cached = cache.filter(|cached| {
                 cached.provider_id == provider_id && cached.fresh_at(now_unix_seconds)
