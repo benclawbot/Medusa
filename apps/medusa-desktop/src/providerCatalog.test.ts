@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, expect, it, vi } from "vitest";
-import { loadProviderCatalog, modelSupports } from "./providerCatalog";
+import { loadProviderCatalog, modelSupports, profileModelCapabilityState, type ProviderCatalogEntry } from "./providerCatalog";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -85,4 +85,67 @@ it("keeps deterministic provider fallback when discovery is unavailable", async 
 
   const providers = await loadProviderCatalog();
   expect(providers[0].modelOptions).toEqual(["MiniMax-M3"]);
+});
+
+
+it("resolves OpenAI OAuth image input by profile provider and connection metadata", () => {
+  const providers: ProviderCatalogEntry[] = [{
+    id: "openai-oauth",
+    displayName: "OpenAI account",
+    description: "Browser OAuth route",
+    connection: "chatgpt-oauth",
+    profileProvider: "openai-oauth",
+    authMethods: ["oauth"],
+    defaultAuth: "oauth",
+    defaultModel: "gpt-5.1-codex",
+    modelOptions: ["gpt-5.1-codex"],
+    models: [{
+      id: "gpt-5.1-codex",
+      display_name: "GPT-5.1 Codex",
+      provider_id: "openai-oauth",
+      profile_provider: "openai-oauth",
+      availability: "available",
+      source: "curated",
+      capabilities: {
+        tool_calling: true,
+        image_input: true,
+        audio_input: false,
+        realtime: false,
+        reasoning: true,
+        reasoning_effort_levels: ["medium"],
+        streaming: true,
+        structured_output: true,
+        prompt_caching: true,
+      },
+      deprecated: false,
+      recommended: true,
+    }],
+    browserOauth: true,
+    discoverModels: true,
+    customValues: false,
+    currentCustom: false,
+  }];
+
+  expect(profileModelCapabilityState(providers, "openai-oauth", "chatgpt-oauth", "gpt-5.1-codex", "image_input")).toBe("supported");
+  expect(profileModelCapabilityState(providers, "chatgpt-oauth", "chatgpt-oauth", "gpt-5.1-codex", "image_input")).toBe("unknown");
+});
+
+it("keeps missing model capability metadata unknown instead of treating it as unsupported", () => {
+  const providers: ProviderCatalogEntry[] = [{
+    id: "anthropic-compatible",
+    displayName: "Compatible endpoint",
+    description: "Custom route",
+    connection: "anthropic-compatible",
+    profileProvider: "anthropic-compatible",
+    authMethods: ["none"],
+    defaultAuth: "none",
+    defaultModel: "custom-model",
+    modelOptions: ["custom-model"],
+    browserOauth: false,
+    discoverModels: false,
+    customValues: true,
+    currentCustom: false,
+  }];
+
+  expect(profileModelCapabilityState(providers, "anthropic-compatible", "anthropic-compatible", "custom-model", "image_input")).toBe("unknown");
 });

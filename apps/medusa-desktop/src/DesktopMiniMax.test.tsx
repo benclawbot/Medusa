@@ -9,9 +9,13 @@ import {
 } from "./runtime";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
-vi.mock("./providerCatalog", () => ({
-  loadProviderCatalog: vi.fn(),
-}));
+vi.mock("./providerCatalog", async () => {
+  const actual = await vi.importActual<typeof import("./providerCatalog")>("./providerCatalog");
+  return {
+    ...actual,
+    loadProviderCatalog: vi.fn(),
+  };
+});
 vi.mock("./runtime", async () => {
   const actual = await vi.importActual<typeof import("./runtime")>("./runtime");
   return {
