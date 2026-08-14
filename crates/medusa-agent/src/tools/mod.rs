@@ -520,14 +520,27 @@ fn execute_browser_tool(
     result
 }
 
-pub(crate) fn execute_tool_cancellable(
+pub(crate) fn execute_tool_cancellable_with_context(
     repo: &Path,
     name: &str,
     input: &Value,
     cancellation: &AtomicBool,
+    mutation_context: Option<&crate::transaction::MutationContext>,
 ) -> MedusaResult<String> {
     if cancellation.load(Ordering::Acquire) {
         return Err(cancelled_tool(name));
+    }
+    if name == "fs_write" {
+        if let Some(context) = mutation_context {
+            let relative = input_string(input, "path")?;
+            let content = input_string(input, "content")?;
+            let outcome = filesystem::write_with_context(repo, relative, content, context)?;
+            return Ok(format!(
+                "wrote {} bytes to {relative}; mutation_ids={}",
+                content.len(),
+                outcome.mutation_ids.join(",")
+            ));
+        }
     }
     if name == "skill_execute" {
         return executable_skills::run(repo, input, cancellation);
@@ -554,6 +567,15 @@ pub(crate) fn execute_tool_cancellable(
     let output_mode =
         crate::output_envelope::OutputMode::parse(input_optional_string(input, "output_mode")?)?;
     shell::run_cancellable(repo, program, &args, output_mode, cancellation)
+}
+
+pub(crate) fn execute_tool_cancellable(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    execute_tool_cancellable_with_context(repo, name, input, cancellation, None)
 }
 
 pub(crate) fn execute_approved_tool_cancellable(

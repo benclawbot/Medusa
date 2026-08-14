@@ -264,6 +264,19 @@ fn apply_atomic_inner(
     })
 }
 
+pub(crate) fn next_mutation_sequence(repo: &Path, session_id: &str) -> MedusaResult<u64> {
+    let journal = load_provenance(repo)?;
+    journal
+        .records
+        .iter()
+        .filter(|record| record.context.session_id == session_id)
+        .map(|record| record.context.sequence)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| provenance_boundary_error("mutation sequence overflow"))
+}
+
 pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<RevertPreview> {
     let journal = load_provenance(repo)?;
     let record = journal
