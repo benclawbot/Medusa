@@ -1,5 +1,0 @@
-Medusa Desktop 1.0.0 release bootstrap
-
-This reviewed marker intentionally triggers a one-time rebuild from main for Linux,
-macOS, and Windows. The workflow stores the validated packages, checksums, package
-manifests, and GitHub attestations on a permanent draft GitHub Release.
