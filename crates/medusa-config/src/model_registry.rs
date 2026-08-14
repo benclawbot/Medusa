@@ -222,14 +222,19 @@ pub fn model_registry(
         by_id.insert(current_model.to_owned(), current);
     }
 
-    let default_model = catalog.map(|entry| entry.default_model);
     let mut models = by_id.into_values().collect::<Vec<_>>();
     models.sort_by_key(|model| {
+        let discovered_rank = live_models
+            .iter()
+            .position(|discovered| discovered.id == model.id)
+            .unwrap_or(usize::MAX);
+        let curated_rank = catalog
+            .and_then(|entry| entry.known_models.iter().position(|known| *known == model.id))
+            .unwrap_or(usize::MAX);
         (
             model.id != current_model,
-            Some(model.id.as_str()) != default_model,
-            !model.recommended,
-            model.source != ModelSource::Curated,
+            discovered_rank,
+            curated_rank,
             model.display_name.to_ascii_lowercase(),
         )
     });
