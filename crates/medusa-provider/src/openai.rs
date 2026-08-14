@@ -83,8 +83,8 @@ impl OpenAiProvider {
                 },
                 max_image_bytes: image_input.then_some(20 * 1024 * 1024),
                 max_images_per_request: image_input.then_some(10),
-                tool_calling: config.model.tool_calling && registry_capabilities.tool_calling,
-                streaming: config.model.streaming && registry_capabilities.streaming,
+                tool_calling: config.model.tool_calling,
+                streaming: config.model.streaming,
             },
         })
     }
