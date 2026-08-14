@@ -142,7 +142,10 @@ fn expected_head_is_forwarded_as_atomic_merge_precondition() {
         body.get("sha").and_then(Value::as_str),
         operation.expected_head.as_deref()
     );
-    assert_eq!(body.get("merge_method").and_then(Value::as_str), Some("squash"));
+    assert_eq!(
+        body.get("merge_method").and_then(Value::as_str),
+        Some("squash")
+    );
 }
 
 #[test]
@@ -163,7 +166,11 @@ fn conflicting_merge_sha_fails_before_dispatch() {
     operation.body = Some(serde_json::json!({"sha":"1111111111111111111111111111111111111111"}));
     operation.idempotency_key = None;
     operation.expected_head = Some("abcdef0123456789abcdef0123456789abcdef01".into());
-    assert!(service(executor.clone()).execute_operation(&operation).is_err());
+    assert!(
+        service(executor.clone())
+            .execute_operation(&operation)
+            .is_err()
+    );
     assert!(executor.calls.lock().expect("calls").is_empty());
 }
 
