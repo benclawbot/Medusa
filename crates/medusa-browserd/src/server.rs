@@ -12,7 +12,7 @@ use medusa_browser_client::{
 
 use crate::{
     proxy,
-    validation::{VerificationRoute, validate_public_url},
+    validation::{VERIFY_URL_ENV, VerificationRoute, validate_public_url},
 };
 
 const BROWSER_BRIDGE_PATH_ENV: &str = "MEDUSA_BROWSER_BRIDGE_PATH";
@@ -89,7 +89,10 @@ pub fn run() -> io::Result<()> {
 
 pub(crate) fn check_readiness() -> io::Result<()> {
     resolve_bridge_path()?;
-    configured_verification_route().map(|_| ())
+    if std::env::var_os(VERIFY_URL_ENV).is_some() {
+        configured_verification_route()?;
+    }
+    Ok(())
 }
 
 fn configured_verification_route() -> io::Result<VerificationRoute> {
