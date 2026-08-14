@@ -20,7 +20,6 @@
     "medusa-execution-replay": "recovery",
     "medusa-extensions": "integrations",
     "medusa-external-contracts": "foundation",
-    "medusa-external-github": "integrations",
     "medusa-external-provider": "provider",
     "medusa-failure": "recovery",
     "medusa-github": "integrations",
