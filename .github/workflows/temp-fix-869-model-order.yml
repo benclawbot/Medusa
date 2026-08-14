@@ -2,15 +2,13 @@ name: Temporary issue 869 model order fix
 
 on:
   push:
-    branches:
-      - codex/issue-869-model-registry
+    branches: [codex/issue-869-model-registry]
 
 permissions:
   contents: write
 
 jobs:
   fix:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,89 +16,92 @@ jobs:
           ref: codex/issue-869-model-registry
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - name: Preserve established model option ordering
-        shell: python
+      - name: Apply ordering fix
         run: |
+          python3 - <<'PY'
           from pathlib import Path
-          path = Path('crates/medusa-config/src/model_registry.rs')
+          path = Path("crates/medusa-config/src/model_registry.rs")
           text = path.read_text()
           old = '''    let default_model = catalog.map(|entry| entry.default_model);
-    let mut models = by_id.into_values().collect::<Vec<_>>();
-    models.sort_by_key(|model| {
-        (
-            model.id != current_model,
-            Some(model.id.as_str()) != default_model,
-            !model.recommended,
-            model.source != ModelSource::Curated,
-            model.display_name.to_ascii_lowercase(),
-        )
-    });
-'''
+              let mut models = by_id.into_values().collect::<Vec<_>>();
+              models.sort_by_key(|model| {
+                  (
+                      model.id != current_model,
+                      Some(model.id.as_str()) != default_model,
+                      !model.recommended,
+                      model.source != ModelSource::Curated,
+                      model.display_name.to_ascii_lowercase(),
+                  )
+              });
+          '''
+          # Match the actual unindented Rust block if YAML display indentation differs.
+          old = old.replace("              ", "")
           new = '''    let mut models = by_id.into_values().collect::<Vec<_>>();
-    models.sort_by_key(|model| {
-        let discovered_rank = live_models
-            .iter()
-            .position(|discovered| discovered.id == model.id)
-            .unwrap_or(usize::MAX);
-        let curated_rank = catalog
-            .and_then(|entry| entry.known_models.iter().position(|known| *known == model.id))
-            .unwrap_or(usize::MAX);
-        (
-            model.id != current_model,
-            discovered_rank,
-            curated_rank,
-            model.display_name.to_ascii_lowercase(),
-        )
-    });
-'''
+          models.sort_by_key(|model| {
+              let discovered_rank = live_models
+                  .iter()
+                  .position(|discovered| discovered.id == model.id)
+                  .unwrap_or(usize::MAX);
+              let curated_rank = catalog
+                  .and_then(|entry| entry.known_models.iter().position(|known| *known == model.id))
+                  .unwrap_or(usize::MAX);
+              (
+                  model.id != current_model,
+                  discovered_rank,
+                  curated_rank,
+                  model.display_name.to_ascii_lowercase(),
+              )
+          });
+          '''
           if old not in text:
-              raise SystemExit('expected ordering block not found')
+              raise SystemExit("expected ordering block not found")
           text = text.replace(old, new, 1)
           marker = '''    #[test]
-    fn search_hides_non_recommended_models_until_show_all() {
-'''
+          fn search_hides_non_recommended_models_until_show_all() {
+          '''
           test = '''    #[test]
-    fn preserves_legacy_current_discovered_then_catalog_order() {
-        let discovered = [DiscoveredModel {
-            id: "claude-live".to_owned(),
-            display_name: None,
-        }];
-        let registry = model_registry("anthropic", "", Ok(&discovered), None, 1);
-        let ids = registry
-            .models
-            .iter()
-            .map(|model| model.id.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            vec![
-                "claude-live",
-                "claude-opus-4-6",
-                "claude-sonnet-4-6",
-                "claude-haiku-4-5",
-            ]
-        );
+          fn preserves_legacy_current_discovered_then_catalog_order() {
+              let discovered = [DiscoveredModel {
+                  id: "claude-live".to_owned(),
+                  display_name: None,
+              }];
+              let registry = model_registry("anthropic", "", Ok(&discovered), None, 1);
+              let ids = registry
+                  .models
+                  .iter()
+                  .map(|model| model.id.as_str())
+                  .collect::<Vec<_>>();
+              assert_eq!(
+                  ids,
+                  vec![
+                      "claude-live",
+                      "claude-opus-4-6",
+                      "claude-sonnet-4-6",
+                      "claude-haiku-4-5",
+                  ]
+              );
 
-        let current = model_registry("anthropic", "private-model", Ok(&discovered), None, 1);
-        assert_eq!(current.models[0].id, "private-model");
-    }
+              let current = model_registry("anthropic", "private-model", Ok(&discovered), None, 1);
+              assert_eq!(current.models[0].id, "private-model");
+          }
 
-'''
+          '''
           if marker not in text:
-              raise SystemExit('test insertion marker not found')
+              raise SystemExit("test insertion marker not found")
           text = text.replace(marker, test + marker, 1)
           path.write_text(text)
-      - name: Format
-        run: cargo fmt --all -- --check || cargo fmt --all
-      - name: Run registry and modal regression tests
+          PY
+      - name: Format and test
         run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
           cargo test -p medusa-config model_registry::tests --lib
           cargo test -p medusa-tui --test app_modal_coverage public_model_modal_flow_covers_provider_effort_and_key_boundaries
-      - name: Commit fix and remove helper
+      - name: Commit clean fix
         run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/temp-fix-869-model-order.yml
           git add crates/medusa-config/src/model_registry.rs
-          git commit -m "fix: preserve model selector ordering"
+          git commit -m 'fix: preserve model selector ordering'
           git push origin HEAD:codex/issue-869-model-registry
