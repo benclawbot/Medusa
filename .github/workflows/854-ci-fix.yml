@@ -19,7 +19,9 @@ jobs:
         with:
           components: clippy,rustfmt
       - name: Apply fixes
-        run: python scripts/issue854_ci_fix.py
+        run: |
+          python scripts/issue854_ci_fix.py
+          sed -i 's/=> Some(session_id.clone())$/=> Some(session_id.clone()),/' crates/medusa-daemon/src/telegram/service.rs
       - name: Validate targeted behavior and quality
         run: |
           cargo fmt --all
