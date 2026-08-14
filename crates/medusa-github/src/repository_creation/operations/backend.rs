@@ -1,6 +1,7 @@
 use std::io::Write;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 
 use super::*;
@@ -35,8 +36,8 @@ impl<E: CommandExecutor> GitHubOperationBackend for RestApiBackend<'_, E> {
         if request.paginate {
             arguments.extend(["--paginate".to_owned(), "--slurp".to_owned()]);
         }
-        let input = request
-            .body
+        let body = request_body(request)?;
+        let input = body
             .as_ref()
             .map(|body| -> MedusaResult<NamedTempFile> {
                 let encoded = serde_json::to_vec(body).map_err(json_error)?;
@@ -112,6 +113,41 @@ impl<E: CommandExecutor> GitHubService<E> {
             .execute(request),
         }
     }
+}
+
+fn request_body(request: &GitHubOperationRequest) -> MedusaResult<Option<Value>> {
+    let Some(expected_head) = request.expected_head.as_ref() else {
+        return Ok(request.body.clone());
+    };
+    if !request.supports_expected_head() {
+        return Err(MedusaError::new(
+            ErrorCode::InvalidInput,
+            ErrorCategory::Validation,
+            "expectedHead cannot be enforced for this GitHub operation",
+        ));
+    }
+    let mut body = match request.body.clone() {
+        Some(Value::Object(object)) => object,
+        None => Map::new(),
+        Some(_) => {
+            return Err(MedusaError::new(
+                ErrorCode::InvalidInput,
+                ErrorCategory::Validation,
+                "pull-request merge body must be a JSON object",
+            ));
+        }
+    };
+    if let Some(existing) = body.get("sha") {
+        if existing.as_str() != Some(expected_head.as_str()) {
+            return Err(MedusaError::new(
+                ErrorCode::InvalidInput,
+                ErrorCategory::Validation,
+                "merge body sha conflicts with expectedHead",
+            ));
+        }
+    }
+    body.insert("sha".to_owned(), Value::String(expected_head.clone()));
+    Ok(Some(Value::Object(body)))
 }
 
 fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'static str)> {
