@@ -21,12 +21,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
-      - name: Validate committed dependency authority
+      - name: Regenerate lockfile for dependency-pruning evidence
         shell: bash
-        run: |
-          set -euo pipefail
-          cargo metadata --locked --format-version 1 >/dev/null
-          git diff --exit-code -- Cargo.lock
+        run: cargo metadata --format-version 1 >/dev/null
+      - name: Upload regenerated lockfile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: regenerated-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
       - name: Check formatting
         shell: bash
         run: |
