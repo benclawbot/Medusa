@@ -17,7 +17,9 @@ jobs:
           ref: codex/854-mutation-provenance
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
       - name: Apply production selective revert wiring
-        run: python scripts/issue854_finish.py
+        run: |
+          python scripts/issue854_finish.py
+          sed -i '/^medusa-agent\.workspace = true$/d' crates/medusa-daemon/Cargo.toml
       - name: Validate
         run: |
           cargo fmt --all
