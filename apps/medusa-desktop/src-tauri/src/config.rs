@@ -136,11 +136,20 @@ pub(crate) fn prepare_provider_profile(
     model: &str,
     effort: &str,
     expected_revision: u64,
+    base_url: Option<&str>,
 ) -> Result<PreparedProviderProfile, String> {
     let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;
-    prepare_with_catalog(catalog, provider, model, effort, expected_revision)
+    prepare_with_catalog_base_url(
+        catalog,
+        provider,
+        model,
+        effort,
+        expected_revision,
+        base_url,
+    )
 }
 
+#[cfg(test)]
 fn prepare_with_catalog(
     catalog: ProviderProfileCatalog,
     provider: &str,
@@ -148,11 +157,23 @@ fn prepare_with_catalog(
     effort: &str,
     expected_revision: u64,
 ) -> Result<PreparedProviderProfile, String> {
+    prepare_with_catalog_base_url(catalog, provider, model, effort, expected_revision, None)
+}
+
+fn prepare_with_catalog_base_url(
+    catalog: ProviderProfileCatalog,
+    provider: &str,
+    model: &str,
+    effort: &str,
+    expected_revision: u64,
+    base_url: Option<&str>,
+) -> Result<PreparedProviderProfile, String> {
     let update = catalog
         .begin_active_profile_update(expected_revision)
         .map_err(|error| error.to_string())?;
     let previous = update.profile();
     let mut profile = previous.clone();
+    let requested_base_url = base_url.map(str::trim).filter(|value| !value.is_empty());
 
     if let Some(entry) = provider_catalog_entry(provider) {
         if let Some(reason) = entry.disabled_reason {
@@ -175,6 +196,15 @@ fn prepare_with_catalog(
                 profile.base_url = entry.base_url.map(str::to_owned);
             }
         }
+        if let Some(base_url) = requested_base_url {
+            if !entry.custom_values {
+                return Err(format!(
+                    "provider {} does not allow a custom base URL",
+                    entry.display_name
+                ));
+            }
+            profile.base_url = Some(base_url.to_owned());
+        }
         if !model.trim().is_empty() {
             profile.model = model.trim().to_owned();
         }
@@ -184,6 +214,9 @@ fn prepare_with_catalog(
             return Err(format!(
                 "unknown provider `{provider}`; only an already configured custom provider may be preserved"
             ));
+        }
+        if let Some(base_url) = requested_base_url {
+            profile.base_url = Some(base_url.to_owned());
         }
         if !model.trim().is_empty() {
             profile.model = model.trim().to_owned();
@@ -407,6 +440,37 @@ mod tests {
         assert!(custom.current_custom);
         assert_eq!(custom.profile_provider, "private-gateway");
         assert_eq!(custom.model_options, vec!["private-model"]);
+    }
+
+    #[test]
+    fn desktop_custom_base_url_is_limited_to_customizable_routes() {
+        let custom_directory = tempfile::tempdir().expect("custom tempdir");
+        let prepared = prepare_with_catalog_base_url(
+            ProviderProfileCatalog::at(custom_directory.path()),
+            "anthropic-compatible",
+            "custom-model",
+            "medium",
+            0,
+            Some("https://gateway.example/v1"),
+        )
+        .expect("custom endpoint");
+        assert_eq!(
+            prepared.profile.base_url.as_deref(),
+            Some("https://gateway.example/v1")
+        );
+
+        let first_class_directory = tempfile::tempdir().expect("first class tempdir");
+        let error = prepare_with_catalog_base_url(
+            ProviderProfileCatalog::at(first_class_directory.path()),
+            "openai",
+            "gpt-5",
+            "medium",
+            0,
+            Some("https://wrong.example/v1"),
+        )
+        .err()
+        .expect("first-class route must reject custom endpoint");
+        assert!(error.contains("does not allow a custom base URL"));
     }
 
     #[test]

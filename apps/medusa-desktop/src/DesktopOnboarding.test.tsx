@@ -73,3 +73,44 @@ it("keeps authentication recoverable when browser OAuth fails or is cancelled", 
   expect(screen.getByRole("heading", { name: "Authenticate" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sign in with browser" })).toBeEnabled();
 });
+
+
+it("stages a custom endpoint only on the advanced custom route", async () => {
+  const customProvider: ProviderCatalogEntry = {
+    id: "anthropic-compatible",
+    displayName: "Compatible endpoint",
+    description: "Custom-compatible endpoint",
+    connection: "anthropic-compatible",
+    profileProvider: "anthropic-compatible",
+    authMethods: ["none"],
+    defaultAuth: "none",
+    defaultModel: "custom-model",
+    modelOptions: ["custom-model"],
+    baseUrl: "https://default.example/v1",
+    browserOauth: false,
+    discoverModels: false,
+    customValues: true,
+    currentCustom: false,
+  };
+  const customConfiguration: SharedConfiguration = {
+    ...configuration,
+    connection: "anthropic-compatible",
+    provider: "anthropic-compatible",
+    model: "",
+    auth: "none",
+    configured: false,
+    credentialConfigured: true,
+  };
+  const onApply = vi.fn().mockResolvedValue(undefined);
+  render(<DesktopOnboarding configuration={customConfiguration} providers={[customProvider]} onApply={onApply} />);
+  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "custom-model" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://gateway.example/v1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
+  await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
+    provider: "anthropic-compatible",
+    model: "custom-model",
+    baseUrl: "https://gateway.example/v1",
+  })));
+});

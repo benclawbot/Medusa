@@ -249,6 +249,7 @@ export interface ModelConfiguration {
   effort: Effort;
   expectedRevision: number;
   apiKey?: string;
+  baseUrl?: string;
 }
 
 const pendingResumeKey = "medusa.desktop.resumeSession";

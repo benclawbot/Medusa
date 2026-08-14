@@ -11,7 +11,7 @@ interface Props {
   configuration: SharedConfiguration;
   providers: ProviderCatalogEntry[];
   error?: string;
-  onApply: (next: { provider: string; model: string; effort: Effort; apiKey?: string }) => Promise<void>;
+  onApply: (next: { provider: string; model: string; effort: Effort; apiKey?: string; baseUrl?: string }) => Promise<void>;
 }
 
 export function DesktopOnboarding({ configuration, providers, error, onApply }: Props) {
@@ -24,6 +24,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   const [model, setModel] = useState(configuration.model || selectedProvider?.defaultModel || "");
   const [effort, setEffort] = useState<Effort>(configuration.effort);
   const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(configuration.baseUrl ?? selectedProvider?.baseUrl ?? "");
   const [step, setStep] = useState(() => initialOnboardingStep(configuration, providers));
   const [saving, setSaving] = useState(false);
   const [authenticating, setAuthenticating] = useState(false);
@@ -39,6 +40,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
     setProvider(value);
     setModel(next?.defaultModel ?? "");
     setApiKey("");
+    setBaseUrl(next?.baseUrl ?? "");
     setAuthError(undefined);
     setOauthConnected(value === configuration.provider && configuration.credentialConfigured);
   };
@@ -68,7 +70,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   const verify = async () => {
     setSaving(true);
     try {
-      await onApply({ provider, model, effort, apiKey: apiKey.trim() || undefined });
+      await onApply({ provider, model, effort, apiKey: apiKey.trim() || undefined, baseUrl: selectedProvider?.customValues ? baseUrl.trim() || undefined : undefined });
       setApiKey("");
       setStep("ready");
     } finally {
@@ -156,6 +158,11 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
                 <option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
               </select>
             </label>
+            {selectedProvider?.customValues && (
+              <label>Base URL
+                <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" />
+              </label>
+            )}
             <div>
               <button className="secondary-action" onClick={() => setStep("model")}>Back</button>
               <button className="primary-action" onClick={() => setStep("verify")}>Review</button>

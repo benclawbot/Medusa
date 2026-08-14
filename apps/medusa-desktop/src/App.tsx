@@ -576,7 +576,7 @@ export function App() {
     setSlashSelection(0);
   };
 
-  const completeOnboarding = async (next: { provider: string; model: string; effort: Effort; apiKey?: string }) => {
+  const completeOnboarding = async (next: { provider: string; model: string; effort: Effort; apiKey?: string; baseUrl?: string }) => {
     const started = await startRuntime();
     try {
       await configureRuntime(started.runtimeId, {
@@ -585,6 +585,7 @@ export function App() {
         effort: next.effort,
         expectedRevision: sharedConfiguration?.revision ?? 0,
         apiKey: next.apiKey,
+        baseUrl: next.baseUrl,
       });
       const configuration = await refreshConfiguration();
       setProvider(configuration.provider);

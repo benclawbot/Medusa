@@ -21,8 +21,8 @@ mod learning;
 mod memories;
 mod model_registry;
 mod mutations;
-mod pull_requests;
 mod provider_auth;
+mod pull_requests;
 mod review;
 mod runtime {
     include!("runtime.rs");
