@@ -1,0 +1,57 @@
+name: Temporary issue 870 onboarding integration
+on:
+  push:
+    branches: [codex/issue-870-desktop-onboarding]
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/issue-870-desktop-onboarding
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Integrate onboarding
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('apps/medusa-desktop/src/App.tsx')
+          s = p.read_text()
+          s = s.replace('import { ApprovalCard } from "./ApprovalCard";\n', 'import { ApprovalCard } from "./ApprovalCard";\nimport { DesktopOnboarding } from "./DesktopOnboarding";\n')
+          s = s.replace('  const applyModel = async () => {\n', '''  const completeOnboarding = async (next: { provider: string; model: string; effort: Effort; apiKey?: string }) => {\n    const started = await startRuntime();\n    try {\n      await configureRuntime(started.runtimeId, {\n        provider: next.provider,\n        model: next.model,\n        effort: next.effort,\n        expectedRevision: sharedConfiguration?.revision ?? 0,\n        apiKey: next.apiKey,\n      });\n      const configuration = await refreshConfiguration();\n      setProvider(configuration.provider);\n      setModel(configuration.model);\n      setEffort(configuration.effort);\n      setRuntimeId(started.runtimeId);\n      setRepo(started.repo);\n      setError(undefined);\n    } catch (cause) {\n      await closeRuntime(started.runtimeId).catch(() => undefined);\n      setError(String(cause));\n      throw cause;\n    }\n  };\n\n  const applyModel = async () => {\n''')
+          old = '''      const configuration = await refreshConfiguration();\n      let started;\n      try {\n        started = await startRuntime(previous || undefined);'''
+          new = '''      const configuration = await refreshConfiguration();\n      if (!configuration.configured || !configuration.provider.trim() || !configuration.model.trim()) return undefined;\n      let started;\n      try {\n        started = await startRuntime(previous || undefined);'''
+          if old not in s:
+              raise SystemExit('startup insertion anchor not found')
+          s = s.replace(old, new, 1)
+          old = '''      .then((started) => {\n        if (disposed) {\n          void closeRuntime(started.runtimeId);'''
+          new = '''      .then((started) => {\n        if (!started) return;\n        if (disposed) {\n          void closeRuntime(started.runtimeId);'''
+          if old not in s:
+              raise SystemExit('startup result anchor not found')
+          s = s.replace(old, new, 1)
+          old = '''  return (\n    <>\n    <main className={`app-shell medusa-shell${railCollapsed ? " rail-collapsed" : ""}`}>'''
+          new = '''  if (!runtimeId && sharedConfiguration && !sharedConfiguration.configured) {\n    return (\n      <DesktopOnboarding\n        configuration={sharedConfiguration}\n        providers={providerCatalog}\n        error={error}\n        onApply={completeOnboarding}\n      />\n    );\n  }\n\n  return (\n    <>\n    <main className={`app-shell medusa-shell${railCollapsed ? " rail-collapsed" : ""}`}>'''
+          if old not in s:
+              raise SystemExit('render anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+      - name: Validate Desktop frontend
+        working-directory: apps/medusa-desktop
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+      - name: Commit integration and remove helper
+        run: |
+          rm .github/workflows/temp-issue-870-onboarding.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/medusa-desktop/src/App.tsx .github/workflows/temp-issue-870-onboarding.yml
+          git commit -m "Integrate guided Desktop onboarding"
+          git push origin HEAD:codex/issue-870-desktop-onboarding
