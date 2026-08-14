@@ -1,0 +1,32 @@
+name: Temporary issue 869 formatter
+
+on:
+  push:
+    branches: [codex/issue-869-model-registry]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-869-model-registry
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Format and verify targeted tests
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p medusa-config model_registry::tests --lib
+          cargo test -p medusa-tui --test app_modal_coverage public_model_modal_flow_covers_provider_effort_and_key_boundaries
+      - name: Commit clean formatted fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/temp-format-869.yml
+          git add crates/medusa-config/src/model_registry.rs
+          git commit -m 'fix: format canonical model ordering'
+          git push origin HEAD:codex/issue-869-model-registry
