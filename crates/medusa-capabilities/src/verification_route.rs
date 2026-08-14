@@ -34,9 +34,7 @@ impl VerificationRoute {
         if !matches!(scheme.as_str(), "http" | "https") {
             return Err(VerificationRouteError::UnsupportedScheme(scheme));
         }
-        let authority_end = remainder
-            .find(['/', '?'])
-            .unwrap_or(remainder.len());
+        let authority_end = remainder.find(['/', '?']).unwrap_or(remainder.len());
         let authority = &remainder[..authority_end];
         if authority.is_empty() {
             return Err(VerificationRouteError::MissingHost);
@@ -46,9 +44,7 @@ impl VerificationRoute {
         }
         let suffix = &remainder[authority_end..];
         let authority = parse_authority(authority)?;
-        let loopback = authority
-            .address
-            .is_some_and(IpAddr::is_loopback)
+        let loopback = authority.address.is_some_and(IpAddr::is_loopback)
             || authority.host.eq_ignore_ascii_case("localhost");
         if !loopback {
             if authority.host.ends_with(".localhost") {
@@ -289,8 +285,8 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable_and_does_not_expose_route_text() {
-        let route = VerificationRoute::parse("http://localhost:4173/app?token=secret")
-            .expect("route");
+        let route =
+            VerificationRoute::parse("http://localhost:4173/app?token=secret").expect("route");
         assert_eq!(route.safe_fingerprint(), route.safe_fingerprint());
         assert!(!route.safe_fingerprint().contains("secret"));
     }
