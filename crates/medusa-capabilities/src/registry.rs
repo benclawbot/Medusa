@@ -5,6 +5,7 @@ use std::{
     process::Command,
 };
 
+use medusa_browser_client::verification_route::VerificationRoute;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::DesktopCommanderSettings;
 use medusa_provider::ToolDefinition;
@@ -513,6 +514,21 @@ fn browser_capability_state(
             detail: "browser sidecar path is not UTF-8".into(),
         };
     };
+    let Some(raw_route) = verification_route else {
+        return CapabilityState {
+            available: false,
+            detail: "browser model actions require a Medusa-owned verification route".into(),
+        };
+    };
+    let route = match VerificationRoute::parse(raw_route) {
+        Ok(route) => route,
+        Err(error) => {
+            return CapabilityState {
+                available: false,
+                detail: format!("invalid browser verification route: {error}"),
+            };
+        }
+    };
     if !probe.available(program, &["--check"]) {
         return CapabilityState {
             available: false,
@@ -525,19 +541,12 @@ fn browser_capability_state(
             detail: "browser sidecar requires Node.js for the Playwright bridge".into(),
         };
     }
-    if verification_route
-        .map(str::trim)
-        .filter(|route| !route.is_empty())
-        .is_none()
-    {
-        return CapabilityState {
-            available: false,
-            detail: "browser model actions require a Medusa-owned verification route".into(),
-        };
-    }
     CapabilityState {
         available: true,
-        detail: "browser sidecar is bound to the Medusa-owned verification route".into(),
+        detail: format!(
+            "browser sidecar is bound to an admitted Medusa-owned verification route ({})",
+            route.safe_fingerprint()
+        ),
     }
 }
 
@@ -951,6 +960,7 @@ fn tool_entry<const N: usize>(
         available: false,
         detail: "capability was not discovered".into(),
     });
+    let readiness_detail = state.detail.clone();
     let permissions = BTreeSet::from(permissions);
     RegistryEntry {
         id: format!("tool.{name}"),
@@ -989,7 +999,10 @@ fn tool_entry<const N: usize>(
         readiness: ReadinessContract {
             ready: state.available,
             detail: state.detail,
-            evidence: vec![format!("registered handler {handler}")],
+            evidence: vec![
+                format!("capability admission: {readiness_detail}"),
+                format!("registered handler {handler}"),
+            ],
         },
         handler: Some(HandlerRegistration {
             id: handler.into(),
@@ -1109,6 +1122,18 @@ mod tests {
         registry
     }
 
+    fn configured_browser() -> medusa_config::BrowserConfig {
+        medusa_config::BrowserConfig {
+            enabled: true,
+            path: Some(PathBuf::from("test-browserd")),
+            timeout_ms: 30_000,
+        }
+    }
+
+    fn browser_probe() -> FakeProbe {
+        FakeProbe(BTreeSet::from(["test-browserd".into(), "node".into()]))
+    }
+
     #[test]
     fn every_model_tool_has_one_ready_handler() {
         let registry = ready_registry();
@@ -1173,13 +1198,7 @@ mod tests {
 
     #[test]
     fn browser_tools_remain_quarantined_without_medusa_verification_route() {
-        let browser = medusa_config::BrowserConfig {
-            enabled: true,
-            path: Some(PathBuf::from("test-browserd")),
-            timeout_ms: 30_000,
-        };
-        let probe = FakeProbe(BTreeSet::from(["test-browserd".into(), "node".into()]));
-        let state = browser_capability_state(&browser, None, &probe);
+        let state = browser_capability_state(&configured_browser(), None, &browser_probe());
         assert!(!state.available);
         let registry = registry_with_browser_state(state);
         assert!(
@@ -1191,15 +1210,46 @@ mod tests {
     }
 
     #[test]
+    fn invalid_browser_routes_never_project_model_tools() {
+        for route in [
+            " ",
+            "not a url",
+            "file:///tmp/index.html",
+            "http://user:secret@localhost:4173/app",
+            "http://localhost:4173/app#fragment",
+            "http://10.0.0.1/verify",
+            "C:\\work\\app\\index.html",
+        ] {
+            let state = browser_capability_state(
+                &configured_browser(),
+                Some(route),
+                &browser_probe(),
+            );
+            assert!(!state.available, "accepted {route}: {}", state.detail);
+            assert!(state.detail.contains("verification route"));
+            let registry = registry_with_browser_state(state);
+            assert!(
+                registry
+                    .model_tools(false)
+                    .iter()
+                    .all(|tool| !tool.name.starts_with("browser_")),
+                "projected browser tool for {route}"
+            );
+        }
+    }
+
+    #[test]
     fn verified_browser_state_exposes_only_bounded_model_actions() {
-        let browser = medusa_config::BrowserConfig {
-            enabled: true,
-            path: Some(PathBuf::from("test-browserd")),
-            timeout_ms: 30_000,
-        };
-        let probe = FakeProbe(BTreeSet::from(["test-browserd".into(), "node".into()]));
-        let state = browser_capability_state(&browser, Some("http://127.0.0.1:4173/app"), &probe);
+        let route = " HTTP://LOCALHOST:4173/app?mode=verify ";
+        let admitted = VerificationRoute::parse(route).expect("admitted route");
+        let state = browser_capability_state(
+            &configured_browser(),
+            Some(route),
+            &browser_probe(),
+        );
         assert!(state.available);
+        assert!(state.detail.contains(&admitted.safe_fingerprint()));
+        assert!(!state.detail.contains("mode=verify"));
         let registry = registry_with_browser_state(state);
         let names = registry
             .model_tools(false)
@@ -1235,6 +1285,20 @@ mod tests {
             assert!(entry.readiness.ready);
             assert_eq!(entry.status, CapabilityStatus::Production);
             assert!(entry.handler.is_some());
+            assert!(
+                entry
+                    .readiness
+                    .evidence
+                    .iter()
+                    .any(|item| item.contains(&admitted.safe_fingerprint()))
+            );
+            assert!(
+                entry
+                    .readiness
+                    .evidence
+                    .iter()
+                    .all(|item| !item.contains("mode=verify"))
+            );
             let schema = &entry.tool.as_ref().expect("tool schema").input_schema;
             assert_eq!(
                 schema.get("additionalProperties"),
@@ -1251,14 +1315,9 @@ mod tests {
 
     #[test]
     fn browser_readiness_requires_sidecar_and_node_probes() {
-        let browser = medusa_config::BrowserConfig {
-            enabled: true,
-            path: Some(PathBuf::from("test-browserd")),
-            timeout_ms: 30_000,
-        };
         assert!(
             !browser_capability_state(
-                &browser,
+                &configured_browser(),
                 Some("http://127.0.0.1:4173"),
                 &FakeProbe(BTreeSet::from(["node".into()])),
             )
@@ -1266,7 +1325,7 @@ mod tests {
         );
         assert!(
             !browser_capability_state(
-                &browser,
+                &configured_browser(),
                 Some("http://127.0.0.1:4173"),
                 &FakeProbe(BTreeSet::from(["test-browserd".into()])),
             )
