@@ -574,12 +574,14 @@ impl FrontendControlPlane {
                     "frontend-control",
                 )
                 .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                let review_fingerprint = repository_review_fingerprint(&self.repo)?;
                 let command = serde_json::to_string(&serde_json::json!({
                     "type": "selective_revert_applied",
                     "mutation_id": mutation_id,
                     "inverse_mutation_ids": outcome.mutation_ids,
                     "verification_invalidated": true,
-                    "review_refresh_required": true,
+                    "review_fingerprint": review_fingerprint,
+                    "review_refresh_required": false,
                 }))
                 .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
                 Ok(FrontendControlResult::CommandAccepted {
@@ -1002,6 +1004,20 @@ fn timestamp_unix_ms(timestamp: time::OffsetDateTime) -> i64 {
 fn fingerprint(envelope: &FrontendCommandEnvelope) -> Result<String, FrontendControlError> {
     let bytes = serde_json::to_vec(envelope)?;
     Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+fn repository_review_fingerprint(repo: &std::path::Path) -> Result<String, FrontendControlError> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--binary", "--no-ext-diff", "--", "."])
+        .current_dir(repo)
+        .output()
+        .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+    if !output.status.success() {
+        return Err(FrontendControlError::InvalidCommand(
+            "could not refresh repository review fingerprint after selective revert".to_owned(),
+        ));
+    }
+    Ok(hex::encode(Sha256::digest(&output.stdout)))
 }
 
 #[derive(Debug, Error)]
