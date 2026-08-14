@@ -1212,7 +1212,6 @@ dependencies = [
  "medusa-daemon",
  "medusa-escalation",
  "medusa-extensions",
- "medusa-external-github",
  "medusa-github",
  "medusa-hardening",
  "medusa-memory",
@@ -1399,18 +1398,6 @@ dependencies = [
  "thiserror",
  "time",
  "ulid",
-]
-
-[[package]]
-name = "medusa-external-github"
-version = "1.0.0"
-dependencies = [
- "medusa-core",
- "medusa-external-contracts",
- "medusa-github",
- "serde",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
