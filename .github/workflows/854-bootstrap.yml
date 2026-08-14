@@ -20,6 +20,16 @@ jobs:
         run: |
           python scripts/issue854_finish.py
           sed -i '/^medusa-agent\.workspace = true$/d' crates/medusa-daemon/Cargo.toml
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-agent/tests/production_mutation_revert.rs')
+          text = path.read_text()
+          needle = '    let directory = tempfile::tempdir().expect("tempdir");\n'
+          replacement = needle + '    assert!(std::process::Command::new("git").arg("init").arg(directory.path()).status().expect("git init").success());\n'
+          if text.count(needle) != 2:
+              raise SystemExit('unexpected tempdir fixture count')
+          path.write_text(text.replace(needle, replacement))
+          PY
       - name: Validate
         run: |
           cargo fmt --all
