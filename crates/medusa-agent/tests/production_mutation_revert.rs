@@ -93,6 +93,19 @@ fn ordinary_dispatch_write_survives_restart_and_selectively_reverts() {
         .load_session(directory.path(), session.id.as_str())
         .expect("restart load");
     assert_eq!(resumed.id, session.id);
+    // Seed durable verification evidence to prove a successful revert invalidates it.
+    let session_path = directory
+        .path()
+        .join(".medusa/sessions")
+        .join(format!("{}.json", session.id));
+    let mut persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(&session_path).expect("session snapshot")).expect("json");
+    persisted["evidence"] = json!(["verification-before-revert"]);
+    fs::write(
+        &session_path,
+        serde_json::to_vec_pretty(&persisted).unwrap(),
+    )
+    .expect("seed evidence");
     let preview =
         preview_session_selective_revert(directory.path(), session.id.as_str(), &mutation_id)
             .expect("preview");
@@ -114,6 +127,10 @@ fn ordinary_dispatch_write_survives_restart_and_selectively_reverts() {
         "user edit\n"
     );
     assert_eq!(outcome.mutation_ids.len(), 1);
+    let refreshed = restarted
+        .load_session(directory.path(), session.id.as_str())
+        .expect("session after revert");
+    assert!(refreshed.evidence.is_empty());
 }
 
 #[test]

@@ -130,19 +130,6 @@ pub enum FrontendControlResult {
         latest_checkpoint_cursor: Option<u64>,
         replay_equivalent: bool,
     },
-    SelectiveRevertPreview {
-        session_id: String,
-        mutation_id: String,
-        path: String,
-        start_byte: usize,
-        remove_len: usize,
-        restore_len: usize,
-    },
-    SelectiveRevertApplied {
-        session_id: String,
-        mutation_id: String,
-        inverse_mutation_ids: Vec<String>,
-    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -562,13 +549,18 @@ impl FrontendControlPlane {
                     mutation_id,
                 )
                 .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
-                Ok(FrontendControlResult::SelectiveRevertPreview {
+                let command = serde_json::to_string(&serde_json::json!({
+                    "type": "selective_revert_preview",
+                    "mutation_id": preview.mutation_id,
+                    "path": preview.path,
+                    "start_byte": preview.start_byte,
+                    "remove_len": preview.remove_len,
+                    "restore_len": preview.restore_len,
+                }))
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                Ok(FrontendControlResult::CommandAccepted {
                     session_id,
-                    mutation_id: preview.mutation_id,
-                    path: preview.path,
-                    start_byte: preview.start_byte,
-                    remove_len: preview.remove_len,
-                    restore_len: preview.restore_len,
+                    command,
                 })
             }
             FrontendCommand::ApplySelectiveRevert { mutation_id } => {
@@ -582,10 +574,17 @@ impl FrontendControlPlane {
                     "frontend-control",
                 )
                 .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
-                Ok(FrontendControlResult::SelectiveRevertApplied {
+                let command = serde_json::to_string(&serde_json::json!({
+                    "type": "selective_revert_applied",
+                    "mutation_id": mutation_id,
+                    "inverse_mutation_ids": outcome.mutation_ids,
+                    "verification_invalidated": true,
+                    "review_refresh_required": true,
+                }))
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                Ok(FrontendControlResult::CommandAccepted {
                     session_id,
-                    mutation_id: mutation_id.clone(),
-                    inverse_mutation_ids: outcome.mutation_ids,
+                    command,
                 })
             }
             FrontendCommand::RecoveryAction {

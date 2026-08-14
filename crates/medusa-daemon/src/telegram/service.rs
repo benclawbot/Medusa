@@ -951,11 +951,7 @@ impl TelegramSessionService {
             | FrontendControlResult::SessionActions { session_id, .. }
             | FrontendControlResult::CancellationRequested { session_id, .. }
             | FrontendControlResult::CommandAccepted { session_id, .. }
-            | FrontendControlResult::Status { session_id, .. }
-            | FrontendControlResult::SelectiveRevertPreview { session_id, .. }
-            | FrontendControlResult::SelectiveRevertApplied { session_id, .. } => {
-                Some(session_id.clone())
-            }
+            | FrontendControlResult::Status { session_id, .. } => Some(session_id.clone()),
             FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),
             FrontendControlResult::Sessions { .. }
             | FrontendControlResult::Detached { .. }

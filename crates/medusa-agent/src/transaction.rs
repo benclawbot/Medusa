@@ -316,7 +316,15 @@ pub fn apply_session_selective_revert(
         sequence,
         occurred_at_unix_ms,
     };
-    apply_selective_revert(repo, mutation_id, &context)
+    let outcome = apply_selective_revert(repo, mutation_id, &context)?;
+    #[cfg(not(test))]
+    {
+        let mut session = crate::session::load(repo, session_id)?;
+        session.evidence.clear();
+        session.updated_at = time::OffsetDateTime::now_utc();
+        crate::session::persist(&session)?;
+    }
+    Ok(outcome)
 }
 
 pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<RevertPreview> {
