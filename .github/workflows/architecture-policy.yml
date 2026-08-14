@@ -29,6 +29,8 @@ jobs:
             --root . \
             --policy .github/architecture-policy.json \
             --report architecture-policy-report.md
+      - name: Enforce sole GitHub operation authority
+        run: python3 scripts/github-authority-policy.py
       - name: Publish architecture report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
