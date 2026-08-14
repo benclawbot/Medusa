@@ -32,6 +32,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "./ApprovalCard";
 import "./approval-card.css";
+import { loadProviderCatalog, type ProviderCatalogEntry } from "./providerCatalog";
 import {
   cancelRuntime,
   commandSuggestions,
@@ -215,6 +216,7 @@ export function App() {
   const [turn, setTurn] = useState(0);
   const [error, setError] = useState<string>();
   const [provider, setProvider] = useState("");
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<Effort>("medium");
   const [sharedConfiguration, setSharedConfiguration] = useState<SharedConfiguration>();
@@ -226,6 +228,19 @@ export function App() {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshConfiguration = useCallback(async () => {
+    const [configuration, catalog] = await Promise.all([
+      loadSharedConfiguration(),
+      loadProviderCatalog(),
+    ]);
+    setSharedConfiguration(configuration);
+    setProviderCatalog(catalog);
+    setProvider(configuration.provider);
+    setModel(configuration.model);
+    setEffort(configuration.effort);
+    return configuration;
+  }, []);
 
   const applyEvent = useCallback((event: RuntimeEvent) => {
     switch (event.type) {
@@ -277,14 +292,7 @@ export function App() {
         });
         break;
       case "configurationChanged":
-        void loadSharedConfiguration()
-          .then((configuration) => {
-            setSharedConfiguration(configuration);
-            setProvider(configuration.provider);
-            setModel(configuration.model);
-            setEffort(configuration.effort);
-          })
-          .catch((cause) => setError(String(cause)));
+        void refreshConfiguration().catch((cause) => setError(String(cause)));
         break;
       case "notice":
         setMessages((current) => [
@@ -337,7 +345,7 @@ export function App() {
         ]);
         break;
     }
-  }, []);
+  }, [refreshConfiguration]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -391,13 +399,7 @@ export function App() {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
     let disposed = false;
     const start = async () => {
-      const configuration = await loadSharedConfiguration();
-      if (!disposed) {
-        setSharedConfiguration(configuration);
-        setProvider(configuration.provider);
-        setModel(configuration.model);
-        setEffort(configuration.effort);
-      }
+      const configuration = await refreshConfiguration();
       let started;
       try {
         started = await startRuntime(previous || undefined);
@@ -428,7 +430,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, []);
+  }, [refreshConfiguration]);
 
   useEffect(() => () => {
     if (runtimeId) void closeRuntime(runtimeId);
@@ -444,11 +446,7 @@ export function App() {
         effort,
         expectedRevision: sharedConfiguration?.revision ?? 0,
       });
-      const configuration = await loadSharedConfiguration();
-      setSharedConfiguration(configuration);
-      setProvider(configuration.provider);
-      setModel(configuration.model);
-      setEffort(configuration.effort);
+      await refreshConfiguration();
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo(started.repo);
@@ -471,11 +469,7 @@ export function App() {
         effort,
         expectedRevision: sharedConfiguration?.revision ?? 0,
       });
-      const configuration = await loadSharedConfiguration();
-      setSharedConfiguration(configuration);
-      setProvider(configuration.provider);
-      setModel(configuration.model);
-      setEffort(configuration.effort);
+      await refreshConfiguration();
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo("");
@@ -589,11 +583,7 @@ export function App() {
         expectedRevision: sharedConfiguration?.revision ?? 0,
         apiKey: apiKey.trim() || undefined,
       });
-      const configuration = await loadSharedConfiguration();
-      setSharedConfiguration(configuration);
-      setProvider(configuration.provider);
-      setModel(configuration.model);
-      setEffort(configuration.effort);
+      await refreshConfiguration();
       setApiKey("");
       setError(undefined);
     } catch (cause) {
@@ -635,7 +625,11 @@ export function App() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [macPlatform, newSession]);
 
-  const credentiallessProvider = ["openai-oauth", "omniroute", "local"].includes(provider);
+  const selectedProvider = useMemo(
+    () => providerCatalog.find((entry) => entry.profileProvider === provider),
+    [providerCatalog, provider],
+  );
+  const credentiallessProvider = selectedProvider?.authMethods.every((method) => method === "none") ?? false;
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.input + usage.output;
   const openDesktopTool = (selector: string) => {
@@ -888,11 +882,19 @@ export function App() {
         {activePanel === "settings" && (
           <div className="standalone-panel settings-form">
             <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Saved securely in your operating system credential manager</p><small>Shared profile: {sharedConfiguration?.activeProfile ?? "loading"} · revision {sharedConfiguration?.revision ?? "…"}</small></div></div>
-            <label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="minimax">MiniMax</option><option value="anthropic">Anthropic</option><option value="anthropic-compatible">Anthropic-compatible</option><option value="openai">OpenAI API</option><option value="openai-oauth">ChatGPT OAuth</option><option value="openai-compatible">OpenAI-compatible</option><option value="omniroute">OmniRoute</option><option value="local">Local endpoint</option></select></label>
-            <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} /></label>
+            <label>Provider<select value={provider} onChange={(event) => {
+              const nextProvider = providerCatalog.find((entry) => entry.profileProvider === event.target.value);
+              setProvider(event.target.value);
+              if (nextProvider) {
+                setModel(nextProvider.defaultModel);
+                setApiKey("");
+              }
+            }}>{providerCatalog.map((entry) => <option key={entry.id} value={entry.profileProvider} disabled={Boolean(entry.disabledReason)}>{entry.displayName}{entry.currentCustom ? " (current custom)" : ""}</option>)}</select></label>
+            {selectedProvider && <small>{selectedProvider.disabledReason ?? selectedProvider.description}</small>}
+            <label>Model<select value={model} onChange={(event) => setModel(event.target.value)}>{(selectedProvider?.modelOptions ?? (model ? [model] : [])).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
             <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
             <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={credentiallessProvider ? "This route does not require an API key" : "Leave blank to use the saved key"} disabled={credentiallessProvider} /></label>
-            <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !sharedConfiguration || !provider.trim() || !model.trim()}>Apply configuration</button>
+            <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !sharedConfiguration || !provider.trim() || !model.trim() || Boolean(selectedProvider?.disabledReason)}>Apply configuration</button>
           </div>
         )}
       </section>
