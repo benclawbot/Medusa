@@ -1,4 +1,4 @@
-name: Issue 854 mutation provenance bootstrap
+name: Issue 854 mutation provenance wiring
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  bootstrap:
+  wire:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -19,52 +19,83 @@ jobs:
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-      - name: Expose provenance production boundary
+      - name: Wire session-owned provenance into fs_write
         shell: python
         run: |
           from pathlib import Path
 
           tx = Path('crates/medusa-agent/src/transaction.rs')
           text = tx.read_text()
-          for marker in [
-              '#[allow(dead_code)]\npub fn apply_atomic_with_context(',
-              '#[allow(dead_code)]\npub fn preview_selective_revert(',
-              '#[allow(dead_code)]\npub fn apply_selective_revert(',
-          ]:
-              if marker not in text:
-                  raise SystemExit(f'missing transaction marker: {marker}')
-              text = text.replace(marker, marker.replace('#[allow(dead_code)]\n', ''), 1)
+          anchor = 'pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<RevertPreview> {'
+          helper = '''pub(crate) fn next_mutation_sequence(repo: &Path, session_id: &str) -> MedusaResult<u64> {\n    let journal = load_provenance(repo)?;\n    journal\n        .records\n        .iter()\n        .filter(|record| record.context.session_id == session_id)\n        .map(|record| record.context.sequence)\n        .max()\n        .unwrap_or(0)\n        .checked_add(1)\n        .ok_or_else(|| provenance_boundary_error("mutation sequence overflow"))\n}\n\n'''
+          if helper not in text:
+              if anchor not in text:
+                  raise SystemExit('missing selective revert anchor')
+              text = text.replace(anchor, helper + anchor, 1)
           tx.write_text(text)
 
-          lib = Path('crates/medusa-agent/src/lib.rs')
-          text = lib.read_text()
-          old = 'pub use transaction::{\n    FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,\n};'
-          new = 'pub use transaction::{\n    FileMutation, MutationContext, RevertPreview, TransactionOutcome, TransactionPreview,\n    apply_atomic, apply_atomic_with_context, apply_selective_revert, preview,\n    preview_selective_revert,\n};'
-          if old not in text:
-              raise SystemExit('missing lib transaction export block')
-          lib.write_text(text.replace(old, new, 1))
+          tools = Path('crates/medusa-agent/src/tools/mod.rs')
+          text = tools.read_text()
+          old_sig = '''pub(crate) fn execute_tool_cancellable(\n    repo: &Path,\n    name: &str,\n    input: &Value,\n    cancellation: &AtomicBool,\n) -> MedusaResult<String> {'''
+          new_sig = '''pub(crate) fn execute_tool_cancellable_with_context(\n    repo: &Path,\n    name: &str,\n    input: &Value,\n    cancellation: &AtomicBool,\n    mutation_context: Option<&crate::transaction::MutationContext>,\n) -> MedusaResult<String> {'''
+          if old_sig not in text:
+              raise SystemExit('missing cancellable tool signature')
+          text = text.replace(old_sig, new_sig, 1)
+          cancel = '''    if cancellation.load(Ordering::Acquire) {\n        return Err(cancelled_tool(name));\n    }\n'''
+          insert = cancel + '''    if name == "fs_write" {\n        if let Some(context) = mutation_context {\n            let relative = input_string(input, "path")?;\n            let content = input_string(input, "content")?;\n            let outcome = filesystem::write_with_context(repo, relative, content, context)?;\n            return Ok(format!(\n                "wrote {} bytes to {relative}; mutation_ids={}",\n                content.len(),\n                outcome.mutation_ids.join(",")\n            ));\n        }\n    }\n'''
+          if cancel not in text:
+              raise SystemExit('missing cancellation block')
+          text = text.replace(cancel, insert, 1)
+          approved_anchor = 'pub(crate) fn execute_approved_tool_cancellable(\n'
+          wrapper = '''pub(crate) fn execute_tool_cancellable(\n    repo: &Path,\n    name: &str,\n    input: &Value,\n    cancellation: &AtomicBool,\n) -> MedusaResult<String> {\n    execute_tool_cancellable_with_context(repo, name, input, cancellation, None)\n}\n\n'''
+          if wrapper not in text:
+              if approved_anchor not in text:
+                  raise SystemExit('missing approved tool anchor')
+              text = text.replace(approved_anchor, wrapper + approved_anchor, 1)
+          tools.write_text(text)
 
-          fs = Path('crates/medusa-agent/src/tools/filesystem.rs')
-          text = fs.read_text()
-          old = '    transaction::{FileMutation, apply_atomic},\n'
-          new = '    transaction::{\n        FileMutation, MutationContext, TransactionOutcome, apply_atomic, apply_atomic_with_context,\n    },\n'
-          if old not in text:
-              raise SystemExit('missing filesystem transaction import')
-          text = text.replace(old, new, 1)
-          anchor = '''pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {\n    reject_git_metadata(relative)?;\n    apply_atomic(\n        repo,\n        &[FileMutation {\n            path: relative.to_owned(),\n            content: content.to_owned(),\n        }],\n    )?;\n    Ok(format!("wrote {} bytes to {relative}", content.len()))\n}\n'''
-          replacement = '''pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {\n    reject_git_metadata(relative)?;\n    apply_atomic(\n        repo,\n        &[FileMutation {\n            path: relative.to_owned(),\n            content: content.to_owned(),\n        }],\n    )?;\n    Ok(format!("wrote {} bytes to {relative}", content.len()))\n}\n\npub(crate) fn write_with_context(\n    repo: &Path,\n    relative: &str,\n    content: &str,\n    context: &MutationContext,\n) -> MedusaResult<TransactionOutcome> {\n    reject_git_metadata(relative)?;\n    apply_atomic_with_context(\n        repo,\n        &[FileMutation {\n            path: relative.to_owned(),\n            content: content.to_owned(),\n        }],\n        context,\n    )\n}\n'''
-          if anchor not in text:
-              raise SystemExit('missing filesystem write block')
-          fs.write_text(text.replace(anchor, replacement, 1))
-      - name: Format and targeted tests
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text()
+          old_import = '    tools::{execute_approved_tool_cancellable, execute_tool_cancellable, input_string},\n'
+          new_import = '    tools::{\n        execute_approved_tool_cancellable, execute_tool_cancellable,\n        execute_tool_cancellable_with_context, input_string,\n    },\n'
+          if old_import not in text:
+              raise SystemExit('missing engine tools import')
+          text = text.replace(old_import, new_import, 1)
+          anchor = 'fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {'
+          helper = '''fn execute_session_tool(\n    repo: &Path,\n    name: &str,\n    input: &serde_json::Value,\n    cancellation: &AtomicBool,\n    session_id: &str,\n    task_step_id: Option<&str>,\n    activity_id: &str,\n) -> MedusaResult<String> {\n    if name != "fs_write" {\n        return execute_tool_cancellable(repo, name, input, cancellation);\n    }\n    let sequence = crate::transaction::next_mutation_sequence(repo, session_id)?;\n    let occurred_at_unix_ms = i64::try_from(\n        OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,\n    )\n    .map_err(|_| MedusaError::new(\n        ErrorCode::InternalInvariant,\n        ErrorCategory::Internal,\n        "mutation timestamp overflow",\n    ))?;\n    let context = crate::transaction::MutationContext {\n        session_id: session_id.to_owned(),\n        task_step_id: task_step_id.map(str::to_owned),\n        activity_id: activity_id.to_owned(),\n        actor: "medusa-agent".to_owned(),\n        sequence,\n        occurred_at_unix_ms,\n    };\n    execute_tool_cancellable_with_context(repo, name, input, cancellation, Some(&context))\n}\n\nfn active_plan_step_id(session: &AgentSession) -> Option<&str> {\n    session\n        .plan\n        .iter()\n        .find(|step| matches!(step.status, crate::session::AgentPlanStepStatus::InProgress))\n        .map(|step| step.title.as_str())\n}\n\n'''
+          if helper not in text:
+              if anchor not in text:
+                  raise SystemExit('missing audited tool anchor')
+              text = text.replace(anchor, helper + anchor, 1)
+
+          direct = '''                        execute_tool_cancellable(\n                            &session.repo,\n                            &name,\n                            &input,\n                            self.cancellation.as_ref(),\n                        )'''
+          replacement = '''                        execute_session_tool(\n                            &session.repo,\n                            &name,\n                            &input,\n                            self.cancellation.as_ref(),\n                            session.id.as_str(),\n                            active_plan_step_id(session),\n                            &id,\n                        )'''
+          if direct not in text:
+              raise SystemExit('missing direct engine execution call')
+          text = text.replace(direct, replacement, 1)
+
+          batch_prelude = '''                let repo = session.repo.as_path();\n                let cache = &safe_tool_cache;'''
+          batch_new = '''                let repo = session.repo.as_path();\n                let mutation_session_id = session.id.to_string();\n                let mutation_task_step = active_plan_step_id(session).map(str::to_owned);\n                let cache = &safe_tool_cache;'''
+          if batch_prelude not in text:
+              raise SystemExit('missing parallel batch prelude')
+          text = text.replace(batch_prelude, batch_new, 1)
+          batch_call = '|| execute_tool_cancellable(repo, &name, &input, cancellation.as_ref()),\n'
+          batch_repl = '''|| execute_session_tool(\n                            repo,\n                            &name,\n                            &input,\n                            cancellation.as_ref(),\n                            &mutation_session_id,\n                            mutation_task_step.as_deref(),\n                            &id,\n                        ),\n'''
+          if batch_call not in text:
+              raise SystemExit('missing parallel execution call')
+          text = text.replace(batch_call, batch_repl, 1)
+          engine.write_text(text)
+      - name: Format and validate production wiring
         run: |
-          cargo fmt --all -- --check || cargo fmt --all
+          cargo fmt --all
           cargo test -p medusa-agent transaction --locked
-      - name: Commit bootstrap
+          cargo test -p medusa-agent extracted_filesystem_tools_preserve_read_write_and_search_behavior --locked
+          cargo check -p medusa-agent --locked
+      - name: Commit production wiring
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-agent/src/transaction.rs crates/medusa-agent/src/lib.rs crates/medusa-agent/src/tools/filesystem.rs
+          git add crates/medusa-agent/src/transaction.rs crates/medusa-agent/src/tools/mod.rs crates/medusa-agent/src/engine.rs
           git diff --cached --check
-          git commit -m "feat(agent): expose mutation provenance boundary"
+          git commit -m "feat(agent): attach session provenance to fs_write"
           git push origin HEAD:codex/854-mutation-provenance
