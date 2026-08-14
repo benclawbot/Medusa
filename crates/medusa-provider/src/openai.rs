@@ -1,6 +1,6 @@
 use std::{env, sync::atomic::AtomicBool};
 
-use medusa_config::Config;
+use medusa_config::{Config, model_capabilities};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{Client as AsyncClient, blocking::Client as BlockingClient};
 use serde::Deserialize;
@@ -61,8 +61,8 @@ impl OpenAiProvider {
                     "https://api.openai.com/v1".to_owned()
                 }
             });
-        let image_input = config.model.provider.eq_ignore_ascii_case("openai")
-            || config.model.auth.eq_ignore_ascii_case("chatgpt-oauth");
+        let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);
+        let image_input = registry_capabilities.image_input;
         Ok(Self {
             blocking_client: shared_blocking_http_client()?,
             async_client: shared_async_http_client()?,

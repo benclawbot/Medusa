@@ -9,7 +9,7 @@ use std::{
     sync::{Arc, OnceLock, atomic::AtomicBool},
 };
 
-use medusa_config::{Config, FallbackProviderConfig};
+use medusa_config::{Config, FallbackProviderConfig, model_capabilities};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_external_contracts::{
     ProviderCapabilitySet, ReadinessCheck, ReadinessStage, RouteIdentity, RouteReadiness,
@@ -335,13 +335,13 @@ impl ModelProvider for LazyConfiguredProviderManager {
 fn truthful_capabilities(config: &Config) -> ProviderCapabilitySet {
     let provider = config.model.provider.trim().to_ascii_lowercase();
     let protocol = config.model.protocol.trim().to_ascii_lowercase();
-    let image_input = provider == "openai"
-        || provider == "anthropic"
-        || config.model.auth.eq_ignore_ascii_case("chatgpt-oauth")
+    let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);
+    let image_input = registry_capabilities.image_input
         || (provider == "minimax" && enabled("MINIMAX_IMAGE_INPUT"));
     ProviderCapabilitySet {
         image_input,
         tool_calling: config.model.tool_calling
+            && registry_capabilities.tool_calling
             && matches!(
                 protocol.as_str(),
                 "anthropic" | "openai" | "anthropic-compatible"

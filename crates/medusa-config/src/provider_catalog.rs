@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use crate::ProviderProfile;
 
 /// User-facing support tier for a selectable provider route.
@@ -90,7 +88,7 @@ const CATALOG: [ProviderCatalogEntry; 8] = [
         ],
         base_url: None,
         browser_oauth: false,
-        discover_models: false,
+        discover_models: true,
         custom_values: false,
         disabled_reason: None,
     },
@@ -106,7 +104,7 @@ const CATALOG: [ProviderCatalogEntry; 8] = [
         known_models: &["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
         base_url: None,
         browser_oauth: false,
-        discover_models: false,
+        discover_models: true,
         custom_values: false,
         disabled_reason: None,
     },
@@ -138,7 +136,7 @@ const CATALOG: [ProviderCatalogEntry; 8] = [
         known_models: &["gpt-5.1-codex", "gpt-5.1", "gpt-5-mini"],
         base_url: Some("https://api.openai.com/v1"),
         browser_oauth: false,
-        discover_models: false,
+        discover_models: true,
         custom_values: false,
         disabled_reason: None,
     },
@@ -277,30 +275,18 @@ pub fn provider_model_options(
     current_model: &str,
     discovered: &[String],
 ) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut models = Vec::new();
-    let mut push = |model: &str| {
-        if !model.trim().is_empty() && seen.insert(model.to_owned()) {
-            models.push(model.to_owned());
-        }
-    };
-
-    // A configured current value is always retained, even if live discovery is unavailable.
-    push(current_model);
-    for model in discovered {
-        push(model);
-    }
-    if let Some(entry) = provider_catalog_entry(provider) {
-        for model in entry.known_models {
-            push(model);
-        }
-        push(entry.default_model);
-    } else if current_model.trim().is_empty()
-        && discovered.iter().all(|model| model.trim().is_empty())
-    {
-        push("custom-model");
-    }
-    models
+    let discovered = discovered
+        .iter()
+        .map(|id| crate::DiscoveredModel {
+            id: id.clone(),
+            display_name: None,
+        })
+        .collect::<Vec<_>>();
+    crate::model_registry(provider, current_model, Ok(&discovered), None, 0)
+        .models
+        .into_iter()
+        .map(|model| model.id)
+        .collect()
 }
 
 /// Applies the catalog defaults for a newly selected provider route.
@@ -315,6 +301,8 @@ pub fn apply_provider_defaults(entry: &ProviderCatalogEntry, profile: &mut Provi
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::Config;
 
