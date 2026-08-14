@@ -1,5 +1,9 @@
 import React, { useMemo, useState } from "react";
-import type { ProviderCatalogEntry } from "./providerCatalog";
+import {
+  loadProviderCatalog,
+  startBrowserOauth,
+  type ProviderCatalogEntry,
+} from "./providerCatalog";
 import type { Effort, SharedConfiguration } from "./runtime";
 import { initialOnboardingStep, recommendedModels } from "./onboarding";
 
@@ -11,28 +15,55 @@ interface Props {
 }
 
 export function DesktopOnboarding({ configuration, providers, error, onApply }: Props) {
+  const [catalog, setCatalog] = useState(providers);
   const [provider, setProvider] = useState(configuration.provider);
   const selectedProvider = useMemo(
-    () => providers.find((entry) => entry.profileProvider === provider),
-    [providers, provider],
+    () => catalog.find((entry) => entry.profileProvider === provider),
+    [catalog, provider],
   );
   const [model, setModel] = useState(configuration.model || selectedProvider?.defaultModel || "");
   const [effort, setEffort] = useState<Effort>(configuration.effort);
   const [apiKey, setApiKey] = useState("");
   const [step, setStep] = useState(() => initialOnboardingStep(configuration, providers));
   const [saving, setSaving] = useState(false);
+  const [authenticating, setAuthenticating] = useState(false);
+  const [oauthConnected, setOauthConnected] = useState(configuration.credentialConfigured);
+  const [authError, setAuthError] = useState<string>();
   const models = recommendedModels(selectedProvider);
   const credentialless = selectedProvider?.authMethods.every((method) => method === "none") ?? false;
   const oauth = selectedProvider?.browserOauth ?? false;
+  const credentialReady = credentialless || configuration.credentialConfigured || oauthConnected;
 
   const chooseProvider = (value: string) => {
-    const next = providers.find((entry) => entry.profileProvider === value);
+    const next = catalog.find((entry) => entry.profileProvider === value);
     setProvider(value);
     setModel(next?.defaultModel ?? "");
     setApiKey("");
+    setAuthError(undefined);
+    setOauthConnected(value === configuration.provider && configuration.credentialConfigured);
   };
 
-  const nextFromProvider = () => setStep(credentialless || configuration.credentialConfigured ? "model" : "authentication");
+  const nextFromProvider = () => setStep(credentialReady ? "model" : "authentication");
+
+  const authenticateWithBrowser = async () => {
+    setAuthenticating(true);
+    setAuthError(undefined);
+    try {
+      await startBrowserOauth(provider);
+      const refreshed = await loadProviderCatalog(true);
+      setCatalog(refreshed);
+      const refreshedProvider = refreshed.find((entry) => entry.profileProvider === provider);
+      if (refreshedProvider && !refreshedProvider.modelOptions.includes(model)) {
+        setModel(refreshedProvider.defaultModel);
+      }
+      setOauthConnected(true);
+      setStep("model");
+    } catch (cause) {
+      setAuthError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAuthenticating(false);
+    }
+  };
 
   const verify = async () => {
     setSaving(true);
@@ -62,7 +93,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
             <label>Provider
               <select value={provider} onChange={(event) => chooseProvider(event.target.value)}>
                 <option value="">Select a provider</option>
-                {providers.map((entry) => (
+                {catalog.map((entry) => (
                   <option key={entry.id} value={entry.profileProvider} disabled={Boolean(entry.disabledReason)}>
                     {entry.displayName}
                   </option>
@@ -77,16 +108,21 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
         {step === "authentication" && (
           <>
             <h2>Authenticate</h2>
-            <p>{oauth ? "This provider supports browser OAuth. Existing shared OAuth credentials are reused automatically when present." : "Enter an API key for this shared Medusa profile."}</p>
+            <p>{oauth ? "Sign in in your browser. Medusa will refresh the models available to the authenticated account when sign-in completes." : "Enter an API key for this shared Medusa profile."}</p>
             {!oauth && !credentialless && (
               <label>API key
                 <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="API key" />
               </label>
             )}
-            {oauth && !configuration.credentialConfigured && <p role="status">Browser OAuth is not yet connected for this profile.</p>}
+            {oauth && !oauthConnected && <p role="status">Browser OAuth is not yet connected for this profile.</p>}
+            {!!authError && <div className="error-banner" role="alert">{authError}</div>}
             <div>
-              <button className="secondary-action" onClick={() => setStep("provider")}>Back</button>
-              <button className="primary-action" disabled={oauth ? !configuration.credentialConfigured : !credentialless && !apiKey.trim()} onClick={() => setStep("model")}>Continue</button>
+              <button className="secondary-action" disabled={authenticating} onClick={() => setStep("provider")}>Back</button>
+              {oauth && !oauthConnected ? (
+                <button className="primary-action" disabled={authenticating} onClick={() => void authenticateWithBrowser()}>{authenticating ? "Opening browser…" : "Sign in with browser"}</button>
+              ) : (
+                <button className="primary-action" disabled={!credentialReady && !apiKey.trim()} onClick={() => setStep("model")}>Continue</button>
+              )}
             </div>
           </>
         )}
@@ -106,7 +142,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
               <p>{selectedProvider.models.find((candidate) => candidate.id === model)?.use_case_hint}</p>
             )}
             <div>
-              <button className="secondary-action" onClick={() => setStep(credentialless || configuration.credentialConfigured ? "provider" : "authentication")}>Back</button>
+              <button className="secondary-action" onClick={() => setStep(credentialReady ? "provider" : "authentication")}>Back</button>
               <button className="primary-action" disabled={!model.trim()} onClick={() => setStep("preferences")}>Continue</button>
             </div>
           </>
