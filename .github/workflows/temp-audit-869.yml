@@ -1,0 +1,20 @@
+name: Temporary issue 869 capability audit
+
+on:
+  push:
+    branches: [codex/issue-869-model-registry]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate remaining model capability consumers
+        run: |
+          echo '=== realtime gateway consumers ==='
+          rg -n "probe_gateway|GatewayCapability|medusa_openai_realtime" crates apps || true
+          echo '=== capability gates ==='
+          rg -n "image_input|audio_input|realtime|structured_output|tool_calling|reasoning_effort" crates apps | head -n 400 || true
