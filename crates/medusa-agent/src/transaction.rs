@@ -277,6 +277,48 @@ pub(crate) fn next_mutation_sequence(repo: &Path, session_id: &str) -> MedusaRes
         .ok_or_else(|| provenance_boundary_error("mutation sequence overflow"))
 }
 
+pub fn preview_session_selective_revert(
+    repo: &Path,
+    session_id: &str,
+    mutation_id: &str,
+) -> MedusaResult<RevertPreview> {
+    let journal = load_provenance(repo)?;
+    let record = journal
+        .records
+        .iter()
+        .find(|record| record.id == mutation_id)
+        .ok_or_else(|| provenance_boundary_error("mutation provenance record is missing"))?;
+    if record.context.session_id != session_id {
+        return Err(provenance_boundary_error(
+            "mutation provenance does not belong to the requested session",
+        ));
+    }
+    preview_selective_revert(repo, mutation_id)
+}
+
+pub fn apply_session_selective_revert(
+    repo: &Path,
+    session_id: &str,
+    mutation_id: &str,
+    activity_id: &str,
+    actor: &str,
+) -> MedusaResult<TransactionOutcome> {
+    preview_session_selective_revert(repo, session_id, mutation_id)?;
+    let sequence = next_mutation_sequence(repo, session_id)?;
+    let occurred_at_unix_ms =
+        i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
+            .map_err(|_| provenance_boundary_error("mutation timestamp overflow"))?;
+    let context = MutationContext {
+        session_id: session_id.to_owned(),
+        task_step_id: None,
+        activity_id: activity_id.to_owned(),
+        actor: actor.to_owned(),
+        sequence,
+        occurred_at_unix_ms,
+    };
+    apply_selective_revert(repo, mutation_id, &context)
+}
+
 pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<RevertPreview> {
     let journal = load_provenance(repo)?;
     let record = journal

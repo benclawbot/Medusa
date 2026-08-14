@@ -66,6 +66,12 @@ pub enum FrontendCommand {
         checkpoint_id: Option<String>,
         confirmed_destructive_effects: bool,
     },
+    PreviewSelectiveRevert {
+        mutation_id: String,
+    },
+    ApplySelectiveRevert {
+        mutation_id: String,
+    },
     Submit {
         text: String,
         #[serde(default)]
@@ -183,6 +189,12 @@ impl FrontendCommand {
             }
             Self::RecoveryAction { operation, .. } if operation.trim().is_empty() => {
                 Err("recovery operation cannot be empty")
+            }
+            Self::PreviewSelectiveRevert { mutation_id }
+            | Self::ApplySelectiveRevert { mutation_id }
+                if mutation_id.trim().is_empty() =>
+            {
+                Err("mutation id cannot be empty")
             }
             Self::ConfigureModel { model, .. } if model.trim().is_empty() => {
                 Err("model cannot be empty")

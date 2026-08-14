@@ -60,8 +60,9 @@ pub use team::{
 };
 pub use transaction::{
     FileMutation, MutationContext, RevertPreview, TransactionOutcome, TransactionPreview,
-    apply_atomic, apply_atomic_with_context, apply_selective_revert, preview,
-    preview_selective_revert,
+    apply_atomic, apply_atomic_with_context, apply_selective_revert,
+    apply_session_selective_revert, preview, preview_selective_revert,
+    preview_session_selective_revert,
 };
 pub use verification::VerificationResult;
 pub use verification_authority::{

@@ -130,6 +130,19 @@ pub enum FrontendControlResult {
         latest_checkpoint_cursor: Option<u64>,
         replay_equivalent: bool,
     },
+    SelectiveRevertPreview {
+        session_id: String,
+        mutation_id: String,
+        path: String,
+        start_byte: usize,
+        remove_len: usize,
+        restore_len: usize,
+    },
+    SelectiveRevertApplied {
+        session_id: String,
+        mutation_id: String,
+        inverse_mutation_ids: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -538,6 +551,41 @@ impl FrontendControlPlane {
                 Ok(FrontendControlResult::CommandAccepted {
                     session_id,
                     command: "run_command".to_owned(),
+                })
+            }
+            FrontendCommand::PreviewSelectiveRevert { mutation_id } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let preview = medusa_agent::preview_session_selective_revert(
+                    &self.repo,
+                    &session_id,
+                    mutation_id,
+                )
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                Ok(FrontendControlResult::SelectiveRevertPreview {
+                    session_id,
+                    mutation_id: preview.mutation_id,
+                    path: preview.path,
+                    start_byte: preview.start_byte,
+                    remove_len: preview.remove_len,
+                    restore_len: preview.restore_len,
+                })
+            }
+            FrontendCommand::ApplySelectiveRevert { mutation_id } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let outcome = medusa_agent::apply_session_selective_revert(
+                    &self.repo,
+                    &session_id,
+                    mutation_id,
+                    &envelope.command_id,
+                    "frontend-control",
+                )
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                Ok(FrontendControlResult::SelectiveRevertApplied {
+                    session_id,
+                    mutation_id: mutation_id.clone(),
+                    inverse_mutation_ids: outcome.mutation_ids,
                 })
             }
             FrontendCommand::RecoveryAction {
