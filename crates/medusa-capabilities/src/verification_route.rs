@@ -44,7 +44,9 @@ impl VerificationRoute {
         }
         let suffix = &remainder[authority_end..];
         let authority = parse_authority(authority)?;
-        let loopback = authority.address.is_some_and(|address| address.is_loopback())
+        let loopback = authority
+            .address
+            .is_some_and(|address| address.is_loopback())
             || authority.host.eq_ignore_ascii_case("localhost");
         if !loopback {
             if authority.host.ends_with(".localhost") {
