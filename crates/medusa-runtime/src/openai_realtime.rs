@@ -14,7 +14,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use medusa_config::Config;
+use medusa_config::{Config, model_capabilities};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -282,6 +282,12 @@ impl OpenAiRealtimeSessionCredential {
 /// Realtime capability.
 #[must_use]
 pub fn resolve_openai_realtime_route(config: &Config) -> OpenAiRealtimeRoute {
+    let capabilities = model_capabilities(OPENAI_OAUTH_PROVIDER, OPENAI_REALTIME_MODEL);
+    if !capabilities.realtime || !capabilities.audio_input {
+        return OpenAiRealtimeRoute::ExistingRouteUnsupported {
+            provider: config.model.provider.clone(),
+        };
+    }
     if !config
         .model
         .provider
@@ -306,6 +312,12 @@ pub fn resolve_openai_realtime_route_with_auth_file(
     auth_file: &Path,
     api_base_url: &str,
 ) -> OpenAiRealtimeRoute {
+    let capabilities = model_capabilities(OPENAI_OAUTH_PROVIDER, OPENAI_REALTIME_MODEL);
+    if !capabilities.realtime || !capabilities.audio_input {
+        return OpenAiRealtimeRoute::ExistingRouteUnsupported {
+            provider: config.model.provider.clone(),
+        };
+    }
     if !config
         .model
         .provider

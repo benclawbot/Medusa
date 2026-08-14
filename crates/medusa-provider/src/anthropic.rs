@@ -1,6 +1,6 @@
 use std::{env, sync::atomic::AtomicBool};
 
-use medusa_config::Config;
+use medusa_config::{Config, model_capabilities};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{Client as AsyncClient, blocking::Client as BlockingClient};
 use serde::Deserialize;
@@ -51,7 +51,9 @@ impl MiniMaxProvider {
             .or_else(|| env::var(settings.base_url_env).ok())
             .unwrap_or_else(|| settings.default_base_url.to_owned());
         let mut capabilities = (settings.capabilities)();
-        capabilities.tool_calling = config.model.tool_calling;
+        let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);
+        capabilities.image_input = capabilities.image_input && registry_capabilities.image_input;
+        capabilities.tool_calling = config.model.tool_calling && registry_capabilities.tool_calling;
         capabilities.streaming = false;
         Ok(Self {
             blocking_client: shared_blocking_http_client()?,
