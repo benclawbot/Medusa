@@ -1,0 +1,30 @@
+name: Refresh PR 864 desktop lock
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: ${{ github.event.pull_request.head.ref == 'codex/851-lockfile-authority' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh nested desktop lock and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          rm .github/workflows/refresh-pr864-desktop-lock.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/medusa-desktop/src-tauri/Cargo.lock .github/workflows/refresh-pr864-desktop-lock.yml
+          git diff --cached --check
+          git commit -m 'Refresh desktop lockfile for committed authority'
+          git push origin HEAD:${{ github.head_ref }}

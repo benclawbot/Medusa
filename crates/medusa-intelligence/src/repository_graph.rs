@@ -18,6 +18,7 @@ use crate::{
 const SCHEMA_VERSION: u32 = 1;
 const CACHE_RELATIVE_PATH: &str = ".medusa/cache/repository-graph-v1.json";
 static CACHE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static CACHE_REPLACE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -346,7 +347,12 @@ fn persist(path: &Path, snapshot: &RepositoryGraphSnapshot) -> MedusaResult<()> 
     let temporary = unique_cache_temporary(path);
     let bytes = serde_json::to_vec_pretty(snapshot)
         .map_err(|error| internal(format!("serialize repository graph: {error}")))?;
-    let result = fs::write(&temporary, bytes).and_then(|()| replace_cache(&temporary, path));
+    let result = fs::write(&temporary, bytes).and_then(|()| {
+        let _guard = CACHE_REPLACE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        replace_cache(&temporary, path)
+    });
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
