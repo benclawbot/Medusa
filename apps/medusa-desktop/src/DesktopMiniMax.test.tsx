@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { loadProviderCatalog } from "./providerCatalog";
 import {
   configureRuntime,
   loadSharedConfiguration,
@@ -8,6 +9,9 @@ import {
 } from "./runtime";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("./providerCatalog", () => ({
+  loadProviderCatalog: vi.fn(),
+}));
 vi.mock("./runtime", async () => {
   const actual = await vi.importActual<typeof import("./runtime")>("./runtime");
   return {
@@ -26,6 +30,23 @@ vi.mock("./runtime", async () => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  vi.mocked(loadProviderCatalog).mockReset().mockResolvedValue([
+    {
+      id: "minimax",
+      displayName: "MiniMax direct",
+      description: "Direct MiniMax route",
+      connection: "direct",
+      profileProvider: "minimax",
+      authMethods: ["api-key"],
+      defaultAuth: "api-key",
+      defaultModel: "MiniMax-M3",
+      modelOptions: ["MiniMax-M3", "MiniMax-M2.7"],
+      browserOauth: false,
+      discoverModels: false,
+      customValues: false,
+      currentCustom: false,
+    },
+  ]);
   vi.mocked(loadSharedConfiguration).mockReset().mockResolvedValue({
     revision: 7,
     activeProfile: "default",
