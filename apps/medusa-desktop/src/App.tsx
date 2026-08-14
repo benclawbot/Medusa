@@ -33,7 +33,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ApprovalCard } from "./ApprovalCard";
 import { DesktopOnboarding } from "./DesktopOnboarding";
 import "./approval-card.css";
-import { loadProviderCatalog, type ProviderCatalogEntry } from "./providerCatalog";
+import { loadProviderCatalog, profileModelCapabilityState, type ProviderCatalogEntry } from "./providerCatalog";
 import {
   cancelRuntime,
   commandSuggestions,
@@ -510,15 +510,21 @@ export function App() {
   };
 
   const imageCompatibility = useMemo(() => {
-    const normalized = provider.trim().toLowerCase();
-    if (normalized === "anthropic" || normalized === "openai" || normalized === "chatgpt-oauth") {
+    const state = profileModelCapabilityState(
+      providerCatalog,
+      provider,
+      sharedConfiguration?.connection,
+      model,
+      "image_input",
+    );
+    if (state === "supported") {
       return { supported: true, text: `${model} is configured for image input.` };
     }
-    if (normalized === "anthropic-compatible") {
-      return { supported: false, text: "This compatible route is text-only unless image support is explicitly configured." };
+    if (state === "unsupported") {
+      return { supported: false, text: `${model} does not advertise image input on this route.` };
     }
     return { supported: undefined, text: "Image compatibility will be verified by the runtime before upload." };
-  }, [provider, model]);
+  }, [providerCatalog, provider, model, sharedConfiguration?.connection]);
 
   const onPaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));

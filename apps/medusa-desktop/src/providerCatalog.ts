@@ -90,13 +90,38 @@ export async function startBrowserOauth(provider: string): Promise<void> {
   await invoke("desktop_browser_oauth", { provider });
 }
 
+export type ModelCapabilityState = "supported" | "unsupported" | "unknown";
+
+export function modelCapabilityState(
+  provider: ProviderCatalogEntry | undefined,
+  modelId: string,
+  capability: keyof ModelCapabilities,
+): ModelCapabilityState {
+  const model = provider?.models?.find((candidate) => candidate.id === modelId);
+  if (!model) return "unknown";
+  const value = model.capabilities[capability];
+  const supported = typeof value === "boolean" ? value : value.length > 0;
+  return supported ? "supported" : "unsupported";
+}
+
+export function profileModelCapabilityState(
+  providers: ProviderCatalogEntry[],
+  profileProvider: string,
+  connection: string | undefined,
+  modelId: string,
+  capability: keyof ModelCapabilities,
+): ModelCapabilityState {
+  const provider = providers.find((candidate) =>
+    candidate.profileProvider === profileProvider
+    && (!connection || candidate.connection === connection)
+  ) ?? providers.find((candidate) => candidate.profileProvider === profileProvider);
+  return modelCapabilityState(provider, modelId, capability);
+}
+
 export function modelSupports(
   provider: ProviderCatalogEntry | undefined,
   modelId: string,
   capability: keyof ModelCapabilities,
 ): boolean {
-  const model = provider?.models?.find((candidate) => candidate.id === modelId);
-  if (!model) return false;
-  const value = model.capabilities[capability];
-  return typeof value === "boolean" ? value : value.length > 0;
+  return modelCapabilityState(provider, modelId, capability) === "supported";
 }
