@@ -1,0 +1,28 @@
+name: Temporary Desktop Lock Refresh
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/temporary-desktop-lock-refresh.yml'
+      - 'apps/medusa-desktop/src-tauri/Cargo.lock'
+      - 'apps/medusa-desktop/src-tauri/Cargo.toml'
+      - 'crates/**/Cargo.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  refresh-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Refresh Desktop dependency resolution in the ephemeral runner
+        run: cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --format-version 1 >/dev/null
+      - name: Prove the refreshed lock is authoritative
+        run: cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked --format-version 1 >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: refreshed-desktop-cargo-lock
+          path: apps/medusa-desktop/src-tauri/Cargo.lock
+          if-no-files-found: error
