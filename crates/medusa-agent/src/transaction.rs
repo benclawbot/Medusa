@@ -98,7 +98,6 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
 /// Applies every repository mutation through the rollback-capable boundary and atomically records
 /// authoritative mutation provenance. If provenance persistence fails, all committed file writes
 /// are rolled back before returning an error.
-#[allow(dead_code)]
 pub fn apply_atomic_with_context(
     repo: &Path,
     mutations: &[FileMutation],
@@ -265,7 +264,6 @@ fn apply_atomic_inner(
     })
 }
 
-#[allow(dead_code)]
 pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<RevertPreview> {
     let journal = load_provenance(repo)?;
     let record = journal
@@ -303,7 +301,6 @@ pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<
     })
 }
 
-#[allow(dead_code)]
 pub fn apply_selective_revert(
     repo: &Path,
     mutation_id: &str,
