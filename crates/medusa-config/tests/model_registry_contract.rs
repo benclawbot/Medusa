@@ -11,13 +11,7 @@ fn compatibility_model_options_follow_canonical_registry_ordering() {
             display_name: None,
         })
         .collect::<Vec<_>>();
-    let registry = model_registry(
-        "openai",
-        "private-model",
-        Ok(&discovered_models),
-        None,
-        0,
-    );
+    let registry = model_registry("openai", "private-model", Ok(&discovered_models), None, 0);
     let registry_ids = registry
         .models
         .iter()
