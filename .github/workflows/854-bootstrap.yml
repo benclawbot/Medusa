@@ -1,0 +1,70 @@
+name: Issue 854 mutation provenance bootstrap
+
+on:
+  push:
+    branches: [codex/854-mutation-provenance]
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/854-mutation-provenance
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Expose provenance production boundary
+        shell: python
+        run: |
+          from pathlib import Path
+
+          tx = Path('crates/medusa-agent/src/transaction.rs')
+          text = tx.read_text()
+          for marker in [
+              '#[allow(dead_code)]\npub fn apply_atomic_with_context(',
+              '#[allow(dead_code)]\npub fn preview_selective_revert(',
+              '#[allow(dead_code)]\npub fn apply_selective_revert(',
+          ]:
+              if marker not in text:
+                  raise SystemExit(f'missing transaction marker: {marker}')
+              text = text.replace(marker, marker.replace('#[allow(dead_code)]\n', ''), 1)
+          tx.write_text(text)
+
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          text = lib.read_text()
+          old = 'pub use transaction::{\n    FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,\n};'
+          new = 'pub use transaction::{\n    FileMutation, MutationContext, RevertPreview, TransactionOutcome, TransactionPreview,\n    apply_atomic, apply_atomic_with_context, apply_selective_revert, preview,\n    preview_selective_revert,\n};'
+          if old not in text:
+              raise SystemExit('missing lib transaction export block')
+          lib.write_text(text.replace(old, new, 1))
+
+          fs = Path('crates/medusa-agent/src/tools/filesystem.rs')
+          text = fs.read_text()
+          old = '    transaction::{FileMutation, apply_atomic},\n'
+          new = '    transaction::{\n        FileMutation, MutationContext, TransactionOutcome, apply_atomic, apply_atomic_with_context,\n    },\n'
+          if old not in text:
+              raise SystemExit('missing filesystem transaction import')
+          text = text.replace(old, new, 1)
+          anchor = '''pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {\n    reject_git_metadata(relative)?;\n    apply_atomic(\n        repo,\n        &[FileMutation {\n            path: relative.to_owned(),\n            content: content.to_owned(),\n        }],\n    )?;\n    Ok(format!("wrote {} bytes to {relative}", content.len()))\n}\n'''
+          replacement = '''pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {\n    reject_git_metadata(relative)?;\n    apply_atomic(\n        repo,\n        &[FileMutation {\n            path: relative.to_owned(),\n            content: content.to_owned(),\n        }],\n    )?;\n    Ok(format!("wrote {} bytes to {relative}", content.len()))\n}\n\npub(crate) fn write_with_context(\n    repo: &Path,\n    relative: &str,\n    content: &str,\n    context: &MutationContext,\n) -> MedusaResult<TransactionOutcome> {\n    reject_git_metadata(relative)?;\n    apply_atomic_with_context(\n        repo,\n        &[FileMutation {\n            path: relative.to_owned(),\n            content: content.to_owned(),\n        }],\n        context,\n    )\n}\n'''
+          if anchor not in text:
+              raise SystemExit('missing filesystem write block')
+          fs.write_text(text.replace(anchor, replacement, 1))
+      - name: Format and targeted tests
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test -p medusa-agent transaction --locked
+      - name: Commit bootstrap
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/transaction.rs crates/medusa-agent/src/lib.rs crates/medusa-agent/src/tools/filesystem.rs
+          git diff --cached --check
+          git commit -m "feat(agent): expose mutation provenance boundary"
+          git push origin HEAD:codex/854-mutation-provenance
