@@ -229,7 +229,12 @@ pub fn model_registry(
             .position(|discovered| discovered.id == model.id)
             .unwrap_or(usize::MAX);
         let curated_rank = catalog
-            .and_then(|entry| entry.known_models.iter().position(|known| *known == model.id))
+            .and_then(|entry| {
+                entry
+                    .known_models
+                    .iter()
+                    .position(|known| *known == model.id)
+            })
             .unwrap_or(usize::MAX);
         (
             model.id != current_model,
