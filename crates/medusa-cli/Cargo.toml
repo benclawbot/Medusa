@@ -57,8 +57,6 @@ medusa-core.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
-# Keep the typed adapter in the shipped graph while the legacy command surface migrates.
-medusa-external-github = { path = "../medusa-external-github" }
 medusa-github = { path = "../medusa-github" }
 medusa-hardening = { path = "../medusa-hardening" }
 medusa-memory = { path = "../medusa-memory" }
