@@ -52,7 +52,10 @@ use crate::{
         PendingToolApproval, bootstrap, load, persist,
     },
     team::{AgentExecutionPolicy, TeamMemberContext},
-    tools::{execute_approved_tool_cancellable, execute_tool_cancellable, input_string},
+    tools::{
+        execute_approved_tool_cancellable, execute_tool_cancellable,
+        execute_tool_cancellable_with_context, input_string,
+    },
     verification_authority::{
         authoritative_verification_for_paths, prepare_paths_for_verification,
     },
@@ -202,6 +205,80 @@ fn dependency_failure_error(name: &str) -> MedusaError {
         serde_json::Value::Bool(true),
     );
     error
+}
+
+fn execute_session_tool(
+    repo: &Path,
+    name: &str,
+    input: &serde_json::Value,
+    cancellation: &AtomicBool,
+    session_id: &str,
+    task_step_id: Option<&str>,
+    activity_id: &str,
+) -> MedusaResult<String> {
+    if name != "fs_write" {
+        return execute_tool_cancellable(repo, name, input, cancellation);
+    }
+
+    let requested_path = input
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                "fs_write path must be a string",
+            )
+        })?;
+
+    // Absolute/external writes must reach the existing path-policy and approval boundary before
+    // any provenance work. They are not repository mutations and cannot be selectively reverted.
+    if Path::new(requested_path).is_absolute() {
+        return execute_tool_cancellable(repo, name, input, cancellation);
+    }
+
+    // Non-Git workspaces remain writable, but repository-diff provenance is unavailable there.
+    // Keep that limitation explicit instead of failing the write or manufacturing authority.
+    let provenance_available = std::process::Command::new("git")
+        .args(["diff", "--binary", "--no-ext-diff", "--", "."])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !provenance_available {
+        let output = execute_tool_cancellable(repo, name, input, cancellation)?;
+        return Ok(format!(
+            "{output}; selective_revert=unavailable (workspace has no authoritative Git provenance)"
+        ));
+    }
+
+    let sequence = crate::transaction::next_mutation_sequence(repo, session_id)?;
+    let occurred_at_unix_ms = i64::try_from(
+        OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
+    )
+    .map_err(|_| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            "mutation timestamp overflow",
+        )
+    })?;
+    let context = crate::transaction::MutationContext {
+        session_id: session_id.to_owned(),
+        task_step_id: task_step_id.map(str::to_owned),
+        activity_id: activity_id.to_owned(),
+        actor: "medusa-agent".to_owned(),
+        sequence,
+        occurred_at_unix_ms,
+    };
+    execute_tool_cancellable_with_context(repo, name, input, cancellation, Some(&context))
+}
+
+fn active_plan_step_id(session: &AgentSession) -> Option<&str> {
+    session
+        .plan
+        .iter()
+        .find(|step| matches!(step.status, crate::session::AgentPlanStepStatus::InProgress))
+        .map(|step| step.title.as_str())
 }
 
 fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
@@ -1134,6 +1211,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                     }
                 }
                 let repo = session.repo.as_path();
+                let mutation_session_id = session.id.to_string();
+                let mutation_task_step = active_plan_step_id(session).map(str::to_owned);
                 let cache = &safe_tool_cache;
                 let requested_at = &tool_requested_at;
                 let cancellation = Arc::clone(&self.cancellation);
@@ -1147,7 +1226,17 @@ impl<P: ModelProvider> AgentEngine<P> {
                         .and_then(|key| cache.get(&key).cloned());
                     let cached = cached_output.is_some();
                     let result = cached_output.map_or_else(
-                        || execute_tool_cancellable(repo, &name, &input, cancellation.as_ref()),
+                        || {
+                            execute_session_tool(
+                                repo,
+                                &name,
+                                &input,
+                                cancellation.as_ref(),
+                                &mutation_session_id,
+                                mutation_task_step.as_deref(),
+                                &id,
+                            )
+                        },
                         Ok,
                     );
                     let timing = ToolExecutionTiming {
@@ -1329,11 +1418,14 @@ impl<P: ModelProvider> AgentEngine<P> {
                             },
                             &mut observer,
                         )?;
-                        execute_tool_cancellable(
+                        execute_session_tool(
                             &session.repo,
                             &name,
                             &input,
                             self.cancellation.as_ref(),
+                            session.id.as_str(),
+                            active_plan_step_id(session),
+                            &id,
                         )
                     }
                 } else {

@@ -5,7 +5,9 @@ use walkdir::WalkDir;
 
 use crate::{
     policy::safe_path,
-    transaction::{FileMutation, apply_atomic},
+    transaction::{
+        FileMutation, MutationContext, TransactionOutcome, apply_atomic, apply_atomic_with_context,
+    },
 };
 
 const MAX_SEARCH_FILES: usize = 10_000;
@@ -101,6 +103,23 @@ pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<
         }],
     )?;
     Ok(format!("wrote {} bytes to {relative}", content.len()))
+}
+
+pub(crate) fn write_with_context(
+    repo: &Path,
+    relative: &str,
+    content: &str,
+    context: &MutationContext,
+) -> MedusaResult<TransactionOutcome> {
+    reject_git_metadata(relative)?;
+    apply_atomic_with_context(
+        repo,
+        &[FileMutation {
+            path: relative.to_owned(),
+            content: content.to_owned(),
+        }],
+        context,
+    )
 }
 
 pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {

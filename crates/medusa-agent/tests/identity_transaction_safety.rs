@@ -3,6 +3,7 @@ mod identity_guard;
 #[allow(dead_code)]
 #[path = "../src/policy.rs"]
 mod policy;
+#[allow(dead_code)]
 #[path = "../src/transaction.rs"]
 mod transaction;
 

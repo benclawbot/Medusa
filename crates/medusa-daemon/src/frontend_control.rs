@@ -4,7 +4,10 @@
 //! command, delegates attachment and replay to `LiveSessionBroker`, and routes mutations through the
 //! existing `RuntimeController`. It does not create a second transcript or policy implementation.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use medusa_config::Config;
 use medusa_protocol::frontend::{
@@ -540,6 +543,55 @@ impl FrontendControlPlane {
                     command: "run_command".to_owned(),
                 })
             }
+            FrontendCommand::PreviewSelectiveRevert { mutation_id } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let preview = medusa_agent::preview_session_selective_revert(
+                    &self.repo,
+                    &session_id,
+                    mutation_id,
+                )
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                let command = serde_json::to_string(&serde_json::json!({
+                    "type": "selective_revert_preview",
+                    "mutation_id": preview.mutation_id,
+                    "path": preview.path,
+                    "start_byte": preview.start_byte,
+                    "remove_len": preview.remove_len,
+                    "restore_len": preview.restore_len,
+                }))
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command,
+                })
+            }
+            FrontendCommand::ApplySelectiveRevert { mutation_id } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let outcome = medusa_agent::apply_session_selective_revert(
+                    &self.repo,
+                    &session_id,
+                    mutation_id,
+                    &envelope.command_id,
+                    "frontend-control",
+                )
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                let review_fingerprint = repository_review_fingerprint(&self.repo)?;
+                let command = serde_json::to_string(&serde_json::json!({
+                    "type": "selective_revert_applied",
+                    "mutation_id": mutation_id,
+                    "inverse_mutation_ids": outcome.mutation_ids,
+                    "verification_invalidated": true,
+                    "review_fingerprint": review_fingerprint,
+                    "review_refresh_required": false,
+                }))
+                .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command,
+                })
+            }
             FrontendCommand::RecoveryAction {
                 operation,
                 checkpoint_id,
@@ -957,6 +1009,20 @@ fn fingerprint(envelope: &FrontendCommandEnvelope) -> Result<String, FrontendCon
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
+fn repository_review_fingerprint(repo: &Path) -> Result<String, FrontendControlError> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--binary", "--no-ext-diff", "--", "."])
+        .current_dir(repo)
+        .output()
+        .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?;
+    if !output.status.success() {
+        return Err(FrontendControlError::InvalidCommand(
+            "could not refresh repository review fingerprint after selective revert".to_owned(),
+        ));
+    }
+    Ok(hex::encode(Sha256::digest(&output.stdout)))
+}
+
 #[derive(Debug, Error)]
 pub enum FrontendControlError {
     #[error("invalid frontend command envelope: {0}")]
@@ -1023,5 +1089,39 @@ mod tests {
             .expect("map"),
             Some(FrontendTransientEvent::Failed { .. })
         ));
+    }
+
+    #[test]
+    fn repository_review_fingerprint_refreshes_when_review_diff_changes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git init");
+        std::fs::write(directory.path().join("value.txt"), "base\n").expect("fixture");
+        std::process::Command::new("git")
+            .args(["add", "value.txt"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git add");
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Medusa Test",
+                "-c",
+                "user.email=medusa@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ])
+            .current_dir(directory.path())
+            .status()
+            .expect("git commit");
+
+        let clean = repository_review_fingerprint(directory.path()).expect("clean fingerprint");
+        std::fs::write(directory.path().join("value.txt"), "changed\n").expect("change");
+        let changed = repository_review_fingerprint(directory.path()).expect("changed fingerprint");
+        assert_ne!(clean, changed);
     }
 }
