@@ -1462,6 +1462,28 @@ impl<P: ModelProvider> AgentEngine<P> {
                 .then(|| refreshed_repository_revision(&session.repo))
                 .flatten();
 
+            let verification_mutation_paths = executed
+                .iter()
+                .filter(|(_, name, input, result, _)| {
+                    result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
+                })
+                .filter_map(|(_, name, input, _, _)| {
+                    matches!(name.as_str(), "fs_write" | "fs_create_dir")
+                        .then(|| input.get("path").and_then(serde_json::Value::as_str))
+                        .flatten()
+                        .filter(|path| !Path::new(path).is_absolute())
+                        .map(|path| path.replace('\\', "/"))
+                })
+                .collect::<Vec<_>>();
+            if repository_revision_after_mutation.is_some() {
+                crate::verification_contract::refresh_persisted_after_mutation(
+                    &session.repo,
+                    session.id.as_str(),
+                    &verification_mutation_paths,
+                    self.config.model.max_output_tokens,
+                )?;
+            }
+
             let failed_dependencies = executed
                 .iter()
                 .filter_map(|(_, name, input, result, _)| {
@@ -1654,8 +1676,47 @@ impl<P: ModelProvider> AgentEngine<P> {
             )?;
             let changed_paths = successful_mutation_paths(session);
             prepare_paths_for_verification(&session.repo, &changed_paths)?;
-            let mut verification =
-                authoritative_verification_for_paths(&session.repo, &changed_paths)?;
+            crate::verification_contract::refresh_persisted_after_mutation(
+                &session.repo,
+                session.id.as_str(),
+                &changed_paths,
+                self.config.model.max_output_tokens,
+            )?;
+            let mut verification = match authoritative_verification_for_paths(
+                &session.repo,
+                &changed_paths,
+            ) {
+                Ok(verification) => verification,
+                Err(error) => {
+                    crate::verification_contract::mark_persisted_unavailable(
+                        &session.repo,
+                        session.id.as_str(),
+                        &error.to_string(),
+                    )?;
+                    let evidence = vec![format!("verification_unavailable={error}")];
+                    append_observed(
+                        session,
+                        EventPayload::VerificationCompleted {
+                            passed: false,
+                            evidence: evidence.clone(),
+                        },
+                        &mut observer,
+                    )?;
+                    session.evidence.extend(evidence.clone());
+                    session.messages.push(Message {
+                        role: Role::User,
+                        content: vec![MessageBlock::Text {
+                            text: format!(
+                                "Required verification is unavailable. The coding task remains incomplete. Evidence:\n{}",
+                                evidence.join("\n")
+                            ),
+                        }],
+                    });
+                    session.updated_at = OffsetDateTime::now_utc();
+                    persist(session)?;
+                    return Ok(StepOutcome::TurnComplete);
+                }
+            };
             let transaction_ids = medusa_intelligence::finalize_patch_transactions(
                 &session.repo,
                 verification.passed,
@@ -1678,7 +1739,18 @@ impl<P: ModelProvider> AgentEngine<P> {
                 &mut observer,
             )?;
             session.evidence.extend(verification.evidence.clone());
-            if verification.passed && plan_is_complete(session) {
+            let contract = crate::verification_contract::apply_persisted_authoritative_summary(
+                &session.repo,
+                session.id.as_str(),
+                &verification.evidence,
+                verification.passed,
+            )?;
+            let contract_ready = contract.completion_ready(&session.repo)?
+                && crate::verification_contract::completion_ready(
+                    &session.repo,
+                    session.id.as_str(),
+                )?;
+            if verification.passed && contract_ready && plan_is_complete(session) {
                 session.completed = true;
                 append_observed(
                     session,
@@ -1687,6 +1759,21 @@ impl<P: ModelProvider> AgentEngine<P> {
                     },
                     &mut observer,
                 )?;
+            } else if verification.passed && !contract_ready {
+                let unresolved = crate::verification_contract::unresolved_summary(
+                    &session.repo,
+                    session.id.as_str(),
+                )?;
+                session.evidence.extend(unresolved.clone());
+                session.messages.push(Message {
+                    role: Role::User,
+                    content: vec![MessageBlock::Text {
+                        text: format!(
+                            "Authoritative checks ran, but the mandatory verification contract is unresolved. The task remains incomplete. Evidence:\n{}",
+                            unresolved.join("\n")
+                        ),
+                    }],
+                });
             } else if !verification.passed {
                 session.messages.push(Message {
                     role: Role::User,

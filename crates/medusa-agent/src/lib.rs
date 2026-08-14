@@ -19,6 +19,7 @@ pub mod tools;
 mod transaction;
 mod verification;
 mod verification_authority;
+mod verification_contract;
 pub mod verification_dag;
 mod worker_execution;
 pub mod world_model_session;

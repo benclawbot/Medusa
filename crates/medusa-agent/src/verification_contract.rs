@@ -128,7 +128,9 @@ impl VerificationContract {
         total_output_tokens: u32,
     ) -> MedusaResult<Self> {
         if session_id.trim().is_empty() || changed_paths.is_empty() {
-            return Err(invalid("verification contract requires session id and changed paths"));
+            return Err(invalid(
+                "verification contract requires session id and changed paths",
+            ));
         }
         let identity = workspace_identity(repo, &changed_paths)?;
         let components = components_for(repo, &changed_paths)?;
@@ -306,10 +308,12 @@ impl VerificationContract {
                 } else {
                     VerificationResolution::Failed
                 };
-                check.receipt_scope_fingerprint = Some(scope_fingerprint(repo, &check.scope_paths)?);
+                check.receipt_scope_fingerprint =
+                    Some(scope_fingerprint(repo, &check.scope_paths)?);
             } else if check.platform.as_deref() == Some(current_platform) && aggregate_passed {
                 check.resolution = VerificationResolution::Passed;
-                check.receipt_scope_fingerprint = Some(scope_fingerprint(repo, &check.scope_paths)?);
+                check.receipt_scope_fingerprint =
+                    Some(scope_fingerprint(repo, &check.scope_paths)?);
             }
         }
         let identity = workspace_identity(repo, &self.changed_paths)?;
@@ -396,6 +400,38 @@ pub(crate) fn completion_ready(repo: &Path, session_id: &str) -> MedusaResult<bo
         return Ok(false);
     };
     contract.completion_ready(repo)
+}
+
+pub(crate) fn mark_persisted_unavailable(
+    repo: &Path,
+    session_id: &str,
+    reason: &str,
+) -> MedusaResult<VerificationContract> {
+    let mut contract = load_contract(repo, session_id)?.ok_or_else(|| {
+        invalid("coding mutation reached unavailable verification without a verification contract")
+    })?;
+    for check in &mut contract.checks {
+        if check.requirement == VerificationRequirement::Required
+            && !matches!(
+                check.resolution,
+                VerificationResolution::Passed
+                    | VerificationResolution::ExplicitlyWaived
+                    | VerificationResolution::Superseded
+            )
+        {
+            check.resolution = VerificationResolution::Unavailable;
+            check.receipt_scope_fingerprint = None;
+        }
+    }
+    contract.constraints.push(VerificationConstraint {
+        source: "verification_authority".to_owned(),
+        requested_scope: contract.changed_paths.iter().cloned().collect(),
+        reason: reason.to_owned(),
+    });
+    contract.authoritative_passed = false;
+    contract.completion_identity = None;
+    persist_contract(repo, &contract)?;
+    Ok(contract)
 }
 
 pub(crate) fn unresolved_summary(repo: &Path, session_id: &str) -> MedusaResult<Vec<String>> {
@@ -551,7 +587,10 @@ fn platform_policy_checks(
         if platform.is_empty() {
             continue;
         }
-        let id = format!("platform-{}", &hex::encode(Sha256::digest(platform.as_bytes()))[..24]);
+        let id = format!(
+            "platform-{}",
+            &hex::encode(Sha256::digest(platform.as_bytes()))[..24]
+        );
         checks.push(ContractCheck {
             id,
             kind: VerificationCheckKind::RepositoryDefined,
@@ -647,7 +686,10 @@ mod tests {
     fn repository() -> tempfile::TempDir {
         let directory = tempfile::tempdir().expect("tempdir");
         git(directory.path(), &["init", "-q"]);
-        git(directory.path(), &["config", "user.email", "medusa@example.invalid"]);
+        git(
+            directory.path(),
+            &["config", "user.email", "medusa@example.invalid"],
+        );
         git(directory.path(), &["config", "user.name", "Medusa Test"]);
         fs::write(directory.path().join("a.txt"), "a0\n").expect("a");
         fs::write(directory.path().join("b.txt"), "b0\n").expect("b");
@@ -686,8 +728,12 @@ mod tests {
             completion_identity: None,
             authoritative_passed: false,
         };
-        contract.record_check_result(repo, "a", true).expect("a pass");
-        contract.record_check_result(repo, "b", true).expect("b pass");
+        contract
+            .record_check_result(repo, "a", true)
+            .expect("a pass");
+        contract
+            .record_check_result(repo, "b", true)
+            .expect("b pass");
         fs::write(repo.join("a.txt"), "a1\n").expect("edit a");
         let affected = BTreeSet::from(["a.txt".to_owned()]);
         let old_b = contract
@@ -704,7 +750,10 @@ mod tests {
             }
         }
         assert_eq!(contract.checks[0].resolution, VerificationResolution::Stale);
-        assert_eq!(contract.checks[1].resolution, VerificationResolution::Passed);
+        assert_eq!(
+            contract.checks[1].resolution,
+            VerificationResolution::Passed
+        );
         assert_eq!(contract.checks[1].receipt_scope_fingerprint, old_b);
     }
 
@@ -738,10 +787,17 @@ mod tests {
         let directory = repository();
         let repo = directory.path();
         fs::create_dir_all(repo.join(".medusa")).expect("medusa");
-        let unavailable = if current_platform() == "windows" { "linux" } else { "windows" };
+        let unavailable = if current_platform() == "windows" {
+            "linux"
+        } else {
+            "windows"
+        };
         fs::write(
             repo.join(".medusa/verification-platforms.json"),
-            format!("{{\"required\":[\"{}\",\"{unavailable}\"]}}", current_platform()),
+            format!(
+                "{{\"required\":[\"{}\",\"{unavailable}\"]}}",
+                current_platform()
+            ),
         )
         .expect("policy");
         fs::write(repo.join("a.txt"), "a1\n").expect("edit");
@@ -807,8 +863,12 @@ mod tests {
             completion_identity: None,
             authoritative_passed: false,
         };
-        contract.record_check_result(repo, "focused", true).expect("focused pass");
-        contract.record_check_result(repo, "workspace", false).expect("workspace fail");
+        contract
+            .record_check_result(repo, "focused", true)
+            .expect("focused pass");
+        contract
+            .record_check_result(repo, "workspace", false)
+            .expect("workspace fail");
         contract.authoritative_passed = false;
         assert!(!contract.completion_ready(repo).expect("not ready"));
     }
@@ -838,7 +898,9 @@ mod tests {
             .waive_check("waived", "user explicitly accepted this verification gap")
             .expect("waive");
         contract.supersede_check("superseded").expect("supersede");
-        contract.mark_unavailable("unavailable").expect("unavailable");
+        contract
+            .mark_unavailable("unavailable")
+            .expect("unavailable");
         assert_eq!(
             contract
                 .checks
@@ -868,10 +930,11 @@ mod tests {
         );
         assert_eq!(contract.constraints.len(), 1);
         assert_eq!(contract.constraints[0].source, "explicit_waiver");
-        assert!(contract
-            .unresolved_required()
-            .iter()
-            .any(|check| check.id == "unavailable"));
+        assert!(
+            contract
+                .unresolved_required()
+                .iter()
+                .any(|check| check.id == "unavailable")
+        );
     }
-
 }
