@@ -219,6 +219,38 @@ fn execute_session_tool(
     if name != "fs_write" {
         return execute_tool_cancellable(repo, name, input, cancellation);
     }
+
+    let requested_path = input
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                "fs_write path must be a string",
+            )
+        })?;
+
+    // Absolute/external writes must reach the existing path-policy and approval boundary before
+    // any provenance work. They are not repository mutations and cannot be selectively reverted.
+    if Path::new(requested_path).is_absolute() {
+        return execute_tool_cancellable(repo, name, input, cancellation);
+    }
+
+    // Non-Git workspaces remain writable, but repository-diff provenance is unavailable there.
+    // Keep that limitation explicit instead of failing the write or manufacturing authority.
+    let provenance_available = std::process::Command::new("git")
+        .args(["diff", "--binary", "--no-ext-diff", "--", "."])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !provenance_available {
+        let output = execute_tool_cancellable(repo, name, input, cancellation)?;
+        return Ok(format!(
+            "{output}; selective_revert=unavailable (workspace has no authoritative Git provenance)"
+        ));
+    }
+
     let sequence = crate::transaction::next_mutation_sequence(repo, session_id)?;
     let occurred_at_unix_ms = i64::try_from(
         OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
