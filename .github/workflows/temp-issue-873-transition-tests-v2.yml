@@ -1,0 +1,26 @@
+name: Temporary issue 873 transition tests v2
+on:
+  push:
+    branches: [codex/issue-873-verification-contract]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/issue-873-verification-contract
+          fetch-depth: 0
+      - name: Add typed terminal state coverage
+        env:
+          TEST_B64: CiAgICAjW3Rlc3RdCiAgICBmbiBleHBsaWNpdF90ZXJtaW5hbF9zdGF0ZV90cmFuc2l0aW9uc19hcmVfdHlwZWRfYW5kX2F1ZGl0YWJsZSgpIHsKICAgICAgICBsZXQgZGlyZWN0b3J5ID0gcmVwb3NpdG9yeSgpOwogICAgICAgIGxldCByZXBvID0gZGlyZWN0b3J5LnBhdGgoKTsKICAgICAgICBsZXQgcGF0aHMgPSBCVHJlZVNldDo6ZnJvbShbImEudHh0Ii50b19vd25lZCgpXSk7CiAgICAgICAgbGV0IGlkZW50aXR5ID0gd29ya3NwYWNlX2lkZW50aXR5KHJlcG8sICZwYXRocykuZXhwZWN0KCJpZGVudGl0eSIpOwogICAgICAgIGxldCBtdXQgY29udHJhY3QgPSBWZXJpZmljYXRpb25Db250cmFjdCB7CiAgICAgICAgICAgIHNjaGVtYV92ZXJzaW9uOiAxLAogICAgICAgICAgICBzZXNzaW9uX2lkOiAic2Vzc2lvbiIudG9fb3duZWQoKSwKICAgICAgICAgICAgY2hhbmdlZF9wYXRoczogcGF0aHMuY2xvbmUoKSwKICAgICAgICAgICAgY2hlY2tzOiB2ZWMhWwogICAgICAgICAgICAgICAgY2hlY2soIndhaXZlZCIsICZbImEudHh0Il0pLAogICAgICAgICAgICAgICAgY2hlY2soInN1cGVyc2VkZWQiLCAmWyJhLnR4dCJdKSwKICAgICAgICAgICAgICAgIGNoZWNrKCJ1bmF2YWlsYWJsZSIsICZbImEudHh0Il0pLAogICAgICAgICAgICBdLAogICAgICAgICAgICBjb25zdHJhaW50czogVmVjOjpuZXcoKSwKICAgICAgICAgICAgYnVkZ2V0OiBWZXJpZmljYXRpb25CdWRnZXRSZXNlcnZhdGlvbjo6Zm9yX291dHB1dF9idWRnZXQoNDA5NiksCiAgICAgICAgICAgIHBsYW5uZWRfaWRlbnRpdHk6IGlkZW50aXR5LAogICAgICAgICAgICBjb21wbGV0aW9uX2lkZW50aXR5OiBOb25lLAogICAgICAgICAgICBhdXRob3JpdGF0aXZlX3Bhc3NlZDogZmFsc2UsCiAgICAgICAgfTsKICAgICAgICBjb250cmFjdAogICAgICAgICAgICAud2FpdmVfY2hlY2soIndhaXZlZCIsICJ1c2VyIGV4cGxpY2l0bHkgYWNjZXB0ZWQgdGhpcyB2ZXJpZmljYXRpb24gZ2FwIikKICAgICAgICAgICAgLmV4cGVjdCgid2FpdmUiKTsKICAgICAgICBjb250cmFjdC5zdXBlcnNlZGVfY2hlY2soInN1cGVyc2VkZWQiKS5leHBlY3QoInN1cGVyc2VkZSIpOwogICAgICAgIGNvbnRyYWN0Lm1hcmtfdW5hdmFpbGFibGUoInVuYXZhaWxhYmxlIikuZXhwZWN0KCJ1bmF2YWlsYWJsZSIpOwogICAgICAgIGFzc2VydF9lcSEoCiAgICAgICAgICAgIGNvbnRyYWN0CiAgICAgICAgICAgICAgICAuY2hlY2tzCiAgICAgICAgICAgICAgICAuaXRlcigpCiAgICAgICAgICAgICAgICAuZmluZCh8Y2hlY2t8IGNoZWNrLmlkID09ICJ3YWl2ZWQiKQogICAgICAgICAgICAgICAgLmV4cGVjdCgid2FpdmVkIikKICAgICAgICAgICAgICAgIC5yZXNvbHV0aW9uLAogICAgICAgICAgICBWZXJpZmljYXRpb25SZXNvbHV0aW9uOjpFeHBsaWNpdGx5V2FpdmVkCiAgICAgICAgKTsKICAgICAgICBhc3NlcnRfZXEhKAogICAgICAgICAgICBjb250cmFjdAogICAgICAgICAgICAgICAgLmNoZWNrcwogICAgICAgICAgICAgICAgLml0ZXIoKQogICAgICAgICAgICAgICAgLmZpbmQofGNoZWNrfCBjaGVjay5pZCA9PSAic3VwZXJzZWRlZCIpCiAgICAgICAgICAgICAgICAuZXhwZWN0KCJzdXBlcnNlZGVkIikKICAgICAgICAgICAgICAgIC5yZXNvbHV0aW9uLAogICAgICAgICAgICBWZXJpZmljYXRpb25SZXNvbHV0aW9uOjpTdXBlcnNlZGVkCiAgICAgICAgKTsKICAgICAgICBhc3NlcnRfZXEhKAogICAgICAgICAgICBjb250cmFjdAogICAgICAgICAgICAgICAgLmNoZWNrcwogICAgICAgICAgICAgICAgLml0ZXIoKQogICAgICAgICAgICAgICAgLmZpbmQofGNoZWNrfCBjaGVjay5pZCA9PSAidW5hdmFpbGFibGUiKQogICAgICAgICAgICAgICAgLmV4cGVjdCgidW5hdmFpbGFibGUiKQogICAgICAgICAgICAgICAgLnJlc29sdXRpb24sCiAgICAgICAgICAgIFZlcmlmaWNhdGlvblJlc29sdXRpb246OlVuYXZhaWxhYmxlCiAgICAgICAgKTsKICAgICAgICBhc3NlcnRfZXEhKGNvbnRyYWN0LmNvbnN0cmFpbnRzLmxlbigpLCAxKTsKICAgICAgICBhc3NlcnRfZXEhKGNvbnRyYWN0LmNvbnN0cmFpbnRzWzBdLnNvdXJjZSwgImV4cGxpY2l0X3dhaXZlciIpOwogICAgICAgIGFzc2VydCEoY29udHJhY3QKICAgICAgICAgICAgLnVucmVzb2x2ZWRfcmVxdWlyZWQoKQogICAgICAgICAgICAuaXRlcigpCiAgICAgICAgICAgIC5hbnkofGNoZWNrfCBjaGVjay5pZCA9PSAidW5hdmFpbGFibGUiKSk7CiAgICB9Cg==
+        run: |
+          python -c 'import base64,os,pathlib; p=pathlib.Path("crates/medusa-agent/src/verification_contract.rs"); s=p.read_text(); t=base64.b64decode(os.environ["TEST_B64"]).decode(); pos=s.rfind("\n}\n"); assert pos>=0; p.write_text(s if "explicit_terminal_state_transitions_are_typed_and_auditable" in s else s[:pos]+"\n"+t+s[pos:])'
+          cargo fmt --all
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/verification_contract.rs
+          git diff --cached --quiet && exit 0
+          git commit -m 'Test verification contract terminal states'
+          git push origin HEAD:codex/issue-873-verification-contract
