@@ -100,6 +100,7 @@ fn configured_verification_route() -> io::Result<VerificationRoute> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
+#[cfg(test)]
 fn admit_verification_route(raw: &str) -> io::Result<VerificationRoute> {
     VerificationRoute::parse(raw)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
