@@ -221,7 +221,11 @@ fn replay_idempotent_operation(
             continue;
         }
         let record: serde_json::Value = serde_json::from_str(line)?;
-        if record.get("idempotencyKey").and_then(serde_json::Value::as_str) != Some(key) {
+        if record
+            .get("idempotencyKey")
+            .and_then(serde_json::Value::as_str)
+            != Some(key)
+        {
             continue;
         }
         let stored_digest = record
@@ -242,18 +246,13 @@ fn replay_idempotent_operation(
             )
             .into());
         }
-        let receipt = serde_json::from_value(
-            record
-                .get("receipt")
-                .cloned()
-                .ok_or_else(|| {
-                    medusa_core::MedusaError::new(
-                        medusa_core::ErrorCode::PersistenceFailed,
-                        medusa_core::ErrorCategory::Persistence,
-                        "idempotent GitHub audit record is missing its receipt",
-                    )
-                })?,
-        )?;
+        let receipt = serde_json::from_value(record.get("receipt").cloned().ok_or_else(|| {
+            medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                "idempotent GitHub audit record is missing its receipt",
+            )
+        })?)?;
         return Ok(Some(receipt));
     }
     Ok(None)
@@ -266,7 +265,7 @@ fn append_audit(
     authorization_events: &[medusa_capabilities::CapabilityAuditEvent],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let record = serde_json::json!({
-        "idempotencyKey": request.idempotency_key,
+        "idempotencyKey": request.idempotency_key.as_deref(),
         "requestDigest": request.request_digest()?,
         "receipt": receipt,
         "authorizationEvents": authorization_events,
