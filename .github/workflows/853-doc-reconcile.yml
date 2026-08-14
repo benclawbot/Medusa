@@ -1,0 +1,53 @@
+name: Issue 853 documentation reconciliation
+
+on:
+  push:
+    branches: [codex/853-browser-certification-docs]
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: codex/853-browser-certification-docs
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Reconcile README browser status
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('README.md')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              'model-executable browser actions remain withheld.': 'browser actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled.',
+              'Model-executable browser actions remain quarantined.': 'Model-executable browser actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled.',
+              'required UI-change browser verification through the internal sidecar, while model-executable browser actions remain quarantined;': 'required UI-change browser verification through the internal sidecar; model browser actions are a readiness-gated, explicit-opt-in preview with a certified dispatcher; not default-enabled;',
+              'Browser crates remain quarantined from advertised executable model actions until dispatcher, permission, and authenticated behavioral evidence are certified.': 'Browser model actions are readiness-gated, explicit-opt-in preview; the dispatcher is certified-production, but the capability is not default-enabled and remains bounded by route admission, permissions, and required verification authority.',
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one README occurrence for {old!r}, found {count}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8', newline='\n')
+      - name: Refresh reviewed documentation inventory
+        run: python scripts/check-documentation.py --write
+      - name: Validate browser and documentation authorities
+        run: |
+          python scripts/test-browser-status.py
+          python scripts/check-browser-status.py
+          python scripts/check-documentation.py
+      - name: Commit reconciliation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md docs/documentation-inventory.json
+          git diff --cached --check
+          git commit -m "docs(browser): reconcile README with runtime authority"
+          git push origin HEAD:codex/853-browser-certification-docs
