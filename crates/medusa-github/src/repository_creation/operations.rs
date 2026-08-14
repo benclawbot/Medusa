@@ -4,6 +4,7 @@ use crate::invalid_input;
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_RESPONSE_BYTES: usize = 4_194_304;
@@ -108,6 +109,14 @@ pub struct GitHubOperationRequest {
     pub paginate: bool,
     #[serde(default = "default_max_response_bytes")]
     pub max_response_bytes: usize,
+    /// Durable replay key for non-idempotent creates. The production CLI persists this key
+    /// beside the request digest and refuses conflicting reuse.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+    /// Exact pull-request head SHA required by a merge mutation. The REST backend forwards this
+    /// as GitHub's atomic `sha` merge precondition.
+    #[serde(default)]
+    pub expected_head: Option<String>,
 }
 
 impl GitHubOperationRequest {
@@ -156,7 +165,30 @@ impl GitHubOperationRequest {
             }
             validate_body_credentials(body)?;
         }
+        if let Some(key) = self.idempotency_key.as_deref() {
+            validate_idempotency_key(key)?;
+        }
+        if self.is_non_idempotent_create() && self.idempotency_key.is_none() {
+            return Err(invalid_input(
+                "non-idempotent GitHub create operations require an idempotencyKey",
+            ));
+        }
+        if let Some(expected_head) = self.expected_head.as_deref() {
+            validate_expected_head(expected_head)?;
+            if !self.supports_expected_head() {
+                return Err(invalid_input(
+                    "expectedHead is supported only for pull-request merge operations",
+                ));
+            }
+        }
         Ok(())
+    }
+
+    /// Stable digest used by the production CLI to reject reuse of an idempotency key for a
+    /// different request. The digest binds repository, route, body, expected head, and key.
+    pub fn request_digest(&self) -> MedusaResult<String> {
+        let encoded = serde_json::to_vec(self).map_err(json_error)?;
+        Ok(hex::encode(Sha256::digest(encoded)))
     }
 
     #[must_use]
@@ -184,6 +216,30 @@ impl GitHubOperationRequest {
         value
     }
 
+    fn is_non_idempotent_create(&self) -> bool {
+        matches!(self.method, GitHubHttpMethod::Post) && self.action == "create"
+    }
+
+    fn supports_expected_head(&self) -> bool {
+        matches!(self.resource, GitHubResource::PullRequests)
+            && matches!(self.method, GitHubHttpMethod::Put)
+            && self.action == "merge"
+            && self.pull_request_number_for_merge().is_some()
+    }
+
+    fn pull_request_number_for_merge(&self) -> Option<u64> {
+        let mut parts = self.endpoint.split('/');
+        match (
+            parts.next(),
+            parts.next().and_then(|value| value.parse::<u64>().ok()),
+            parts.next(),
+            parts.next(),
+        ) {
+            (Some("pulls"), Some(number), Some("merge"), None) => Some(number),
+            _ => None,
+        }
+    }
+
     fn secret_operation(&self) -> bool {
         matches!(self.resource, GitHubResource::Secrets)
             || self.endpoint.split('/').any(|segment| segment == "secrets")
@@ -203,6 +259,29 @@ impl GitHubOperationRequest {
             || self.endpoint.starts_with("environments")
             || self.endpoint.starts_with("rulesets")
     }
+}
+
+fn validate_idempotency_key(value: &str) -> MedusaResult<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        })
+    {
+        return Err(invalid_input(
+            "idempotencyKey must contain 1 to 128 URL-safe printable characters",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_expected_head(value: &str) -> MedusaResult<()> {
+    if !(7..=64).contains(&value.len()) || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(invalid_input(
+            "expectedHead must be a 7 to 64 character hexadecimal commit identity",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
