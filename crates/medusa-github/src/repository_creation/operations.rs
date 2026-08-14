@@ -4,7 +4,6 @@ use crate::invalid_input;
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_RESPONSE_BYTES: usize = 4_194_304;
@@ -188,7 +187,7 @@ impl GitHubOperationRequest {
     /// different request. The digest binds repository, route, body, expected head, and key.
     pub fn request_digest(&self) -> MedusaResult<String> {
         let encoded = serde_json::to_vec(self).map_err(json_error)?;
-        Ok(hex::encode(Sha256::digest(encoded)))
+        Ok(stable_request_digest(&encoded))
     }
 
     #[must_use]
@@ -259,6 +258,20 @@ impl GitHubOperationRequest {
             || self.endpoint.starts_with("environments")
             || self.endpoint.starts_with("rulesets")
     }
+}
+
+fn stable_request_digest(bytes: &[u8]) -> String {
+    // Stable, dependency-free 128-bit fingerprint for replay conflict detection. This is an
+    // identity checksum, not a credential or cryptographic authorization boundary.
+    let mut left = 0xcbf29ce484222325_u64;
+    let mut right = 0x84222325cbf29ce4_u64;
+    for byte in bytes {
+        left ^= u64::from(*byte);
+        left = left.wrapping_mul(0x100000001b3);
+        right ^= u64::from(*byte).rotate_left(1);
+        right = right.wrapping_mul(0x100000001b3).rotate_left(5);
+    }
+    format!("{left:016x}{right:016x}")
 }
 
 fn validate_idempotency_key(value: &str) -> MedusaResult<()> {
