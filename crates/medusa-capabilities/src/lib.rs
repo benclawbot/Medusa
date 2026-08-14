@@ -1,6 +1,9 @@
 //! Versioned capability authority shared by model, CLI, UI, protocol, and documentation surfaces.
 
+extern crate self as medusa_browser_client;
+
 mod registry;
+mod verification_route;
 
 pub use registry::*;
 
