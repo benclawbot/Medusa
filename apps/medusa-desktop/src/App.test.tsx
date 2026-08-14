@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { loadProviderCatalog } from "./providerCatalog";
 import {
   closeRuntime,
   commandSuggestions,
@@ -11,7 +12,60 @@ import {
   startRuntime,
 } from "./runtime";
 
+const providerCatalog = [
+  {
+    id: "minimax",
+    displayName: "MiniMax direct",
+    description: "Direct MiniMax route",
+    connection: "direct",
+    profileProvider: "minimax",
+    authMethods: ["api-key"],
+    defaultAuth: "api-key",
+    defaultModel: "MiniMax-M3",
+    modelOptions: ["MiniMax-M3", "MiniMax-M2.7"],
+    browserOauth: false,
+    discoverModels: false,
+    customValues: false,
+    currentCustom: false,
+  },
+  {
+    id: "openai",
+    displayName: "OpenAI API",
+    description: "Official OpenAI API route",
+    connection: "openai-api",
+    profileProvider: "openai",
+    authMethods: ["api-key"],
+    defaultAuth: "api-key",
+    defaultModel: "gpt-5.1-codex",
+    modelOptions: ["gpt-5.1-codex", "gpt-5.1"],
+    baseUrl: "https://api.openai.com/v1",
+    browserOauth: false,
+    discoverModels: false,
+    customValues: false,
+    currentCustom: false,
+  },
+  {
+    id: "omniroute",
+    displayName: "OmniRoute",
+    description: "Managed OmniRoute gateway",
+    connection: "omniroute",
+    profileProvider: "auto/coding",
+    authMethods: ["none"],
+    defaultAuth: "none",
+    defaultModel: "auto/coding",
+    modelOptions: ["auto/coding"],
+    baseUrl: "http://127.0.0.1:20128/v1",
+    browserOauth: false,
+    discoverModels: false,
+    customValues: false,
+    currentCustom: false,
+  },
+];
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("./providerCatalog", () => ({
+  loadProviderCatalog: vi.fn(),
+}));
 vi.mock("./runtime", async () => {
   const actual = await vi.importActual<typeof import("./runtime")>("./runtime");
   return {
@@ -40,6 +94,7 @@ vi.mock("./runtime", async () => {
 
 beforeEach(() => {
   window.localStorage.clear();
+  vi.mocked(loadProviderCatalog).mockReset().mockResolvedValue(providerCatalog);
   vi.mocked(loadSharedConfiguration).mockReset().mockResolvedValue({
     revision: 0,
     activeProfile: "default",
@@ -68,12 +123,43 @@ it("starts a general chat without requiring a project", async () => {
   render(<App />);
 
   await waitFor(() => expect(loadSharedConfiguration).toHaveBeenCalled());
+  await waitFor(() => expect(loadProviderCatalog).toHaveBeenCalled());
   await waitFor(() => expect(startRuntime).toHaveBeenCalledWith(undefined));
   expect(window.localStorage.getItem("medusa.desktop.model")).toBeNull();
   expect(screen.getByRole("heading", { name: "Medusa" })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "General chat" })).toBeInTheDocument();
   expect(screen.getByRole("textbox")).toBeEnabled();
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
+});
+
+it("renders provider and model choices from the shared catalog", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+  await waitFor(() => expect(startRuntime).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  const providerSelect = screen.getByLabelText("Provider");
+  expect(screen.getByRole("option", { name: "MiniMax direct" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "OpenAI API" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "OmniRoute" })).toHaveValue("auto/coding");
+
+  fireEvent.change(providerSelect, { target: { value: "openai" } });
+  expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.1-codex");
+  expect(screen.getByRole("option", { name: "gpt-5.1" })).toBeInTheDocument();
+});
+
+it("uses catalog auth metadata instead of a frontend provider allowlist", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+  await waitFor(() => expect(startRuntime).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "auto/coding" } });
+  expect(screen.getByLabelText("API key")).toBeDisabled();
+  expect(screen.getByLabelText("API key")).toHaveAttribute(
+    "placeholder",
+    "This route does not require an API key",
+  );
 });
 
 it("gives the icon-only send button an accessible name", async () => {
