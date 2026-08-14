@@ -156,7 +156,10 @@ fn prepare_with_catalog(
 
     if let Some(entry) = provider_catalog_entry(provider) {
         if let Some(reason) = entry.disabled_reason {
-            return Err(format!("provider {} is unavailable: {reason}", entry.display_name));
+            return Err(format!(
+                "provider {} is unavailable: {reason}",
+                entry.display_name
+            ));
         }
         let same_route = provider_catalog_entry_for_profile(previous)
             .is_some_and(|current| current.id == entry.id);
@@ -282,7 +285,11 @@ fn desktop_catalog_entry(
         description: entry.description.to_owned(),
         connection: entry.connection.to_owned(),
         profile_provider: entry.profile_provider.to_owned(),
-        auth_methods: entry.auth_methods.iter().map(|value| (*value).to_owned()).collect(),
+        auth_methods: entry
+            .auth_methods
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
         default_auth: entry.default_auth.to_owned(),
         default_model: entry.default_model.to_owned(),
         model_options: provider_model_options(entry.id, current_model, &[]),
@@ -368,7 +375,10 @@ mod tests {
             assert_eq!(desktop.default_auth, canonical.default_auth);
             assert_eq!(desktop.default_model, canonical.default_model);
             assert_eq!(desktop.base_url.as_deref(), canonical.base_url);
-            assert_eq!(desktop.disabled_reason.as_deref(), canonical.disabled_reason);
+            assert_eq!(
+                desktop.disabled_reason.as_deref(),
+                canonical.disabled_reason
+            );
         }
     }
 
@@ -430,8 +440,8 @@ mod tests {
     fn selecting_a_catalog_provider_applies_canonical_defaults() {
         let directory = tempfile::tempdir().expect("tempdir");
         let catalog = ProviderProfileCatalog::at(directory.path());
-        let prepared = prepare_with_catalog(catalog, "openai-oauth", "", "medium", 0)
-            .expect("prepare");
+        let prepared =
+            prepare_with_catalog(catalog, "openai-oauth", "", "medium", 0).expect("prepare");
         assert_eq!(prepared.profile.connection, "chatgpt-oauth");
         assert_eq!(prepared.profile.provider, "openai-oauth");
         assert_eq!(prepared.profile.model, "gpt-5");
