@@ -78,7 +78,7 @@ vi.mock("./runtime", async () => {
       model: "MiniMax-M3",
       effort: "medium",
       auth: "api-key",
-      configured: false,
+      configured: true,
       credentialConfigured: false,
     }),
     startRuntime: vi.fn(),
@@ -103,7 +103,7 @@ beforeEach(() => {
     model: "MiniMax-M3",
     effort: "medium",
     auth: "api-key",
-    configured: false,
+    configured: true,
     credentialConfigured: false,
   });
   vi.mocked(startRuntime).mockReset();

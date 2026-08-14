@@ -43,6 +43,8 @@ pub struct DesktopModelConfiguration {
     pub expected_revision: u64,
     #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

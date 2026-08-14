@@ -31,6 +31,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "./ApprovalCard";
+import { DesktopOnboarding } from "./DesktopOnboarding";
 import "./approval-card.css";
 import { loadProviderCatalog, type ProviderCatalogEntry } from "./providerCatalog";
 import {
@@ -400,6 +401,7 @@ export function App() {
     let disposed = false;
     const start = async () => {
       const configuration = await refreshConfiguration();
+      if (!configuration.configured || !configuration.provider.trim() || !configuration.model.trim()) return undefined;
       let started;
       try {
         started = await startRuntime(previous || undefined);
@@ -417,6 +419,7 @@ export function App() {
     };
     void start()
       .then((started) => {
+        if (!started) return;
         if (disposed) {
           void closeRuntime(started.runtimeId);
           return;
@@ -573,6 +576,31 @@ export function App() {
     setSlashSelection(0);
   };
 
+  const completeOnboarding = async (next: { provider: string; model: string; effort: Effort; apiKey?: string; baseUrl?: string }) => {
+    const started = await startRuntime();
+    try {
+      await configureRuntime(started.runtimeId, {
+        provider: next.provider,
+        model: next.model,
+        effort: next.effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
+        apiKey: next.apiKey,
+        baseUrl: next.baseUrl,
+      });
+      const configuration = await refreshConfiguration();
+      setProvider(configuration.provider);
+      setModel(configuration.model);
+      setEffort(configuration.effort);
+      setRuntimeId(started.runtimeId);
+      setRepo(started.repo);
+      setError(undefined);
+    } catch (cause) {
+      await closeRuntime(started.runtimeId).catch(() => undefined);
+      setError(String(cause));
+      throw cause;
+    }
+  };
+
   const applyModel = async () => {
     if (!runtimeId) return;
     try {
@@ -635,6 +663,17 @@ export function App() {
   const openDesktopTool = (selector: string) => {
     document.querySelector<HTMLButtonElement>(selector)?.click();
   };
+
+  if (!runtimeId && sharedConfiguration && !sharedConfiguration.configured) {
+    return (
+      <DesktopOnboarding
+        configuration={sharedConfiguration}
+        providers={providerCatalog}
+        error={error}
+        onApply={completeOnboarding}
+      />
+    );
+  }
 
   return (
     <>

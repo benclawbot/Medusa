@@ -583,6 +583,7 @@ pub fn runtime_configure_model(
         &model,
         &effort_name,
         configuration.expected_revision,
+        configuration.base_url.as_deref(),
     )?;
     let previous_profile = prepared_profile.previous_profile().clone();
     let profile_changed = prepared_profile.is_changed();

@@ -67,10 +67,10 @@ export async function loadModelRegistry(refresh = false): Promise<ModelRegistry>
   return invoke<ModelRegistry>("desktop_model_registry", { refresh });
 }
 
-export async function loadProviderCatalog(): Promise<ProviderCatalogEntry[]> {
+export async function loadProviderCatalog(refresh = false): Promise<ProviderCatalogEntry[]> {
   const providers = await invoke<ProviderCatalogEntry[]>("desktop_provider_catalog");
   try {
-    const registry = await loadModelRegistry();
+    const registry = await loadModelRegistry(refresh);
     return providers.map((provider) =>
       provider.id === registry.provider_id || provider.profileProvider === registry.provider_id
         ? {
@@ -84,6 +84,10 @@ export async function loadProviderCatalog(): Promise<ProviderCatalogEntry[]> {
     // Provider metadata remains usable when authenticated discovery is offline.
     return providers;
   }
+}
+
+export async function startBrowserOauth(provider: string): Promise<void> {
+  await invoke("desktop_browser_oauth", { provider });
 }
 
 export function modelSupports(
