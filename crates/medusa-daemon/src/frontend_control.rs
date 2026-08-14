@@ -4,7 +4,10 @@
 //! command, delegates attachment and replay to `LiveSessionBroker`, and routes mutations through the
 //! existing `RuntimeController`. It does not create a second transcript or policy implementation.
 
-use std::{collections::BTreeMap, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use medusa_config::Config;
 use medusa_protocol::frontend::{
@@ -1118,8 +1121,7 @@ mod tests {
 
         let clean = repository_review_fingerprint(directory.path()).expect("clean fingerprint");
         std::fs::write(directory.path().join("value.txt"), "changed\n").expect("change");
-        let changed =
-            repository_review_fingerprint(directory.path()).expect("changed fingerprint");
+        let changed = repository_review_fingerprint(directory.path()).expect("changed fingerprint");
         assert_ne!(clean, changed);
     }
 }
