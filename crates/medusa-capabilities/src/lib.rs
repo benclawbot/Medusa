@@ -3,7 +3,7 @@
 extern crate self as medusa_browser_client;
 
 mod registry;
-pub mod verification_route;
+mod verification_route;
 
 pub use registry::*;
 
