@@ -4,13 +4,9 @@ on:
   push:
     tags:
       - "v*"
-    branches:
-      - main
-    paths:
-      - ".github/release-trigger-v1.0.0"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: publish-release-${{ github.ref_name }}
@@ -38,30 +34,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
-          REF_NAME: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if [[ "$REF_TYPE" == "tag" ]]; then
-            RELEASE_TAG="$REF_NAME"
-          else
-            RELEASE_TAG="v1.0.0"
-            if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-              existing=$(git rev-list -n 1 "$RELEASE_TAG")
-              if [[ "$existing" != "$RELEASE_SHA" ]]; then
-                echo "release tag $RELEASE_TAG already points to $existing" >&2
-                exit 2
-              fi
-            else
-              gh api \
-                --method POST \
-                "repos/${GITHUB_REPOSITORY}/git/refs" \
-                -f ref="refs/tags/$RELEASE_TAG" \
-                -f sha="$RELEASE_SHA" >/dev/null
-            fi
-          fi
           version=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
-          git fetch --force --tags origin
+          git fetch --tags origin
           git fetch --no-tags origin main
           tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
           if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
@@ -70,6 +47,10 @@ jobs:
           fi
           if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
             echo "release tag $RELEASE_TAG does not point to a commit in main history" >&2
+            exit 2
+          fi
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists; refusing to rebuild or overwrite it" >&2
             exit 2
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
@@ -295,7 +276,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG"
-          git fetch --force --tags origin
+          git fetch --tags origin
           tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
           if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
             echo "release tag $RELEASE_TAG moved away from workflow event SHA $RELEASE_SHA" >&2
