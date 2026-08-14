@@ -1,0 +1,44 @@
+name: Temporary issue 869 runtime capability fix
+
+on:
+  push:
+    branches:
+      - codex/issue-869-model-registry
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-869-model-registry
+      - name: Preserve configured runtime policy flags
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/medusa-provider/src/openai.rs')
+          text = path.read_text()
+          old = '''                tool_calling: config.model.tool_calling && registry_capabilities.tool_calling,
+                streaming: config.model.streaming && registry_capabilities.streaming,
+'''
+          new = '''                tool_calling: config.model.tool_calling,
+                streaming: config.model.streaming,
+'''
+          if old not in text:
+              raise SystemExit('expected runtime capability block not found')
+          path.write_text(text.replace(old, new, 1))
+      - name: Format and run targeted provider test
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p medusa-provider --test openai_provider
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-provider/src/openai.rs
+          git commit -m 'Preserve configured provider runtime capabilities'
+          git push origin HEAD:codex/issue-869-model-registry
