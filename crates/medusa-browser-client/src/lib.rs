@@ -1,7 +1,6 @@
 pub mod network_policy;
 pub mod protocol;
 pub mod transport;
-pub mod verification_route;
 
 use std::io::{BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
