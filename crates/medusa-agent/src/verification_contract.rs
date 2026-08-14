@@ -812,4 +812,66 @@ mod tests {
         contract.authoritative_passed = false;
         assert!(!contract.completion_ready(repo).expect("not ready"));
     }
+
+    #[test]
+    fn explicit_terminal_state_transitions_are_typed_and_auditable() {
+        let directory = repository();
+        let repo = directory.path();
+        let paths = BTreeSet::from(["a.txt".to_owned()]);
+        let identity = workspace_identity(repo, &paths).expect("identity");
+        let mut contract = VerificationContract {
+            schema_version: 1,
+            session_id: "session".to_owned(),
+            changed_paths: paths.clone(),
+            checks: vec![
+                check("waived", &["a.txt"]),
+                check("superseded", &["a.txt"]),
+                check("unavailable", &["a.txt"]),
+            ],
+            constraints: Vec::new(),
+            budget: VerificationBudgetReservation::for_output_budget(4096),
+            planned_identity: identity,
+            completion_identity: None,
+            authoritative_passed: false,
+        };
+        contract
+            .waive_check("waived", "user explicitly accepted this verification gap")
+            .expect("waive");
+        contract.supersede_check("superseded").expect("supersede");
+        contract.mark_unavailable("unavailable").expect("unavailable");
+        assert_eq!(
+            contract
+                .checks
+                .iter()
+                .find(|check| check.id == "waived")
+                .expect("waived")
+                .resolution,
+            VerificationResolution::ExplicitlyWaived
+        );
+        assert_eq!(
+            contract
+                .checks
+                .iter()
+                .find(|check| check.id == "superseded")
+                .expect("superseded")
+                .resolution,
+            VerificationResolution::Superseded
+        );
+        assert_eq!(
+            contract
+                .checks
+                .iter()
+                .find(|check| check.id == "unavailable")
+                .expect("unavailable")
+                .resolution,
+            VerificationResolution::Unavailable
+        );
+        assert_eq!(contract.constraints.len(), 1);
+        assert_eq!(contract.constraints[0].source, "explicit_waiver");
+        assert!(contract
+            .unresolved_required()
+            .iter()
+            .any(|check| check.id == "unavailable"));
+    }
+
 }
