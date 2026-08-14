@@ -17,20 +17,17 @@ jobs:
         with:
           ref: codex/issue-869-model-registry
       - name: Preserve configured runtime policy flags
-        shell: python
         run: |
+          python - <<'PY'
           from pathlib import Path
           path = Path('crates/medusa-provider/src/openai.rs')
           text = path.read_text()
-          old = '''                tool_calling: config.model.tool_calling && registry_capabilities.tool_calling,
-                streaming: config.model.streaming && registry_capabilities.streaming,
-'''
-          new = '''                tool_calling: config.model.tool_calling,
-                streaming: config.model.streaming,
-'''
+          old = "                tool_calling: config.model.tool_calling && registry_capabilities.tool_calling,\n                streaming: config.model.streaming && registry_capabilities.streaming,\n"
+          new = "                tool_calling: config.model.tool_calling,\n                streaming: config.model.streaming,\n"
           if old not in text:
               raise SystemExit('expected runtime capability block not found')
           path.write_text(text.replace(old, new, 1))
+          PY
       - name: Format and run targeted provider test
         run: |
           cargo fmt --all -- --check
