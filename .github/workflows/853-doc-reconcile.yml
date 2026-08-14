@@ -25,7 +25,7 @@ jobs:
           path = Path('README.md')
           text = path.read_text(encoding='utf-8')
           replacements = {
-              'model-executable browser actions remain withheld.': 'browser actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled.',
+              'model-executable browser actions remain withheld.': 'browser actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled. Activation requires `MEDUSA_BROWSER_ENABLED=true`, an explicit `MEDUSA_BROWSER_PATH`, and an admitted `MEDUSA_BROWSER_VERIFY_URL`.',
               'Model-executable browser actions remain quarantined.': 'Model-executable browser actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled.',
               'required UI-change browser verification through the internal sidecar, while model-executable browser actions remain quarantined;': 'required UI-change browser verification through the internal sidecar; model browser actions are a readiness-gated, explicit-opt-in preview with a certified dispatcher; not default-enabled;',
               'Browser crates remain quarantined from advertised executable model actions until dispatcher, permission, and authenticated behavioral evidence are certified.': 'Browser model actions are readiness-gated, explicit-opt-in preview; the dispatcher is certified-production, but the capability is not default-enabled and remains bounded by route admission, permissions, and required verification authority.',
