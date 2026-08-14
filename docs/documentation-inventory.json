@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "2c082c489da7a92b50b9d7e65823bcae64b329d5ab25028ded73cbf95a83a502"
+      "sha256": "413318d492f95f7157c3ecd6fcbc30822d3c9940a4476bacd12eab7e6bbb9271"
     },
     {
       "path": "SECURITY.md",
@@ -126,7 +126,7 @@
     {
       "path": "docs/CONFIGURATION.md",
       "disposition": "current",
-      "sha256": "1113e8ea8ce18346eb61ea8d71d32dea50b1adf4df0c2b57bdba055d558aa303"
+      "sha256": "c30c6dee37c95242cfc5594d4bbca58ceb072f1efe8f83cb20733aa72677b44d"
     },
     {
       "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
@@ -391,7 +391,7 @@
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "90c109a549b37183899cf960ed6fcd037a583750a0091702cd1ea03c102dfeb9"
+      "sha256": "ce392d005b7cc8faa455d27860f21c6a3e9eb83fa54a61322cfce9c5dc792fe1"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
@@ -452,6 +452,11 @@
       "path": "docs/architecture/decisions/0008-main-default-explicit-release-updates.md",
       "disposition": "current",
       "sha256": "a5454453e8c8491ed2edd3f1ae84205d8153b829967415d842f33dee82abda8f"
+    },
+    {
+      "path": "docs/architecture/decisions/0009-browser-preview-certification.md",
+      "disposition": "current",
+      "sha256": "d251aa949c7060aeb88c6724b49343f2588f8503c1bbe0ba76b7869938fc3b88"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",
