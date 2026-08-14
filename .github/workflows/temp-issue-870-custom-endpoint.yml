@@ -1,0 +1,115 @@
+name: Temporary issue 870 custom endpoint integration
+on:
+  push:
+    branches: [codex/issue-870-desktop-onboarding]
+permissions:
+  contents: write
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/issue-870-desktop-onboarding
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+      - name: Integrate custom endpoint staging
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          dto = Path('apps/medusa-desktop/src-tauri/src/dto.rs')
+          s = dto.read_text()
+          old = '''    #[serde(default)]\n    pub api_key: Option<String>,\n}'''
+          new = '''    #[serde(default)]\n    pub api_key: Option<String>,\n    #[serde(default)]\n    pub base_url: Option<String>,\n}'''
+          if old not in s: raise SystemExit('dto anchor missing')
+          dto.write_text(s.replace(old, new, 1))
+
+          config = Path('apps/medusa-desktop/src-tauri/src/config.rs')
+          s = config.read_text()
+          old = '''pub(crate) fn prepare_provider_profile(\n    provider: &str,\n    model: &str,\n    effort: &str,\n    expected_revision: u64,\n) -> Result<PreparedProviderProfile, String> {\n    let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;\n    prepare_with_catalog(catalog, provider, model, effort, expected_revision)\n}\n\nfn prepare_with_catalog(\n    catalog: ProviderProfileCatalog,\n    provider: &str,\n    model: &str,\n    effort: &str,\n    expected_revision: u64,\n) -> Result<PreparedProviderProfile, String> {'''
+          new = '''pub(crate) fn prepare_provider_profile(\n    provider: &str,\n    model: &str,\n    effort: &str,\n    expected_revision: u64,\n    base_url: Option<&str>,\n) -> Result<PreparedProviderProfile, String> {\n    let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;\n    prepare_with_catalog_base_url(catalog, provider, model, effort, expected_revision, base_url)\n}\n\nfn prepare_with_catalog(\n    catalog: ProviderProfileCatalog,\n    provider: &str,\n    model: &str,\n    effort: &str,\n    expected_revision: u64,\n) -> Result<PreparedProviderProfile, String> {\n    prepare_with_catalog_base_url(catalog, provider, model, effort, expected_revision, None)\n}\n\nfn prepare_with_catalog_base_url(\n    catalog: ProviderProfileCatalog,\n    provider: &str,\n    model: &str,\n    effort: &str,\n    expected_revision: u64,\n    base_url: Option<&str>,\n) -> Result<PreparedProviderProfile, String> {'''
+          if old not in s: raise SystemExit('config function anchor missing')
+          s = s.replace(old, new, 1)
+          old = '''    let previous = update.profile();\n    let mut profile = previous.clone();\n\n    if let Some(entry) = provider_catalog_entry(provider) {'''
+          new = '''    let previous = update.profile();\n    let mut profile = previous.clone();\n    let requested_base_url = base_url.map(str::trim).filter(|value| !value.is_empty());\n\n    if let Some(entry) = provider_catalog_entry(provider) {'''
+          if old not in s: raise SystemExit('config base url anchor missing')
+          s = s.replace(old, new, 1)
+          old = '''        if !model.trim().is_empty() {\n            profile.model = model.trim().to_owned();\n        }\n    } else {'''
+          new = '''        if let Some(base_url) = requested_base_url {\n            if !entry.custom_values {\n                return Err(format!(\n                    "provider {} does not allow a custom base URL",\n                    entry.display_name\n                ));\n            }\n            profile.base_url = Some(base_url.to_owned());\n        }\n        if !model.trim().is_empty() {\n            profile.model = model.trim().to_owned();\n        }\n    } else {'''
+          if old not in s: raise SystemExit('config known provider anchor missing')
+          s = s.replace(old, new, 1)
+          old = '''        if !model.trim().is_empty() {\n            profile.model = model.trim().to_owned();\n        }\n    }\n\n    profile'''
+          new = '''        if let Some(base_url) = requested_base_url {\n            profile.base_url = Some(base_url.to_owned());\n        }\n        if !model.trim().is_empty() {\n            profile.model = model.trim().to_owned();\n        }\n    }\n\n    profile'''
+          if old not in s: raise SystemExit('config custom provider anchor missing')
+          s = s.replace(old, new, 1)
+          marker = '''    #[test]\n    fn desktop_rejects_a_stale_revision_before_persistence() {'''
+          test = '''    #[test]\n    fn desktop_custom_base_url_is_limited_to_customizable_routes() {\n        let directory = tempfile::tempdir().expect("tempdir");\n        let catalog = ProviderProfileCatalog::at(directory.path());\n        let prepared = prepare_with_catalog_base_url(\n            catalog.clone(),\n            "anthropic-compatible",\n            "custom-model",\n            "medium",\n            0,\n            Some("https://gateway.example/v1"),\n        )\n        .expect("custom endpoint");\n        assert_eq!(prepared.profile.base_url.as_deref(), Some("https://gateway.example/v1"));\n\n        let error = prepare_with_catalog_base_url(\n            catalog,\n            "openai",\n            "gpt-5",\n            "medium",\n            0,\n            Some("https://wrong.example/v1"),\n        )\n        .err()\n        .expect("first-class route must reject custom endpoint");\n        assert!(error.contains("does not allow a custom base URL"));\n    }\n\n'''
+          if marker not in s: raise SystemExit('config test anchor missing')
+          config.write_text(s.replace(marker, test + marker, 1))
+
+          runtime_rs = Path('apps/medusa-desktop/src-tauri/src/runtime.rs')
+          s = runtime_rs.read_text()
+          old = '''        configuration.expected_revision,\n    )?;'''
+          new = '''        configuration.expected_revision,\n        configuration.base_url.as_deref(),\n    )?;'''
+          if old not in s: raise SystemExit('runtime config anchor missing')
+          runtime_rs.write_text(s.replace(old, new, 1))
+
+          runtime_ts = Path('apps/medusa-desktop/src/runtime.ts')
+          s = runtime_ts.read_text()
+          old = '''  expectedRevision: number;\n  apiKey?: string;\n}'''
+          new = '''  expectedRevision: number;\n  apiKey?: string;\n  baseUrl?: string;\n}'''
+          if old not in s: raise SystemExit('runtime ts config anchor missing')
+          runtime_ts.write_text(s.replace(old, new, 1))
+
+          onboarding = Path('apps/medusa-desktop/src/DesktopOnboarding.tsx')
+          s = onboarding.read_text()
+          s = s.replace('onApply: (next: { provider: string; model: string; effort: Effort; apiKey?: string }) => Promise<void>;', 'onApply: (next: { provider: string; model: string; effort: Effort; apiKey?: string; baseUrl?: string }) => Promise<void>;')
+          s = s.replace('  const [apiKey, setApiKey] = useState("");\n', '  const [apiKey, setApiKey] = useState("");\n  const [baseUrl, setBaseUrl] = useState(configuration.baseUrl ?? selectedProvider?.baseUrl ?? "");\n')
+          s = s.replace('    setApiKey("");\n    setAuthError(undefined);', '    setApiKey("");\n    setBaseUrl(next?.baseUrl ?? "");\n    setAuthError(undefined);')
+          old = 'await onApply({ provider, model, effort, apiKey: apiKey.trim() || undefined });'
+          new = 'await onApply({ provider, model, effort, apiKey: apiKey.trim() || undefined, baseUrl: selectedProvider?.customValues ? baseUrl.trim() || undefined : undefined });'
+          if old not in s: raise SystemExit('onboarding apply anchor missing')
+          s = s.replace(old, new, 1)
+          old = '''            <label>Reasoning effort\n              <select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}>\n                <option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>\n              </select>\n            </label>'''
+          new = '''            <label>Reasoning effort\n              <select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}>\n                <option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>\n              </select>\n            </label>\n            {selectedProvider?.customValues && (\n              <label>Base URL\n                <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" />\n              </label>\n            )}'''
+          if old not in s: raise SystemExit('onboarding preferences anchor missing')
+          onboarding.write_text(s.replace(old, new, 1))
+
+          app = Path('apps/medusa-desktop/src/App.tsx')
+          s = app.read_text()
+          old = 'const completeOnboarding = async (next: { provider: string; model: string; effort: Effort; apiKey?: string }) => {'
+          new = 'const completeOnboarding = async (next: { provider: string; model: string; effort: Effort; apiKey?: string; baseUrl?: string }) => {'
+          if old not in s: raise SystemExit('App onboarding signature missing')
+          s = s.replace(old, new, 1)
+          old = '''        apiKey: next.apiKey,\n      });'''
+          new = '''        apiKey: next.apiKey,\n        baseUrl: next.baseUrl,\n      });'''
+          if old not in s: raise SystemExit('App base url config anchor missing')
+          app.write_text(s.replace(old, new, 1))
+
+          tests = Path('apps/medusa-desktop/src/DesktopOnboarding.test.tsx')
+          s = tests.read_text()
+          s += '''\n\nit("stages a custom endpoint only on the advanced custom route", async () => {\n  const customProvider: ProviderCatalogEntry = {\n    id: "anthropic-compatible",\n    displayName: "Compatible endpoint",\n    description: "Custom-compatible endpoint",\n    connection: "anthropic-compatible",\n    profileProvider: "anthropic-compatible",\n    authMethods: ["none"],\n    defaultAuth: "none",\n    defaultModel: "custom-model",\n    modelOptions: ["custom-model"],\n    baseUrl: "https://default.example/v1",\n    browserOauth: false,\n    discoverModels: false,\n    customValues: true,\n    currentCustom: false,\n  };\n  const customConfiguration: SharedConfiguration = {\n    ...configuration,\n    connection: "anthropic-compatible",\n    provider: "anthropic-compatible",\n    model: "",\n    auth: "none",\n    configured: false,\n    credentialConfigured: true,\n  };\n  const onApply = vi.fn().mockResolvedValue(undefined);\n  render(<DesktopOnboarding configuration={customConfiguration} providers={[customProvider]} onApply={onApply} />);\n  fireEvent.change(screen.getByLabelText("Model"), { target: { value: "custom-model" } });\n  fireEvent.click(screen.getByRole("button", { name: "Continue" }));\n  fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://gateway.example/v1" } });\n  fireEvent.click(screen.getByRole("button", { name: "Review" }));\n  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));\n  await waitFor(() => expect(onApply).toHaveBeenCalledWith(expect.objectContaining({\n    provider: "anthropic-compatible",\n    model: "custom-model",\n    baseUrl: "https://gateway.example/v1",\n  })));\n});\n'''
+          tests.write_text(s)
+          PY
+      - name: Validate Desktop frontend and adapter
+        run: |
+          cd apps/medusa-desktop
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          cd src-tauri
+          cargo fmt --all -- --check
+          cargo test --lib
+          cargo clippy --all-targets -- -D warnings
+      - name: Commit product changes and remove helper
+        run: |
+          rm .github/workflows/temp-issue-870-custom-endpoint.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/medusa-desktop/src apps/medusa-desktop/src-tauri/src .github/workflows/temp-issue-870-custom-endpoint.yml
+          git commit -m "Add Desktop custom endpoint onboarding"
+          git push origin HEAD:codex/issue-870-desktop-onboarding
