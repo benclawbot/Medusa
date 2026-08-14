@@ -8,10 +8,12 @@ use medusa_browser_client::{
         MAX_BROWSER_REQUEST_FRAME_BYTES, MAX_BROWSER_RESPONSE_FRAME_BYTES,
     },
     transport::{Transport, read_bounded_frame, send_and_receive},
-    verification_route::{VERIFY_URL_ENV, VerificationRoute},
 };
 
-use crate::{proxy, validation::validate_public_url};
+use crate::{
+    proxy,
+    validation::{VerificationRoute, validate_public_url},
+};
 
 const BROWSER_BRIDGE_PATH_ENV: &str = "MEDUSA_BROWSER_BRIDGE_PATH";
 const BROWSER_BRIDGE_RELATIVE_PATH: &str = "browser/playwright_bridge.mjs";
@@ -91,19 +93,8 @@ pub(crate) fn check_readiness() -> io::Result<()> {
 }
 
 fn configured_verification_route() -> io::Result<VerificationRoute> {
-    let raw = std::env::var_os(VERIFY_URL_ENV).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{VERIFY_URL_ENV} is required for browser readiness"),
-        )
-    })?;
-    let raw = raw.to_str().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{VERIFY_URL_ENV} must be valid UTF-8"),
-        )
-    })?;
-    admit_verification_route(raw)
+    VerificationRoute::from_env()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
 fn admit_verification_route(raw: &str) -> io::Result<VerificationRoute> {
