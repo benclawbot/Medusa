@@ -37,7 +37,13 @@ export function initialOnboardingStep(
   const provider = providerForProfile(providers, configuration.provider);
   if (!provider || provider.disabledReason) return "provider";
   const authRequired = provider.authMethods.some((method) => method !== "none");
-  if (authRequired && !configuration.credentialConfigured && configuration.auth !== "oauth") return "authentication";
+  if (
+    authRequired
+    && !configuration.credentialConfigured
+    && (configuration.auth !== "oauth" || !configuration.configured)
+  ) {
+    return "authentication";
+  }
   if (!configuration.model.trim()) return "model";
   if (!configuration.configured) return "verify";
   return "ready";
