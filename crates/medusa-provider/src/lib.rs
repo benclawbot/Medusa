@@ -9,6 +9,7 @@ mod hedge_runtime;
 mod hedging;
 mod http;
 mod manager;
+mod model_discovery;
 mod openai;
 mod openai_streaming;
 mod openai_transport;
@@ -31,6 +32,7 @@ pub use hedge_acceptance::{
 };
 pub use hedging::{HedgeDecision, HedgePolicy, hedge_decision};
 pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
+pub use model_discovery::{ModelDiscoveryError, discover_models};
 pub use openai::OpenAiProvider;
 pub use openai_streaming::OpenAiStreamAccumulator;
 pub use reasoning_exchange::{
