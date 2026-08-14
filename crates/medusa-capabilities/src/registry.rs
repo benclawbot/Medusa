@@ -929,7 +929,10 @@ fn builtin_tool_entries(
             .map(Value::String)
             .collect::<Vec<_>>();
         entries.push(tool_entry(
-            ToolIdentity { states, name: "desktop_commander" },
+            ToolIdentity {
+                states,
+                name: "desktop_commander",
+            },
             Capability::DesktopMcp,
             "Call one policy-approved Desktop Commander MCP file or search tool.",
             json!({"type":"object","properties":{"tool":{"type":"string","enum":allowed},"arguments":{"type":"object"}},"required":["tool","arguments"],"additionalProperties":false}),
@@ -1220,11 +1223,8 @@ mod tests {
             "http://10.0.0.1/verify",
             "C:\\work\\app\\index.html",
         ] {
-            let state = browser_capability_state(
-                &configured_browser(),
-                Some(route),
-                &browser_probe(),
-            );
+            let state =
+                browser_capability_state(&configured_browser(), Some(route), &browser_probe());
             assert!(!state.available, "accepted {route}: {}", state.detail);
             assert!(state.detail.contains("verification route"));
             let registry = registry_with_browser_state(state);
@@ -1242,11 +1242,7 @@ mod tests {
     fn verified_browser_state_exposes_only_bounded_model_actions() {
         let route = " HTTP://LOCALHOST:4173/app?mode=verify ";
         let admitted = VerificationRoute::parse(route).expect("admitted route");
-        let state = browser_capability_state(
-            &configured_browser(),
-            Some(route),
-            &browser_probe(),
-        );
+        let state = browser_capability_state(&configured_browser(), Some(route), &browser_probe());
         assert!(state.available);
         assert!(state.detail.contains(&admitted.safe_fingerprint()));
         assert!(!state.detail.contains("mode=verify"));
