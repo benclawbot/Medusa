@@ -27,6 +27,20 @@ export function modelCapabilityState(
   return supported ? "supported" : "unsupported";
 }
 
+export function profileModelCapabilityState(
+  providers: ProviderCatalogEntry[],
+  profileProvider: string,
+  connection: string | undefined,
+  modelId: string,
+  capability: keyof ModelCapabilities,
+): ModelCapabilityState {
+  const provider = providers.find((candidate) =>
+    candidate.profileProvider === profileProvider
+    && (!connection || candidate.connection === connection)
+  ) ?? providers.find((candidate) => candidate.profileProvider === profileProvider);
+  return modelCapabilityState(provider, modelId, capability);
+}
+
 export function modelSupports(
   provider: ProviderCatalogEntry | undefined,
   modelId: string,
@@ -42,7 +56,7 @@ catalog.write_text(s.replace(old, new, 1))
 app = Path('apps/medusa-desktop/src/App.tsx')
 s = app.read_text()
 old = 'import { loadProviderCatalog, type ProviderCatalogEntry } from "./providerCatalog";'
-new = 'import { loadProviderCatalog, modelCapabilityState, type ProviderCatalogEntry } from "./providerCatalog";'
+new = 'import { loadProviderCatalog, profileModelCapabilityState, type ProviderCatalogEntry } from "./providerCatalog";'
 if old not in s:
     raise SystemExit('App import anchor missing')
 s = s.replace(old, new, 1)
@@ -57,11 +71,13 @@ old = '''  const imageCompatibility = useMemo(() => {
     return { supported: undefined, text: "Image compatibility will be verified by the runtime before upload." };
   }, [provider, model]);'''
 new = '''  const imageCompatibility = useMemo(() => {
-    const selectedProvider = providerCatalog.find((candidate) =>
-      candidate.profileProvider === provider
-      && (sharedConfiguration?.provider !== provider || candidate.connection === sharedConfiguration.connection)
-    ) ?? providerCatalog.find((candidate) => candidate.profileProvider === provider);
-    const state = modelCapabilityState(selectedProvider, model, "image_input");
+    const state = profileModelCapabilityState(
+      providerCatalog,
+      provider,
+      sharedConfiguration?.connection,
+      model,
+      "image_input",
+    );
     if (state === "supported") {
       return { supported: true, text: `${model} is configured for image input.` };
     }
@@ -69,7 +85,7 @@ new = '''  const imageCompatibility = useMemo(() => {
       return { supported: false, text: `${model} does not advertise image input on this route.` };
     }
     return { supported: undefined, text: "Image compatibility will be verified by the runtime before upload." };
-  }, [providerCatalog, provider, model, sharedConfiguration?.provider, sharedConfiguration?.connection]);'''
+  }, [providerCatalog, provider, model, sharedConfiguration?.connection]);'''
 if old not in s:
     raise SystemExit('App image compatibility anchor missing')
 app.write_text(s.replace(old, new, 1))
@@ -93,54 +109,75 @@ for test_path in [
         raise SystemExit(f'provider catalog mock anchor missing in {test_path}')
     test_path.write_text(test_source.replace(partial_mock_old, partial_mock_new, 1))
 
-tests = Path('apps/medusa-desktop/src/App.test.tsx')
-s = tests.read_text()
+catalog_tests = Path('apps/medusa-desktop/src/providerCatalog.test.ts')
+s = catalog_tests.read_text()
+s = s.replace(
+    'import { loadProviderCatalog, modelSupports } from "./providerCatalog";',
+    'import { loadProviderCatalog, modelSupports, profileModelCapabilityState, type ProviderCatalogEntry } from "./providerCatalog";',
+    1,
+)
 addition = '''
 
-it("uses canonical model capability metadata for OpenAI OAuth image input", async () => {
-  const imageCapabilities = {
-    tool_calling: true,
-    image_input: true,
-    audio_input: false,
-    realtime: false,
-    reasoning: true,
-    reasoning_effort_levels: ["medium"],
-    streaming: true,
-    structured_output: true,
-    prompt_caching: true,
-  };
-  vi.mocked(loadSharedConfiguration).mockResolvedValue({ revision: 3, activeProfile: "default", connection: "chatgpt-oauth", provider: "openai-oauth", model: "gpt-5.1-codex", effort: "medium", auth: "oauth", configured: true, credentialConfigured: true });
-  vi.mocked(loadProviderCatalog).mockResolvedValue([{
-    id: "openai-oauth", displayName: "OpenAI account", description: "Browser OAuth route", connection: "chatgpt-oauth", profileProvider: "openai-oauth", authMethods: ["oauth"], defaultAuth: "oauth", defaultModel: "gpt-5.1-codex", modelOptions: ["gpt-5.1-codex"],
-    models: [{ id: "gpt-5.1-codex", display_name: "GPT-5.1 Codex", provider_id: "openai-oauth", profile_provider: "openai-oauth", availability: "available", source: "curated", capabilities: imageCapabilities, deprecated: false, recommended: true }],
-    browserOauth: true, discoverModels: true, customValues: false, currentCustom: false,
-  }]);
-  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-oauth", repo: "" });
-  render(<App />);
-  await waitFor(() => expect(startRuntime).toHaveBeenCalled());
-  expect(screen.getByText("gpt-5.1-codex is configured for image input.")).toBeInTheDocument();
+it("resolves OpenAI OAuth image input by profile provider and connection metadata", () => {
+  const providers: ProviderCatalogEntry[] = [{
+    id: "openai-oauth",
+    displayName: "OpenAI account",
+    description: "Browser OAuth route",
+    connection: "chatgpt-oauth",
+    profileProvider: "openai-oauth",
+    authMethods: ["oauth"],
+    defaultAuth: "oauth",
+    defaultModel: "gpt-5.1-codex",
+    modelOptions: ["gpt-5.1-codex"],
+    models: [{
+      id: "gpt-5.1-codex",
+      display_name: "GPT-5.1 Codex",
+      provider_id: "openai-oauth",
+      profile_provider: "openai-oauth",
+      availability: "available",
+      source: "curated",
+      capabilities: {
+        tool_calling: true,
+        image_input: true,
+        audio_input: false,
+        realtime: false,
+        reasoning: true,
+        reasoning_effort_levels: ["medium"],
+        streaming: true,
+        structured_output: true,
+        prompt_caching: true,
+      },
+      deprecated: false,
+      recommended: true,
+    }],
+    browserOauth: true,
+    discoverModels: true,
+    customValues: false,
+    currentCustom: false,
+  }];
+
+  expect(profileModelCapabilityState(providers, "openai-oauth", "chatgpt-oauth", "gpt-5.1-codex", "image_input")).toBe("supported");
+  expect(profileModelCapabilityState(providers, "chatgpt-oauth", "chatgpt-oauth", "gpt-5.1-codex", "image_input")).toBe("unknown");
 });
 
-it("does not confuse a connection identifier with a profile provider identifier", async () => {
-  vi.mocked(loadSharedConfiguration).mockResolvedValue({ revision: 3, activeProfile: "default", connection: "chatgpt-oauth", provider: "chatgpt-oauth", model: "gpt-5.1-codex", effort: "medium", auth: "oauth", configured: true, credentialConfigured: true });
-  vi.mocked(loadProviderCatalog).mockResolvedValue([{
-    id: "openai-oauth", displayName: "OpenAI account", description: "Browser OAuth route", connection: "chatgpt-oauth", profileProvider: "openai-oauth", authMethods: ["oauth"], defaultAuth: "oauth", defaultModel: "gpt-5.1-codex", modelOptions: ["gpt-5.1-codex"], browserOauth: true, discoverModels: true, customValues: false, currentCustom: false,
-  }]);
-  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-oauth", repo: "" });
-  render(<App />);
-  await waitFor(() => expect(startRuntime).toHaveBeenCalled());
-  expect(screen.getByText("Image compatibility will be verified by the runtime before upload.")).toBeInTheDocument();
-});
+it("keeps missing model capability metadata unknown instead of treating it as unsupported", () => {
+  const providers: ProviderCatalogEntry[] = [{
+    id: "anthropic-compatible",
+    displayName: "Compatible endpoint",
+    description: "Custom route",
+    connection: "anthropic-compatible",
+    profileProvider: "anthropic-compatible",
+    authMethods: ["none"],
+    defaultAuth: "none",
+    defaultModel: "custom-model",
+    modelOptions: ["custom-model"],
+    browserOauth: false,
+    discoverModels: false,
+    customValues: true,
+    currentCustom: false,
+  }];
 
-it("keeps custom routes conservative without image capability metadata", async () => {
-  vi.mocked(loadSharedConfiguration).mockResolvedValue({ revision: 2, activeProfile: "default", connection: "anthropic-compatible", provider: "anthropic-compatible", model: "custom-model", effort: "medium", auth: "none", configured: true, credentialConfigured: true });
-  vi.mocked(loadProviderCatalog).mockResolvedValue([{
-    id: "anthropic-compatible", displayName: "Compatible endpoint", description: "Custom route", connection: "anthropic-compatible", profileProvider: "anthropic-compatible", authMethods: ["none"], defaultAuth: "none", defaultModel: "custom-model", modelOptions: ["custom-model"], browserOauth: false, discoverModels: false, customValues: true, currentCustom: false,
-  }]);
-  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-custom", repo: "" });
-  render(<App />);
-  await waitFor(() => expect(startRuntime).toHaveBeenCalled());
-  expect(screen.getByText("Image compatibility will be verified by the runtime before upload.")).toBeInTheDocument();
+  expect(profileModelCapabilityState(providers, "anthropic-compatible", "anthropic-compatible", "custom-model", "image_input")).toBe("unknown");
 });
 '''
-tests.write_text(s + addition)
+catalog_tests.write_text(s + addition)
