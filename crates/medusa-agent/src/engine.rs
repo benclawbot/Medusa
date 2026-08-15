@@ -53,9 +53,10 @@ use crate::{
     },
     team::{AgentExecutionPolicy, TeamMemberContext},
     tools::{
-        execute_approved_tool_cancellable_with_policy,
-        execute_tool_cancellable_with_context_and_policy, execute_tool_cancellable_with_policy,
-        input_string,
+        CertifiedToolExecution, certify_cached_tool_with_policy,
+        execute_approved_tool_cancellable_with_policy_certified, execute_engine_tool_with_policy,
+        execute_tool_cancellable_with_context_and_policy_certified,
+        execute_tool_cancellable_with_policy_certified, input_string,
     },
     verification_authority::{
         authoritative_verification_for_paths, prepare_paths_for_verification,
@@ -208,6 +209,29 @@ fn dependency_failure_error(name: &str) -> MedusaError {
     error
 }
 
+fn journal_certified_tool_execution(
+    session: &mut AgentSession,
+    tool_use_id: &str,
+    name: &str,
+    input: &serde_json::Value,
+    receipt: serde_json::Value,
+) -> MedusaResult<()> {
+    append_event(
+        session,
+        Actor::Coordinator,
+        EventPayload::WorkerEvidenceRecorded {
+            evidence: serde_json::json!({
+                "kind": "certified_tool_execution",
+                "tool_use_id": tool_use_id,
+                "tool": audited_tool_name(name, input),
+                "receipt": receipt,
+            }),
+        },
+    )?;
+    session.updated_at = OffsetDateTime::now_utc();
+    persist(session)
+}
+
 fn execute_session_tool(
     repo: &Path,
     name: &str,
@@ -217,9 +241,9 @@ fn execute_session_tool(
     session_id: &str,
     task_step_id: Option<&str>,
     activity_id: &str,
-) -> MedusaResult<String> {
+) -> MedusaResult<CertifiedToolExecution> {
     if name != "fs_write" {
-        return execute_tool_cancellable_with_policy(
+        return execute_tool_cancellable_with_policy_certified(
             repo,
             name,
             input,
@@ -242,7 +266,7 @@ fn execute_session_tool(
     // Absolute/external writes must reach the existing path-policy and approval boundary before
     // any provenance work. They are not repository mutations and cannot be selectively reverted.
     if Path::new(requested_path).is_absolute() {
-        return execute_tool_cancellable_with_policy(
+        return execute_tool_cancellable_with_policy_certified(
             repo,
             name,
             input,
@@ -259,16 +283,19 @@ fn execute_session_tool(
         .output()
         .is_ok_and(|output| output.status.success());
     if !provenance_available {
-        let output = execute_tool_cancellable_with_policy(
+        let mut execution = execute_tool_cancellable_with_policy_certified(
             repo,
             name,
             input,
             cancellation,
             execution_policy,
         )?;
-        return Ok(format!(
-            "{output}; selective_revert=unavailable (workspace has no authoritative Git provenance)"
-        ));
+        execution.result = execution.result.map(|output| {
+            format!(
+                "{output}; selective_revert=unavailable (workspace has no authoritative Git provenance)"
+            )
+        });
+        return Ok(execution);
     }
 
     let sequence = crate::transaction::next_mutation_sequence(repo, session_id)?;
@@ -290,7 +317,7 @@ fn execute_session_tool(
         sequence,
         occurred_at_unix_ms,
     };
-    execute_tool_cancellable_with_context_and_policy(
+    execute_tool_cancellable_with_context_and_policy_certified(
         repo,
         name,
         input,
@@ -324,11 +351,15 @@ struct ToolExecutionTiming {
     cached: bool,
 }
 
-#[derive(Debug)]
+enum PostToolAction {
+    PlanUpdated(Vec<AgentPlanStep>),
+    AskQuestion(AgentQuestion),
+}
+
 struct EarlyToolExecution {
     name: String,
     input: serde_json::Value,
-    output: String,
+    execution: CertifiedToolExecution,
     requested_at: std::time::Instant,
     timing: ToolExecutionTiming,
 }
@@ -659,13 +690,21 @@ impl<P: ModelProvider> AgentEngine<P> {
                 )?;
                 session.updated_at = OffsetDateTime::now_utc();
                 persist(session)?;
-                let result = execute_approved_tool_cancellable_with_policy(
+                let execution = execute_approved_tool_cancellable_with_policy_certified(
                     &session.repo,
                     &approval.tool,
                     &approval.input,
                     self.cancellation.as_ref(),
                     &self.execution_policy,
-                );
+                )?;
+                journal_certified_tool_execution(
+                    session,
+                    &approval.tool_use_id,
+                    &approval.tool,
+                    &approval.input,
+                    execution.receipt,
+                )?;
+                let result = execution.result;
                 append_event(
                     session,
                     Actor::Coordinator,
@@ -1050,19 +1089,20 @@ impl<P: ModelProvider> AgentEngine<P> {
                     {
                         let requested_at = std::time::Instant::now();
                         let started = std::time::Instant::now();
-                        if let Ok(output) = execute_tool_cancellable_with_policy(
+                        if let Ok(execution) = execute_tool_cancellable_with_policy_certified(
                             &streaming_repo,
                             &name,
                             &input,
                             self.cancellation.as_ref(),
                             &self.execution_policy,
-                        ) {
+                        ) && execution.result.is_ok()
+                        {
                             early_tool_executions.insert(
                                 id,
                                 EarlyToolExecution {
                                     name,
                                     input,
-                                    output,
+                                    execution,
                                     requested_at,
                                     timing: ToolExecutionTiming {
                                         queue_duration_ns: 0,
@@ -1196,7 +1236,16 @@ impl<P: ModelProvider> AgentEngine<P> {
                 .collect::<Vec<_>>();
             let positions = calls
                 .iter()
-                .position(|(_, name, _)| name == ANALYSIS_WORKSPACE_TOOL)
+                .position(|(_, name, _)| {
+                    name == ANALYSIS_WORKSPACE_TOOL
+                        || name == "update_plan"
+                        || name == "ask_user_question"
+                        || name == "desktop_commander"
+                        || self
+                            .team_context
+                            .as_ref()
+                            .is_some_and(|team| team.handles(name))
+                })
                 .or_else(|| {
                     calls
                         .iter()
@@ -1245,7 +1294,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 let requested_at = &tool_requested_at;
                 let cancellation = Arc::clone(&self.cancellation);
                 let execution_policy = self.execution_policy.clone();
-                map_parallel_ordered(batch, |(id, name, input)| {
+                let executed = map_parallel_ordered(batch, |(id, name, input)| {
                     let started = std::time::Instant::now();
                     let queue_duration_ns = requested_at
                         .get(&id)
@@ -1254,7 +1303,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     let cached_output = crate::tool_dag::dedup_key(&name, &input)
                         .and_then(|key| cache.get(&key).cloned());
                     let cached = cached_output.is_some();
-                    let result = cached_output.map_or_else(
+                    let execution = cached_output.map_or_else(
                         || {
                             execute_session_tool(
                                 repo,
@@ -1267,15 +1316,39 @@ impl<P: ModelProvider> AgentEngine<P> {
                                 &id,
                             )
                         },
-                        Ok,
+                        |output| {
+                            certify_cached_tool_with_policy(
+                                repo,
+                                &name,
+                                &input,
+                                cancellation.as_ref(),
+                                &execution_policy,
+                                output,
+                            )
+                        },
                     );
                     let timing = ToolExecutionTiming {
                         queue_duration_ns,
                         execution_duration_ns: duration_ns(started.elapsed()),
                         cached,
                     };
-                    (id, name, input, result, Some(timing))
-                })?
+                    (id, name, input, execution, Some(timing))
+                })?;
+                executed
+                    .into_iter()
+                    .map(|(id, name, input, execution, timing)| {
+                        let execution = execution?;
+                        Ok((
+                            id,
+                            name,
+                            input,
+                            execution.result,
+                            Some(execution.receipt),
+                            timing,
+                            None,
+                        ))
+                    })
+                    .collect::<MedusaResult<Vec<_>>>()?
             } else {
                 let (id, name, input) = batch.into_iter().next().ok_or_else(|| {
                     MedusaError::new(
@@ -1292,23 +1365,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                 let mut measured = false;
                 let mut cached = false;
                 let mut timing_override = None;
-                let result = if let Some(reason) =
-                    self.execution_policy.denial_reason(&name, &input)
-                {
-                    append_observed(
-                        session,
-                        EventPayload::ToolCallDenied {
-                            tool: audited_tool_name(&name, &input),
-                            reason: reason.clone(),
-                        },
-                        &mut observer,
-                    )?;
-                    Err(MedusaError::new(
-                        ErrorCode::PolicyDenied,
-                        ErrorCategory::Policy,
-                        reason,
-                    ))
-                } else if let Some(early) = early_tool_executions.remove(&id) {
+                let mut post_action = None;
+                let execution = if let Some(early) = early_tool_executions.remove(&id) {
                     if early.name != name || early.input != input {
                         return Err(early_tool_identity_error(&id));
                     }
@@ -1321,7 +1379,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    Ok(early.output)
+                    early.execution
                 } else if name == ANALYSIS_WORKSPACE_TOOL {
                     measured = true;
                     append_observed(
@@ -1331,15 +1389,28 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    let host = self.analysis_host.as_ref().ok_or_else(|| {
-                        MedusaError::new(
-                            ErrorCode::PolicyDenied,
-                            ErrorCategory::Policy,
-                            "analysis workspace authority is unavailable",
-                        )
-                    })?;
+                    let host = self.analysis_host.as_ref();
                     let session_id = session.id.to_string();
-                    host.execute(&session_id, &input, self.cancellation.as_ref())
+                    execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |canonical_input| {
+                            let host = host.ok_or_else(|| {
+                                MedusaError::new(
+                                    ErrorCode::PolicyDenied,
+                                    ErrorCategory::Policy,
+                                    "analysis workspace authority is unavailable",
+                                )
+                            })?;
+                            host.execute(
+                                &session_id,
+                                canonical_input,
+                                self.cancellation.as_ref(),
+                            )
+                        },
+                    )?
                 } else if name == "update_plan" {
                     measured = true;
                     append_observed(
@@ -1349,32 +1420,34 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    let plan = plan_from_input(&input);
-                    if plan.is_empty() {
-                        Ok("Visible task plan update ignored because it was empty.".to_owned())
-                    } else {
-                        if session.plan != plan {
-                            let recorded_at = OffsetDateTime::now_utc();
-                            for grant in session.approval_grants.drain(..) {
-                                session.approval_receipts.push(ApprovalReceipt {
-                                    decision: ApprovalDecision::Invalidated,
-                                    scope: grant.scope,
-                                    recorded_at,
-                                    reason: "visible plan changed".to_owned(),
-                                });
+                    let execution = execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |canonical_input| {
+                            let plan = plan_from_input(canonical_input);
+                            if plan.is_empty() {
+                                Ok("Visible task plan update ignored because it was empty.".to_owned())
+                            } else {
+                                if session.plan != plan {
+                                    let recorded_at = OffsetDateTime::now_utc();
+                                    for grant in session.approval_grants.drain(..) {
+                                        session.approval_receipts.push(ApprovalReceipt {
+                                            decision: ApprovalDecision::Invalidated,
+                                            scope: grant.scope,
+                                            recorded_at,
+                                            reason: "visible plan changed".to_owned(),
+                                        });
+                                    }
+                                }
+                                session.plan = plan.clone();
+                                post_action = Some(PostToolAction::PlanUpdated(plan));
+                                Ok("Visible task plan updated.".to_owned())
                             }
-                        }
-                        session.plan = plan.clone();
-                        append_observed(
-                            session,
-                            EventPayload::PlanUpdated {
-                                update: serde_json::to_value(&plan).map_err(json_error)?,
-                            },
-                            &mut observer,
-                        )?;
-                        observer(&AgentUpdate::Plan(plan));
-                        Ok("Visible task plan updated.".to_owned())
-                    }
+                        },
+                    )?;
+                    execution
                 } else if name == "ask_user_question" {
                     measured = true;
                     append_observed(
@@ -1384,21 +1457,18 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    match question_from_input(id.clone(), &input) {
-                        Ok(question) => {
-                            append_observed(
-                                session,
-                                EventPayload::ToolExecutionCompleted {
-                                    tool: audited_tool_name(&name, &input),
-                                    exit_code: Some(0),
-                                },
-                                &mut observer,
-                            )?;
-                            pause_for_question(session, question, &mut observer)?;
-                            return Ok(StepOutcome::WaitingForUser);
-                        }
-                        Err(error) => Err(error),
-                    }
+                    let execution = execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |canonical_input| {
+                            let question = question_from_input(id.clone(), canonical_input)?;
+                            post_action = Some(PostToolAction::AskQuestion(question));
+                            Ok("User question prepared.".to_owned())
+                        },
+                    )?;
+                    execution
                 } else if self
                     .team_context
                     .as_ref()
@@ -1412,16 +1482,24 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    self.team_context
-                        .as_ref()
-                        .ok_or_else(|| {
-                            MedusaError::new(
-                                ErrorCode::InternalInvariant,
-                                ErrorCategory::Internal,
-                                "team tool context disappeared",
-                            )
-                        })?
-                        .execute(&name, &input)
+                    execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |canonical_input| {
+                            self.team_context
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    MedusaError::new(
+                                        ErrorCode::InternalInvariant,
+                                        ErrorCategory::Internal,
+                                        "team tool context disappeared",
+                                    )
+                                })?
+                                .execute(&name, canonical_input)
+                        },
+                    )?
                 } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name)
                 {
                     measured = true;
@@ -1432,14 +1510,29 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    self.execute_desktop_commander(&session.repo, &input)
+                    execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |canonical_input| {
+                            self.execute_desktop_commander(&session.repo, canonical_input)
+                        },
+                    )?
                 } else if tool_allowed(self.config.agent.mode, &name) {
                     measured = true;
                     if let Some(output) = crate::tool_dag::dedup_key(&name, &input)
                         .and_then(|key| safe_tool_cache.get(&key).cloned())
                     {
                         cached = true;
-                        Ok(output)
+                        certify_cached_tool_with_policy(
+                            &session.repo,
+                            &name,
+                            &input,
+                            self.cancellation.as_ref(),
+                            &self.execution_policy,
+                            output,
+                        )?
                     } else {
                         append_observed(
                             session,
@@ -1457,23 +1550,23 @@ impl<P: ModelProvider> AgentEngine<P> {
                             session.id.as_str(),
                             active_plan_step_id(session),
                             &id,
-                        )
+                        )?
                     }
                 } else {
                     let reason = "tool is unavailable in read-only planning mode".to_owned();
-                    append_observed(
-                        session,
-                        EventPayload::ToolCallDenied {
-                            tool: audited_tool_name(&name, &input),
-                            reason: reason.clone(),
+                    execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |_| {
+                            Err(MedusaError::new(
+                                ErrorCode::PolicyDenied,
+                                ErrorCategory::Policy,
+                                reason,
+                            ))
                         },
-                        &mut observer,
-                    )?;
-                    Err(MedusaError::new(
-                        ErrorCode::PolicyDenied,
-                        ErrorCategory::Policy,
-                        reason,
-                    ))
+                    )?
                 };
                 let timing = timing_override.or_else(|| {
                     measured.then(|| ToolExecutionTiming {
@@ -1482,12 +1575,20 @@ impl<P: ModelProvider> AgentEngine<P> {
                         cached,
                     })
                 });
-                vec![(id, name, input, result, timing)]
+                vec![(
+                    id,
+                    name,
+                    input,
+                    execution.result,
+                    Some(execution.receipt),
+                    timing,
+                    post_action,
+                )]
             };
 
             let repository_revision_after_mutation = executed
                 .iter()
-                .any(|(_, name, input, result, _)| {
+                .any(|(_, name, input, result, _, _, _)| {
                     result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
                 })
                 .then(|| refreshed_repository_revision(&session.repo))
@@ -1495,10 +1596,10 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let verification_mutation_paths = executed
                 .iter()
-                .filter(|(_, name, input, result, _)| {
+                .filter(|(_, name, input, result, _, _, _)| {
                     result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
                 })
-                .filter_map(|(_, name, input, _, _)| {
+                .filter_map(|(_, name, input, _, _, _, _)| {
                     matches!(name.as_str(), "fs_write" | "fs_create_dir")
                         .then(|| input.get("path").and_then(serde_json::Value::as_str))
                         .flatten()
@@ -1517,7 +1618,7 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let failed_dependencies = executed
                 .iter()
-                .filter_map(|(_, name, input, result, _)| {
+                .filter_map(|(_, name, input, result, _, _, _)| {
                     let error = result.as_ref().err()?;
                     let awaiting_approval = error.code == ErrorCode::PolicyDenied
                         && self.config.agent.mode != Mode::ReadOnly
@@ -1529,24 +1630,64 @@ impl<P: ModelProvider> AgentEngine<P> {
             let blocked =
                 crate::tool_dag::drain_failed_dependents(&mut calls, &failed_dependencies);
             let mut executed = executed;
-            executed.extend(blocked.into_iter().map(|(id, name, input)| {
+            for (id, name, input) in blocked {
                 let error = dependency_failure_error(&name);
-                (id, name, input, Err(error), None)
-            }));
+                let execution = execute_engine_tool_with_policy(
+                    &name,
+                    &input,
+                    self.cancellation.as_ref(),
+                    &self.execution_policy,
+                    |_| Err(error),
+                )?;
+                executed.push((
+                    id,
+                    name,
+                    input,
+                    execution.result,
+                    Some(execution.receipt),
+                    None,
+                    None,
+                ));
+            }
             if let Some(current_revision) = repository_revision_after_mutation {
                 let stale =
                     crate::tool_dag::drain_stale_revision_calls(&mut calls, &current_revision);
-                executed.extend(stale.into_iter().map(|(id, name, input)| {
+                for (id, name, input) in stale {
                     let error = stale_revision_error(&name, &current_revision);
-                    (id, name, input, Err(error), None)
-                }));
+                    let execution = execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |_| Err(error),
+                    )?;
+                    executed.push((
+                        id,
+                        name,
+                        input,
+                        execution.result,
+                        Some(execution.receipt),
+                        None,
+                        None,
+                    ));
+                }
             }
 
-            for (id, name, input, result, timing) in executed {
-                if let Ok(output) = &result
-                    && let Some(key) = crate::tool_dag::dedup_key(&name, &input)
+            for (id, name, input, result, receipt, timing, post_action) in executed {
+                if let Some(receipt) = receipt {
+                    journal_certified_tool_execution(session, &id, &name, &input, receipt)?;
+                }
+                if let Some(PostToolAction::PlanUpdated(plan)) = post_action.as_ref()
+                    && result.is_ok()
                 {
-                    safe_tool_cache.entry(key).or_insert_with(|| output.clone());
+                    append_observed(
+                        session,
+                        EventPayload::PlanUpdated {
+                            update: serde_json::to_value(plan).map_err(json_error)?,
+                        },
+                        &mut observer,
+                    )?;
+                    observer(&AgentUpdate::Plan(plan.clone()));
                 }
                 if let Err(error) = &result
                     && error.code == ErrorCode::PolicyDenied
@@ -1606,17 +1747,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     return Ok(StepOutcome::WaitingForUser);
                 }
                 let event_tool = audited_tool_name(&name, &input);
-                let (raw_content, is_error, exit_code) = match result {
-                    Ok(output) => (output, false, Some(0)),
-                    Err(error) => (error.to_string(), true, Some(1)),
-                };
-                world_model_observation::record_tool_observation(
-                    session,
-                    &name,
-                    &input,
-                    &raw_content,
-                    if is_error { 1 } else { 0 },
-                );
+                let exit_code = Some(if result.is_ok() { 0 } else { 1 });
                 append_observed(
                     session,
                     EventPayload::ToolExecutionCompleted {
@@ -1625,6 +1756,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                     },
                     &mut observer,
                 )?;
+                if let Some(PostToolAction::AskQuestion(question)) = post_action
+                    && result.is_ok()
+                {
+                    pause_for_question(session, question, &mut observer)?;
+                    return Ok(StepOutcome::WaitingForUser);
+                }
                 if let Some(timing) = timing {
                     let profile = crate::tool_dag::profile(&name, &input);
                     append_observed(
@@ -1641,6 +1778,24 @@ impl<P: ModelProvider> AgentEngine<P> {
                         &mut observer,
                     )?;
                 }
+                let (raw_content, is_error) = match result {
+                    Ok(output) => (output, false),
+                    Err(error) => (error.to_string(), true),
+                };
+                if !is_error
+                    && let Some(key) = crate::tool_dag::dedup_key(&name, &input)
+                {
+                    safe_tool_cache
+                        .entry(key)
+                        .or_insert_with(|| raw_content.clone());
+                }
+                world_model_observation::record_tool_observation(
+                    session,
+                    &name,
+                    &input,
+                    &raw_content,
+                    if is_error { 1 } else { 0 },
+                );
                 // The TUI sees the full body verbatim; the model sees the compact
                 // head/tail envelope with a pointer to the on-disk artifact.
                 observer(&AgentUpdate::ToolOutput {
@@ -1977,6 +2132,16 @@ mod streaming_tool_dispatch_tests {
             AgentUpdate::ToolOutput { tool, output, is_error: false }
                 if tool == "fs_read" && output.contains("before-stream-complete")
         )));
+        let receipt_index = session.events.iter().position(|event| matches!(
+            &event.payload,
+            EventPayload::WorkerEvidenceRecorded { evidence }
+                if evidence["kind"] == serde_json::json!("certified_tool_execution")
+        ));
+        let completed_index = session.events.iter().position(|event| matches!(
+            event.payload,
+            EventPayload::ToolExecutionCompleted { .. }
+        ));
+        assert!(receipt_index.is_some_and(|receipt| completed_index.is_some_and(|done| receipt < done)));
     }
 }
 
