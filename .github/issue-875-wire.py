@@ -37,6 +37,7 @@ lib.write_text(text)
 
 module = Path("crates/medusa-runtime/src/repository_context.rs")
 source = module.read_text()
+source = source.replace("step.description.trim()", "step.title.trim()")
 source = source.replace(
     "    use medusa_agent::AgentEngine;\n    use medusa_config::Config;\n    use medusa_provider::ScriptedProvider;\n",
     "    use medusa_agent::AgentEngine;\n    use medusa_config::Config;\n    use medusa_core::MedusaResult;\n    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};\n",
