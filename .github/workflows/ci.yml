@@ -77,6 +77,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 scripts/test-production-panic-exemptions.py
+          python3 scripts/check-production-panic-exemptions.py
           cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
             -D clippy::unwrap_used \
             -D clippy::expect_used \
