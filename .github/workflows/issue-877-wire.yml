@@ -19,7 +19,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply production integration
-        run: python .github/issue-877-wire.py
+        run: |
+          python .github/issue-877-wire.py
+          python .github/issue-877-classify.py
       - name: Format source
         run: cargo fmt --all --check
       - name: Continuity tests
@@ -34,7 +36,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/issue-877-wire.py .github/workflows/issue-877-wire.yml
+          rm -f .github/issue-877-wire.py .github/issue-877-classify.py .github/workflows/issue-877-wire.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
