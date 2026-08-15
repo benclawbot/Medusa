@@ -24,9 +24,9 @@ jobs:
           src = Path('.github/workflows/issue-874-runtime-wiring.yml').read_text().splitlines()
           start = next(i for i, line in enumerate(src) if "python3 - <<'PY'" in line) + 1
           end = next(i for i in range(start, len(src)) if src[i].strip() == 'PY')
-          lines = src[start:end]
-          indent = min(len(line) - len(line.lstrip()) for line in lines if line.strip())
-          Path('/tmp/issue874.py').write_text('\n'.join(line[indent:] for line in lines) + '\n')
+          prefix = '          '
+          lines = [line[len(prefix):] if line.startswith(prefix) else line for line in src[start:end]]
+          Path('/tmp/issue874.py').write_text('\n'.join(lines) + '\n')
           PY
           python3 /tmp/issue874.py
           cargo fmt --all
