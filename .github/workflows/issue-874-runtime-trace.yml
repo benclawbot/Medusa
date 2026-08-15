@@ -9,30 +9,34 @@ permissions:
   contents: write
 
 jobs:
-  trace:
+  wire:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Trace continuity symbols
+      - name: Apply runtime wiring
         shell: bash
         run: |
-          {
-            echo '=== medusa_session_continuity ==='
-            grep -RIn --exclude-dir=target --exclude='Cargo.lock' 'medusa_session_continuity' crates || true
-            echo '=== ContinuityStore ==='
-            grep -RIn --exclude-dir=target 'ContinuityStore' crates || true
-            echo '=== CodingTrajectoryCheckpoint ==='
-            grep -RIn --exclude-dir=target 'CodingTrajectoryCheckpoint' crates || true
-            echo '=== AuthoritativeTaskState ==='
-            grep -RIn --exclude-dir=target 'AuthoritativeTaskState' crates || true
-            echo '=== continuity Cargo dependency ==='
-            grep -RIn --include='Cargo.toml' 'medusa-session-continuity' crates || true
-          } > .github/issue-874-runtime-trace.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('.github/workflows/issue-874-runtime-wiring.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(src) if "python3 - <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(src)) if src[i].strip() == 'PY')
+          lines = src[start:end]
+          indent = min(len(line) - len(line.lstrip()) for line in lines if line.strip())
+          Path('/tmp/issue874.py').write_text('\n'.join(line[indent:] for line in lines) + '\n')
+          PY
+          python3 /tmp/issue874.py
+          cargo fmt --all
+          cargo test -p medusa-session-continuity --locked
+          cargo test -p medusa-runtime --locked coding_trajectory -- --nocapture
+          cargo test -p medusa-runtime --locked attachment::session -- --nocapture
+          cargo clippy -p medusa-session-continuity -p medusa-runtime --all-targets --locked -- -D warnings
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/issue-874-runtime-trace.txt
-          git commit -m 'ci: capture issue 874 runtime trace'
+          git rm .github/workflows/issue-874-runtime-wiring.yml .github/workflows/issue-874-runtime-trace.yml .github/issue-874-runtime-trace.txt
+          git add crates/medusa-session-continuity/src/root.rs crates/medusa-runtime/src/coding_trajectory.rs crates/medusa-runtime/src/lib.rs
+          git commit -m 'feat(runtime): drive turns from durable coding trajectory'
           git push origin HEAD:codex/issue-874-coding-trajectory-state
