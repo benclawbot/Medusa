@@ -8,6 +8,9 @@ mod intelligence;
 mod shell;
 pub(crate) mod skills;
 mod web;
+pub mod pipeline {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tool_pipeline.rs"));
+}
 
 use std::{
     collections::BTreeMap,
@@ -31,6 +34,12 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
+use crate::team::AgentExecutionPolicy;
+use pipeline::{
+    FinalToolOutcome, GuardDecision, ResolvedToolIdentity, ToolExecutionPipeline,
+    ToolPipelineRequest,
+};
+
 const BROWSER_VERIFY_URL_ENV: &str = "MEDUSA_BROWSER_VERIFY_URL";
 const BROWSER_VERIFICATION_ORIGIN_ENV: &str = "MEDUSA_BROWSER_VERIFICATION_ORIGIN";
 const MAX_BROWSER_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
@@ -53,6 +62,17 @@ struct BrowserToolSession {
 static BROWSER_SESSIONS: OnceLock<Mutex<BTreeMap<BrowserSessionKey, SharedBrowserSession>>> =
     OnceLock::new();
 static BROWSER_NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) struct CertifiedToolExecution {
+    pub receipt: Value,
+    pub result: MedusaResult<String>,
+}
+
+fn certified_execution(outcome: FinalToolOutcome) -> MedusaResult<CertifiedToolExecution> {
+    let receipt = outcome.receipt_value()?;
+    let result = outcome.into_result();
+    Ok(CertifiedToolExecution { receipt, result })
+}
 
 /// Single policy-aware registry for built-in tools shared by every agent frontend.
 #[derive(Clone, Debug)]
@@ -87,27 +107,11 @@ impl ToolManager {
     }
 
     pub fn execute(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
-        let registry = CapabilityRegistry::discover_with_desktop(
-            repo.to_path_buf(),
-            &SystemProbe,
-            self.desktop_commander.clone(),
-        )?;
-        let id = format!("tool.{name}");
-        let entry = registry
-            .entry(&id)
-            .ok_or_else(|| invalid_tool(format!("tool is not registered: {name}")))?;
-        if !entry.projected_to(medusa_capabilities::CapabilitySurface::Model) {
-            return Err(MedusaError::new(
-                ErrorCode::PolicyDenied,
-                ErrorCategory::Policy,
-                format!("tool is unavailable: {name}: {}", entry.readiness.detail),
-            ));
-        }
-        execute_tool(repo, name, input)
+        execute_tool_cancellable(repo, name, input, &BROWSER_NEVER_CANCELLED)
     }
 
     pub fn execute_approved(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
-        execute_approved_tool(repo, name, input)
+        execute_approved_tool_cancellable(repo, name, input, &BROWSER_NEVER_CANCELLED)
     }
 }
 
@@ -520,7 +524,57 @@ fn execute_browser_tool(
     result
 }
 
-pub(crate) fn execute_tool_cancellable_with_context(
+fn capability_guard(repo: &Path, name: &str) -> GuardDecision {
+    let registry = match CapabilityRegistry::discover(repo) {
+        Ok(registry) => registry,
+        Err(error) => return GuardDecision::Deny(format!("capability discovery failed: {error}")),
+    };
+    let id = format!("tool.{name}");
+    let Some(entry) = registry.entry(&id) else {
+        return GuardDecision::Deny(format!("tool is not registered: {name}"));
+    };
+    if !entry.projected_to(medusa_capabilities::CapabilitySurface::Model) {
+        return GuardDecision::Deny(format!(
+            "tool is unavailable: {name}: {}",
+            entry.readiness.detail
+        ));
+    }
+    GuardDecision::Allow
+}
+
+fn certified_pipeline(
+    repo: &Path,
+    name: &str,
+    execution_policy: &AgentExecutionPolicy,
+) -> ToolExecutionPipeline {
+    let capability_repo = repo.to_path_buf();
+    let capability_name = name.to_owned();
+    let policy = execution_policy.clone();
+    let policy_name = name.to_owned();
+    ToolExecutionPipeline::new()
+        .with_guard("capability_readiness", move |_| {
+            capability_guard(&capability_repo, &capability_name)
+        })
+        .with_guard("agent_execution_policy", move |request| {
+            policy
+                .denial_reason(&policy_name, &request.input)
+                .map_or(GuardDecision::Allow, GuardDecision::Deny)
+        })
+}
+
+fn engine_pipeline(name: &str, execution_policy: &AgentExecutionPolicy) -> ToolExecutionPipeline {
+    let policy = execution_policy.clone();
+    let policy_name = name.to_owned();
+    ToolExecutionPipeline::new()
+        .with_guard("engine_capability_authority", |_| GuardDecision::Allow)
+        .with_guard("agent_execution_policy", move |request| {
+            policy
+                .denial_reason(&policy_name, &request.input)
+                .map_or(GuardDecision::Allow, GuardDecision::Deny)
+        })
+}
+
+fn execute_tool_cancellable_with_context_unchecked(
     repo: &Path,
     name: &str,
     input: &Value,
@@ -569,6 +623,121 @@ pub(crate) fn execute_tool_cancellable_with_context(
     shell::run_cancellable(repo, program, &args, output_mode, cancellation)
 }
 
+pub(crate) fn execute_tool_cancellable_with_context_and_policy_certified(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    mutation_context: Option<&crate::transaction::MutationContext>,
+    execution_policy: &AgentExecutionPolicy,
+) -> MedusaResult<CertifiedToolExecution> {
+    certified_execution(certified_pipeline(repo, name, execution_policy).execute(
+        ToolPipelineRequest::built_in(name, input),
+        cancellation,
+        |canonical_input| {
+            execute_tool_cancellable_with_context_unchecked(
+                repo,
+                name,
+                canonical_input,
+                cancellation,
+                mutation_context,
+            )
+        },
+    ))
+}
+
+pub(crate) fn execute_tool_cancellable_with_context_and_policy(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    mutation_context: Option<&crate::transaction::MutationContext>,
+    execution_policy: &AgentExecutionPolicy,
+) -> MedusaResult<String> {
+    execute_tool_cancellable_with_context_and_policy_certified(
+        repo,
+        name,
+        input,
+        cancellation,
+        mutation_context,
+        execution_policy,
+    )?
+    .result
+}
+
+pub(crate) fn execute_tool_cancellable_with_context(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    mutation_context: Option<&crate::transaction::MutationContext>,
+) -> MedusaResult<String> {
+    execute_tool_cancellable_with_context_and_policy(
+        repo,
+        name,
+        input,
+        cancellation,
+        mutation_context,
+        &AgentExecutionPolicy::unrestricted(),
+    )
+}
+
+pub(crate) fn execute_tool_cancellable_with_policy_certified(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    execution_policy: &AgentExecutionPolicy,
+) -> MedusaResult<CertifiedToolExecution> {
+    execute_tool_cancellable_with_context_and_policy_certified(
+        repo,
+        name,
+        input,
+        cancellation,
+        None,
+        execution_policy,
+    )
+}
+
+pub(crate) fn certify_cached_tool_with_policy(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    execution_policy: &AgentExecutionPolicy,
+    cached_output: String,
+) -> MedusaResult<CertifiedToolExecution> {
+    certified_execution(certified_pipeline(repo, name, execution_policy).execute(
+        ToolPipelineRequest::built_in(name, input),
+        cancellation,
+        move |_| Ok(cached_output),
+    ))
+}
+
+pub(crate) fn execute_engine_tool_with_policy(
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    execution_policy: &AgentExecutionPolicy,
+    handler: impl FnOnce(&Value) -> MedusaResult<String>,
+) -> MedusaResult<CertifiedToolExecution> {
+    let request = ToolPipelineRequest {
+        identity: ResolvedToolIdentity::new(
+            format!("engine-tool.{name}"),
+            format!("medusa-agent-engine::{name}"),
+            "engine-v1",
+        ),
+        input: input.clone(),
+        approval_required: false,
+        approval_granted: false,
+    };
+    certified_execution(engine_pipeline(name, execution_policy).execute(
+        request,
+        cancellation,
+        handler,
+    ))
+}
+
 pub(crate) fn execute_tool_cancellable(
     repo: &Path,
     name: &str,
@@ -578,7 +747,7 @@ pub(crate) fn execute_tool_cancellable(
     execute_tool_cancellable_with_context(repo, name, input, cancellation, None)
 }
 
-pub(crate) fn execute_approved_tool_cancellable(
+fn execute_approved_tool_cancellable_unchecked(
     repo: &Path,
     name: &str,
     input: &Value,
@@ -606,6 +775,57 @@ pub(crate) fn execute_approved_tool_cancellable(
     let output_mode =
         crate::output_envelope::OutputMode::parse(input_optional_string(input, "output_mode")?)?;
     shell::run_approved_cancellable(repo, program, &args, output_mode, cancellation)
+}
+
+pub(crate) fn execute_approved_tool_cancellable_with_policy_certified(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    execution_policy: &AgentExecutionPolicy,
+) -> MedusaResult<CertifiedToolExecution> {
+    let mut request = ToolPipelineRequest::built_in(name, input);
+    request.approval_required = true;
+    request.approval_granted = true;
+    certified_execution(certified_pipeline(repo, name, execution_policy).execute(
+        request,
+        cancellation,
+        |canonical_input| {
+            execute_approved_tool_cancellable_unchecked(repo, name, canonical_input, cancellation)
+        },
+    ))
+}
+
+pub(crate) fn execute_approved_tool_cancellable_with_policy(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    execution_policy: &AgentExecutionPolicy,
+) -> MedusaResult<String> {
+    execute_approved_tool_cancellable_with_policy_certified(
+        repo,
+        name,
+        input,
+        cancellation,
+        execution_policy,
+    )?
+    .result
+}
+
+pub(crate) fn execute_approved_tool_cancellable(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    execute_approved_tool_cancellable_with_policy(
+        repo,
+        name,
+        input,
+        cancellation,
+        &AgentExecutionPolicy::unrestricted(),
+    )
 }
 
 pub(crate) fn execute_approved_tool(
@@ -752,7 +972,7 @@ mod tests {
         for invalid in [Value::Null, json!(42), json!({"mode": "compact"})] {
             let input = json!({"output_mode": invalid});
             let error = input_optional_string(&input, "output_mode")
-                .expect_err("present non-string mode must fail");
+                .expect_err("present non-string mode must fail closed");
             assert!(error.to_string().contains("output_mode must be a string"));
         }
     }
@@ -799,5 +1019,73 @@ mod tests {
             validate_browser_model_input("browser_navigate", &json!({"url": "http://127.0.0.1:9"}))
                 .expect_err("model-selected URL must be rejected");
         assert!(error.to_string().contains("does not accept field `url`"));
+    }
+
+    #[test]
+    fn policy_aware_dispatch_denies_role_forbidden_tool_inside_pipeline() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let policy = AgentExecutionPolicy::for_team_role(crate::team::TeamRole::Researcher);
+        let error = execute_tool_cancellable_with_policy_certified(
+            directory.path(),
+            "fs_write",
+            &json!({"path":"denied.txt","content":"no"}),
+            &AtomicBool::new(false),
+            &policy,
+        )
+        .expect("certified execution")
+        .result
+        .expect_err("researcher write must be denied by certified pipeline");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
+        assert!(!directory.path().join("denied.txt").exists());
+    }
+
+    #[test]
+    fn approved_retry_rechecks_role_policy_inside_pipeline() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let policy = AgentExecutionPolicy::for_team_role(crate::team::TeamRole::Researcher);
+        let error = execute_approved_tool_cancellable_with_policy(
+            directory.path(),
+            "fs_write",
+            &json!({"path": directory.path().join("denied.txt"), "content":"no"}),
+            &AtomicBool::new(false),
+            &policy,
+        )
+        .expect_err("approval must not override role policy");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
+        assert!(!directory.path().join("denied.txt").exists());
+    }
+
+    #[test]
+    fn certified_execution_exposes_immutable_receipt_before_projection() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        std::fs::write(directory.path().join("fixture.txt"), "receipt").expect("fixture");
+        let execution = execute_tool_cancellable_with_policy_certified(
+            directory.path(),
+            "fs_read",
+            &json!({"path":"fixture.txt"}),
+            &AtomicBool::new(false),
+            &AgentExecutionPolicy::unrestricted(),
+        )
+        .expect("certified execution");
+        assert_eq!(execution.receipt["outcome"], json!("success"));
+        assert!(execution.result.expect("result").contains("receipt"));
+    }
+
+    #[test]
+    fn engine_owned_tool_still_runs_agent_policy_guard() {
+        let policy = AgentExecutionPolicy::for_team_role(crate::team::TeamRole::Researcher);
+        let execution = execute_engine_tool_with_policy(
+            "fs_write",
+            &json!({"path":"denied.txt","content":"no"}),
+            &AtomicBool::new(false),
+            &policy,
+            |_| Ok("must not run".to_owned()),
+        )
+        .expect("certified execution");
+        assert_eq!(execution.receipt["outcome"], json!("denied"));
+        assert_eq!(
+            execution.result.expect_err("policy denial").code,
+            ErrorCode::PolicyDenied
+        );
     }
 }
