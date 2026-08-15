@@ -72,9 +72,8 @@ jobs:
 
           apply('crates/medusa-agent/src/verification_authority_legacy.rs', [
               ('        ExecutedVerificationCommand, VerificationResult, execute_verification_command,\n        required_browser_verification,\n    },', '        ExecutedVerificationCommand, execute_verification_command, required_browser_verification,\n    },\n'),
-              ('use verification_schedule::{dag_for_plan, execute_command_wave};', '#[cfg(test)]\nuse crate::verification::VerificationResult;\n\nuse verification_schedule::{dag_for_plan, execute_command_wave};'),
               ('pub fn authoritative_verification_for_components(\n', '#[cfg(test)]\npub fn authoritative_verification_for_components(\n'),
-              ('pub(crate) fn authoritative_verification_for_paths(\n', '#[cfg(test)]\npub(crate) fn authoritative_verification_for_paths(\n'),
+              ('pub(crate) fn authoritative_verification_for_paths(\n    repo: &Path,\n    paths: &[String],\n) -> MedusaResult<VerificationResult> {\n    let components = paths\n        .iter()\n        .map(|path| ChangedComponent::new(ChangeKind::Modified, path.clone()))\n        .collect::<std::result::Result<Vec<_>, _>>()\n        .map_err(evidence_error)?;\n    let commit = git_stdout(repo, &["rev-parse", "HEAD"]).unwrap_or_else(|| "worktree".to_owned());\n    let repository_fingerprint = short_hash(&format!("{}:{commit}", repo.display()));\n    let result = authoritative_verification_for_components(\n        repo,\n        &repository_fingerprint,\n        &commit,\n        &components,\n    )?;\n    Ok(VerificationResult {\n        passed: result.receipt.passed,\n        evidence: result.summary,\n    })\n}\n\n', ''),
               ('fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {', '#[cfg(test)]\nfn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {')
           ])
           PY
@@ -99,5 +98,5 @@ jobs:
           git add crates/medusa-context/src/refinement.rs \
             crates/medusa-agent/src/session/skill_outcomes.rs \
             crates/medusa-agent/src/verification_authority_legacy.rs
-          git commit -m 'refactor: scope legacy helpers to tests'
+          git commit -m 'refactor: complete dead-code migration cleanup'
           git push origin HEAD:codex/issue-858-dead-code-migrations
