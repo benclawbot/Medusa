@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "suite_version": "1.0.0",
+  "suite_id": "medusa-same-model-coding-harness",
+  "task_revision": "coding-harness-corpus-v1",
+  "source_contract": "cargo product-acceptance",
+  "default_runs": 2,
+  "same_model_required": true,
+  "variants": [
+    {"id":"baseline","features":[]},
+    {"id":"mandatory-verification","features":["873"]},
+    {"id":"trajectory-continuity","features":["874"]},
+    {"id":"evidence-ranked-context","features":["875"]},
+    {"id":"structured-repair-ledger","features":["876"]},
+    {"id":"roadblock-recovery","features":["877"]},
+    {"id":"current-production","features":["873","874","875","876","877"]}
+  ],
+  "scenarios": [
+    {"id":"localized-bug-fix","category":"localized_bug_fix","acceptance_ids":["production-orchestration","verification-rollback"],"expected_outcome":"success","authoritative_verification":true},
+    {"id":"unfamiliar-repository-navigation","category":"repository_navigation","acceptance_ids":["production-orchestration","headless-entrypoint"],"expected_outcome":"success","authoritative_verification":true},
+    {"id":"cross-module-api-change","category":"cross_module_api","acceptance_ids":["production-orchestration","architecture-policy"],"expected_outcome":"success","authoritative_verification":true},
+    {"id":"regression-test-addition","category":"regression_test","acceptance_ids":["production-orchestration","verification-rollback"],"expected_outcome":"success","authoritative_verification":true},
+    {"id":"multiple-simultaneous-diagnostics","category":"multi_diagnostic_repair","acceptance_ids":["production-orchestration"],"expected_outcome":"success","authoritative_verification":true},
+    {"id":"architecture-policy-failure","category":"architecture_policy","acceptance_ids":["production-orchestration","escalation"],"expected_outcome":"success","authoritative_verification":true},
+    {"id":"dependency-configuration-change","category":"dependency_configuration","acceptance_ids":["upgrade-rollback-evidence"],"expected_outcome":"success","authoritative_verification":true},
+    {"id":"long-horizon-repair-cycles","category":"long_horizon","acceptance_ids":["production-orchestration","checkpoint-restore","verification-rollback"],"expected_outcome":"success","authoritative_verification":true,"forced_long_horizon":true},
+    {"id":"forced-compaction-resume","category":"compaction_resume","acceptance_ids":["production-orchestration","checkpoint-restore","interruption-resume"],"expected_outcome":"success","authoritative_verification":true,"forced_compaction":true,"platform_any":["interruption-resume","interruption-replay"]},
+    {"id":"repository-drift-before-mutation","category":"repository_drift","acceptance_ids":["production-orchestration"],"expected_outcome":"success","authoritative_verification":true,"forced_repository_drift":true},
+    {"id":"misleading-first-hypothesis","category":"hypothesis_recovery","acceptance_ids":["production-orchestration"],"expected_outcome":"success","authoritative_verification":true,"forced_hypothesis_failure":true},
+    {"id":"narrow-pass-broad-verification-fail","category":"verification_breadth","acceptance_ids":["production-orchestration","verification-rollback"],"expected_outcome":"success","authoritative_verification":true,"forced_broad_verification_failure":true},
+    {"id":"blocked-primary-alternative-path","category":"roadblock_recovery","acceptance_ids":["production-orchestration","escalation"],"expected_outcome":"success","authoritative_verification":true,"forced_roadblock":true},
+    {"id":"truthful-partial-completion-control","category":"negative_control","acceptance_ids":["production-orchestration","escalation"],"expected_outcome":"partial","authoritative_verification":true,"control":true},
+    {"id":"no-code-change-control","category":"negative_control","acceptance_ids":["production-orchestration"],"expected_outcome":"no_change","authoritative_verification":true,"control":true}
+  ],
+  "required_metrics": [
+    "task_success_rate",
+    "false_complete_rate",
+    "first_pass_correctness_rate",
+    "repair_cycles",
+    "duplicate_tool_calls",
+    "failed_deterministic_retries",
+    "context_retained_bytes",
+    "context_reread_bytes",
+    "verification_coverage",
+    "stale_evidence_incidents",
+    "roadblocks_encountered",
+    "roadblock_recoveries",
+    "wall_clock_ms",
+    "tool_latency_ms",
+    "input_tokens",
+    "output_tokens",
+    "billed_cost_microunits",
+    "manual_interventions"
+  ],
+  "feature_assertions": [
+    {"feature":"873","metric":"false_complete_rate","direction":"lower_or_equal","safety_metric":true},
+    {"feature":"874","metric":"continuity_loss_incidents","direction":"lower_or_equal","safety_metric":true},
+    {"feature":"875","metric":"irrelevant_context_bytes","direction":"lower_or_equal","guard_metric":"task_success_rate"},
+    {"feature":"876","metric":"duplicate_diagnostic_reads","direction":"lower_or_equal","guard_metric":"task_success_rate"},
+    {"feature":"877","metric":"blocked_path_completion_rate","direction":"higher_or_equal","guard_metric":"false_complete_rate"}
+  ],
+  "promotion_guardrails": {
+    "minimum_task_success_rate": 1.0,
+    "minimum_verification_coverage": 1.0,
+    "maximum_false_complete_rate": 0.0,
+    "maximum_safety_regressions": 0,
+    "correctness_and_safety_override_latency_cost": true
+  }
+}
