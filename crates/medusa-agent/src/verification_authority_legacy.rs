@@ -27,8 +27,7 @@ mod verification_schedule;
 use crate::{
     repository_boundary::is_revisioned_git_repository_root,
     verification::{
-        ExecutedVerificationCommand, VerificationResult, execute_verification_command,
-        required_browser_verification,
+        ExecutedVerificationCommand, execute_verification_command, required_browser_verification,
     },
     verification_dag::{VerificationDag, VerificationNodeState, VerificationReceipt as DagReceipt},
 };
@@ -179,6 +178,7 @@ fn bounded_failure_text(bytes: &[u8]) -> String {
     truncate_utf8(text.trim(), 2048)
 }
 
+#[cfg(test)]
 pub fn authoritative_verification_for_components(
     repo: &Path,
     repository_fingerprint: &str,
@@ -780,29 +780,6 @@ fn collect_repository_paths(
     Ok(())
 }
 
-pub(crate) fn authoritative_verification_for_paths(
-    repo: &Path,
-    paths: &[String],
-) -> MedusaResult<VerificationResult> {
-    let components = paths
-        .iter()
-        .map(|path| ChangedComponent::new(ChangeKind::Modified, path.clone()))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(evidence_error)?;
-    let commit = git_stdout(repo, &["rev-parse", "HEAD"]).unwrap_or_else(|| "worktree".to_owned());
-    let repository_fingerprint = short_hash(&format!("{}:{commit}", repo.display()));
-    let result = authoritative_verification_for_components(
-        repo,
-        &repository_fingerprint,
-        &commit,
-        &components,
-    )?;
-    Ok(VerificationResult {
-        passed: result.receipt.passed,
-        evidence: result.summary,
-    })
-}
-
 fn graph_verification_assessment(
     repo: &Path,
     commit: &str,
@@ -1321,6 +1298,7 @@ fn media_type_for_path(path: &Path) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .args(args)
