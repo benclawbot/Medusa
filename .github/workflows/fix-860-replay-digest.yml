@@ -48,7 +48,7 @@ jobs:
       - name: Validate unchanged public build contract
         shell: bash
         run: cargo check -p medusa-improvement --lib --locked
-      - name: Commit migration
+      - name: Commit source migration
         shell: bash
         run: |
           set -euo pipefail
@@ -56,9 +56,6 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-improvement/src/lib.rs \
                   crates/medusa-improvement/src/regression_replay.rs \
-                  crates/medusa-improvement/src/correction_loop.rs \
-                  .github/workflows/ci.yml \
-                  scripts/check-production-panic-exemptions.py \
-                  scripts/test-production-panic-exemptions.py
+                  crates/medusa-improvement/src/correction_loop.rs
           git commit -m 'fix: make replay digest hashing infallible'
           git push
