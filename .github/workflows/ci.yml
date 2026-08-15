@@ -18,6 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate repository artifact hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-repository-artifacts.py
+          python3 scripts/check-repository-artifacts.py
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
