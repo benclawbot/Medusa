@@ -9,7 +9,6 @@ script = '\n'.join(
     line[len(prefix):] if line.startswith(prefix) else line for line in src[start:end]
 ) + '\n'
 
-# Replace the brittle continuity whole-method patch with a structural insertion.
 begin = script.index("anchor = '''    pub fn mutate")
 finish = script.index("module = r'''", begin)
 replacement = '''marker = "    pub fn handoff("
@@ -45,7 +44,6 @@ root.write_text(s.replace(marker, project_task + marker, 1))
 '''
 script = script[:begin] + replacement + script[finish:]
 
-# Align generated reducer with protocol shapes and imports.
 script = script.replace(
     'AuthoritativeTaskState, CodingTrajectoryCheckpoint, DisprovedHypothesisCheckpoint,',
     'CodingTrajectoryCheckpoint, DisprovedHypothesisCheckpoint,',
@@ -88,7 +86,6 @@ script = script.replace(
     'medusa_agent::record_session_event(&mut session, Actor::System("verifier".to_owned()), EventPayload::VerificationCompleted',
 )
 
-# Make resume a persisted continuity transition, not a render-only helper.
 old_resume = '''          pub(crate) fn render_for_resume(
               repo: &Path,
               session: &AgentSession,
@@ -178,7 +175,6 @@ if old_resume not in script:
     raise SystemExit('resume helper anchor missing')
 script = script.replace(old_resume, new_resume, 1)
 
-# Force a real compaction before resume in the runtime trajectory acceptance test.
 script = script.replace(
     '''                  let first = sync_and_render(repo.path(), &session, Some("provider-native-1".to_owned())).expect("sync");
                   assert!(first.contains("keep public API stable"));
@@ -212,7 +208,6 @@ script = script.replace(
     1,
 )
 
-# Replace brittle engine-call patch with structural insertion independent of indentation.
 engine_begin = script.index(
     "old = '''                match engine.step_with_observer_and_context_and_turn_instruction_for_phase("
 )
@@ -238,7 +233,6 @@ s = s.replace(context_arg, "                    Some(turn_context.as_str()),", 1
 '''
 script = script[:engine_begin] + engine_replacement + script[post_begin:]
 
-# Replace post-step patch up to the final lib write.
 post_begin = script.index(
     "old = '''            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });"
 )
@@ -251,8 +245,7 @@ s = s.replace(marker, replacement_line, 1)
 '''
 script = script[:post_begin] + post_replacement + script[post_finish:]
 
-# Wire the persisted restore into the real runtime resume boundary.
-script += r'''
+script += r"""
 error_path = Path('crates/medusa-runtime/src/error.rs')
 error_source = error_path.read_text()
 resume_anchor = '''        let restored_followups = restore_queued_followups(&session)?;
@@ -267,7 +260,7 @@ resume_replacement = '''        let restored_followups = restore_queued_followup
 if resume_anchor not in error_source:
     raise SystemExit('runtime resume boundary anchor missing')
 error_path.write_text(error_source.replace(resume_anchor, resume_replacement, 1))
-'''
+"""
 
 Path('/tmp/issue874.py').write_text(script)
 exec(compile(script, '/tmp/issue874.py', 'exec'), {'__name__': '__main__'})
