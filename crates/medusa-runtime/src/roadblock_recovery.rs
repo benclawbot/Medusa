@@ -26,15 +26,17 @@ pub(crate) fn project(trajectory: &CodingTrajectoryCheckpoint) -> Projection {
         .iter()
         .map(|item| (item.fingerprint.clone(), item.clone()))
         .collect::<BTreeMap<_, _>>();
-    let attempted = prior
-        .values()
-        .flat_map(|item| item.alternatives.iter())
-        .filter(|item| item.selected || item.rejected_reason.is_some())
-        .map(|item| strategy_signature(&item.strategy))
-        .collect::<BTreeSet<_>>();
-
     let mut roadblocks = Vec::new();
     for failure in trajectory.repair_ledger.iter().filter(|item| item.unresolved()) {
+        let attempted = failure
+            .repairs
+            .iter()
+            .filter(|attempt| {
+                attempt.outcome == medusa_session_continuity::VerificationOutcome::Failed
+                    && !attempt.hypothesis.trim().is_empty()
+            })
+            .map(|attempt| strategy_signature(&attempt.hypothesis))
+            .collect::<BTreeSet<_>>();
         let Some(class) = classify(failure) else {
             continue;
         };
@@ -51,10 +53,16 @@ pub(crate) fn project(trajectory: &CodingTrajectoryCheckpoint) -> Projection {
         let selected_index = can_transition
             .then(|| alternatives.iter().position(|item| item.rejected_reason.is_none()))
             .flatten();
+        let selected_alternative = selected_index.map(|index| alternatives[index].strategy.clone());
         for (index, item) in alternatives.iter_mut().enumerate() {
             item.selected = Some(index) == selected_index;
+            if !item.selected && item.rejected_reason.is_none() {
+                item.rejected_reason = Some(match selected_alternative.as_deref() {
+                    Some(selected) => format!("lower ranked than selected alternative `{selected}`"),
+                    None => "strategy transition budget exhausted".to_owned(),
+                });
+            }
         }
-        let selected_alternative = selected_index.map(|index| alternatives[index].strategy.clone());
         let disposition = if selected_alternative.is_some() {
             RoadblockDisposition::AlternativeSelected
         } else {
@@ -109,9 +117,6 @@ pub(crate) fn project(trajectory: &CodingTrajectoryCheckpoint) -> Projection {
 
 fn classify(failure: &RepairLedgerEntry) -> Option<RoadblockClass> {
     let text = format!("{} {}", failure.diagnostic_class, failure.summary).to_ascii_lowercase();
-    if contains_any(&text, &["permission denied", "not permitted", "forbidden", "policy", "approval required"]) {
-        return Some(RoadblockClass::PermissionPolicy);
-    }
     if contains_any(&text, &["command not found", "not installed", "unsupported platform", "unavailable tool", "missing capability"]) {
         return Some(RoadblockClass::MissingCapability);
     }
@@ -121,6 +126,9 @@ fn classify(failure: &RepairLedgerEntry) -> Option<RoadblockClass> {
     if contains_any(&text, &["breaking change", "public api", "architecture", "compatibility", "forbidden dependency"]) {
         return Some(RoadblockClass::ArchitectureCompatibility);
     }
+    if contains_any(&text, &["permission denied", "not permitted", "forbidden", "policy", "approval required"]) {
+        return Some(RoadblockClass::PermissionPolicy);
+    }
     if contains_any(&text, &["stale", "conflict", "non-fast-forward", "repository drift", "lock file changed"]) {
         return Some(RoadblockClass::RepositoryConflict);
     }
@@ -129,6 +137,9 @@ fn classify(failure: &RepairLedgerEntry) -> Option<RoadblockClass> {
     }
     if contains_any(&text, &["assumption", "hypothesis", "does not exist", "no method named", "unresolved import"]) {
         return Some(RoadblockClass::DisprovedHypothesis);
+    }
+    if contains_any(&text, &["structurally wrong", "invariant violation", "design cannot satisfy", "structural verification"]) {
+        return Some(RoadblockClass::StructuralVerification);
     }
     if failure.occurrence_count >= 2 || failure.repairs.iter().filter(|attempt| attempt.outcome == medusa_session_continuity::VerificationOutcome::Failed).count() >= 1 {
         return Some(RoadblockClass::DeterministicFailure);
@@ -158,8 +169,8 @@ fn alternatives_for(
             candidate("complete-independent-work-and-escalate", "Finish independent work and preserve the exact permission boundary as a resumable blocker.", 70, 2, 100),
         ],
         RoadblockClass::ArchitectureCompatibility => vec![
-            candidate("compatibility-shim", "Preserve the public/architecture contract with an adapter or compatibility shim.", 94, 12, 92),
-            candidate("move-change-behind-existing-seam", "Implement behind the repository's existing authority or extension seam instead of changing the public boundary.", 91, 10, 94),
+            candidate("compatibility-shim", "Preserve the public/architecture contract with an adapter or compatibility shim.", 98, 6, 99),
+            candidate("move-change-behind-existing-seam", "Implement behind the repository's existing authority or extension seam instead of changing the public boundary.", 92, 10, 95),
             candidate("decompose-compatible-increments", "Split the change into smaller independently verifiable compatibility-preserving steps.", 84, 6, 97),
         ],
         RoadblockClass::RepositoryConflict => vec![
@@ -377,6 +388,51 @@ mod tests {
         assert_ne!(
             second.roadblocks[0].selected_alternative,
             state.roadblocks[0].selected_alternative
+        );
+    }
+
+    #[test]
+    fn single_transient_failure_does_not_trigger_recovery() {
+        let projected = project(&trajectory(failure("temporary compile hiccup", 1)));
+        assert!(projected.roadblocks.is_empty());
+        assert!(projected.selected_strategy.is_none());
+    }
+
+    #[test]
+    fn missing_capability_selects_repository_supported_alternative() {
+        let projected = project(&trajectory(failure("required command not found", 1)));
+        assert_eq!(projected.roadblocks[0].class, RoadblockClass::MissingCapability);
+        assert_eq!(
+            projected.roadblocks[0].selected_alternative.as_deref(),
+            Some("use-repository-supported-alternative")
+        );
+    }
+
+    #[test]
+    fn unrelated_failed_strategy_does_not_poison_current_roadblock() {
+        let mut current = failure("required command not found", 1);
+        current.fingerprint = "current".to_owned();
+        let mut unrelated = failure("mismatched types", 2);
+        unrelated.fingerprint = "unrelated".to_owned();
+        unrelated.repairs.push(RepairAttemptCheckpoint {
+            id: "unrelated-repair".to_owned(),
+            failure_fingerprint: "unrelated".to_owned(),
+            changed_files: vec!["crates/a/src/lib.rs".to_owned()],
+            outcome: VerificationOutcome::Failed,
+            hypothesis: "use-repository-supported-alternative".to_owned(),
+            repository_fingerprint: "repo-a".to_owned(),
+        });
+        let mut state = trajectory(current);
+        state.repair_ledger.push(unrelated);
+        let projected = project(&state);
+        let current_roadblock = projected
+            .roadblocks
+            .iter()
+            .find(|item| item.summary.contains("command not found"))
+            .expect("current roadblock");
+        assert_eq!(
+            current_roadblock.selected_alternative.as_deref(),
+            Some("use-repository-supported-alternative")
         );
     }
 

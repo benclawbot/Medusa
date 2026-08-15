@@ -15,6 +15,8 @@ use crate::RuntimeError;
 
 #[path = "repair_ledger.rs"]
 mod repair_ledger;
+#[path = "roadblock_recovery.rs"]
+mod roadblock_recovery;
 
 const CONTEXT_LIMIT: usize = 12_000;
 
@@ -302,11 +304,53 @@ fn reduce(
     trajectory.repair_ledger = repair_projection.entries;
     trajectory.verification_generation = repair_projection.generation;
     trajectory.repair_ledger_cursor = repair_projection.cursor;
-    trajectory.continuation_intent = session
-        .plan
+
+    let previously_selected = trajectory
+        .roadblocks
         .iter()
-        .find(|step| step.status != AgentPlanStepStatus::Completed)
-        .map(|step| format!("continue plan step: {}", step.title));
+        .filter(|roadblock| roadblock.unresolved())
+        .filter_map(|roadblock| roadblock.selected_alternative.clone())
+        .collect::<BTreeSet<_>>();
+    let roadblock_projection = roadblock_recovery::project(&trajectory);
+    let selected_strategy = roadblock_projection.selected_strategy;
+    if selected_strategy
+        .as_ref()
+        .is_some_and(|strategy| !previously_selected.contains(strategy))
+    {
+        trajectory.strategy_transition_count = trajectory.strategy_transition_count.saturating_add(1);
+    }
+    trajectory.roadblocks = roadblock_projection.roadblocks;
+    trajectory
+        .remaining_blockers
+        .retain(|item| !item.starts_with("roadblock:"));
+    for roadblock in trajectory.roadblocks.iter().filter(|item| item.unresolved()) {
+        trajectory.remaining_blockers.push(format!(
+            "roadblock:{:?}:{}",
+            roadblock.class, roadblock.summary
+        ));
+    }
+    trajectory.remaining_blockers.sort();
+    trajectory.remaining_blockers.dedup();
+    trajectory.rejected_alternatives = trajectory
+        .roadblocks
+        .iter()
+        .flat_map(|roadblock| roadblock.alternatives.iter())
+        .filter_map(|alternative| {
+            alternative.rejected_reason.as_ref().map(|reason| {
+                format!("{}: {}", alternative.strategy, reason)
+            })
+        })
+        .take(128)
+        .collect();
+    trajectory.continuation_intent = selected_strategy
+        .map(|strategy| format!("switch strategy: {strategy}"))
+        .or_else(|| {
+            session
+                .plan
+                .iter()
+                .find(|step| step.status != AgentPlanStepStatus::Completed)
+                .map(|step| format!("continue plan step: {}", step.title))
+        });
     Ok(trajectory)
 }
 
@@ -397,7 +441,7 @@ fn git(repo: &Path, args: &[&str]) -> Option<String> {
 fn render(trajectory: &CodingTrajectoryCheckpoint) -> Result<String, RuntimeError> {
     let json = serde_json::to_string(trajectory).map_err(RuntimeError::agent)?;
     Ok(format!(
-        "[medusa-coding-trajectory-v1]\nAuthoritative compact trajectory derived from the canonical journal. Preserve immutable objective/constraints and use repair_ledger as the complete actionable failure set. Repair all independent diagnostics from the latest verification generation together, expand exact source_refs only when needed, rerun the narrowest authoritative check after mutation, and do not repeat an identical failed repair on an unchanged repository fingerprint; re-plan or escalate instead. Revalidate stale paths after repository drift.\n{}",
+        "[medusa-coding-trajectory-v1]\nAuthoritative compact trajectory derived from the canonical journal. Preserve immutable objective/constraints and use repair_ledger as the complete actionable failure set. Repair all independent diagnostics from the latest verification generation together, expand exact source_refs only when needed, rerun the narrowest authoritative check after mutation, and do not repeat an identical failed repair on an unchanged repository fingerprint. When roadblocks are present, follow only an admissible selected_alternative, preserve authority boundaries, and materially change strategy; rejected alternatives and disproved hypotheses must not be retried without new evidence. If disposition is escalation_required, complete independent work and report the exact blocker rather than claiming success. Revalidate stale paths after repository drift.\n{}",
         bounded(&json, CONTEXT_LIMIT)
     ))
 }

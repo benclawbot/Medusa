@@ -10,7 +10,7 @@ use thiserror::Error;
 pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 pub const CODING_TRAJECTORY_SCHEMA_VERSION: u32 = 1;
 const MAX_TRAJECTORY_ITEMS: usize = 256;
-const MAX_TRAJECTORY_TEXT_BYTES: usize = 16 * 1024;
+const MAX_TRAJECTORY_TEXT_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -236,6 +236,69 @@ pub struct DisprovedHypothesisCheckpoint {
     pub repository_fingerprint: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoadblockClass {
+    DeterministicFailure,
+    MissingCapability,
+    DependencyUnavailable,
+    PermissionPolicy,
+    ArchitectureCompatibility,
+    RepositoryConflict,
+    DisprovedHypothesis,
+    StructuralVerification,
+    ResourceExhaustion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoadblockDisposition {
+    AlternativeSelected,
+    EscalationRequired,
+    Resolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlternativePathCheckpoint {
+    pub strategy: String,
+    pub rationale: String,
+    pub success_probability: u8,
+    pub blast_radius: u8,
+    pub verifiability: u8,
+    pub reversibility: u8,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    #[serde(default)]
+    pub verification_requirements: Vec<String>,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub rejected_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoadblockCheckpoint {
+    pub fingerprint: String,
+    pub class: RoadblockClass,
+    pub summary: String,
+    pub first_generation: u64,
+    pub last_generation: u64,
+    pub repository_fingerprint: String,
+    pub abandoned_strategy: String,
+    pub selected_alternative: Option<String>,
+    #[serde(default)]
+    pub alternatives: Vec<AlternativePathCheckpoint>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    pub disposition: RoadblockDisposition,
+}
+
+impl RoadblockCheckpoint {
+    pub fn unresolved(&self) -> bool {
+        !matches!(self.disposition, RoadblockDisposition::Resolved)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodingTrajectoryCheckpoint {
     pub schema_version: u32,
@@ -258,6 +321,10 @@ pub struct CodingTrajectoryCheckpoint {
     pub verification_generation: u64,
     #[serde(default)]
     pub repair_ledger_cursor: u64,
+    #[serde(default)]
+    pub roadblocks: Vec<RoadblockCheckpoint>,
+    #[serde(default)]
+    pub strategy_transition_count: u32,
     pub disproved_hypotheses: Vec<DisprovedHypothesisCheckpoint>,
     pub unresolved_uncertainties: Vec<String>,
     pub remaining_blockers: Vec<String>,
@@ -288,6 +355,8 @@ impl Default for CodingTrajectoryCheckpoint {
             repair_ledger: Vec::new(),
             verification_generation: 0,
             repair_ledger_cursor: 0,
+            roadblocks: Vec::new(),
+            strategy_transition_count: 0,
             disproved_hypotheses: Vec::new(),
             unresolved_uncertainties: Vec::new(),
             remaining_blockers: Vec::new(),
@@ -321,6 +390,7 @@ impl CodingTrajectoryCheckpoint {
             self.verification_receipts.len(),
             self.failure_history.len(),
             self.repair_ledger.len(),
+            self.roadblocks.len(),
             self.disproved_hypotheses.len(),
             self.unresolved_uncertainties.len(),
             self.remaining_blockers.len(),
