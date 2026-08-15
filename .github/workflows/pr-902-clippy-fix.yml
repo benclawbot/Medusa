@@ -148,6 +148,13 @@ jobs:
               'let error = execute_tool_cancellable_with_policy_certified(',
               1,
           )
+          old_expect = '.expect_err("researcher write must be denied by certified pipeline");'
+          assert tools.count(old_expect) == 1
+          tools = tools.replace(
+              old_expect,
+              '.err().expect("researcher write must be denied by certified pipeline");',
+              1,
+          )
           tools_path.write_text(tools)
           PY
           cargo fmt --all
