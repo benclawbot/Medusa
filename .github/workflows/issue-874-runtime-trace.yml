@@ -26,6 +26,8 @@ jobs:
           end = next(i for i in range(start, len(src)) if src[i].strip() == 'PY')
           prefix = '          '
           script = '\n'.join(line[len(prefix):] if line.startswith(prefix) else line for line in src[start:end]) + '\n'
+
+          # Replace the brittle continuity whole-method patch with a structural insertion.
           begin = script.index("anchor = '''    pub fn mutate")
           finish = script.index("module = r'''", begin)
           replacement = """marker = \"    pub fn handoff(\"
@@ -35,6 +37,36 @@ jobs:
           root.write_text(s.replace(marker, project_task + marker, 1))
 
           """
+          script = script[:begin] + replacement + script[finish:]
+
+          # Replace the brittle engine-call patch with a one-line structural insertion.
+          begin = script.index("old = '''                match engine.step_with_observer_and_context_and_turn_instruction_for_phase(")
+          finish_marker = "          s = s.replace(old, new, 1)\n"
+          finish = script.index(finish_marker, begin) + len(finish_marker)
+          replacement = """marker = \"                match engine.step_with_observer_and_context_and_turn_instruction_for_phase(\\n\"
+          if marker not in s:
+              raise SystemExit(\"engine call marker missing\")
+          prefix = '''                let trajectory_context = crate::coding_trajectory::sync_and_render(
+                    &state.repo,
+                    &session,
+                    None,
+                )?;
+                let turn_context = format!("{skill_context}\\n\\n{trajectory_context}");
+'''
+          s = s.replace(marker, prefix + marker, 1)
+          s = s.replace("                    Some(skill_context.as_str()),", "                    Some(turn_context.as_str()),", 1)
+"""
+          script = script[:begin] + replacement + script[finish:]
+
+          # Replace the post-step patch structurally as well.
+          begin = script.index("old = '''            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });")
+          finish = script.index(finish_marker, begin) + len(finish_marker)
+          replacement = """marker = \"            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });\\n\"
+          if marker not in s:
+              raise SystemExit(\"post-step marker missing\")
+          replacement_line = marker + "            let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;\\n"
+          s = s.replace(marker, replacement_line, 1)
+"""
           script = script[:begin] + replacement + script[finish:]
           Path('/tmp/issue874.py').write_text(script)
           PY
