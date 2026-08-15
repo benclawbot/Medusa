@@ -53,8 +53,8 @@ use crate::{
     },
     team::{AgentExecutionPolicy, TeamMemberContext},
     tools::{
-        execute_approved_tool_cancellable, execute_tool_cancellable,
-        execute_tool_cancellable_with_context, input_string,
+        execute_approved_tool_cancellable_with_policy, execute_tool_cancellable_with_policy,
+        execute_tool_cancellable_with_context_and_policy, input_string,
     },
     verification_authority::{
         authoritative_verification_for_paths, prepare_paths_for_verification,
@@ -212,12 +212,19 @@ fn execute_session_tool(
     name: &str,
     input: &serde_json::Value,
     cancellation: &AtomicBool,
+    execution_policy: &AgentExecutionPolicy,
     session_id: &str,
     task_step_id: Option<&str>,
     activity_id: &str,
 ) -> MedusaResult<String> {
     if name != "fs_write" {
-        return execute_tool_cancellable(repo, name, input, cancellation);
+        return execute_tool_cancellable_with_policy(
+            repo,
+            name,
+            input,
+            cancellation,
+            execution_policy,
+        );
     }
 
     let requested_path = input
@@ -231,21 +238,29 @@ fn execute_session_tool(
             )
         })?;
 
-    // Absolute/external writes must reach the existing path-policy and approval boundary before
-    // any provenance work. They are not repository mutations and cannot be selectively reverted.
     if Path::new(requested_path).is_absolute() {
-        return execute_tool_cancellable(repo, name, input, cancellation);
+        return execute_tool_cancellable_with_policy(
+            repo,
+            name,
+            input,
+            cancellation,
+            execution_policy,
+        );
     }
 
-    // Non-Git workspaces remain writable, but repository-diff provenance is unavailable there.
-    // Keep that limitation explicit instead of failing the write or manufacturing authority.
     let provenance_available = std::process::Command::new("git")
         .args(["diff", "--binary", "--no-ext-diff", "--", "."])
         .current_dir(repo)
         .output()
         .is_ok_and(|output| output.status.success());
     if !provenance_available {
-        let output = execute_tool_cancellable(repo, name, input, cancellation)?;
+        let output = execute_tool_cancellable_with_policy(
+            repo,
+            name,
+            input,
+            cancellation,
+            execution_policy,
+        )?;
         return Ok(format!(
             "{output}; selective_revert=unavailable (workspace has no authoritative Git provenance)"
         ));
@@ -270,7 +285,14 @@ fn execute_session_tool(
         sequence,
         occurred_at_unix_ms,
     };
-    execute_tool_cancellable_with_context(repo, name, input, cancellation, Some(&context))
+    execute_tool_cancellable_with_context_and_policy(
+        repo,
+        name,
+        input,
+        cancellation,
+        Some(&context),
+        execution_policy,
+    )
 }
 
 fn active_plan_step_id(session: &AgentSession) -> Option<&str> {
@@ -479,7 +501,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         load(repo, session)
     }
 
-    /// Loads the durable evidence model associated with a session, when enabled.
     pub fn load_session_world_model(
         &self,
         session: &AgentSession,
@@ -498,7 +519,6 @@ impl<P: ModelProvider> AgentEngine<P> {
             })
     }
 
-    /// Adds a follow-up prompt to an existing session so later turns retain context.
     pub fn append_user_message(
         &self,
         session: &mut AgentSession,
@@ -527,7 +547,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
-    /// Applies one previously accepted queued follow-up exactly once.
     pub fn append_queued_user_message(
         &self,
         session: &mut AgentSession,
@@ -557,7 +576,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
-    /// Resolves a blocking question with a single user response and resumes the same session.
     pub fn answer_pending_question(
         &self,
         session: &mut AgentSession,
@@ -632,11 +650,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                 )?;
                 session.updated_at = OffsetDateTime::now_utc();
                 persist(session)?;
-                let result = execute_approved_tool_cancellable(
+                let result = execute_approved_tool_cancellable_with_policy(
                     &session.repo,
                     &approval.tool,
                     &approval.input,
                     self.cancellation.as_ref(),
+                    &self.execution_policy,
                 );
                 append_event(
                     session,
@@ -689,7 +708,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
-    /// Updates the durable session objective without creating a new conversation.
     pub fn update_objective(
         &self,
         session: &mut AgentSession,
@@ -698,7 +716,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         update_session_objective(session, objective)
     }
 
-    /// Replaces prior message history with a bounded durable summary for the next model request.
     pub fn compact_session(
         &self,
         session: &mut AgentSession,
@@ -844,9 +861,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         )
     }
 
-    /// Executes one model step with ephemeral system context and an optional latest-turn
-    /// instruction. The instruction is sent only in the provider request and is never persisted in
-    /// the durable session history.
     pub fn step_with_observer_and_context_and_turn_instruction<F>(
         &self,
         session: &mut AgentSession,
@@ -1018,16 +1032,16 @@ impl<P: ModelProvider> AgentEngine<P> {
                     ProviderStreamEvent::ToolUseReady { id, name, input }
                         if !early_tool_executions.contains_key(&id)
                             && stream_dispatch_safe_tool(&name, &input)
-                            && self.execution_policy.denial_reason(&name, &input).is_none()
                             && tool_allowed(self.config.agent.mode, &name) =>
                     {
                         let requested_at = std::time::Instant::now();
                         let started = std::time::Instant::now();
-                        if let Ok(output) = execute_tool_cancellable(
+                        if let Ok(output) = execute_tool_cancellable_with_policy(
                             &streaming_repo,
                             &name,
                             &input,
                             self.cancellation.as_ref(),
+                            &self.execution_policy,
                         ) {
                             early_tool_executions.insert(
                                 id,
@@ -1216,6 +1230,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 let cache = &safe_tool_cache;
                 let requested_at = &tool_requested_at;
                 let cancellation = Arc::clone(&self.cancellation);
+                let execution_policy = self.execution_policy.clone();
                 map_parallel_ordered(batch, |(id, name, input)| {
                     let started = std::time::Instant::now();
                     let queue_duration_ns = requested_at
@@ -1232,6 +1247,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                                 &name,
                                 &input,
                                 cancellation.as_ref(),
+                                &execution_policy,
                                 &mutation_session_id,
                                 mutation_task_step.as_deref(),
                                 &id,
@@ -1423,6 +1439,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                             &name,
                             &input,
                             self.cancellation.as_ref(),
+                            &self.execution_policy,
                             session.id.as_str(),
                             active_plan_step_id(session),
                             &id,
@@ -1610,8 +1627,6 @@ impl<P: ModelProvider> AgentEngine<P> {
                         &mut observer,
                     )?;
                 }
-                // The TUI sees the full body verbatim; the model sees the compact
-                // head/tail envelope with a pointer to the on-disk artifact.
                 observer(&AgentUpdate::ToolOutput {
                     tool: name.clone(),
                     output: raw_content.clone(),
@@ -1626,9 +1641,6 @@ impl<P: ModelProvider> AgentEngine<P> {
                 ) {
                     Ok(env) => {
                         let compact = compact_envelope_for_model(&env);
-                        // Persist the artifact path on the session for later
-                        // reference (cleanup, replay). Currently unused by
-                        // downstream consumers — Task 7 wires SessionBrowser on top.
                         session.tool_artifacts.push(env.path.clone());
                         if is_error {
                             format!("[error]\n{compact}")
@@ -1636,11 +1648,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                             compact
                         }
                     }
-                    Err(_) => {
-                        // Envelope wrap failed (rare — disk full, perms). Fall back
-                        // to the raw body so the model still sees output.
-                        raw_content.clone()
-                    }
+                    Err(_) => raw_content.clone(),
                 };
                 session.messages.push(Message {
                     role: Role::User,
@@ -2038,7 +2046,7 @@ mod phase_budget_tests {
         );
         let mut session = engine
             .create_session(directory.path(), "repair failed verification".to_owned())
-            .expect("create session");
+            .expect("create delegated session");
 
         engine
             .step_for_provider_phase(&mut session, ProviderExecutionPhase::Repair)
