@@ -63,7 +63,11 @@ jobs:
         if: always()
         with:
           name: coding-harness-benchmark-${{ github.sha }}
-          path: target/coding-harness-benchmark
+          path: |
+            target/coding-harness-benchmark/coding-harness-benchmark.json
+            target/coding-harness-benchmark/coding-harness-benchmark.md
+            target/coding-harness-benchmark/acceptance-1/summary.json
+            target/coding-harness-benchmark/acceptance-2/summary.json
 
   deterministic-runtime:
     name: Deterministic runtime benchmark
@@ -102,4 +106,7 @@ jobs:
           path: |
             target/reliability-benchmark
             target/orchestration-benchmark
-            target/coding-harness-benchmark
+            target/coding-harness-benchmark/coding-harness-benchmark.json
+            target/coding-harness-benchmark/coding-harness-benchmark.md
+            target/coding-harness-benchmark/acceptance-1/summary.json
+            target/coding-harness-benchmark/acceptance-2/summary.json
