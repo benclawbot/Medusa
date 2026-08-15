@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   implement-and-validate:
-    if: github.event.head_commit.message == 'chore: run issue 876 validation'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +32,6 @@ jobs:
       - name: Clippy
         run: cargo clippy -p medusa-session-continuity -p medusa-runtime --all-targets -- -D warnings
       - name: Commit production changes
-        if: success()
         run: |
           git rm .github/workflows/issue-876-bootstrap.yml .github/issue-876-patch.py
           git add crates/medusa-session-continuity/src/root.rs crates/medusa-runtime/src/coding_trajectory.rs crates/medusa-runtime/src/repair_ledger.rs
