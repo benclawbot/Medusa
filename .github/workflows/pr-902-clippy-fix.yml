@@ -29,6 +29,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           engine_path = Path('crates/medusa-agent/src/engine.rs')
           engine = engine_path.read_text()
@@ -70,17 +71,8 @@ jobs:
           segment = segment.replace('activity_id: activity_id.to_owned()', 'activity_id: authority.activity_id.to_owned()')
           engine = engine[:start] + segment + engine[end:]
 
-          old_parallel = '''execute_session_tool(
-                                  repo,
-                                  &name,
-                                  &input,
-                                  cancellation.as_ref(),
-                                  &execution_policy,
-                                  &mutation_session_id,
-                                  mutation_task_step.as_deref(),
-                                  &id,
-                              )'''
-          new_parallel = '''execute_session_tool(
+          parallel_pattern = re.compile(r'''execute_session_tool\(\s*repo,\s*&name,\s*&input,\s*cancellation\.as_ref\(\),\s*&execution_policy,\s*&mutation_session_id,\s*mutation_task_step\.as_deref\(\),\s*&id,\s*\)''')
+          parallel_replacement = '''execute_session_tool(
                                   repo,
                                   &name,
                                   &input,
@@ -92,20 +84,11 @@ jobs:
                                       activity_id: &id,
                                   },
                               )'''
-          assert engine.count(old_parallel) == 1
-          engine = engine.replace(old_parallel, new_parallel)
+          engine, count = parallel_pattern.subn(parallel_replacement, engine, count=1)
+          assert count == 1
 
-          old_normal = '''execute_session_tool(
-                              &session.repo,
-                              &name,
-                              &input,
-                              self.cancellation.as_ref(),
-                              &self.execution_policy,
-                              session.id.as_str(),
-                              active_plan_step_id(session),
-                              &id,
-                          )?'''
-          new_normal = '''execute_session_tool(
+          normal_pattern = re.compile(r'''execute_session_tool\(\s*&session\.repo,\s*&name,\s*&input,\s*self\.cancellation\.as_ref\(\),\s*&self\.execution_policy,\s*session\.id\.as_str\(\),\s*active_plan_step_id\(session\),\s*&id,\s*\)\?''')
+          normal_replacement = '''execute_session_tool(
                               &session.repo,
                               &name,
                               &input,
@@ -117,8 +100,8 @@ jobs:
                                   activity_id: &id,
                               },
                           )?'''
-          assert engine.count(old_normal) == 1
-          engine = engine.replace(old_normal, new_normal)
+          engine, count = normal_pattern.subn(normal_replacement, engine, count=1)
+          assert count == 1
 
           assert engine.count('    AskQuestion(AgentQuestion),') == 1
           engine = engine.replace('    AskQuestion(AgentQuestion),', '    AskQuestion(Box<AgentQuestion>),')
@@ -138,8 +121,8 @@ jobs:
           special = engine[special_start:special_end]
           assert special.count('let execution = execute_engine_tool_with_policy(') == 2
           special = special.replace('let execution = execute_engine_tool_with_policy(', 'execute_engine_tool_with_policy(')
-          assert special.count('                    )?;\n                    execution') == 2
-          special = special.replace('                    )?;\n                    execution', '                    )?')
+          special, count = re.subn(r'\)\?;\s*execution', ')?', special)
+          assert count == 2
           engine = engine[:special_start] + special + engine[special_end:]
           engine_path.write_text(engine)
 
@@ -147,26 +130,12 @@ jobs:
           tools = tools_path.read_text()
           assert tools.count('mod pipeline {') == 1
           tools = tools.replace('mod pipeline {', 'pub mod pipeline {', 1)
-          obsolete = '''pub(crate) fn execute_tool_cancellable_with_policy(
-              repo: &Path,
-              name: &str,
-              input: &Value,
-              cancellation: &AtomicBool,
-              execution_policy: &AgentExecutionPolicy,
-          ) -> MedusaResult<String> {
-              execute_tool_cancellable_with_policy_certified(
-                  repo,
-                  name,
-                  input,
-                  cancellation,
-                  execution_policy,
-              )?
-              .result
-          }
-
-          '''
-          assert tools.count(obsolete) == 1
-          tools = tools.replace(obsolete, '')
+          obsolete_pattern = re.compile(
+              r'pub\(crate\) fn execute_tool_cancellable_with_policy\([\s\S]*?\n}\n\n'
+              r'(?=pub\(crate\) fn execute_tool_cancellable\()'
+          )
+          tools, count = obsolete_pattern.subn('', tools, count=1)
+          assert count == 1
           tools_path.write_text(tools)
           PY
           cargo fmt --all
@@ -181,6 +150,6 @@ jobs:
           git diff --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -- crates/medusa-agent/src/engine.rs crates/medusa-agent/src/tools/mod.rs .github/workflows/pr-902-clippy-fix.yml
+          git add -A
           git commit -m "Fix certified pipeline Clippy findings"
           git push origin HEAD:codex/issue-889-tool-pipeline
