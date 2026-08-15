@@ -2,18 +2,14 @@ name: PR 902 Final Validation Fix
 
 on:
   push:
-    branches: [codex/issue-889-tool-pipeline]
+    branches:
+      - codex/issue-889-tool-pipeline
 
 permissions:
   contents: write
 
-concurrency:
-  group: pr-902-final-fix
-  cancel-in-progress: true
-
 jobs:
   fix:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -24,84 +20,8 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Apply final fixes
-        shell: bash
         run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          engine_path = Path('crates/medusa-agent/src/engine.rs')
-          engine = engine_path.read_text()
-          start_marker = '''                if let Err(error) = &result
-                    && error.code == ErrorCode::PolicyDenied
-                    && self.config.agent.mode != Mode::ReadOnly
-                    && self.execution_policy.denial_reason(&name, &input).is_none()
-                    && interactively_approvable(&name, &input)
-                {
-'''
-          end_marker = '''                let event_tool = audited_tool_name(&name, &input);
-'''
-          start = engine.index(start_marker)
-          end = engine.index(end_marker, start)
-          old = engine[start:end]
-          approval_body_start = old.index('                    let action = approval_action_label')
-          approval_body = old[approval_body_start:]
-          # Remove the existing denial event prefix and closing brace, preserving approval body.
-          approval_body = approval_body.rsplit('                }\n', 1)[0]
-          new = '''                let awaiting_approval = result.as_ref().err().is_some_and(|error| {
-                    error.code == ErrorCode::PolicyDenied
-                        && self.config.agent.mode != Mode::ReadOnly
-                        && self.execution_policy.denial_reason(&name, &input).is_none()
-                        && interactively_approvable(&name, &input)
-                });
-                if let Err(error) = &result
-                    && error.code == ErrorCode::PolicyDenied
-                {
-                    append_observed(
-                        session,
-                        EventPayload::ToolCallDenied {
-                            tool: audited_tool_name(&name, &input),
-                            reason: if awaiting_approval {
-                                "tool requires explicit user approval".to_owned()
-                            } else {
-                                error.to_string()
-                            },
-                        },
-                        &mut observer,
-                    )?;
-                }
-                if awaiting_approval {
-''' + approval_body + '''
-                }
-'''
-          engine = engine[:start] + new + engine[end:]
-          engine_path.write_text(engine)
-
-          tools_path = Path('crates/medusa-agent/src/tools/mod.rs')
-          tools = tools_path.read_text()
-          old_test = '''        let error = execute_tool_cancellable_with_policy_certified(
-            directory.path(),
-            "fs_write",
-            &json!({"path":"denied.txt","content":"no"}),
-            &AtomicBool::new(false),
-            &policy,
-        )
-        .err()
-        .expect("researcher write must be denied by certified pipeline");'''
-          new_test = '''        let error = execute_tool_cancellable_with_policy_certified(
-            directory.path(),
-            "fs_write",
-            &json!({"path":"denied.txt","content":"no"}),
-            &AtomicBool::new(false),
-            &policy,
-        )
-        .expect("certified execution")
-        .result
-        .expect_err("researcher write must be denied by certified pipeline");'''
-          assert tools.count(old_test) == 1
-          tools = tools.replace(old_test, new_test)
-          tools_path.write_text(tools)
-          PY
+          python3 scripts/pr-902-final-fix.py
           python3 scripts/check-documentation.py --write
           cargo fmt --all
           git diff --check
@@ -111,11 +31,9 @@ jobs:
         run: cargo test -p medusa-agent --lib --all-features --locked
       - name: Verify documentation inventory
         run: python3 scripts/check-documentation.py
-      - name: Commit verified fixes and remove helper workflow
-        shell: bash
+      - name: Commit verified fixes and remove temporary helpers
         run: |
-          set -euo pipefail
-          rm .github/workflows/pr-902-final-fix.yml
+          rm .github/workflows/pr-902-final-fix.yml scripts/pr-902-final-fix.py
           git diff --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
