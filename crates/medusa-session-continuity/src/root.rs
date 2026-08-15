@@ -146,16 +146,70 @@ pub struct VerificationReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelevantPathCheckpoint {
+    pub path: String,
+    pub reason: String,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepositoryCheckpoint {
+    pub head: Option<String>,
+    pub workspace_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairAttemptCheckpoint {
+    pub id: String,
+    pub failure_fingerprint: String,
+    pub changed_files: Vec<String>,
+    pub outcome: VerificationOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailureCheckpoint {
+    pub fingerprint: String,
+    pub classification: String,
+    pub summary: String,
+    pub repairs: Vec<RepairAttemptCheckpoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalEvidenceRef {
+    pub id: String,
+    pub artifact_path: String,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisprovedHypothesisCheckpoint {
+    pub signature: String,
+    pub repository_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodingTrajectoryCheckpoint {
     pub schema_version: u32,
+    pub immutable_objective: String,
+    pub immutable_constraints: Vec<String>,
     pub task_stack: Vec<String>,
     pub task_graph: Vec<TaskEdge>,
     pub plan_steps: Vec<PlanStepCheckpoint>,
     pub delegations: Vec<DelegatedWorkCheckpoint>,
+    pub relevant_paths: Vec<RelevantPathCheckpoint>,
     pub modified_files: Vec<String>,
+    pub architectural_decisions: Vec<String>,
+    pub rejected_alternatives: Vec<String>,
+    pub verification_requirements: Vec<String>,
     pub verification_receipts: Vec<VerificationReceipt>,
+    pub failure_history: Vec<FailureCheckpoint>,
+    pub disproved_hypotheses: Vec<DisprovedHypothesisCheckpoint>,
     pub unresolved_uncertainties: Vec<String>,
+    pub remaining_blockers: Vec<String>,
+    pub external_evidence_refs: Vec<ExternalEvidenceRef>,
+    pub repository: Option<RepositoryCheckpoint>,
     pub continuation_intent: Option<String>,
+    pub provider_native_continuation_id: Option<String>,
     pub resume_hops: u32,
 }
 
@@ -163,14 +217,26 @@ impl Default for CodingTrajectoryCheckpoint {
     fn default() -> Self {
         Self {
             schema_version: CODING_TRAJECTORY_SCHEMA_VERSION,
+            immutable_objective: String::new(),
+            immutable_constraints: Vec::new(),
             task_stack: Vec::new(),
             task_graph: Vec::new(),
             plan_steps: Vec::new(),
             delegations: Vec::new(),
+            relevant_paths: Vec::new(),
             modified_files: Vec::new(),
+            architectural_decisions: Vec::new(),
+            rejected_alternatives: Vec::new(),
+            verification_requirements: Vec::new(),
             verification_receipts: Vec::new(),
+            failure_history: Vec::new(),
+            disproved_hypotheses: Vec::new(),
             unresolved_uncertainties: Vec::new(),
+            remaining_blockers: Vec::new(),
+            external_evidence_refs: Vec::new(),
+            repository: None,
             continuation_intent: None,
+            provider_native_continuation_id: None,
             resume_hops: 0,
         }
     }
@@ -189,9 +255,17 @@ impl CodingTrajectoryCheckpoint {
             self.task_graph.len(),
             self.plan_steps.len(),
             self.delegations.len(),
+            self.relevant_paths.len(),
             self.modified_files.len(),
+            self.architectural_decisions.len(),
+            self.rejected_alternatives.len(),
+            self.verification_requirements.len(),
             self.verification_receipts.len(),
+            self.failure_history.len(),
+            self.disproved_hypotheses.len(),
             self.unresolved_uncertainties.len(),
+            self.remaining_blockers.len(),
+            self.external_evidence_refs.len(),
         ];
         if lengths.into_iter().any(|len| len > MAX_TRAJECTORY_ITEMS)
             || serde_json::to_vec(self)?.len() > MAX_TRAJECTORY_TEXT_BYTES
@@ -206,6 +280,37 @@ impl CodingTrajectoryCheckpoint {
         let mut restored = self.clone();
         restored.resume_hops = restored.resume_hops.saturating_add(1);
         Ok(restored)
+    }
+
+    pub fn restored_for_provider_fallback(&self) -> Result<Self, ContinuityError> {
+        let mut restored = self.restored_for_resume()?;
+        restored.provider_native_continuation_id = None;
+        Ok(restored)
+    }
+
+    pub fn allows_hypothesis_attempt(&self, signature: &str, repository_fingerprint: &str) -> bool {
+        !self.disproved_hypotheses.iter().any(|item| {
+            item.signature == signature && item.repository_fingerprint == repository_fingerprint
+        })
+    }
+
+    pub fn invalidate_for_repository_drift(&mut self, repository: RepositoryCheckpoint) {
+        if self.repository.as_ref() == Some(&repository) {
+            return;
+        }
+        for path in &mut self.relevant_paths {
+            path.stale = true;
+        }
+        self.verification_receipts.clear();
+        self.repository = Some(repository);
+        if !self
+            .remaining_blockers
+            .iter()
+            .any(|item| item == "repository drift requires trajectory revalidation")
+        {
+            self.remaining_blockers
+                .push("repository drift requires trajectory revalidation".to_owned());
+        }
     }
 }
 
@@ -1058,6 +1163,8 @@ mod coding_trajectory_tests {
 
     fn trajectory() -> CodingTrajectoryCheckpoint {
         CodingTrajectoryCheckpoint {
+            immutable_objective: "finish issue 874 without losing repair state".into(),
+            immutable_constraints: vec!["preserve exact verification obligations".into()],
             task_stack: vec!["issue-874".into(), "resume".into()],
             task_graph: vec![TaskEdge {
                 parent: "issue-874".into(),
@@ -1081,14 +1188,50 @@ mod coding_trajectory_tests {
                 summary: "inspect recovery".into(),
                 status: DelegationStatus::PendingJoin,
             }],
+            relevant_paths: vec![RelevantPathCheckpoint {
+                path: "crates/medusa-session-continuity/src/root.rs".into(),
+                reason: "authoritative continuity schema".into(),
+                stale: false,
+            }],
             modified_files: vec!["crates/medusa-session-continuity/src/root.rs".into()],
+            architectural_decisions: vec!["reuse atomic continuity authority".into()],
+            rejected_alternatives: vec!["parallel trajectory store".into()],
+            verification_requirements: vec![
+                "cargo test -p medusa-session-continuity --locked".into(),
+            ],
             verification_receipts: vec![VerificationReceipt {
                 command: "cargo test -p medusa-session-continuity".into(),
                 outcome: VerificationOutcome::Failed,
                 evidence: Some("resume mismatch".into()),
             }],
+            failure_history: vec![FailureCheckpoint {
+                fingerprint: "failure:test:resume-mismatch".into(),
+                classification: "test".into(),
+                summary: "resume mismatch".into(),
+                repairs: vec![RepairAttemptCheckpoint {
+                    id: "repair-1".into(),
+                    failure_fingerprint: "failure:test:resume-mismatch".into(),
+                    changed_files: vec!["crates/medusa-session-continuity/src/root.rs".into()],
+                    outcome: VerificationOutcome::Failed,
+                }],
+            }],
+            disproved_hypotheses: vec![DisprovedHypothesisCheckpoint {
+                signature: "retry-same-fix".into(),
+                repository_fingerprint: "repo-a".into(),
+            }],
             unresolved_uncertainties: vec!["pending worker join".into()],
+            remaining_blockers: vec!["failed verification remains".into()],
+            external_evidence_refs: vec![ExternalEvidenceRef {
+                id: "evidence-1".into(),
+                artifact_path: ".medusa/artifacts/evidence-1".into(),
+                digest: "sha256:deadbeef".into(),
+            }],
+            repository: Some(RepositoryCheckpoint {
+                head: Some("abc123".into()),
+                workspace_fingerprint: "repo-a".into(),
+            }),
             continuation_intent: Some("join worker, repair verifier, rerun".into()),
+            provider_native_continuation_id: Some("provider-response-123".into()),
             ..Default::default()
         }
     }
@@ -1184,6 +1327,92 @@ mod coding_trajectory_tests {
         assert_eq!(second.continuation_intent, original.continuation_intent);
         assert_eq!(second.modified_files, original.modified_files);
         assert_eq!(second.plan_steps, original.plan_steps);
+    }
+
+    #[test]
+    fn provider_fallback_keeps_portable_state_but_drops_native_continuation() {
+        let original = trajectory();
+        let fallback = original.restored_for_provider_fallback().expect("fallback");
+        assert_eq!(fallback.immutable_objective, original.immutable_objective);
+        assert_eq!(
+            fallback.immutable_constraints,
+            original.immutable_constraints
+        );
+        assert_eq!(fallback.failure_history, original.failure_history);
+        assert_eq!(
+            fallback.verification_requirements,
+            original.verification_requirements
+        );
+        assert_eq!(
+            fallback.external_evidence_refs,
+            original.external_evidence_refs
+        );
+        assert_eq!(fallback.provider_native_continuation_id, None);
+        assert_eq!(fallback.resume_hops, original.resume_hops + 1);
+    }
+
+    #[test]
+    fn repository_drift_invalidates_receipts_and_marks_paths_stale() {
+        let mut value = trajectory();
+        value.invalidate_for_repository_drift(RepositoryCheckpoint {
+            head: Some("def456".into()),
+            workspace_fingerprint: "repo-b".into(),
+        });
+        assert!(value.verification_receipts.is_empty());
+        assert!(value.relevant_paths.iter().all(|path| path.stale));
+        assert!(
+            value
+                .remaining_blockers
+                .iter()
+                .any(|item| item.contains("drift"))
+        );
+        assert_eq!(
+            value.repository.as_ref().unwrap().workspace_fingerprint,
+            "repo-b"
+        );
+    }
+
+    #[test]
+    fn disproved_hypothesis_requires_new_repository_evidence_before_retry() {
+        let value = trajectory();
+        assert!(!value.allows_hypothesis_attempt("retry-same-fix", "repo-a"));
+        assert!(value.allows_hypothesis_attempt("retry-same-fix", "repo-b"));
+        assert!(value.allows_hypothesis_attempt("new-fix", "repo-a"));
+    }
+
+    #[test]
+    fn verbose_evidence_is_externalized_by_type() {
+        let value = trajectory();
+        let encoded = serde_json::to_string(&value.external_evidence_refs).expect("json");
+        assert!(encoded.contains(".medusa/artifacts/evidence-1"));
+        assert!(!encoded.contains("very long raw tool output"));
+    }
+
+    #[test]
+    fn objective_constraints_failures_and_decisions_survive_compaction_resume_cycles() {
+        let original = trajectory();
+        let mut current = original.clone();
+        for _ in 0..3 {
+            current = current.restored_for_resume().expect("resume");
+        }
+        assert_eq!(current.immutable_objective, original.immutable_objective);
+        assert_eq!(
+            current.immutable_constraints,
+            original.immutable_constraints
+        );
+        assert_eq!(current.failure_history, original.failure_history);
+        assert_eq!(
+            current.architectural_decisions,
+            original.architectural_decisions
+        );
+        assert_eq!(
+            current.rejected_alternatives,
+            original.rejected_alternatives
+        );
+        assert_eq!(
+            current.verification_requirements,
+            original.verification_requirements
+        );
     }
 
     #[test]
