@@ -1,0 +1,589 @@
+name: Issue 874 hardening
+
+on:
+  push:
+    branches:
+      - codex/issue-874-coding-trajectory
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Harden trajectory authority and acceptance coverage
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def patch(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing patch anchor in {path}: {old[:160]!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          vc = Path('crates/medusa-agent/src/verification_contract.rs')
+          text = vc.read_text()
+          anchor = '''pub(crate) fn completion_ready(repo: &Path, session_id: &str) -> MedusaResult<bool> {
+    let Some(contract) = load_contract(repo, session_id)? else {
+        return Ok(false);
+    };
+    contract.completion_ready(repo)
+}
+'''
+          replacement = anchor + '''
+pub(crate) fn snapshot_persisted(
+    repo: &Path,
+    session_id: &str,
+) -> MedusaResult<Option<serde_json::Value>> {
+    load_contract(repo, session_id)?
+        .map(|contract| serde_json::to_value(contract).map_err(json_error))
+        .transpose()
+}
+'''
+          if anchor not in text:
+              raise SystemExit('missing verification contract snapshot anchor')
+          vc.write_text(text.replace(anchor, replacement, 1))
+
+          path = Path('crates/medusa-agent/src/coding_trajectory.rs')
+          text = path.read_text()
+
+          text = text.replace(
+          '''#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TrajectoryFailure {
+    pub fingerprint: String,
+    pub summary: String,
+    pub occurrences: u32,
+    pub resolved: bool,
+}
+''',
+          '''#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TrajectoryFailure {
+    pub fingerprint: String,
+    pub classification: String,
+    pub summary: String,
+    pub occurrences: u32,
+    pub resolved: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TrajectoryRepairAttempt {
+    pub generation: u64,
+    pub failure_fingerprints: Vec<String>,
+    pub changed_paths: BTreeSet<String>,
+    pub outcome: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TrajectoryEvidenceRef {
+    pub digest: String,
+    pub tool: String,
+    pub artifact_ref: Option<String>,
+    pub is_error: bool,
+}
+''', 1)
+
+          text = text.replace(
+          '''    pub mutation_generation: u64,
+    pub verification_receipts: Vec<String>,
+    pub failures: Vec<TrajectoryFailure>,
+    pub disproved_hypotheses: BTreeSet<String>,
+    pub unresolved_questions: Vec<String>,
+    pub remaining_blockers: Vec<String>,
+    pub evidence_refs: BTreeSet<String>,
+    pub repository: TrajectoryRepositoryIdentity,
+    pub repository_drift_detected: bool,
+''',
+          '''    pub mutation_generation: u64,
+    pub verification_receipts: Vec<String>,
+    pub verification_contract: Option<serde_json::Value>,
+    pub failures: Vec<TrajectoryFailure>,
+    pub repair_attempts: Vec<TrajectoryRepairAttempt>,
+    pub architectural_decisions: Vec<String>,
+    pub rejected_alternatives: Vec<String>,
+    pub disproved_hypotheses: BTreeSet<String>,
+    pub unresolved_questions: Vec<String>,
+    pub remaining_blockers: Vec<String>,
+    pub evidence_refs: BTreeSet<String>,
+    pub external_evidence: BTreeMap<String, TrajectoryEvidenceRef>,
+    pub observed_tool_calls: BTreeMap<String, String>,
+    pub stale_paths: BTreeSet<String>,
+    pub plan_valid_for_repository: bool,
+    pub resume_reason: String,
+    pub repository: TrajectoryRepositoryIdentity,
+    pub repository_drift_detected: bool,
+''', 1)
+
+          text = text.replace(
+          '''            mutation_generation: 0,
+            verification_receipts: Vec::new(),
+            failures: Vec::new(),
+            disproved_hypotheses: BTreeSet::new(),
+            unresolved_questions: Vec::new(),
+            remaining_blockers: Vec::new(),
+            evidence_refs: BTreeSet::new(),
+            repository: repository_identity(&session.repo)?,
+            repository_drift_detected: false,
+''',
+          '''            mutation_generation: 0,
+            verification_receipts: Vec::new(),
+            verification_contract: crate::verification_contract::snapshot_persisted(
+                &session.repo,
+                session.id.as_str(),
+            )?,
+            failures: Vec::new(),
+            repair_attempts: Vec::new(),
+            architectural_decisions: Vec::new(),
+            rejected_alternatives: Vec::new(),
+            disproved_hypotheses: BTreeSet::new(),
+            unresolved_questions: Vec::new(),
+            remaining_blockers: Vec::new(),
+            evidence_refs: BTreeSet::new(),
+            external_evidence: BTreeMap::new(),
+            observed_tool_calls: BTreeMap::new(),
+            stale_paths: BTreeSet::new(),
+            plan_valid_for_repository: true,
+            resume_reason: "fresh task trajectory".to_owned(),
+            repository: repository_identity(&session.repo)?,
+            repository_drift_detected: false,
+''', 1)
+
+          text = text.replace(
+          '''        if self.repository != current {
+            self.repository_drift_detected = true;
+            self.verification_receipts.clear();
+            push_unique(
+                &mut self.remaining_blockers,
+                "repository drift invalidated prior verification and affected assumptions"
+                    .to_owned(),
+                64,
+            );
+        }
+        self.repository = current;
+        self.objective.clone_from(&session.objective);
+''',
+          '''        if self.repository != current {
+            self.repository_drift_detected = true;
+            self.plan_valid_for_repository = false;
+            self.stale_paths.extend(self.relevant_paths.keys().cloned());
+            self.stale_paths.extend(self.changed_paths.iter().cloned());
+            self.verification_receipts.clear();
+            self.resume_reason = "repository drift detected; revalidate stale paths and verification before continuing".to_owned();
+            push_unique(
+                &mut self.remaining_blockers,
+                "repository drift invalidated prior verification and affected assumptions"
+                    .to_owned(),
+                64,
+            );
+        }
+        self.repository = current;
+        if self.objective != session.objective {
+            push_unique(
+                &mut self.remaining_blockers,
+                "session objective diverged from immutable trajectory objective".to_owned(),
+                64,
+            );
+        }
+        self.verification_contract = crate::verification_contract::snapshot_persisted(
+            &session.repo,
+            session.id.as_str(),
+        )?;
+''', 1)
+
+          text = text.replace(
+          '''        collect_user_constraints(session, &mut self.user_constraints);
+        collect_evidence(session, self);
+        Ok(())
+    }
+''',
+          '''        collect_evidence(session, self);
+        Ok(())
+    }
+''', 1)
+
+          text = text.replace(
+          '''        self.mutation_generation = self.mutation_generation.saturating_add(1);
+        self.verification_receipts.clear();
+        self.repository = repository_identity(&session.repo)?;
+        self.repository_drift_detected = false;
+        self.remaining_blockers
+            .retain(|item| !item.starts_with("repository drift invalidated"));
+        collect_user_constraints(session, &mut self.user_constraints);
+        collect_evidence(session, self);
+        Ok(())
+''',
+          '''        self.mutation_generation = self.mutation_generation.saturating_add(1);
+        let unresolved = self
+            .failures
+            .iter()
+            .filter(|failure| !failure.resolved)
+            .map(|failure| failure.fingerprint.clone())
+            .collect::<Vec<_>>();
+        if !unresolved.is_empty() {
+            self.repair_attempts.push(TrajectoryRepairAttempt {
+                generation: self.mutation_generation,
+                failure_fingerprints: unresolved,
+                changed_paths: paths.iter().cloned().collect(),
+                outcome: "pending_verification".to_owned(),
+            });
+        }
+        self.verification_receipts.clear();
+        self.verification_contract = crate::verification_contract::snapshot_persisted(
+            &session.repo,
+            session.id.as_str(),
+        )?;
+        self.repository = repository_identity(&session.repo)?;
+        self.repository_drift_detected = false;
+        self.plan_valid_for_repository = true;
+        self.stale_paths.clear();
+        self.resume_reason = "repository mutation recorded; continue from current plan and pending verification".to_owned();
+        self.remaining_blockers
+            .retain(|item| !item.starts_with("repository drift invalidated"));
+        collect_evidence(session, self);
+        Ok(())
+''', 1)
+
+          text = text.replace(
+          '''        self.repository = repository_identity(&session.repo)?;
+        self.repository_drift_detected = false;
+        self.verification_receipts = summary.iter().map(|line| bounded(line, 1000)).collect();
+''',
+          '''        self.repository = repository_identity(&session.repo)?;
+        self.repository_drift_detected = false;
+        self.plan_valid_for_repository = true;
+        self.verification_contract = crate::verification_contract::snapshot_persisted(
+            &session.repo,
+            session.id.as_str(),
+        )?;
+        self.verification_receipts = summary.iter().map(|line| bounded(line, 1000)).collect();
+        for attempt in self
+            .repair_attempts
+            .iter_mut()
+            .filter(|attempt| attempt.outcome == "pending_verification")
+        {
+            attempt.outcome = if passed { "verified" } else { "failed" }.to_owned();
+        }
+        self.resume_reason = if passed {
+            "authoritative verification passed; continue only if plan obligations remain"
+        } else {
+            "authoritative verification failed; continue from preserved failure and repair history"
+        }
+        .to_owned();
+''', 1)
+
+          text = text.replace(
+          '''        self.failures.push(TrajectoryFailure {
+            fingerprint,
+            summary,
+            occurrences: 1,
+            resolved: false,
+        });
+''',
+          '''        self.failures.push(TrajectoryFailure {
+            fingerprint,
+            classification: classify_failure(&summary).to_owned(),
+            summary,
+            occurrences: 1,
+            resolved: false,
+        });
+''', 1)
+
+          text = text.replace(
+          '''pub(crate) fn refresh_and_render(session: &AgentSession) -> MedusaResult<String> {
+    let mut state = load(session)?.unwrap_or(CodingTrajectoryState::new(session)?);
+    state.synchronize(session)?;
+''',
+          '''pub(crate) fn refresh_and_render(session: &AgentSession) -> MedusaResult<String> {
+    let mut state = match load(session)? {
+        Some(state) => state,
+        None => {
+            let mut state = CodingTrajectoryState::new(session)?;
+            collect_user_constraints(session, &mut state.user_constraints);
+            state
+        }
+    };
+    state.synchronize(session)?;
+''', 1)
+
+          text = text.replace(
+          '''pub(crate) fn snapshot(session: &AgentSession) -> MedusaResult<serde_json::Value> {
+    let mut state = load(session)?.unwrap_or(CodingTrajectoryState::new(session)?);
+    state.synchronize(session)?;
+''',
+          '''pub(crate) fn snapshot(session: &AgentSession) -> MedusaResult<serde_json::Value> {
+    let mut state = match load(session)? {
+        Some(state) => state,
+        None => {
+            let mut state = CodingTrajectoryState::new(session)?;
+            collect_user_constraints(session, &mut state.user_constraints);
+            state
+        }
+    };
+    state.synchronize(session)?;
+''', 1)
+
+          insert = '''
+pub(crate) fn record_tool_result(
+    session: &AgentSession,
+    tool: &str,
+    input: &serde_json::Value,
+    artifact_ref: Option<&str>,
+    raw_content: &str,
+    is_error: bool,
+) -> MedusaResult<()> {
+    let mut state = load(session)?.unwrap_or(CodingTrajectoryState::new(session)?);
+    let input_json = serde_json::to_string(input).map_err(json_error)?;
+    let signature = hash_bytes(format!("{tool}:{input_json}").as_bytes());
+    let digest = hash_bytes(raw_content.as_bytes());
+    let evidence_id = format!("tool:{signature}:{digest}");
+    state.evidence_refs.insert(evidence_id.clone());
+    state.external_evidence.insert(
+        evidence_id.clone(),
+        TrajectoryEvidenceRef {
+            digest: digest.clone(),
+            tool: tool.to_owned(),
+            artifact_ref: artifact_ref.map(str::to_owned),
+            is_error,
+        },
+    );
+    if let Some(path) = input.get("path").and_then(serde_json::Value::as_str) {
+        state
+            .relevant_paths
+            .insert(path.replace('\\\\', "/"), format!("observed by {tool}"));
+    }
+    if let Some(previous_digest) = state.observed_tool_calls.insert(signature.clone(), digest.clone()) {
+        if previous_digest == digest && is_error {
+            state.disproved_hypotheses.insert(signature.clone());
+            push_unique(
+                &mut state.rejected_alternatives,
+                format!("repeat {tool} call {signature} reproduced the same deterministic failure"),
+                128,
+            );
+        }
+    }
+    if is_error {
+        state.record_failure(&format!("{tool}: {}", bounded(raw_content, 1200)));
+    }
+    while state.external_evidence.len() > MAX_EVIDENCE_REFS {
+        if let Some(first) = state.external_evidence.keys().next().cloned() {
+            state.external_evidence.remove(&first);
+        } else {
+            break;
+        }
+    }
+    persist(session, &state)
+}
+
+'''
+          marker = 'pub(crate) fn snapshot(session: &AgentSession) -> MedusaResult<serde_json::Value> {'
+          if marker not in text:
+              raise SystemExit('missing trajectory snapshot marker')
+          text = text.replace(marker, insert + marker, 1)
+
+          text = text.replace(
+          '''fn looks_like_failure(value: &str) -> bool {
+''',
+          '''fn classify_failure(value: &str) -> &'static str {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("compile") || lower.contains("error[e") {
+        "compile"
+    } else if lower.contains("test") || lower.contains("assert") {
+        "test"
+    } else if lower.contains("lint") || lower.contains("clippy") || lower.contains("fmt") {
+        "quality_gate"
+    } else if lower.contains("policy") || lower.contains("denied") {
+        "policy"
+    } else if lower.contains("timeout") || lower.contains("cancel") {
+        "execution"
+    } else {
+        "unknown"
+    }
+}
+
+fn looks_like_failure(value: &str) -> bool {
+''', 1)
+
+          test_insert = r'''
+
+    #[test]
+    fn failed_repair_history_survives_restart_and_verification() {
+        let repo = tempfile::tempdir().expect("repo");
+        let session = session(repo.path());
+        record_verification(&session, &["test failed: regression".to_owned()], false)
+            .expect("failed verification");
+        record_mutation(&session, &["src/lib.rs".to_owned()]).expect("repair mutation");
+        let before = load(&session).expect("load").expect("state");
+        assert_eq!(before.repair_attempts.len(), 1);
+        assert_eq!(before.repair_attempts[0].outcome, "pending_verification");
+        record_verification(&session, &["test passed: regression".to_owned()], true)
+            .expect("passed verification");
+        let after = load(&session).expect("reload").expect("state");
+        assert_eq!(after.repair_attempts[0].outcome, "verified");
+        assert!(after.failures.iter().all(|failure| failure.resolved));
+    }
+
+    #[test]
+    fn deterministic_tool_failure_is_referenced_and_rejected_on_repeat() {
+        let repo = tempfile::tempdir().expect("repo");
+        let session = session(repo.path());
+        let input = serde_json::json!({"path": "src/lib.rs"});
+        record_tool_result(
+            &session,
+            "fs_read",
+            &input,
+            Some(".medusa/artifacts/read-1"),
+            "error: missing symbol",
+            true,
+        )
+        .expect("first result");
+        record_tool_result(
+            &session,
+            "fs_read",
+            &input,
+            Some(".medusa/artifacts/read-2"),
+            "error: missing symbol",
+            true,
+        )
+        .expect("repeat result");
+        let state = load(&session).expect("load").expect("state");
+        assert_eq!(state.external_evidence.len(), 1);
+        assert_eq!(state.disproved_hypotheses.len(), 1);
+        assert_eq!(state.rejected_alternatives.len(), 1);
+        assert!(state.external_evidence.values().all(|evidence| evidence.artifact_ref.is_some()));
+    }
+
+    #[test]
+    fn repository_drift_invalidates_plan_paths_and_verification() {
+        let repo = tempfile::tempdir().expect("repo");
+        std::process::Command::new("git")
+            .arg("init")
+            .arg(repo.path())
+            .status()
+            .expect("git init");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "user.email", "medusa@example.invalid"])
+            .status()
+            .expect("git email");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "user.name", "Medusa Test"])
+            .status()
+            .expect("git name");
+        fs::write(repo.path().join("tracked.txt"), "one").expect("write");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["add", "."])
+            .status()
+            .expect("git add");
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["commit", "-m", "initial"])
+            .status()
+            .expect("git commit");
+        let session = session(repo.path());
+        record_mutation(&session, &["tracked.txt".to_owned()]).expect("mutation");
+        record_verification(&session, &["unit-tests=passed".to_owned()], true)
+            .expect("verify");
+        fs::write(repo.path().join("tracked.txt"), "external drift").expect("drift");
+        refresh_and_render(&session).expect("refresh");
+        let state = load(&session).expect("load").expect("state");
+        assert!(state.repository_drift_detected);
+        assert!(!state.plan_valid_for_repository);
+        assert!(state.stale_paths.contains("tracked.txt"));
+        assert!(state.verification_receipts.is_empty());
+    }
+
+    #[test]
+    fn constraints_are_stable_across_repeated_snapshot_cycles() {
+        let repo = tempfile::tempdir().expect("repo");
+        let mut session = session(repo.path());
+        let first = snapshot(&session).expect("first snapshot");
+        session.messages.push(Message {
+            role: Role::User,
+            content: vec![MessageBlock::Text {
+                text: "Verification failed. Fix the remaining issue.".to_owned(),
+            }],
+        });
+        let second = snapshot(&session).expect("second snapshot");
+        assert_eq!(first["user_constraints"], second["user_constraints"]);
+        assert_eq!(
+            first["user_constraints"][0],
+            "keep compatibility and run the regression test"
+        );
+    }
+'''
+          if not text.endswith('\n}'):
+              raise SystemExit('unexpected trajectory test module ending')
+          text = text[:-2] + test_insert + '\n}\n'
+          path.write_text(text)
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text()
+          old = '''                let model_content = match wrap_envelope(
+                    &name,
+                    raw_content.as_bytes(),
+                    OutputFormat::Plain,
+                    &envelope_cfg,
+                ) {
+                    Ok(env) => {
+                        let compact = compact_envelope_for_model(&env);
+'''
+          new = '''                let mut artifact_ref = None;
+                let model_content = match wrap_envelope(
+                    &name,
+                    raw_content.as_bytes(),
+                    OutputFormat::Plain,
+                    &envelope_cfg,
+                ) {
+                    Ok(env) => {
+                        let compact = compact_envelope_for_model(&env);
+                        artifact_ref = Some(env.path.clone());
+'''
+          if old not in text:
+              raise SystemExit('missing engine envelope anchor')
+          text = text.replace(old, new, 1)
+          old2 = '''                session.messages.push(Message {
+                    role: Role::User,
+                    content: vec![MessageBlock::ToolResult {
+'''
+          new2 = '''                crate::coding_trajectory::record_tool_result(
+                    session,
+                    &name,
+                    &input,
+                    artifact_ref.as_deref(),
+                    &raw_content,
+                    is_error,
+                )?;
+                session.messages.push(Message {
+                    role: Role::User,
+                    content: vec![MessageBlock::ToolResult {
+'''
+          if old2 not in text:
+              raise SystemExit('missing engine tool result anchor')
+          engine.write_text(text.replace(old2, new2, 1))
+          PY
+
+          cargo fmt --all
+          cargo test -p medusa-agent --locked coding_trajectory -- --nocapture
+          cargo test -p medusa-agent --locked compaction_v2 -- --nocapture
+          cargo test -p medusa-agent --locked verification_contract -- --nocapture
+          cargo clippy -p medusa-agent --all-features --locked -- -D warnings
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/issue-874-hardening.yml
+          git add crates/medusa-agent/src/coding_trajectory.rs crates/medusa-agent/src/verification_contract.rs crates/medusa-agent/src/engine.rs
+          git commit -m 'feat(agent): harden durable trajectory authority'
+          git push origin HEAD:codex/issue-874-coding-trajectory
