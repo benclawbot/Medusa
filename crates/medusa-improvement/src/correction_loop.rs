@@ -15,9 +15,9 @@ use crate::{
     provenance::{ProvenanceGraph, ProvenanceObservation, ProvenanceSource},
     refinement_authority::RefinementAuthorityStore,
     regression_replay::{
-        ReplayBundle, ReplayBundleBuilder, ReplayDecision, ReplayEnvironment, ReplayObservation,
-        ReplayReport, ReplayRunner, ReplayScenario, ReplayScenarioKind, ReplayValidator,
-        supports_solution,
+        ReplayBundle, ReplayBundleBuildError, ReplayBundleBuilder, ReplayDecision,
+        ReplayEnvironment, ReplayObservation, ReplayReport, ReplayRunner, ReplayScenario,
+        ReplayScenarioKind, ReplayValidator, supports_solution,
     },
     solution_selection::{GeneratedArtifact, SolutionProposal, SolutionSelector, SolutionType},
 };
@@ -37,6 +37,8 @@ pub enum CorrectionLoopError {
     Io(#[from] std::io::Error),
     #[error("correction loop serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("replay bundle construction failed: {0}")]
+    ReplayBundle(#[from] ReplayBundleBuildError),
     #[error("correction loop rejected the candidate: {0}")]
     Validation(String),
     #[error("canonical refinement authority rejected the candidate: {0}")]
@@ -118,39 +120,56 @@ pub struct ImprovementCandidate {
     pub rollback: CandidateRollbackPlan,
     pub predecessor: Option<String>,
     pub conflicts: Vec<String>,
+    pub evidence_links: Vec<String>,
+    pub created_at_unix_ms: i64,
 }
 
 impl ImprovementCandidate {
-    fn validate(&self) -> Result<(), CorrectionLoopError> {
-        if self.id.trim().is_empty()
-            || self.version == 0
-            || self.source_observation_ids.is_empty()
-            || self.root_trajectory_id.trim().is_empty()
-            || self.root_cause_hypothesis.trim().is_empty()
-            || self.generalized_rule.trim().is_empty()
-            || self.evaluation.oracle.trim().is_empty()
-            || self.evaluation.cohort.trim().is_empty()
-            || !self.evaluation.same_cohort
-            || self.rollback.rollback_action.trim().is_empty()
-        {
+    pub fn validate(&self) -> Result<(), CorrectionLoopError> {
+        if self.id.trim().is_empty() {
             return Err(CorrectionLoopError::Validation(
-                "candidate contract is incomplete".to_owned(),
+                "candidate id must not be empty".to_owned(),
             ));
         }
-        if self.confidence_milli > 1_000 || self.artifact.is_empty() {
+        if self.source_observation_ids.is_empty() {
             return Err(CorrectionLoopError::Validation(
-                "candidate confidence or artifact is invalid".to_owned(),
+                "candidate must cite at least one source observation".to_owned(),
             ));
         }
-        if contains_sensitive(&self.generalized_rule)
-            || contains_sensitive(&self.root_cause_hypothesis)
-            || self
-                .artifact
-                .iter()
-                .any(|artifact| contains_sensitive(&artifact.content))
+        if self.root_cause_hypothesis.trim().is_empty() || self.generalized_rule.trim().is_empty() {
+            return Err(CorrectionLoopError::Validation(
+                "candidate must include root-cause and generalized-rule evidence".to_owned(),
+            ));
+        }
+        if self.matching_predicates.is_empty() || self.exclusions.is_empty() {
+            return Err(CorrectionLoopError::Validation(
+                "candidate must define matching predicates and exclusions".to_owned(),
+            ));
+        }
+        if self.artifact.is_empty() {
+            return Err(CorrectionLoopError::Validation(
+                "candidate must include a concrete behavior artifact".to_owned(),
+            ));
+        }
+        if self.evaluation.baseline_case_ids.is_empty()
+            || self.evaluation.candidate_case_ids.is_empty()
+            || self.evaluation.negative_case_ids.is_empty()
+            || self.evaluation.adjacent_case_ids.is_empty()
         {
             return Err(CorrectionLoopError::Validation(
-                "candidate contains secret-like material".to_owned(),
+                "candidate evaluation must include baseline, candidate, negative, and adjacent cases"
+                    .to_owned(),
+            ));
+        }
+        if !self.evaluation.same_cohort {
+            return Err(CorrectionLoopError::Validation(
+                "candidate evaluation must compare the same cohort".to_owned(),
+            ));
+        }
+        if self.rollback.stop_conditions.is_empty() || self.rollback.rollback_action.trim().is_empty()
+        {
+            return Err(CorrectionLoopError::Validation(
+                "candidate must define rollback stop conditions and an action".to_owned(),
             ));
         }
         Ok(())
@@ -161,138 +180,85 @@ impl ImprovementCandidate {
 pub struct CorrectionEpisode {
     pub id: String,
     pub session_id: String,
+    pub signal_id: String,
     pub state: CorrectionEpisodeState,
-    pub signal_ids: Vec<String>,
-    pub source_observation_ids: Vec<String>,
-    pub lesson: LessonCandidate,
-    pub solution: SolutionProposal,
-    pub candidate: Option<ImprovementCandidate>,
+    pub lesson: Option<LessonCandidate>,
+    pub solution: Option<SolutionProposal>,
     pub replay_bundle: Option<ReplayBundle>,
     pub replay: Option<ReplayReport>,
+    pub candidate: Option<ImprovementCandidate>,
     pub blocked_reasons: Vec<String>,
     pub created_at_unix_ms: i64,
     pub updated_at_unix_ms: i64,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CorrectionLoopReport {
-    pub signals: Vec<LearningSignal>,
-    pub blocked_turns: Vec<String>,
-    pub episodes: Vec<CorrectionEpisode>,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CorrectionLoopSnapshot {
-    pub schema_version: u32,
-    pub revision: u64,
-    pub episodes: Vec<CorrectionEpisode>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct CorrectionLoopDocument {
+struct CorrectionLoopState {
     schema_version: u32,
-    revision: u64,
     episodes: Vec<CorrectionEpisode>,
 }
 
-#[derive(Clone, Debug)]
-struct CorrectionLoopStore {
-    path: PathBuf,
-    events_path: PathBuf,
-    document: CorrectionLoopDocument,
+impl Default for CorrectionLoopState {
+    fn default() -> Self {
+        Self {
+            schema_version: STATE_SCHEMA_VERSION,
+            episodes: Vec::new(),
+        }
+    }
 }
 
-impl CorrectionLoopStore {
-    fn open(repo: &Path) -> Result<Self, CorrectionLoopError> {
-        let root = repo.join(".medusa/correction-loop");
-        let path = root.join("state.json");
-        let document = if path.is_file() {
-            let document: CorrectionLoopDocument = serde_json::from_slice(&fs::read(&path)?)?;
-            if document.schema_version != STATE_SCHEMA_VERSION {
-                return Err(CorrectionLoopError::Validation(format!(
-                    "unsupported correction-loop schema {}",
-                    document.schema_version
-                )));
-            }
-            document
-        } else {
-            CorrectionLoopDocument {
-                schema_version: STATE_SCHEMA_VERSION,
-                ..CorrectionLoopDocument::default()
-            }
+#[derive(Clone, Debug)]
+pub struct CorrectionEpisodeStore {
+    path: PathBuf,
+}
+
+impl CorrectionEpisodeStore {
+    #[must_use]
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn load(&self) -> Result<Vec<CorrectionEpisode>, CorrectionLoopError> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+        let bytes = fs::read(&self.path)?;
+        let state: CorrectionLoopState = serde_json::from_slice(&bytes)?;
+        if state.schema_version != STATE_SCHEMA_VERSION {
+            return Err(CorrectionLoopError::Validation(format!(
+                "unsupported correction-loop state schema version {}",
+                state.schema_version
+            )));
+        }
+        Ok(state.episodes)
+    }
+
+    pub fn put(&self, episode: CorrectionEpisode) -> Result<(), CorrectionLoopError> {
+        let mut episodes = self.load()?;
+        episodes.retain(|existing| existing.id != episode.id);
+        episodes.push(episode);
+        episodes.sort_by(|left, right| left.id.cmp(&right.id));
+        if episodes.len() > MAX_EPISODES {
+            let remove_count = episodes.len() - MAX_EPISODES;
+            episodes.drain(0..remove_count);
+        }
+        let state = CorrectionLoopState {
+            schema_version: STATE_SCHEMA_VERSION,
+            episodes,
         };
-        Ok(Self {
-            events_path: root.join("events.jsonl"),
-            path,
-            document,
-        })
-    }
-
-    fn find(&self, id: &str) -> Option<CorrectionEpisode> {
-        self.document
-            .episodes
-            .iter()
-            .find(|episode| episode.id == id)
-            .cloned()
-    }
-
-    fn put(&mut self, episode: CorrectionEpisode) -> Result<(), CorrectionLoopError> {
-        let event_episode = episode.clone();
-        if let Some(existing) = self
-            .document
-            .episodes
-            .iter_mut()
-            .find(|existing| existing.id == episode.id)
-        {
-            *existing = episode;
-        } else {
-            self.document.episodes.push(episode);
-        }
-        self.document
-            .episodes
-            .sort_by(|left, right| left.id.cmp(&right.id));
-        if self.document.episodes.len() > MAX_EPISODES {
-            let excess = self.document.episodes.len() - MAX_EPISODES;
-            self.document.episodes.drain(..excess);
-        }
-        self.document.revision = self.document.revision.saturating_add(1);
-        self.persist(&event_episode)
-    }
-
-    fn persist(&self, episode: &CorrectionEpisode) -> Result<(), CorrectionLoopError> {
-        let Some(parent) = self.path.parent() else {
-            return Err(CorrectionLoopError::Validation(
-                "correction-loop state path has no parent".to_owned(),
-            ));
-        };
-        fs::create_dir_all(parent)?;
-        let temporary = parent.join(format!("state.tmp-{}", std::process::id()));
-        fs::write(&temporary, serde_json::to_vec_pretty(&self.document)?)?;
-        if self.path.exists() {
-            fs::remove_file(&self.path)?;
-        }
-        fs::rename(temporary, &self.path)?;
-        let event = serde_json::json!({
-            "schema_version": STATE_SCHEMA_VERSION,
-            "revision": self.document.revision,
-            "episode_id": &episode.id,
-            "state": episode.state,
-            "recorded_at_unix_ms": episode.updated_at_unix_ms,
-        });
-        let mut events = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.events_path)?;
-        serde_json::to_writer(&mut events, &event)?;
-        use std::io::Write;
-        events.write_all(b"\n")?;
-        events.sync_data()?;
-        Ok(())
+        atomic_json(&self.path, &state)
     }
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct CorrectionLoopEngine {
+pub struct CorrectionLoopReport {
+    pub signals: Vec<LearningSignal>,
+    pub blocked_turns: Vec<usize>,
+    pub episodes: Vec<CorrectionEpisode>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CorrectionLoop {
     detector: CorrectionSignalDetector,
     inference: LessonInferenceEngine,
     selector: SolutionSelector,
@@ -300,65 +266,54 @@ pub struct CorrectionLoopEngine {
     replay_validator: ReplayValidator,
 }
 
-impl CorrectionLoopEngine {
-    pub fn snapshot(repo: &Path) -> Result<CorrectionLoopSnapshot, CorrectionLoopError> {
-        let store = CorrectionLoopStore::open(repo)?;
-        Ok(CorrectionLoopSnapshot {
-            schema_version: store.document.schema_version,
-            revision: store.document.revision,
-            episodes: store.document.episodes,
-        })
-    }
-
+impl CorrectionLoop {
     pub fn run<R: ReplayRunner>(
         &self,
-        repo: &Path,
-        request: CorrectionLoopRequest,
+        request: &CorrectionLoopRequest,
         runner: &R,
+        repo: &RefinementAuthorityStore,
+        store: &CorrectionEpisodeStore,
     ) -> Result<CorrectionLoopReport, CorrectionLoopError> {
-        if !request.policy.capture_enabled() || !request.policy.automatic_proposals_enabled() {
-            return Ok(CorrectionLoopReport::default());
-        }
-        if request.session_id.trim().is_empty() || request.objective.trim().is_empty() {
-            return Err(CorrectionLoopError::Validation(
-                "correction-loop request is missing session identity or objective".to_owned(),
-            ));
-        }
-
-        let batch = self
-            .detector
-            .detect(&request.turns, Some(&request.session_id));
-        let inferred = self.inference.infer(&batch.signals);
-        let mut store = CorrectionLoopStore::open(repo)?;
+        let batch = self.detector.detect(&request.turns, &request.policy);
         let mut episodes = Vec::new();
-        for lesson in inferred.candidates {
-            let episode_id = stable_id("episode", &[&request.session_id, &lesson.id]);
-            if let Some(existing) = store.find(&episode_id) {
-                episodes.push(existing);
-                continue;
-            }
-            let signal_ids = lesson.supporting_signal_ids.clone();
-            let source_observation_ids =
-                source_observations(&request.provenance, &request.session_id)
-                    .into_iter()
-                    .map(|observation| observation.id.clone())
-                    .collect::<Vec<_>>();
+
+        for signal in &batch.signals {
+            let signal_id = signal.id.clone();
+            let source_observation_ids = request
+                .provenance
+                .observations
+                .iter()
+                .filter(|observation| observation.source_turn == signal.source_turn)
+                .filter(|observation| observation.learning_eligible)
+                .filter(|observation| observation.privacy_approved)
+                .map(|observation| observation.id.clone())
+                .collect::<Vec<_>>();
+            let lesson = self.inference.infer(signal);
             let solution = self.selector.propose(&lesson);
             let mut episode = CorrectionEpisode {
-                id: episode_id,
+                id: format!("correction-{}", signal.id),
                 session_id: request.session_id.clone(),
-                state: CorrectionEpisodeState::Inferred,
-                signal_ids,
-                source_observation_ids: source_observation_ids.clone(),
-                lesson: lesson.clone(),
-                solution: solution.clone(),
-                candidate: None,
+                signal_id,
+                state: CorrectionEpisodeState::Detected,
+                lesson: Some(lesson.clone()),
+                solution: Some(solution.clone()),
                 replay_bundle: None,
                 replay: None,
+                candidate: None,
                 blocked_reasons: Vec::new(),
                 created_at_unix_ms: request.now_unix_ms,
                 updated_at_unix_ms: request.now_unix_ms,
             };
+
+            episode.state = CorrectionEpisodeState::Inferred;
+            if lesson.promotion_blocked {
+                episode.state = CorrectionEpisodeState::Blocked;
+                episode.blocked_reasons = lesson.uncertainty.clone();
+                episode.updated_at_unix_ms = request.now_unix_ms;
+                store.put(episode.clone())?;
+                episodes.push(episode);
+                continue;
+            }
 
             if source_observation_ids.is_empty() {
                 episode.state = CorrectionEpisodeState::Blocked;
@@ -392,7 +347,7 @@ impl CorrectionLoopEngine {
                 &solution,
                 &request.repository_fixture,
                 request.tool_capabilities.clone(),
-            );
+            )?;
             let replay = self.replay_validator.validate(&bundle, &solution, runner);
             episode.replay_bundle = Some(bundle);
             episode.replay = Some(replay.clone());
@@ -432,52 +387,6 @@ impl CorrectionLoopEngine {
     }
 }
 
-/// Deterministic local harness used by production persistence until a provider-backed replay is
-/// explicitly authorized. It executes the candidate artifact content, never a fixture response
-/// table, and keeps the cohort and oracle fixed for both baseline and candidate runs.
-#[derive(Clone, Debug, Default)]
-pub struct DeterministicProductionReplayRunner;
-
-impl ReplayRunner for DeterministicProductionReplayRunner {
-    fn run(
-        &self,
-        scenario: &ReplayScenario,
-        candidate: Option<&SolutionProposal>,
-        _environment: &ReplayEnvironment,
-    ) -> ReplayObservation {
-        let is_origin = scenario.kind == ReplayScenarioKind::OriginatingFailure;
-        let artifact_matches = candidate.is_some_and(|proposal| {
-            proposal
-                .artifacts
-                .iter()
-                .any(|artifact| artifact.content.contains(&scenario.expected_behavior))
-        });
-        let triggered = is_origin && artifact_matches;
-        let behavior = match scenario.kind {
-            ReplayScenarioKind::OriginatingFailure if triggered => {
-                scenario.expected_behavior.clone()
-            }
-            ReplayScenarioKind::OriginatingFailure => "baseline failure".to_owned(),
-            ReplayScenarioKind::CriticalSafety => scenario.expected_behavior.clone(),
-            ReplayScenarioKind::IntendedContext if triggered => scenario.expected_behavior.clone(),
-            _ => "candidate remains inactive".to_owned(),
-        };
-        ReplayObservation {
-            behavior,
-            candidate_triggered: triggered,
-            critical_safety_passed: true,
-            evidence_links: vec![format!("replay://{}", scenario.id)],
-            metrics: std::collections::BTreeMap::from([
-                ("same_cohort".to_owned(), 1),
-                (
-                    "artifact_executed".to_owned(),
-                    i64::from(candidate.is_some()),
-                ),
-            ]),
-        }
-    }
-}
-
 fn build_candidate(
     lesson: &LessonCandidate,
     solution: &SolutionProposal,
@@ -487,326 +396,327 @@ fn build_candidate(
     repository_fixture: &str,
     now_unix_ms: i64,
 ) -> Result<ImprovementCandidate, CorrectionLoopError> {
-    let artifact_type = artifact_type(solution.selected.first().copied())?;
-    let root_trajectory_id = provenance
-        .observations
-        .iter()
-        .find(|observation| source_observation_ids.contains(&observation.id))
-        .map(|observation| observation.trajectory_id.clone())
-        .ok_or_else(|| CorrectionLoopError::Validation("source trajectory is missing".into()))?;
-    let bundle_environment = ReplayEnvironment::default();
-    let baseline_case_ids = lesson
+    let regression_case_ids = lesson
         .regression_examples
         .iter()
-        .map(|example| format!("baseline:{}", example.source_signal_id))
+        .enumerate()
+        .map(|(index, _)| format!("origin-{index}"))
         .collect::<Vec<_>>();
-    let candidate_case_ids = baseline_case_ids
-        .iter()
-        .map(|id| id.replacen("baseline:", "candidate:", 1))
-        .collect::<Vec<_>>();
+    let baseline_case_ids = if regression_case_ids.is_empty() {
+        vec!["origin-0".to_owned()]
+    } else {
+        regression_case_ids.clone()
+    };
     let negative_case_ids = lesson
         .non_applicable_contexts
         .iter()
         .enumerate()
         .map(|(index, _)| format!("negative-{index}"))
         .collect::<Vec<_>>();
-    let mut capabilities = tool_capabilities.to_vec();
-    capabilities.sort();
-    capabilities.dedup();
-    let cohort = format!(
-        "model={};provider={};runtime={};repository={};tools={}",
-        bundle_environment.model,
-        bundle_environment.provider,
-        bundle_environment.runtime_version,
-        repository_fixture,
-        capabilities.join(",")
-    );
+    let adjacent_case_ids = vec!["critical-safety".to_owned()];
+    let root_trajectory_id = provenance
+        .observations
+        .iter()
+        .find(|observation| source_observation_ids.contains(&observation.id))
+        .map(|observation| observation.trajectory_id.clone())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let evidence_links = source_observation_ids
+        .iter()
+        .map(|id| format!("provenance://observation/{id}"))
+        .collect::<Vec<_>>();
+    let matching_predicates = vec![format!("lesson_scope={:?}", lesson.scope).to_ascii_lowercase()];
+    let exclusions = if lesson.non_applicable_contexts.is_empty() {
+        vec!["outside explicitly matched correction contexts".to_owned()]
+    } else {
+        lesson.non_applicable_contexts.clone()
+    };
+    let safety_impact = if tool_capabilities.iter().any(|tool| tool == "write") {
+        "candidate may influence repository writes; replay and explicit review are mandatory"
+            .to_owned()
+    } else {
+        "candidate is constrained to non-writing behavior until explicit review".to_owned()
+    };
+
     Ok(ImprovementCandidate {
         id: format!("candidate-{}", lesson.id),
         version: 1,
-        artifact_type,
+        artifact_type: candidate_artifact_type(solution),
         source_observation_ids: source_observation_ids.to_vec(),
         root_trajectory_id,
         root_cause_hypothesis: lesson.root_cause.clone(),
         generalized_rule: lesson.generalized_rule.clone(),
         intended_scope: lesson.scope,
-        matching_predicates: vec![lesson.observed_pattern.clone()],
-        exclusions: lesson.non_applicable_contexts.clone(),
-        expiry_or_review_unix_ms: Some(now_unix_ms.saturating_add(90 * 24 * 60 * 60 * 1_000)),
-        alternatives_considered: solution
-            .alternatives
-            .iter()
-            .map(|alternative| alternative.solution_type)
-            .collect(),
+        matching_predicates,
+        exclusions,
+        expiry_or_review_unix_ms: Some(now_unix_ms.saturating_add(30 * 24 * 60 * 60 * 1_000)),
+        alternatives_considered: solution.selected.clone(),
         confidence_milli: lesson.confidence_milli,
         uncertainty: lesson.uncertainty.clone(),
-        safety_impact: "bounded declarative behavior; no capability, approval, or repository mutation authority".to_owned(),
+        safety_impact,
         artifact: solution.artifacts.clone(),
         evaluation: CandidateEvaluationPlan {
-            baseline_case_ids,
-            candidate_case_ids,
+            baseline_case_ids: baseline_case_ids.clone(),
+            candidate_case_ids: baseline_case_ids,
             negative_case_ids,
-            adjacent_case_ids: Vec::new(),
-            oracle: "typed replay scenario expected_behavior and critical-safety invariants".to_owned(),
-            cohort,
+            adjacent_case_ids,
+            oracle: "candidate must fix the originating behavior without over-triggering or safety regressions"
+                .to_owned(),
+            cohort: format!("session:{}", provenance.session_id),
             same_cohort: true,
-            environment: bundle_environment,
+            environment: ReplayEnvironment::default(),
         },
         rollback: CandidateRollbackPlan {
             predecessor: None,
             stop_conditions: vec![
-                "negative or adjacent-case regression".to_owned(),
-                "privacy, capability, or invalid-approval violation".to_owned(),
-                "confidence or provenance becomes contradictory".to_owned(),
+                "candidate fails deterministic replay".to_owned(),
+                "candidate over-triggers outside intended scope".to_owned(),
+                "critical safety behavior regresses".to_owned(),
             ],
-            rollback_action: "suspend through canonical refinement authority and restore exact predecessor".to_owned(),
+            rollback_action: "deactivate candidate and restore predecessor authority".to_owned(),
         },
         predecessor: None,
         conflicts: Vec::new(),
+        evidence_links,
+        created_at_unix_ms: now_unix_ms,
     })
 }
 
+fn candidate_artifact_type(solution: &SolutionProposal) -> CandidateArtifactType {
+    if solution.selected.contains(&SolutionType::RepositoryMemory) {
+        CandidateArtifactType::RepositoryConvention
+    } else if solution.selected.contains(&SolutionType::WorkflowGate) {
+        CandidateArtifactType::Workflow
+    } else if solution.selected.contains(&SolutionType::ProductCodeChange) {
+        CandidateArtifactType::EngineeringProposal
+    } else if solution.selected.contains(&SolutionType::UserPreference) {
+        CandidateArtifactType::Memory
+    } else {
+        CandidateArtifactType::PromptGuidance
+    }
+}
+
 fn publish_evaluated(
-    repo: &Path,
+    repo: &RefinementAuthorityStore,
     candidate: &ImprovementCandidate,
     lesson: &LessonCandidate,
     provenance: &ProvenanceGraph,
     replay: &ReplayReport,
 ) -> Result<(), CorrectionLoopError> {
-    let Some(proposal) = refinement_proposal(candidate, lesson, provenance)? else {
-        return Ok(());
+    let content = RefinementContent {
+        title: format!("Correction candidate {}", candidate.id),
+        summary: candidate.generalized_rule.clone(),
+        body: serde_json::to_string_pretty(candidate)?,
+        tags: vec![
+            "correction-loop".to_owned(),
+            format!("lesson-scope:{:?}", lesson.scope).to_ascii_lowercase(),
+        ],
     };
-    let mut authority = RefinementAuthorityStore::open(repo)
+    let scope = match candidate.intended_scope {
+        LessonScope::UserPreference => RefinementScope::Global,
+        LessonScope::RepositorySpecific => RefinementScope::Repository {
+            repository: provenance.repository.clone(),
+        },
+        LessonScope::DomainGeneral => RefinementScope::Repository {
+            repository: provenance.repository.clone(),
+        },
+    };
+    let proposal = RefinementProposal {
+        id: candidate.id.clone(),
+        artifact: RefinementArtifactKind::Candidate,
+        scope,
+        proposer: ProposerMetadata {
+            proposer: "correction-loop".to_owned(),
+            session_id: Some(provenance.session_id.clone()),
+            turn_id: None,
+        },
+        rationale: format!(
+            "{}; deterministic replay decision={:?}",
+            lesson.rationale, replay.decision
+        ),
+        evidence: candidate
+            .evidence_links
+            .iter()
+            .map(|reference| EvidenceRef {
+                reference: reference.clone(),
+                kind: EvidenceKind::Provenance,
+            })
+            .collect(),
+        uncertainty: candidate.uncertainty.clone(),
+        risk: RefinementRisk::Elevated,
+        content,
+        predecessor: candidate.predecessor.clone(),
+        supersedes: Vec::new(),
+        conflicts: candidate.conflicts.clone(),
+        proposed_at_ms: candidate.created_at_unix_ms,
+        actor: "correction-loop".to_owned(),
+        evidence_hash: String::new(),
+    };
+    repo.submit_proposal(proposal)
         .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
-    let initial = authority
-        .snapshot()
-        .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
-    if initial
-        .records
-        .iter()
-        .any(|record| record.proposal_id == proposal.id && record.version == proposal.version)
-    {
-        return Ok(());
-    }
-    authority
-        .propose(proposal.clone(), initial.revision)
-        .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
-    let validated = authority
-        .snapshot()
-        .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
-    authority
-        .validate(&proposal.id, proposal.version, validated.revision)
-        .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
-    let evaluated = authority
-        .snapshot()
-        .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
-    authority
-        .record_evaluation(
-            &proposal.id,
-            proposal.version,
-            EvaluationResult {
-                evaluator: "medusa-correction-loop/replay-v1".to_owned(),
-                validation_passed: replay.decision == ReplayDecision::Validated,
-                regression_passed: replay
-                    .comparisons
-                    .iter()
-                    .all(|comparison| comparison.trigger_correct && comparison.safety_passed),
-                effectiveness_passed: replay.comparisons.iter().any(|comparison| {
-                    comparison.baseline_reproduced_failure && comparison.candidate_resolved_failure
-                }),
-                notes: replay.diagnostics.join("; "),
-            },
-            evaluated.revision,
-        )
-        .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
+    repo.record_evaluation(EvaluationResult {
+        candidate_id: candidate.id.clone(),
+        passed: replay.decision == ReplayDecision::Validated,
+        confidence_bps: u32::from(candidate.confidence_milli) * 10,
+        baseline_summary: format!(
+            "{} replay comparisons",
+            candidate.evaluation.baseline_case_ids.len()
+        ),
+        candidate_summary: format!("decision={:?}", replay.decision),
+        evidence_hash: String::new(),
+        evaluated_at_ms: candidate.created_at_unix_ms,
+        evaluator: "correction-loop".to_owned(),
+    })
+    .map_err(|error| CorrectionLoopError::Authority(error.to_string()))?;
     Ok(())
 }
 
-fn refinement_proposal(
-    candidate: &ImprovementCandidate,
-    lesson: &LessonCandidate,
-    provenance: &ProvenanceGraph,
-) -> Result<Option<RefinementProposal>, CorrectionLoopError> {
-    let Some((artifact_kind, scope, after)) = refinement_content(candidate, lesson) else {
-        return Ok(None);
-    };
-    let evidence = provenance
-        .observations
-        .iter()
-        .filter(|observation| candidate.source_observation_ids.contains(&observation.id))
-        .map(|observation| EvidenceRef {
-            id: observation.id.clone(),
-            kind: match observation.source {
-                ProvenanceSource::UserCorrection => EvidenceKind::UserCorrection,
-                ProvenanceSource::Verification
-                | ProvenanceSource::Integration
-                | ProvenanceSource::Recovery
-                | ProvenanceSource::TerminalOutcome => EvidenceKind::ExplicitOutcome,
-                _ => EvidenceKind::ToolEvent,
-            },
-            trajectory_id: observation.trajectory_id.clone(),
-            start_sequence: observation.source_range.start_sequence,
-            end_sequence: observation.source_range.end_sequence,
-        })
-        .collect::<Vec<_>>();
-    if evidence.is_empty() {
-        return Err(CorrectionLoopError::Validation(
-            "candidate has no exact provenance evidence".to_owned(),
-        ));
-    }
-    Ok(Some(RefinementProposal {
-        id: candidate.id.clone(),
-        version: candidate.version,
-        artifact_kind,
-        scope,
-        evidence,
-        before: None,
-        after,
-        rationale: format!("{} Root cause: {}", lesson.rationale, lesson.root_cause),
-        expected_outcome: candidate.generalized_rule.clone(),
-        proposer: ProposerMetadata {
-            model: "medusa-correction-loop".to_owned(),
-            route: "typed-correction-to-replay".to_owned(),
-            version: "1".to_owned(),
-        },
-        risk: RefinementRisk::Low,
-    }))
+fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), CorrectionLoopError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| CorrectionLoopError::Validation("state path has no parent".to_owned()))?;
+    fs::create_dir_all(parent)?;
+    let tmp = path.with_extension(format!("tmp-{}", ulid::Ulid::new()));
+    fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
+    fs::rename(tmp, path)?;
+    Ok(())
 }
-
-fn refinement_content(
-    candidate: &ImprovementCandidate,
-    lesson: &LessonCandidate,
-) -> Option<(RefinementArtifactKind, RefinementScope, RefinementContent)> {
-    let key = format!("correction.{}", candidate.id);
-    let value = candidate.generalized_rule.clone();
-    let scope = match lesson.scope {
-        LessonScope::User => RefinementScope::User,
-        LessonScope::Task => RefinementScope::Session,
-        _ => RefinementScope::Repository,
-    };
-    let (kind, content) = match candidate.artifact_type {
-        CandidateArtifactType::Memory => (
-            RefinementArtifactKind::Memory,
-            RefinementContent::Memory { key, value },
-        ),
-        CandidateArtifactType::RepositoryConvention => (
-            RefinementArtifactKind::RepositoryConvention,
-            RefinementContent::RepositoryConvention { key, value },
-        ),
-        CandidateArtifactType::Workflow => (
-            RefinementArtifactKind::WorkflowMetadata,
-            RefinementContent::WorkflowMetadata {
-                name: key,
-                summary: value,
-            },
-        ),
-        CandidateArtifactType::PromptGuidance => (
-            RefinementArtifactKind::PromptGuidance,
-            RefinementContent::PromptGuidance {
-                key,
-                guidance: value,
-            },
-        ),
-        CandidateArtifactType::EngineeringProposal => return None,
-    };
-    Some((kind, scope, content))
-}
-
-fn artifact_type(
-    solution: Option<SolutionType>,
-) -> Result<CandidateArtifactType, CorrectionLoopError> {
-    match solution {
-        Some(SolutionType::UserPreference) => Ok(CandidateArtifactType::Memory),
-        Some(SolutionType::RepositoryMemory) => Ok(CandidateArtifactType::RepositoryConvention),
-        Some(SolutionType::ReusableSkill)
-        | Some(SolutionType::WorkflowGate)
-        | Some(SolutionType::RegressionFixture) => Ok(CandidateArtifactType::Workflow),
-        Some(SolutionType::HarnessPolicy) => Ok(CandidateArtifactType::PromptGuidance),
-        Some(SolutionType::ProductCodeChange)
-        | Some(SolutionType::DocumentationUpdate)
-        | Some(SolutionType::ConfigurationChange) => Ok(CandidateArtifactType::EngineeringProposal),
-        Some(SolutionType::SessionNote) => Ok(CandidateArtifactType::Memory),
-        Some(SolutionType::NoPersistence) | None => Err(CorrectionLoopError::Validation(
-            "no durable solution was selected".to_owned(),
-        )),
-    }
-}
-
-fn source_observations<'a>(
-    provenance: &'a ProvenanceGraph,
-    session_id: &str,
-) -> Vec<&'a ProvenanceObservation> {
-    provenance
-        .observations
-        .iter()
-        .filter(|observation| {
-            observation.session_id == session_id
-                && observation.source == ProvenanceSource::UserCorrection
-                && observation.privacy.captured
-        })
-        .collect()
-}
-
-fn stable_id(kind: &str, values: &[&str]) -> String {
-    let mut input = kind.to_owned();
-    for value in values {
-        input.push('\0');
-        input.push_str(value);
-    }
-    format!(
-        "{kind}-{}",
-        crate::encode(sha2::Sha256::digest(input.as_bytes()))
-    )
-}
-
-fn contains_sensitive(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    [
-        "api_key",
-        "apikey",
-        "authorization:",
-        "bearer ",
-        "secret=",
-        "token=",
-        "password=",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
-}
-
-use sha2::Digest;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::correction_signals::TurnAuthor;
+    use crate::provenance::ProvenanceEdge;
+    use tempfile::tempdir;
+
+    #[derive(Default)]
+    struct PassingReplay;
+
+    impl ReplayRunner for PassingReplay {
+        fn run(
+            &self,
+            scenario: &ReplayScenario,
+            candidate: Option<&SolutionProposal>,
+            _environment: &ReplayEnvironment,
+        ) -> ReplayObservation {
+            let behavior = if scenario.kind == ReplayScenarioKind::OriginatingFailure
+                && candidate.is_none()
+            {
+                "baseline failure".to_owned()
+            } else {
+                scenario.expected_behavior.clone()
+            };
+            ReplayObservation {
+                behavior,
+                candidate_triggered: candidate.is_some() && scenario.candidate_should_trigger,
+                critical_safety_passed: true,
+                evidence_links: vec![format!("evidence://{}", scenario.id)],
+                metrics: Default::default(),
+            }
+        }
+    }
+
+    fn request() -> CorrectionLoopRequest {
+        let turns = vec![
+            ConversationTurn {
+                author: TurnAuthor::Assistant,
+                text: "I updated just one fixture.".to_owned(),
+                tool_backed: false,
+            },
+            ConversationTurn {
+                author: TurnAuthor::User,
+                text: "No, that is wrong. You missed the other authoritative fixtures.".to_owned(),
+                tool_backed: false,
+            },
+        ];
+        let mut provenance = ProvenanceGraph::new("session-1", "repo");
+        provenance
+            .add_observation(ProvenanceObservation {
+                id: "obs-user".to_owned(),
+                trajectory_id: "trajectory-1".to_owned(),
+                source_turn: 1,
+                source: ProvenanceSource::User,
+                summary: "user corrected incomplete fixture inventory".to_owned(),
+                learning_eligible: true,
+                privacy_approved: true,
+            })
+            .unwrap();
+        provenance
+            .add_observation(ProvenanceObservation {
+                id: "obs-assistant".to_owned(),
+                trajectory_id: "trajectory-1".to_owned(),
+                source_turn: 0,
+                source: ProvenanceSource::Assistant,
+                summary: "assistant made incomplete change".to_owned(),
+                learning_eligible: false,
+                privacy_approved: true,
+            })
+            .unwrap();
+        provenance
+            .add_edge(ProvenanceEdge {
+                from: "obs-assistant".to_owned(),
+                to: "obs-user".to_owned(),
+                relation: "corrected_by".to_owned(),
+            })
+            .unwrap();
+        CorrectionLoopRequest {
+            session_id: "session-1".to_owned(),
+            objective: "complete fixture inventory".to_owned(),
+            turns,
+            provenance,
+            policy: LearningAdmissionPolicy {
+                enabled: true,
+                ..LearningAdmissionPolicy::default()
+            },
+            repository_fixture: "fixture token=secret".to_owned(),
+            tool_capabilities: vec!["read".to_owned()],
+            now_unix_ms: 100,
+        }
+    }
 
     #[test]
-    fn deterministic_runner_executes_artifact_content() {
-        let runner = DeterministicProductionReplayRunner;
-        let scenario = ReplayScenario {
-            id: "origin".into(),
-            kind: ReplayScenarioKind::OriginatingFailure,
-            input: "input".into(),
-            expected_behavior: "inventory sources".into(),
-            candidate_should_trigger: true,
-        };
-        let proposal = SolutionProposal {
-            lesson_id: "lesson".into(),
-            source_signal_ids: vec!["signal".into()],
-            selected: vec![SolutionType::ReusableSkill],
-            alternatives: Vec::new(),
-            rationale: "test".into(),
-            review_strength: crate::solution_selection::ReviewStrength::Elevated,
-            isolated: true,
-            editable: true,
-            artifacts: vec![GeneratedArtifact {
-                path: "candidate.md".into(),
-                content: "inventory sources".into(),
-            }],
-            activation_blocked: true,
-        };
-        let observation = runner.run(&scenario, Some(&proposal), &ReplayEnvironment::default());
-        assert!(observation.candidate_triggered);
-        assert_eq!(observation.behavior, "inventory sources");
+    fn correction_loop_emits_reviewable_candidate_with_provenance() {
+        let dir = tempdir().unwrap();
+        let repo = RefinementAuthorityStore::open(dir.path().join("refinement")).unwrap();
+        let store = CorrectionEpisodeStore::new(dir.path().join("correction-loop.json"));
+        let report = CorrectionLoop::default()
+            .run(&request(), &PassingReplay, &repo, &store)
+            .unwrap();
+        assert_eq!(report.episodes.len(), 1);
+        let episode = &report.episodes[0];
+        assert_eq!(episode.state, CorrectionEpisodeState::AwaitingReview);
+        let candidate = episode.candidate.as_ref().unwrap();
+        assert_eq!(candidate.source_observation_ids, vec!["obs-user"]);
+        assert_eq!(candidate.root_trajectory_id, "trajectory-1");
+        assert_eq!(candidate.evaluation.cohort, "session:session-1");
+        assert!(candidate.evaluation.same_cohort);
+        assert!(
+            candidate
+                .evaluation
+                .negative_case_ids
+                .iter()
+                .any(|case| case.starts_with("negative-"))
+        );
+        let queue = repo.review_queue().unwrap();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].proposal.id, candidate.id);
+        assert_eq!(
+            queue[0].proposal.lifecycle,
+            medusa_context::refinement::RefinementLifecycle::Evaluated
+        );
+    }
+
+    #[test]
+    fn missing_learning_provenance_blocks_persistence() {
+        let dir = tempdir().unwrap();
+        let repo = RefinementAuthorityStore::open(dir.path().join("refinement")).unwrap();
+        let store = CorrectionEpisodeStore::new(dir.path().join("correction-loop.json"));
+        let mut request = request();
+        request.provenance.observations[0].privacy_approved = false;
+        let report = CorrectionLoop::default()
+            .run(&request, &PassingReplay, &repo, &store)
+            .unwrap();
+        assert_eq!(report.episodes.len(), 1);
+        assert_eq!(report.episodes[0].state, CorrectionEpisodeState::Blocked);
+        assert!(report.episodes[0].candidate.is_none());
     }
 }
