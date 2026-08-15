@@ -1,0 +1,41 @@
+name: Issue 876 acceptance hardening
+
+on:
+  push:
+    branches:
+      - codex/issue-876-repair-ledger
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-876-repair-ledger
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Apply acceptance hardening
+        run: python3 .github/issue-876-acceptance.py
+      - name: Format source
+        run: cargo fmt --all
+      - name: Continuity tests
+        run: cargo test -p medusa-session-continuity
+      - name: Repair ledger tests
+        run: cargo test -p medusa-runtime repair_ledger --lib
+      - name: Coding trajectory tests
+        run: cargo test -p medusa-runtime coding_trajectory --lib
+      - name: Clippy
+        run: cargo clippy -p medusa-session-continuity -p medusa-runtime --all-targets -- -D warnings
+      - name: Commit production hardening
+        run: |
+          git rm .github/workflows/issue-876-acceptance.yml .github/issue-876-acceptance.py
+          git add crates/medusa-session-continuity/src/root.rs crates/medusa-runtime/src/repair_ledger.rs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(runtime): harden repair ledger acceptance invariants"
+          git push origin HEAD:codex/issue-876-repair-ledger
