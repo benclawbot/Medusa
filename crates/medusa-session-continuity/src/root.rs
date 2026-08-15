@@ -545,6 +545,29 @@ impl ContinuityStore {
         )
     }
 
+    /// Replaces the journal-derived task projection without claiming frontend ownership.
+    ///
+    /// The canonical session journal remains the execution authority; this writes only the
+    /// bounded deterministic projection consumed by continuity/resume.
+    pub fn project_task(
+        &self,
+        event_id: &str,
+        event: SessionEventKind,
+        task: AuthoritativeTaskState,
+    ) -> Result<ApplyOutcome, ContinuityError> {
+        let current = self.load()?;
+        self.update(
+            current.revision,
+            event_id,
+            |session| {
+                session.task = task;
+                Ok(event)
+            },
+            "runtime-projection",
+            0,
+        )
+    }
+
     pub fn handoff(&self, request: HandoffRequest) -> Result<ApplyOutcome, ContinuityError> {
         self.update(
             request.expected_revision,
