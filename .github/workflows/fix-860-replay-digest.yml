@@ -1,0 +1,106 @@
+name: Temporary issue 860 replay digest migration
+
+on:
+  push:
+    branches: [codex/issue-860-replay-digest-panic-safety]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-860-replay-digest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Apply typed replay digest contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def apply(path, replacements):
+              p = Path(path)
+              text = p.read_text()
+              for old, new in replacements:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f"{path}: expected exactly one occurrence, found {count}: {old!r}")
+                  text = text.replace(old, new, 1)
+              p.write_text(text)
+
+          apply("crates/medusa-improvement/src/lib.rs", [
+              ("#[allow(clippy::expect_used)]\npub mod regression_replay;", "pub mod regression_replay;"),
+          ])
+
+          apply("crates/medusa-improvement/src/regression_replay.rs", [
+              (
+                  "use sha2::{Digest, Sha256};\n",
+                  "use sha2::{Digest, Sha256};\nuse thiserror::Error;\n",
+              ),
+              (
+                  "#[derive(Clone, Debug, Default)]\npub struct ReplayBundleBuilder;\n",
+                  "#[derive(Debug, Error)]\npub enum ReplayBundleBuildError {\n    #[error(\"failed to serialize replay bundle for digest: {0}\")]\n    Serialization(#[from] serde_json::Error),\n}\n\n#[derive(Clone, Debug, Default)]\npub struct ReplayBundleBuilder;\n",
+              ),
+              (
+                  "    ) -> ReplayBundle {\n",
+                  "    ) -> Result<ReplayBundle, ReplayBundleBuildError> {\n",
+              ),
+              (
+                  "        bundle.digest = digest_bundle(&bundle);\n        bundle\n",
+                  "        bundle.digest = digest_bundle(&bundle)?;\n        Ok(bundle)\n",
+              ),
+              (
+                  "fn digest_bundle(bundle: &ReplayBundle) -> String {\n    let mut clone = bundle.clone();\n    clone.digest.clear();\n    let bytes = serde_json::to_vec(&clone).expect(\"serializable replay bundle\");\n    format!(\"{:x}\", Sha256::digest(bytes))\n}\n",
+                  "fn digest_bundle(bundle: &ReplayBundle) -> Result<String, ReplayBundleBuildError> {\n    let mut clone = bundle.clone();\n    clone.digest.clear();\n    let bytes = serde_json::to_vec(&clone)?;\n    Ok(format!(\"{:x}\", Sha256::digest(bytes)))\n}\n",
+              ),
+          ])
+
+          apply(".github/workflows/ci.yml", [
+              (
+                  "      - name: Production panic audit\n        id: production_panic_audit\n        shell: bash\n        run: |\n          set -o pipefail\n          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \\\n",
+                  "      - name: Production panic audit\n        id: production_panic_audit\n        shell: bash\n        run: |\n          set -o pipefail\n          python3 scripts/test-production-panic-exemptions.py\n          python3 scripts/check-production-panic-exemptions.py\n          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \\\n",
+              ),
+          ])
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+      - name: Validate all affected callers
+        shell: bash
+        run: cargo check --workspace --all-targets --all-features --locked
+      - name: Validate production panic contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-production-panic-exemptions.py
+          python3 scripts/check-production-panic-exemptions.py
+          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic
+      - name: Validate replay tests
+        shell: bash
+        run: cargo test -p medusa-improvement --locked regression_replay
+      - name: Commit migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-improvement/src/lib.rs \
+                  crates/medusa-improvement/src/regression_replay.rs \
+                  .github/workflows/ci.yml \
+                  scripts/check-production-panic-exemptions.py \
+                  scripts/test-production-panic-exemptions.py
+          git commit -m 'fix: make replay digest construction fallible'
+          git push
