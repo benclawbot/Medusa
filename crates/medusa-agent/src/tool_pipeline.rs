@@ -6,8 +6,16 @@ use serde_json::Value;
 
 pub const TOOL_PIPELINE_VERSION: u32 = 1;
 
+const CORE_MIDDLEWARE_OWNER: &str = "medusa-core";
+
 type GuardFn = dyn Fn(&ToolPipelineRequest) -> GuardDecision + Send + Sync;
-type GuardEntry = (String, Box<GuardFn>);
+type GuardEntry = (String, String, Box<GuardFn>);
+type PreTransformFn = dyn Fn(&Value) -> MedusaResult<Value> + Send + Sync;
+type PreTransformEntry = (String, String, Box<PreTransformFn>);
+type AroundHookFn = dyn Fn(&ToolPipelineRequest) -> MedusaResult<()> + Send + Sync;
+type AroundHookEntry = (String, String, Box<AroundHookFn>);
+type PostTransformFn = dyn Fn(String) -> MedusaResult<String> + Send + Sync;
+type PostTransformEntry = (String, String, Box<PostTransformFn>);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,19 +56,32 @@ impl ToolPipelineStage {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ResolvedToolIdentity {
-    pub capability_id: String,
-    pub handler_id: String,
-    pub capability_version: String,
+    capability_id: String,
+    handler_id: String,
+    capability_version: String,
 }
 
 impl ResolvedToolIdentity {
     #[must_use]
-    pub fn built_in(name: &str) -> Self {
+    pub fn new(
+        capability_id: impl Into<String>,
+        handler_id: impl Into<String>,
+        capability_version: impl Into<String>,
+    ) -> Self {
         Self {
-            capability_id: format!("tool.{name}"),
-            handler_id: format!("medusa-agent::{name}"),
-            capability_version: "builtin-v1".to_owned(),
+            capability_id: capability_id.into(),
+            handler_id: handler_id.into(),
+            capability_version: capability_version.into(),
         }
+    }
+
+    #[must_use]
+    pub fn built_in(name: &str) -> Self {
+        Self::new(
+            format!("tool.{name}"),
+            format!("medusa-agent::{name}"),
+            "builtin-v1",
+        )
     }
 }
 
@@ -75,6 +96,22 @@ pub enum GuardDecision {
 pub struct GuardReceipt {
     pub guard_id: String,
     pub decision: GuardDecision,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MiddlewareStatus {
+    Passed,
+    Denied,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MiddlewareReceipt {
+    pub owner_id: String,
+    pub middleware_id: String,
+    pub stage: ToolPipelineStage,
+    pub status: MiddlewareStatus,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -94,12 +131,26 @@ pub struct FinalToolOutcome {
     outcome: ToolOutcomeClass,
     output: Option<String>,
     error: Option<MedusaError>,
+    artifact_refs: Vec<String>,
+    evidence_refs: Vec<String>,
+    cancelled: bool,
     guard_receipts: Vec<GuardReceipt>,
+    middleware_receipts: Vec<MiddlewareReceipt>,
     stages: Vec<ToolPipelineStage>,
     elapsed_ns: u64,
 }
 
 impl FinalToolOutcome {
+    pub fn receipt_value(&self) -> MedusaResult<Value> {
+        serde_json::to_value(self).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("could not serialize immutable tool execution receipt: {error}"),
+            )
+        })
+    }
+
     pub fn into_result(self) -> MedusaResult<String> {
         match self.outcome {
             ToolOutcomeClass::Success => Ok(self.output.unwrap_or_default()),
@@ -145,7 +196,10 @@ impl ToolPipelineRequest {
 
 #[derive(Default)]
 pub struct ToolExecutionPipeline {
+    pre_transforms: Vec<PreTransformEntry>,
     guards: Vec<GuardEntry>,
+    around_hooks: Vec<AroundHookEntry>,
+    post_transforms: Vec<PostTransformEntry>,
 }
 
 impl ToolExecutionPipeline {
@@ -155,13 +209,94 @@ impl ToolExecutionPipeline {
     }
 
     #[must_use]
-    pub fn with_guard(
+    pub fn with_pre_transform(
+        self,
+        id: impl Into<String>,
+        transform: impl Fn(&Value) -> MedusaResult<Value> + Send + Sync + 'static,
+    ) -> Self {
+        self.with_owned_pre_transform(CORE_MIDDLEWARE_OWNER, id, transform)
+    }
+
+    #[must_use]
+    pub fn with_owned_pre_transform(
         mut self,
+        owner: impl Into<String>,
+        id: impl Into<String>,
+        transform: impl Fn(&Value) -> MedusaResult<Value> + Send + Sync + 'static,
+    ) -> Self {
+        self.pre_transforms
+            .push((owner.into(), id.into(), Box::new(transform)));
+        self
+    }
+
+    #[must_use]
+    pub fn with_guard(
+        self,
         id: impl Into<String>,
         guard: impl Fn(&ToolPipelineRequest) -> GuardDecision + Send + Sync + 'static,
     ) -> Self {
-        self.guards.push((id.into(), Box::new(guard)));
+        self.with_owned_guard(CORE_MIDDLEWARE_OWNER, id, guard)
+    }
+
+    #[must_use]
+    pub fn with_owned_guard(
+        mut self,
+        owner: impl Into<String>,
+        id: impl Into<String>,
+        guard: impl Fn(&ToolPipelineRequest) -> GuardDecision + Send + Sync + 'static,
+    ) -> Self {
+        self.guards
+            .push((owner.into(), id.into(), Box::new(guard)));
         self
+    }
+
+    #[must_use]
+    pub fn with_around_hook(
+        self,
+        id: impl Into<String>,
+        hook: impl Fn(&ToolPipelineRequest) -> MedusaResult<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.with_owned_around_hook(CORE_MIDDLEWARE_OWNER, id, hook)
+    }
+
+    #[must_use]
+    pub fn with_owned_around_hook(
+        mut self,
+        owner: impl Into<String>,
+        id: impl Into<String>,
+        hook: impl Fn(&ToolPipelineRequest) -> MedusaResult<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.around_hooks
+            .push((owner.into(), id.into(), Box::new(hook)));
+        self
+    }
+
+    #[must_use]
+    pub fn with_post_transform(
+        self,
+        id: impl Into<String>,
+        transform: impl Fn(String) -> MedusaResult<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.with_owned_post_transform(CORE_MIDDLEWARE_OWNER, id, transform)
+    }
+
+    #[must_use]
+    pub fn with_owned_post_transform(
+        mut self,
+        owner: impl Into<String>,
+        id: impl Into<String>,
+        transform: impl Fn(String) -> MedusaResult<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.post_transforms
+            .push((owner.into(), id.into(), Box::new(transform)));
+        self
+    }
+
+    pub fn remove_owner(&mut self, owner: &str) {
+        self.pre_transforms.retain(|entry| entry.0 != owner);
+        self.guards.retain(|entry| entry.0 != owner);
+        self.around_hooks.retain(|entry| entry.0 != owner);
+        self.post_transforms.retain(|entry| entry.0 != owner);
     }
 
     pub fn execute(
@@ -173,68 +308,188 @@ impl ToolExecutionPipeline {
         let started = Instant::now();
         let mut stages = Vec::with_capacity(ToolPipelineStage::REQUIRED.len());
         let mut guard_receipts = Vec::with_capacity(self.guards.len());
+        let mut middleware_receipts = Vec::new();
+        let mut terminal_error = None;
+        let mut cancelled = false;
 
         stages.push(ToolPipelineStage::Resolve);
         let identity = request.identity.clone();
 
         stages.push(ToolPipelineStage::PreExecute);
-        let input = canonicalize_json(request.input.clone());
+        let mut input = canonicalize_json(request.input.clone());
+        for (owner, middleware_id, transform) in &self.pre_transforms {
+            if terminal_error.is_some() {
+                middleware_receipts.push(middleware_receipt(
+                    owner,
+                    middleware_id,
+                    ToolPipelineStage::PreExecute,
+                    MiddlewareStatus::Denied,
+                ));
+                continue;
+            }
+            match transform(&input) {
+                Ok(next) => {
+                    let next = canonicalize_json(next);
+                    if input_is_narrowing(&input, &next) {
+                        input = next;
+                        middleware_receipts.push(middleware_receipt(
+                            owner,
+                            middleware_id,
+                            ToolPipelineStage::PreExecute,
+                            MiddlewareStatus::Passed,
+                        ));
+                    } else {
+                        terminal_error = Some(MedusaError::new(
+                            ErrorCode::PolicyDenied,
+                            ErrorCategory::Policy,
+                            format!(
+                                "pre-execution middleware {middleware_id} attempted to widen tool authority"
+                            ),
+                        ));
+                        middleware_receipts.push(middleware_receipt(
+                            owner,
+                            middleware_id,
+                            ToolPipelineStage::PreExecute,
+                            MiddlewareStatus::Denied,
+                        ));
+                    }
+                }
+                Err(error) => {
+                    terminal_error = Some(error);
+                    middleware_receipts.push(middleware_receipt(
+                        owner,
+                        middleware_id,
+                        ToolPipelineStage::PreExecute,
+                        MiddlewareStatus::Failed,
+                    ));
+                }
+            }
+        }
         let input_fingerprint = stable_fingerprint(&input);
 
         stages.push(ToolPipelineStage::Guards);
-        let mut denied = None;
-        for (guard_id, guard) in &self.guards {
-            let decision = if denied.is_some() {
-                GuardDecision::Deny("prior monotonic guard denial".to_owned())
+        for (owner, guard_id, guard) in &self.guards {
+            let decision = if terminal_error.is_some() {
+                GuardDecision::Deny("prior monotonic denial".to_owned())
             } else {
-                guard(&request)
+                guard(&ToolPipelineRequest {
+                    identity: identity.clone(),
+                    input: input.clone(),
+                    approval_required: request.approval_required,
+                    approval_granted: request.approval_granted,
+                })
             };
-            if let GuardDecision::Deny(reason) = &decision {
-                denied.get_or_insert_with(|| reason.clone());
-            }
+            let status = match &decision {
+                GuardDecision::Allow => MiddlewareStatus::Passed,
+                GuardDecision::Deny(reason) => {
+                    if terminal_error.is_none() {
+                        terminal_error = Some(MedusaError::new(
+                            ErrorCode::PolicyDenied,
+                            ErrorCategory::Policy,
+                            reason.clone(),
+                        ));
+                    }
+                    MiddlewareStatus::Denied
+                }
+            };
             guard_receipts.push(GuardReceipt {
                 guard_id: guard_id.clone(),
                 decision,
             });
+            middleware_receipts.push(middleware_receipt(
+                owner,
+                guard_id,
+                ToolPipelineStage::Guards,
+                status,
+            ));
         }
 
         stages.push(ToolPipelineStage::Approval);
-        if denied.is_none() && request.approval_required && !request.approval_granted {
-            denied = Some("tool requires explicit approval".to_owned());
+        if terminal_error.is_none() && request.approval_required && !request.approval_granted {
+            terminal_error = Some(MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                "tool requires explicit approval",
+            ));
         }
 
         stages.push(ToolPipelineStage::AroundDispatch);
-        if denied.is_none() && cancellation.load(std::sync::atomic::Ordering::Acquire) {
-            stages.push(ToolPipelineStage::Execute);
-            stages.push(ToolPipelineStage::PostExecute);
-            return finalize(FinalizeInput {
-                identity,
-                input_fingerprint,
-                outcome: ToolOutcomeClass::Cancelled,
-                output: None,
-                error: Some(MedusaError::new(
-                    ErrorCode::ToolExecutionFailed,
-                    ErrorCategory::Execution,
-                    "tool execution cancelled",
+        for (owner, middleware_id, hook) in &self.around_hooks {
+            if terminal_error.is_some() {
+                middleware_receipts.push(middleware_receipt(
+                    owner,
+                    middleware_id,
+                    ToolPipelineStage::AroundDispatch,
+                    MiddlewareStatus::Denied,
+                ));
+                continue;
+            }
+            match hook(&ToolPipelineRequest {
+                identity: identity.clone(),
+                input: input.clone(),
+                approval_required: request.approval_required,
+                approval_granted: request.approval_granted,
+            }) {
+                Ok(()) => middleware_receipts.push(middleware_receipt(
+                    owner,
+                    middleware_id,
+                    ToolPipelineStage::AroundDispatch,
+                    MiddlewareStatus::Passed,
                 )),
-                guard_receipts,
-                stages,
-                elapsed: started.elapsed(),
-            });
+                Err(error) => {
+                    terminal_error = Some(error);
+                    middleware_receipts.push(middleware_receipt(
+                        owner,
+                        middleware_id,
+                        ToolPipelineStage::AroundDispatch,
+                        MiddlewareStatus::Failed,
+                    ));
+                }
+            }
+        }
+        if terminal_error.is_none()
+            && cancellation.load(std::sync::atomic::Ordering::Acquire)
+        {
+            cancelled = true;
+            terminal_error = Some(cancelled_error());
         }
 
         stages.push(ToolPipelineStage::Execute);
-        let result = denied.map_or_else(|| handler(&input), |reason| {
-            Err(MedusaError::new(
-                ErrorCode::PolicyDenied,
-                ErrorCategory::Policy,
-                reason,
-            ))
-        });
+        let mut result = terminal_error.map_or_else(|| handler(&input), Err);
 
         stages.push(ToolPipelineStage::PostExecute);
+        if let Ok(mut output) = result {
+            for (owner, middleware_id, transform) in &self.post_transforms {
+                match transform(output) {
+                    Ok(next) => {
+                        output = next;
+                        middleware_receipts.push(middleware_receipt(
+                            owner,
+                            middleware_id,
+                            ToolPipelineStage::PostExecute,
+                            MiddlewareStatus::Passed,
+                        ));
+                    }
+                    Err(error) => {
+                        middleware_receipts.push(middleware_receipt(
+                            owner,
+                            middleware_id,
+                            ToolPipelineStage::PostExecute,
+                            MiddlewareStatus::Failed,
+                        ));
+                        result = Err(error);
+                        break;
+                    }
+                }
+            }
+            if result.is_ok() {
+                result = Ok(output);
+            }
+        }
+
         let (outcome, output, error) = match result {
             Ok(output) => (ToolOutcomeClass::Success, Some(output), None),
+            Err(error) if cancelled => (ToolOutcomeClass::Cancelled, None, Some(error)),
             Err(error) if error.code == ErrorCode::PolicyDenied => {
                 (ToolOutcomeClass::Denied, None, Some(error))
             }
@@ -247,7 +502,11 @@ impl ToolExecutionPipeline {
             outcome,
             output,
             error,
+            artifact_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+            cancelled,
             guard_receipts,
+            middleware_receipts,
             stages,
             elapsed: started.elapsed(),
         })
@@ -260,7 +519,11 @@ struct FinalizeInput {
     outcome: ToolOutcomeClass,
     output: Option<String>,
     error: Option<MedusaError>,
+    artifact_refs: Vec<String>,
+    evidence_refs: Vec<String>,
+    cancelled: bool,
     guard_receipts: Vec<GuardReceipt>,
+    middleware_receipts: Vec<MiddlewareReceipt>,
     stages: Vec<ToolPipelineStage>,
     elapsed: Duration,
 }
@@ -272,7 +535,11 @@ fn finalize(input: FinalizeInput) -> FinalToolOutcome {
         mut outcome,
         mut output,
         mut error,
+        artifact_refs,
+        evidence_refs,
+        cancelled,
         guard_receipts,
+        middleware_receipts,
         mut stages,
         elapsed,
     } = input;
@@ -294,10 +561,40 @@ fn finalize(input: FinalizeInput) -> FinalToolOutcome {
         outcome,
         output,
         error,
+        artifact_refs,
+        evidence_refs,
+        cancelled,
         guard_receipts,
+        middleware_receipts,
         stages,
         elapsed_ns: elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
     }
+}
+
+fn middleware_receipt(
+    owner: &str,
+    middleware_id: &str,
+    stage: ToolPipelineStage,
+    status: MiddlewareStatus,
+) -> MiddlewareReceipt {
+    MiddlewareReceipt {
+        owner_id: owner.to_owned(),
+        middleware_id: middleware_id.to_owned(),
+        stage,
+        status,
+    }
+}
+
+fn cancelled_error() -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        "tool execution cancelled",
+    );
+    error
+        .context
+        .insert("cancelled".to_owned(), Value::Bool(true));
+    error
 }
 
 fn canonicalize_json(value: Value) -> Value {
@@ -309,6 +606,20 @@ fn canonicalize_json(value: Value) -> Value {
         ),
         Value::Array(values) => Value::Array(values.into_iter().map(canonicalize_json).collect()),
         scalar => scalar,
+    }
+}
+
+fn input_is_narrowing(original: &Value, candidate: &Value) -> bool {
+    match (original, candidate) {
+        (Value::Object(original), Value::Object(candidate)) => candidate.iter().all(|(key, value)| {
+            original
+                .get(key)
+                .is_some_and(|original_value| input_is_narrowing(original_value, value))
+        }),
+        (Value::Array(original), Value::Array(candidate)) => candidate
+            .iter()
+            .all(|value| original.iter().any(|original_value| original_value == value)),
+        _ => original == candidate,
     }
 }
 
@@ -402,6 +713,7 @@ mod tests {
             },
         );
         assert_eq!(outcome.outcome, ToolOutcomeClass::Cancelled);
+        assert!(outcome.cancelled);
         assert_eq!(outcome.stages, ToolPipelineStage::REQUIRED);
         assert_eq!(called.load(Ordering::SeqCst), 0);
     }
@@ -435,6 +747,100 @@ mod tests {
     }
 
     #[test]
+    fn pre_transform_may_narrow_but_cannot_widen_input_scope() {
+        let narrowed = ToolExecutionPipeline::new()
+            .with_pre_transform("drop_optional", |input| {
+                Ok(json!({"path": input["path"].clone()}))
+            })
+            .execute(
+                ToolPipelineRequest::built_in(
+                    "fs_read",
+                    &json!({"path":"src/lib.rs","optional":true}),
+                ),
+                &AtomicBool::new(false),
+                |_| Ok("ok".to_owned()),
+            );
+        assert_eq!(narrowed.outcome, ToolOutcomeClass::Success);
+
+        let widened = ToolExecutionPipeline::new()
+            .with_pre_transform("widen", |_| {
+                Ok(json!({"path":"src/lib.rs","network":true}))
+            })
+            .execute(
+                ToolPipelineRequest::built_in("fs_read", &json!({"path":"src/lib.rs"})),
+                &AtomicBool::new(false),
+                |_| Ok("must not run".to_owned()),
+            );
+        assert_eq!(widened.outcome, ToolOutcomeClass::Denied);
+    }
+
+    #[test]
+    fn hook_faults_are_normalized_and_cannot_publish_false_success() {
+        let pre = ToolExecutionPipeline::new()
+            .with_pre_transform("fault", |_| {
+                Err(MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Internal,
+                    "pre hook fault",
+                ))
+            })
+            .execute(
+                ToolPipelineRequest::built_in("x", &json!({})),
+                &AtomicBool::new(false),
+                |_| Ok("must not run".to_owned()),
+            );
+        assert_eq!(pre.outcome, ToolOutcomeClass::Failed);
+
+        let around = ToolExecutionPipeline::new()
+            .with_around_hook("fault", |_| {
+                Err(MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Internal,
+                    "around hook fault",
+                ))
+            })
+            .execute(
+                ToolPipelineRequest::built_in("x", &json!({})),
+                &AtomicBool::new(false),
+                |_| Ok("must not run".to_owned()),
+            );
+        assert_eq!(around.outcome, ToolOutcomeClass::Failed);
+
+        let post = ToolExecutionPipeline::new()
+            .with_post_transform("fault", |_| {
+                Err(MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Internal,
+                    "post hook fault",
+                ))
+            })
+            .execute(
+                ToolPipelineRequest::built_in("x", &json!({})),
+                &AtomicBool::new(false),
+                |_| Ok("handler success".to_owned()),
+            );
+        assert_eq!(post.outcome, ToolOutcomeClass::Failed);
+        assert!(post.output.is_none());
+    }
+
+    #[test]
+    fn unloading_owner_removes_every_owned_middleware_registration() {
+        let mut pipeline = ToolExecutionPipeline::new()
+            .with_owned_pre_transform("plugin-a", "pre", |input| Ok(input.clone()))
+            .with_owned_guard("plugin-a", "guard", |_| GuardDecision::Deny("deny".to_owned()))
+            .with_owned_around_hook("plugin-a", "around", |_| Ok(()))
+            .with_owned_post_transform("plugin-a", "post", Ok);
+        pipeline.remove_owner("plugin-a");
+        let outcome = pipeline.execute(
+            ToolPipelineRequest::built_in("x", &json!({})),
+            &AtomicBool::new(false),
+            |_| Ok("ok".to_owned()),
+        );
+        assert_eq!(outcome.outcome, ToolOutcomeClass::Success);
+        assert!(outcome.middleware_receipts.is_empty());
+    }
+
+    #[test]
     fn structured_handler_error_survives_finalization() {
         let mut source = MedusaError::new(
             ErrorCode::ToolExecutionFailed,
@@ -461,6 +867,19 @@ mod tests {
     }
 
     #[test]
+    fn immutable_receipt_is_serialized_before_result_consumption() {
+        let outcome = ToolExecutionPipeline::new().execute(
+            ToolPipelineRequest::built_in("fs_read", &json!({"path":"x"})),
+            &AtomicBool::new(false),
+            |_| Ok("ok".to_owned()),
+        );
+        let receipt = outcome.receipt_value().expect("receipt");
+        assert_eq!(receipt["pipeline_version"], json!(TOOL_PIPELINE_VERSION));
+        assert_eq!(receipt["outcome"], json!("success"));
+        assert_eq!(outcome.into_result().expect("result"), "ok");
+    }
+
+    #[test]
     fn malformed_stage_sequence_fails_closed_in_finalization() {
         let outcome = finalize(FinalizeInput {
             identity: ResolvedToolIdentity::built_in("fs_read"),
@@ -468,7 +887,11 @@ mod tests {
             outcome: ToolOutcomeClass::Success,
             output: Some("must not escape".to_owned()),
             error: None,
+            artifact_refs: Vec::new(),
+            evidence_refs: Vec::new(),
+            cancelled: false,
             guard_receipts: Vec::new(),
+            middleware_receipts: Vec::new(),
             stages: vec![ToolPipelineStage::Resolve, ToolPipelineStage::Execute],
             elapsed: Duration::ZERO,
         });
