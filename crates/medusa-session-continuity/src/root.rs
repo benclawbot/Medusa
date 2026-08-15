@@ -7,7 +7,10 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CODING_TRAJECTORY_SCHEMA_VERSION: u32 = 1;
+const MAX_TRAJECTORY_ITEMS: usize = 256;
+const MAX_TRAJECTORY_TEXT_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +84,234 @@ pub enum SessionEventKind {
     CompletionRecorded {
         status: String,
     },
+    RepairLoopCheckpointed,
+    CompactionCheckpointed,
+    TrajectoryRestored {
+        resume_hops: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskEdge {
+    pub parent: String,
+    pub child: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStepStatus {
+    Pending,
+    Active,
+    Completed,
+    Blocked,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanStepCheckpoint {
+    pub id: String,
+    pub description: String,
+    pub status: PlanStepStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationStatus {
+    Running,
+    PendingJoin,
+    Joined,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegatedWorkCheckpoint {
+    pub id: String,
+    pub parent_task: String,
+    pub summary: String,
+    pub status: DelegationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationOutcome {
+    Passed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationReceipt {
+    pub command: String,
+    pub outcome: VerificationOutcome,
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelevantPathCheckpoint {
+    pub path: String,
+    pub reason: String,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepositoryCheckpoint {
+    pub head: Option<String>,
+    pub workspace_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairAttemptCheckpoint {
+    pub id: String,
+    pub failure_fingerprint: String,
+    pub changed_files: Vec<String>,
+    pub outcome: VerificationOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailureCheckpoint {
+    pub fingerprint: String,
+    pub classification: String,
+    pub summary: String,
+    pub repairs: Vec<RepairAttemptCheckpoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalEvidenceRef {
+    pub id: String,
+    pub artifact_path: String,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisprovedHypothesisCheckpoint {
+    pub signature: String,
+    pub repository_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodingTrajectoryCheckpoint {
+    pub schema_version: u32,
+    pub immutable_objective: String,
+    pub immutable_constraints: Vec<String>,
+    pub task_stack: Vec<String>,
+    pub task_graph: Vec<TaskEdge>,
+    pub plan_steps: Vec<PlanStepCheckpoint>,
+    pub delegations: Vec<DelegatedWorkCheckpoint>,
+    pub relevant_paths: Vec<RelevantPathCheckpoint>,
+    pub modified_files: Vec<String>,
+    pub architectural_decisions: Vec<String>,
+    pub rejected_alternatives: Vec<String>,
+    pub verification_requirements: Vec<String>,
+    pub verification_receipts: Vec<VerificationReceipt>,
+    pub failure_history: Vec<FailureCheckpoint>,
+    pub disproved_hypotheses: Vec<DisprovedHypothesisCheckpoint>,
+    pub unresolved_uncertainties: Vec<String>,
+    pub remaining_blockers: Vec<String>,
+    pub external_evidence_refs: Vec<ExternalEvidenceRef>,
+    pub repository: Option<RepositoryCheckpoint>,
+    pub continuation_intent: Option<String>,
+    pub provider_native_continuation_id: Option<String>,
+    pub resume_hops: u32,
+}
+
+impl Default for CodingTrajectoryCheckpoint {
+    fn default() -> Self {
+        Self {
+            schema_version: CODING_TRAJECTORY_SCHEMA_VERSION,
+            immutable_objective: String::new(),
+            immutable_constraints: Vec::new(),
+            task_stack: Vec::new(),
+            task_graph: Vec::new(),
+            plan_steps: Vec::new(),
+            delegations: Vec::new(),
+            relevant_paths: Vec::new(),
+            modified_files: Vec::new(),
+            architectural_decisions: Vec::new(),
+            rejected_alternatives: Vec::new(),
+            verification_requirements: Vec::new(),
+            verification_receipts: Vec::new(),
+            failure_history: Vec::new(),
+            disproved_hypotheses: Vec::new(),
+            unresolved_uncertainties: Vec::new(),
+            remaining_blockers: Vec::new(),
+            external_evidence_refs: Vec::new(),
+            repository: None,
+            continuation_intent: None,
+            provider_native_continuation_id: None,
+            resume_hops: 0,
+        }
+    }
+}
+
+impl CodingTrajectoryCheckpoint {
+    pub fn validate(&self) -> Result<(), ContinuityError> {
+        if self.schema_version != CODING_TRAJECTORY_SCHEMA_VERSION {
+            return Err(ContinuityError::UnsupportedTrajectorySchema {
+                found: self.schema_version,
+                current: CODING_TRAJECTORY_SCHEMA_VERSION,
+            });
+        }
+        let lengths = [
+            self.task_stack.len(),
+            self.task_graph.len(),
+            self.plan_steps.len(),
+            self.delegations.len(),
+            self.relevant_paths.len(),
+            self.modified_files.len(),
+            self.architectural_decisions.len(),
+            self.rejected_alternatives.len(),
+            self.verification_requirements.len(),
+            self.verification_receipts.len(),
+            self.failure_history.len(),
+            self.disproved_hypotheses.len(),
+            self.unresolved_uncertainties.len(),
+            self.remaining_blockers.len(),
+            self.external_evidence_refs.len(),
+        ];
+        if lengths.into_iter().any(|len| len > MAX_TRAJECTORY_ITEMS)
+            || serde_json::to_vec(self)?.len() > MAX_TRAJECTORY_TEXT_BYTES
+        {
+            return Err(ContinuityError::TrajectoryTooLarge);
+        }
+        Ok(())
+    }
+
+    pub fn restored_for_resume(&self) -> Result<Self, ContinuityError> {
+        self.validate()?;
+        let mut restored = self.clone();
+        restored.resume_hops = restored.resume_hops.saturating_add(1);
+        Ok(restored)
+    }
+
+    pub fn restored_for_provider_fallback(&self) -> Result<Self, ContinuityError> {
+        let mut restored = self.restored_for_resume()?;
+        restored.provider_native_continuation_id = None;
+        Ok(restored)
+    }
+
+    pub fn allows_hypothesis_attempt(&self, signature: &str, repository_fingerprint: &str) -> bool {
+        !self.disproved_hypotheses.iter().any(|item| {
+            item.signature == signature && item.repository_fingerprint == repository_fingerprint
+        })
+    }
+
+    pub fn invalidate_for_repository_drift(&mut self, repository: RepositoryCheckpoint) {
+        if self.repository.as_ref() == Some(&repository) {
+            return;
+        }
+        for path in &mut self.relevant_paths {
+            path.stale = true;
+        }
+        self.verification_receipts.clear();
+        self.repository = Some(repository);
+        if !self
+            .remaining_blockers
+            .iter()
+            .any(|item| item == "repository drift requires trajectory revalidation")
+        {
+            self.remaining_blockers
+                .push("repository drift requires trajectory revalidation".to_owned());
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -94,6 +325,8 @@ pub struct AuthoritativeTaskState {
     pub verification_evidence: Vec<String>,
     pub file_changes: Vec<String>,
     pub completion_status: Option<String>,
+    #[serde(default)]
+    pub coding_trajectory: Option<CodingTrajectoryCheckpoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +447,10 @@ pub enum ContinuityError {
     InvalidEventSequence,
     #[error("session attachment state is inconsistent")]
     InvalidAttachmentState,
+    #[error("unsupported coding trajectory schema version {found}; current version is {current}")]
+    UnsupportedTrajectorySchema { found: u32, current: u32 },
+    #[error("coding trajectory exceeds bounded checkpoint limits")]
+    TrajectoryTooLarge,
 }
 
 #[derive(Debug, Clone)]
@@ -305,6 +542,29 @@ impl ContinuityStore {
             },
             &request.client_id,
             request.occurred_at_unix_ms,
+        )
+    }
+
+    /// Replaces the journal-derived task projection without claiming frontend ownership.
+    ///
+    /// The canonical session journal remains the execution authority; this writes only the
+    /// bounded deterministic projection consumed by continuity/resume.
+    pub fn project_task(
+        &self,
+        event_id: &str,
+        event: SessionEventKind,
+        task: AuthoritativeTaskState,
+    ) -> Result<ApplyOutcome, ContinuityError> {
+        let current = self.load()?;
+        self.update(
+            current.revision,
+            event_id,
+            |session| {
+                session.task = task;
+                Ok(event)
+            },
+            "runtime-projection",
+            0,
         )
     }
 
@@ -536,6 +796,7 @@ fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, Continuity
                 "verification_evidence": [],
                 "file_changes": [],
                 "completion_status": null,
+                "coding_trajectory": null,
             })
         });
         object
@@ -570,6 +831,13 @@ fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, Continuity
                 .or_insert_with(|| serde_json::Value::from(0));
         }
     }
+    if let Some(task) = object
+        .get_mut("task")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        task.entry("coding_trajectory")
+            .or_insert(serde_json::Value::Null);
+    }
     object.insert(
         "schema_version".to_owned(),
         serde_json::Value::from(CURRENT_SCHEMA_VERSION),
@@ -583,6 +851,9 @@ fn validate(session: &ContinuitySession) -> Result<(), ContinuityError> {
             found: session.schema_version,
             current: CURRENT_SCHEMA_VERSION,
         });
+    }
+    if let Some(trajectory) = &session.task.coding_trajectory {
+        trajectory.validate()?;
     }
     for (expected, event) in session.events.iter().enumerate() {
         if event.sequence != expected as u64 {
@@ -617,6 +888,7 @@ mod tests {
             verification_evidence: vec!["cargo-test:passed".to_owned()],
             file_changes: vec!["src/lib.rs".to_owned()],
             completion_status: status.map(str::to_owned),
+            coding_trajectory: None,
         }
     }
 
@@ -904,6 +1176,283 @@ mod tests {
         assert!(matches!(
             second,
             Err(ContinuityError::OwnershipConflict { owner }) if owner == "tui"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod coding_trajectory_tests {
+    use super::*;
+
+    fn trajectory() -> CodingTrajectoryCheckpoint {
+        CodingTrajectoryCheckpoint {
+            immutable_objective: "finish issue 874 without losing repair state".into(),
+            immutable_constraints: vec!["preserve exact verification obligations".into()],
+            task_stack: vec!["issue-874".into(), "resume".into()],
+            task_graph: vec![TaskEdge {
+                parent: "issue-874".into(),
+                child: "resume".into(),
+            }],
+            plan_steps: vec![
+                PlanStepCheckpoint {
+                    id: "schema".into(),
+                    description: "persist trajectory".into(),
+                    status: PlanStepStatus::Completed,
+                },
+                PlanStepCheckpoint {
+                    id: "resume".into(),
+                    description: "restore after compaction".into(),
+                    status: PlanStepStatus::Active,
+                },
+            ],
+            delegations: vec![DelegatedWorkCheckpoint {
+                id: "worker-1".into(),
+                parent_task: "resume".into(),
+                summary: "inspect recovery".into(),
+                status: DelegationStatus::PendingJoin,
+            }],
+            relevant_paths: vec![RelevantPathCheckpoint {
+                path: "crates/medusa-session-continuity/src/root.rs".into(),
+                reason: "authoritative continuity schema".into(),
+                stale: false,
+            }],
+            modified_files: vec!["crates/medusa-session-continuity/src/root.rs".into()],
+            architectural_decisions: vec!["reuse atomic continuity authority".into()],
+            rejected_alternatives: vec!["parallel trajectory store".into()],
+            verification_requirements: vec![
+                "cargo test -p medusa-session-continuity --locked".into(),
+            ],
+            verification_receipts: vec![VerificationReceipt {
+                command: "cargo test -p medusa-session-continuity".into(),
+                outcome: VerificationOutcome::Failed,
+                evidence: Some("resume mismatch".into()),
+            }],
+            failure_history: vec![FailureCheckpoint {
+                fingerprint: "failure:test:resume-mismatch".into(),
+                classification: "test".into(),
+                summary: "resume mismatch".into(),
+                repairs: vec![RepairAttemptCheckpoint {
+                    id: "repair-1".into(),
+                    failure_fingerprint: "failure:test:resume-mismatch".into(),
+                    changed_files: vec!["crates/medusa-session-continuity/src/root.rs".into()],
+                    outcome: VerificationOutcome::Failed,
+                }],
+            }],
+            disproved_hypotheses: vec![DisprovedHypothesisCheckpoint {
+                signature: "retry-same-fix".into(),
+                repository_fingerprint: "repo-a".into(),
+            }],
+            unresolved_uncertainties: vec!["pending worker join".into()],
+            remaining_blockers: vec!["failed verification remains".into()],
+            external_evidence_refs: vec![ExternalEvidenceRef {
+                id: "evidence-1".into(),
+                artifact_path: ".medusa/artifacts/evidence-1".into(),
+                digest: "sha256:deadbeef".into(),
+            }],
+            repository: Some(RepositoryCheckpoint {
+                head: Some("abc123".into()),
+                workspace_fingerprint: "repo-a".into(),
+            }),
+            continuation_intent: Some("join worker, repair verifier, rerun".into()),
+            provider_native_continuation_id: Some("provider-response-123".into()),
+            ..Default::default()
+        }
+    }
+
+    fn task(value: CodingTrajectoryCheckpoint) -> AuthoritativeTaskState {
+        AuthoritativeTaskState {
+            plan_state: Some("running".into()),
+            active_step: Some("resume".into()),
+            coding_trajectory: Some(value),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn trajectory_survives_repair_compaction_and_multi_hop_resume() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ContinuityStore::new(temp.path().join("session.json"));
+        let initial = store.create("trajectory").expect("create");
+        let attached = store
+            .attach(AttachRequest {
+                client_id: "daemon".into(),
+                client_kind: ClientKind::Daemon,
+                requested_mode: AttachmentMode::Owner,
+                expected_revision: initial.revision,
+                journal_cursor: 0,
+                occurred_at_unix_ms: 1,
+                event_id: "attach".into(),
+            })
+            .expect("attach")
+            .session()
+            .clone();
+        let original = trajectory();
+        let repair = store
+            .mutate(MutationRequest {
+                client_id: "daemon".into(),
+                expected_revision: attached.revision,
+                occurred_at_unix_ms: 2,
+                event_id: "repair".into(),
+                event: SessionEventKind::RepairLoopCheckpointed,
+                task: task(original.clone()),
+            })
+            .expect("repair")
+            .session()
+            .clone();
+        let compacted = store
+            .mutate(MutationRequest {
+                client_id: "daemon".into(),
+                expected_revision: repair.revision,
+                occurred_at_unix_ms: 3,
+                event_id: "compact".into(),
+                event: SessionEventKind::CompactionCheckpointed,
+                task: repair.task.clone(),
+            })
+            .expect("compact")
+            .session()
+            .clone();
+        assert_eq!(store.load().expect("load").task, compacted.task);
+        let first = compacted
+            .task
+            .coding_trajectory
+            .as_ref()
+            .expect("trajectory")
+            .restored_for_resume()
+            .expect("resume1");
+        let resumed = store
+            .mutate(MutationRequest {
+                client_id: "daemon".into(),
+                expected_revision: compacted.revision,
+                occurred_at_unix_ms: 4,
+                event_id: "resume".into(),
+                event: SessionEventKind::TrajectoryRestored {
+                    resume_hops: first.resume_hops,
+                },
+                task: task(first),
+            })
+            .expect("resume mutation")
+            .session()
+            .clone();
+        let second = resumed
+            .task
+            .coding_trajectory
+            .as_ref()
+            .expect("trajectory")
+            .restored_for_resume()
+            .expect("resume2");
+        assert_eq!(second.resume_hops, 2);
+        assert_eq!(second.delegations, original.delegations);
+        assert_eq!(second.verification_receipts, original.verification_receipts);
+        assert_eq!(
+            second.unresolved_uncertainties,
+            original.unresolved_uncertainties
+        );
+        assert_eq!(second.continuation_intent, original.continuation_intent);
+        assert_eq!(second.modified_files, original.modified_files);
+        assert_eq!(second.plan_steps, original.plan_steps);
+    }
+
+    #[test]
+    fn provider_fallback_keeps_portable_state_but_drops_native_continuation() {
+        let original = trajectory();
+        let fallback = original.restored_for_provider_fallback().expect("fallback");
+        assert_eq!(fallback.immutable_objective, original.immutable_objective);
+        assert_eq!(
+            fallback.immutable_constraints,
+            original.immutable_constraints
+        );
+        assert_eq!(fallback.failure_history, original.failure_history);
+        assert_eq!(
+            fallback.verification_requirements,
+            original.verification_requirements
+        );
+        assert_eq!(
+            fallback.external_evidence_refs,
+            original.external_evidence_refs
+        );
+        assert_eq!(fallback.provider_native_continuation_id, None);
+        assert_eq!(fallback.resume_hops, original.resume_hops + 1);
+    }
+
+    #[test]
+    fn repository_drift_invalidates_receipts_and_marks_paths_stale() {
+        let mut value = trajectory();
+        value.invalidate_for_repository_drift(RepositoryCheckpoint {
+            head: Some("def456".into()),
+            workspace_fingerprint: "repo-b".into(),
+        });
+        assert!(value.verification_receipts.is_empty());
+        assert!(value.relevant_paths.iter().all(|path| path.stale));
+        assert!(
+            value
+                .remaining_blockers
+                .iter()
+                .any(|item| item.contains("drift"))
+        );
+        assert_eq!(
+            value.repository.as_ref().unwrap().workspace_fingerprint,
+            "repo-b"
+        );
+    }
+
+    #[test]
+    fn disproved_hypothesis_requires_new_repository_evidence_before_retry() {
+        let value = trajectory();
+        assert!(!value.allows_hypothesis_attempt("retry-same-fix", "repo-a"));
+        assert!(value.allows_hypothesis_attempt("retry-same-fix", "repo-b"));
+        assert!(value.allows_hypothesis_attempt("new-fix", "repo-a"));
+    }
+
+    #[test]
+    fn verbose_evidence_is_externalized_by_type() {
+        let value = trajectory();
+        let encoded = serde_json::to_string(&value.external_evidence_refs).expect("json");
+        assert!(encoded.contains(".medusa/artifacts/evidence-1"));
+        assert!(!encoded.contains("very long raw tool output"));
+    }
+
+    #[test]
+    fn objective_constraints_failures_and_decisions_survive_compaction_resume_cycles() {
+        let original = trajectory();
+        let mut current = original.clone();
+        for _ in 0..3 {
+            current = current.restored_for_resume().expect("resume");
+        }
+        assert_eq!(current.immutable_objective, original.immutable_objective);
+        assert_eq!(
+            current.immutable_constraints,
+            original.immutable_constraints
+        );
+        assert_eq!(current.failure_history, original.failure_history);
+        assert_eq!(
+            current.architectural_decisions,
+            original.architectural_decisions
+        );
+        assert_eq!(
+            current.rejected_alternatives,
+            original.rejected_alternatives
+        );
+        assert_eq!(
+            current.verification_requirements,
+            original.verification_requirements
+        );
+    }
+
+    #[test]
+    fn rejects_incompatible_and_unbounded_trajectory_checkpoints() {
+        let mut incompatible = trajectory();
+        incompatible.schema_version += 1;
+        assert!(matches!(
+            incompatible.validate(),
+            Err(ContinuityError::UnsupportedTrajectorySchema { .. })
+        ));
+        let mut oversized = trajectory();
+        oversized.task_stack = (0..=MAX_TRAJECTORY_ITEMS)
+            .map(|i| format!("task-{i}"))
+            .collect();
+        assert!(matches!(
+            oversized.validate(),
+            Err(ContinuityError::TrajectoryTooLarge)
         ));
     }
 }

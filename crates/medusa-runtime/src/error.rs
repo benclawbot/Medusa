@@ -122,6 +122,7 @@ impl RuntimeController {
         validate_resumed_session(&repo, &session)?;
         let interrupted_steps = recover_interrupted_session(&repo, &mut session)?;
         let restored_followups = restore_queued_followups(&session)?;
+        let _ = crate::coding_trajectory::restore_for_resume(&repo, &session, false)?;
         let active_session_id = Some(session.id.to_string());
         state.session = Some(session);
 

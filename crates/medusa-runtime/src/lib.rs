@@ -35,6 +35,7 @@ mod analysis_tool;
 pub mod checkpoint_payload;
 pub mod checkpoint_store;
 mod command_router;
+mod coding_trajectory;
 pub mod commands;
 mod config_command;
 mod error;
@@ -1345,10 +1346,17 @@ fn run_prompt(
     let session_id = state.session.as_ref().map(|session| session.id.as_str());
     let learning_context =
         crate::learning_retrieval::select(&state.repo, &draft, session_id, events);
+    let trajectory_context = {
+        let session = state.session.as_ref().ok_or_else(|| {
+            RuntimeError::agent("runtime session disappeared before trajectory projection")
+        })?;
+        crate::coding_trajectory::sync_and_render(&state.repo, session, None)?
+    };
     let mut task_context = vec![
         orchestration_context,
         tool_policy_context,
         verification_context,
+        trajectory_context,
     ];
     if implementation_evidence.is_none()
         && let Some(evidence) = coordinator_evidence.as_ref()
@@ -1441,9 +1449,17 @@ fn run_prompt(
                     ],
                 }));
                 let provider_started_at = std::time::Instant::now();
+                let trajectory_context = crate::coding_trajectory::sync_and_render(
+                    &state.repo,
+                    &session,
+                    None,
+                )?;
+                let turn_context = format!("{skill_context}
+
+{trajectory_context}");
                 match engine.step_with_observer_and_context_and_turn_instruction_for_phase(
                     &mut session,
-                    Some(skill_context.as_str()),
+                    Some(turn_context.as_str()),
                     None,
                     provider_phase,
                     |update| {
@@ -1502,6 +1518,7 @@ fn run_prompt(
                 }
             };
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+            let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;
 
             if matches!(outcome, StepOutcome::Continue | StepOutcome::TurnComplete)
                 && should_auto_compact(
