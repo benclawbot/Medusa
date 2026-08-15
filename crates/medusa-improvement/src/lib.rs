@@ -15,7 +15,6 @@ pub mod provenance;
 pub mod refinement_authority;
 pub mod refinement_migration;
 mod refinement_persistence;
-#[allow(clippy::expect_used)]
 pub mod regression_replay;
 pub mod retrieval;
 pub mod scoped_memory;
