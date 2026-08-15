@@ -1404,11 +1404,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                                     "analysis workspace authority is unavailable",
                                 )
                             })?;
-                            host.execute(
-                                &session_id,
-                                canonical_input,
-                                self.cancellation.as_ref(),
-                            )
+                            host.execute(&session_id, canonical_input, self.cancellation.as_ref())
                         },
                     )?
                 } else if name == "update_plan" {
@@ -1428,7 +1424,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                         |canonical_input| {
                             let plan = plan_from_input(canonical_input);
                             if plan.is_empty() {
-                                Ok("Visible task plan update ignored because it was empty.".to_owned())
+                                Ok("Visible task plan update ignored because it was empty."
+                                    .to_owned())
                             } else {
                                 if session.plan != plan {
                                     let recorded_at = OffsetDateTime::now_utc();
@@ -1782,9 +1779,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     Ok(output) => (output, false),
                     Err(error) => (error.to_string(), true),
                 };
-                if !is_error
-                    && let Some(key) = crate::tool_dag::dedup_key(&name, &input)
-                {
+                if !is_error && let Some(key) = crate::tool_dag::dedup_key(&name, &input) {
                     safe_tool_cache
                         .entry(key)
                         .or_insert_with(|| raw_content.clone());
@@ -2132,16 +2127,20 @@ mod streaming_tool_dispatch_tests {
             AgentUpdate::ToolOutput { tool, output, is_error: false }
                 if tool == "fs_read" && output.contains("before-stream-complete")
         )));
-        let receipt_index = session.events.iter().position(|event| matches!(
-            &event.payload,
-            EventPayload::WorkerEvidenceRecorded { evidence }
-                if evidence["kind"] == serde_json::json!("certified_tool_execution")
-        ));
-        let completed_index = session.events.iter().position(|event| matches!(
-            event.payload,
-            EventPayload::ToolExecutionCompleted { .. }
-        ));
-        assert!(receipt_index.is_some_and(|receipt| completed_index.is_some_and(|done| receipt < done)));
+        let receipt_index = session.events.iter().position(|event| {
+            matches!(
+                &event.payload,
+                EventPayload::WorkerEvidenceRecorded { evidence }
+                    if evidence["kind"] == serde_json::json!("certified_tool_execution")
+            )
+        });
+        let completed_index = session
+            .events
+            .iter()
+            .position(|event| matches!(event.payload, EventPayload::ToolExecutionCompleted { .. }));
+        assert!(
+            receipt_index.is_some_and(|receipt| completed_index.is_some_and(|done| receipt < done))
+        );
     }
 }
 

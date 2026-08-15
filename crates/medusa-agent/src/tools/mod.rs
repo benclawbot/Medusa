@@ -631,21 +631,19 @@ pub(crate) fn execute_tool_cancellable_with_context_and_policy_certified(
     mutation_context: Option<&crate::transaction::MutationContext>,
     execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<CertifiedToolExecution> {
-    certified_execution(
-        certified_pipeline(repo, name, execution_policy).execute(
-            ToolPipelineRequest::built_in(name, input),
-            cancellation,
-            |canonical_input| {
-                execute_tool_cancellable_with_context_unchecked(
-                    repo,
-                    name,
-                    canonical_input,
-                    cancellation,
-                    mutation_context,
-                )
-            },
-        ),
-    )
+    certified_execution(certified_pipeline(repo, name, execution_policy).execute(
+        ToolPipelineRequest::built_in(name, input),
+        cancellation,
+        |canonical_input| {
+            execute_tool_cancellable_with_context_unchecked(
+                repo,
+                name,
+                canonical_input,
+                cancellation,
+                mutation_context,
+            )
+        },
+    ))
 }
 
 pub(crate) fn execute_tool_cancellable_with_context_and_policy(
@@ -709,13 +707,11 @@ pub(crate) fn certify_cached_tool_with_policy(
     execution_policy: &AgentExecutionPolicy,
     cached_output: String,
 ) -> MedusaResult<CertifiedToolExecution> {
-    certified_execution(
-        certified_pipeline(repo, name, execution_policy).execute(
-            ToolPipelineRequest::built_in(name, input),
-            cancellation,
-            move |_| Ok(cached_output),
-        ),
-    )
+    certified_execution(certified_pipeline(repo, name, execution_policy).execute(
+        ToolPipelineRequest::built_in(name, input),
+        cancellation,
+        move |_| Ok(cached_output),
+    ))
 }
 
 pub(crate) fn execute_engine_tool_with_policy(
@@ -735,7 +731,11 @@ pub(crate) fn execute_engine_tool_with_policy(
         approval_required: false,
         approval_granted: false,
     };
-    certified_execution(engine_pipeline(name, execution_policy).execute(request, cancellation, handler))
+    certified_execution(engine_pipeline(name, execution_policy).execute(
+        request,
+        cancellation,
+        handler,
+    ))
 }
 
 pub(crate) fn execute_tool_cancellable_with_policy(
@@ -745,8 +745,14 @@ pub(crate) fn execute_tool_cancellable_with_policy(
     cancellation: &AtomicBool,
     execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<String> {
-    execute_tool_cancellable_with_policy_certified(repo, name, input, cancellation, execution_policy)?
-        .result
+    execute_tool_cancellable_with_policy_certified(
+        repo,
+        name,
+        input,
+        cancellation,
+        execution_policy,
+    )?
+    .result
 }
 
 pub(crate) fn execute_tool_cancellable(
@@ -798,20 +804,13 @@ pub(crate) fn execute_approved_tool_cancellable_with_policy_certified(
     let mut request = ToolPipelineRequest::built_in(name, input);
     request.approval_required = true;
     request.approval_granted = true;
-    certified_execution(
-        certified_pipeline(repo, name, execution_policy).execute(
-            request,
-            cancellation,
-            |canonical_input| {
-                execute_approved_tool_cancellable_unchecked(
-                    repo,
-                    name,
-                    canonical_input,
-                    cancellation,
-                )
-            },
-        ),
-    )
+    certified_execution(certified_pipeline(repo, name, execution_policy).execute(
+        request,
+        cancellation,
+        |canonical_input| {
+            execute_approved_tool_cancellable_unchecked(repo, name, canonical_input, cancellation)
+        },
+    ))
 }
 
 pub(crate) fn execute_approved_tool_cancellable_with_policy(
