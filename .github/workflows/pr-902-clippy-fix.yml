@@ -110,11 +110,16 @@ jobs:
               'post_action = Some(PostToolAction::AskQuestion(question));',
               'post_action = Some(PostToolAction::AskQuestion(Box::new(question)));',
           )
-          assert engine.count('pause_for_question(session, question, &mut observer)?;') == 1
-          engine = engine.replace(
-              'pause_for_question(session, question, &mut observer)?;',
-              'pause_for_question(session, *question, &mut observer)?;',
+          question_block_pattern = re.compile(
+              r'(if let Some\(PostToolAction::AskQuestion\(question\)\) = post_action[\s\S]*?\{\s*)'
+              r'pause_for_question\(session, question, &mut observer\)\?;'
           )
+          engine, count = question_block_pattern.subn(
+              r'\1pause_for_question(session, *question, &mut observer)?;',
+              engine,
+              count=1,
+          )
+          assert count == 1
 
           special_start = engine.index('} else if name == "update_plan" {')
           special_end = engine.index('} else if self\n                    .team_context', special_start)
