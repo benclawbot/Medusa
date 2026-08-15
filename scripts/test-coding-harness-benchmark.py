@@ -74,7 +74,10 @@ def main() -> int:
     assert not false_report["passed"]
     assert "false_complete_rate" in false_report["failures"]
 
-    baseline = make(suite, summary(), "baseline")
+    baseline_source = summary()
+    for item in baseline_source["scenarios"]:
+        item["metrics"]["irrelevant_context_bytes"] = 20
+    baseline = make(suite, baseline_source, "baseline")
     candidate_source = summary()
     for item in candidate_source["scenarios"]:
         item["metrics"]["irrelevant_context_bytes"] = 1
