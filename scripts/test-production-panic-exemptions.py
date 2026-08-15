@@ -29,11 +29,14 @@ def main() -> int:
         {"src/main.rs": "#![allow(clippy::expect_used)]\nfn main() {}\n"}
     )
 
-    # Test-only expect use is permitted; the policy targets exemptions, not the call itself.
+    # Unit-test-only calls and exemptions after the cfg(test) boundary are permitted.
     assert module.violations(
         {
             "crates/example/src/lib.rs": (
-                "#[cfg(test)]\nmod tests {\n"
+                "fn production() {}\n"
+                "#[cfg(test)]\n"
+                "#[allow(clippy::unwrap_used, clippy::expect_used)]\n"
+                "mod tests {\n"
                 "    #[test]\n"
                 "    fn fixture() { let _ = Some(1).expect(\"fixture\"); }\n"
                 "}\n"
