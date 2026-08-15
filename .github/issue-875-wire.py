@@ -8,31 +8,23 @@ if "mod repository_context;\n" not in text:
         raise SystemExit("module anchor missing")
     text = text.replace(module_anchor, module_anchor + "mod repository_context;\n", 1)
 
-turn_anchor = """                let trajectory_context = crate::coding_trajectory::sync_and_render(
-                    &state.repo,
-                    &session,
-                    None,
-                )?;
-                let turn_context = format!(\"{skill_context}\\n\\n{trajectory_context}\");
-"""
-replacement = """                let trajectory_context = crate::coding_trajectory::sync_and_render(
-                    &state.repo,
-                    &session,
-                    None,
-                )?;
-                let repository_context = crate::repository_context::assemble_and_render(
+if "let repository_context = crate::repository_context::assemble_and_render(" not in text:
+    trajectory = text.index("                let trajectory_context = crate::coding_trajectory::sync_and_render(")
+    turn_start = text.index("                let turn_context =", trajectory)
+    call_start = text.index(
+        "                match engine.step_with_observer_and_context_and_turn_instruction_for_phase(",
+        turn_start,
+    )
+    replacement = """                let repository_context = crate::repository_context::assemble_and_render(
                     &state.repo,
                     &session,
                     &draft.text,
                 )?;
                 let turn_context = format!(
-                    \"{skill_context}\\n\\n{trajectory_context}\\n\\n{repository_context}\"
+                    "{skill_context}\\n\\n{trajectory_context}\\n\\n{repository_context}"
                 );
 """
-if "let repository_context = crate::repository_context::assemble_and_render(" not in text:
-    if turn_anchor not in text:
-        raise SystemExit("turn context anchor missing")
-    text = text.replace(turn_anchor, replacement, 1)
+    text = text[:turn_start] + replacement + text[call_start:]
 lib.write_text(text)
 
 module = Path("crates/medusa-runtime/src/repository_context.rs")
