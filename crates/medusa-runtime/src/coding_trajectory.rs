@@ -13,6 +13,9 @@ use sha2::{Digest, Sha256};
 
 use crate::RuntimeError;
 
+#[path = "repair_ledger.rs"]
+mod repair_ledger;
+
 const CONTEXT_LIMIT: usize = 12_000;
 
 pub(crate) fn sync_and_render(
@@ -289,6 +292,16 @@ fn reduce(
             .remaining_blockers
             .push("latest authoritative verification failed".to_owned());
     }
+    let repair_projection = repair_ledger::project(
+        session,
+        repository.workspace_fingerprint.as_str(),
+        trajectory.repair_ledger.as_slice(),
+        trajectory.verification_generation,
+        trajectory.repair_ledger_cursor,
+    );
+    trajectory.repair_ledger = repair_projection.entries;
+    trajectory.verification_generation = repair_projection.generation;
+    trajectory.repair_ledger_cursor = repair_projection.cursor;
     trajectory.continuation_intent = session
         .plan
         .iter()
@@ -384,7 +397,7 @@ fn git(repo: &Path, args: &[&str]) -> Option<String> {
 fn render(trajectory: &CodingTrajectoryCheckpoint) -> Result<String, RuntimeError> {
     let json = serde_json::to_string(trajectory).map_err(RuntimeError::agent)?;
     Ok(format!(
-        "[medusa-coding-trajectory-v1]\nAuthoritative compact trajectory derived from the canonical journal. Preserve immutable objective/constraints, continue from retained plan/failure/verification state, do not retry disproved hypotheses on the same repository fingerprint without new evidence, and revalidate stale paths after repository drift.\n{}",
+        "[medusa-coding-trajectory-v1]\nAuthoritative compact trajectory derived from the canonical journal. Preserve immutable objective/constraints and use repair_ledger as the complete actionable failure set. Repair all independent diagnostics from the latest verification generation together, expand exact source_refs only when needed, rerun the narrowest authoritative check after mutation, and do not repeat an identical failed repair on an unchanged repository fingerprint; re-plan or escalate instead. Revalidate stale paths after repository drift.\n{}",
         bounded(&json, CONTEXT_LIMIT)
     ))
 }
@@ -429,6 +442,85 @@ mod tests {
         fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
             unreachable!("not used")
         }
+    }
+
+    #[test]
+    fn repair_ledger_collects_full_generation_deduplicates_and_resolves() {
+        let repo = tempfile::tempdir().expect("repo");
+        Command::new("git").arg("init").arg(repo.path()).status().expect("git init");
+        let engine = AgentEngine::new(UnusedProvider, Config::default());
+        let mut session = engine
+            .create_session(repo.path(), "repair simultaneous diagnostics".to_owned())
+            .expect("session");
+        let diagnostics = vec![r#"$ cargo check
+error[E0308]: mismatched types
+  --> crates/a/src/lib.rs:12:3
+error[E0425]: cannot find value `x`
+  --> crates/b/src/lib.rs:8:9"#.to_owned()];
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::System("verifier".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: false,
+                evidence: diagnostics.clone(),
+            },
+        )
+        .expect("first verification");
+        sync_and_render(repo.path(), &session, None).expect("first sync");
+        let first = store(repo.path(), session.id.as_str()).load().expect("stored");
+        let first_trajectory = first.task.coding_trajectory.as_ref().expect("trajectory");
+        assert_eq!(first_trajectory.verification_generation, 1);
+        assert_eq!(first_trajectory.repair_ledger.len(), 2);
+        assert!(first_trajectory.repair_ledger.iter().all(|entry| entry.occurrence_count == 1));
+        assert!(first_trajectory.repair_ledger.iter().all(|entry| !entry.source_refs.is_empty()));
+
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::System("verifier".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: false,
+                evidence: diagnostics,
+            },
+        )
+        .expect("repeat verification");
+        sync_and_render(repo.path(), &session, None).expect("repeat sync");
+        let repeated = store(repo.path(), session.id.as_str()).load().expect("stored repeat");
+        let repeated_trajectory = repeated.task.coding_trajectory.as_ref().expect("trajectory");
+        assert_eq!(repeated_trajectory.verification_generation, 2);
+        assert_eq!(repeated_trajectory.repair_ledger.len(), 2);
+        assert!(repeated_trajectory.repair_ledger.iter().all(|entry| entry.occurrence_count == 2));
+
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::System("verifier".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: true,
+                evidence: vec!["$ cargo check".to_owned()],
+            },
+        )
+        .expect("passing verification");
+        sync_and_render(repo.path(), &session, None).expect("passing sync");
+        let passed = store(repo.path(), session.id.as_str()).load().expect("stored pass");
+        let passed_trajectory = passed.task.coding_trajectory.as_ref().expect("trajectory");
+        assert_eq!(passed_trajectory.verification_generation, 3);
+        assert!(passed_trajectory.repair_ledger.iter().all(|entry| !entry.unresolved()));
+
+        medusa_agent::compact_session(&mut session, Some("repair simultaneous diagnostics"))
+            .expect("compaction");
+        let restored = restore_for_resume(repo.path(), &session, false)
+            .expect("restore")
+            .expect("context");
+        assert!(restored.contains("repair_ledger"));
+        let restored_state = store(repo.path(), session.id.as_str()).load().expect("restored state");
+        assert_eq!(
+            restored_state
+                .task
+                .coding_trajectory
+                .as_ref()
+                .expect("trajectory")
+                .verification_generation,
+            3
+        );
     }
 
     #[test]

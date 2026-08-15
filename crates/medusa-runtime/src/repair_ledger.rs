@@ -26,7 +26,12 @@ pub(crate) fn project(
     let mut cursor = cursor;
     let mut changed_files = BTreeSet::new();
 
-    for event in session.events.iter().filter(|event| event.sequence > cursor) {
+    let starting_cursor = cursor;
+    for event in session
+        .events
+        .iter()
+        .filter(|event| event.sequence > starting_cursor)
+    {
         cursor = cursor.max(event.sequence);
         match &event.payload {
             EventPayload::FileTransactionCommitted { paths, .. } => {
@@ -162,7 +167,7 @@ fn reconcile_generation(
                 .is_some_and(|source| !existing.source_refs.contains(source));
             if is_new_occurrence {
                 existing.occurrence_count = existing.occurrence_count.saturating_add(1);
-                existing.source_refs.extend(item.source_refs.drain(..));
+                existing.source_refs.append(&mut item.source_refs);
             }
             if !existing.changed_details.contains(&item.summary) && existing.summary != item.summary {
                 existing.changed_details.push(item.summary.clone());
@@ -332,18 +337,22 @@ fn is_diagnostic_start(line: &str) -> bool {
 }
 
 fn looks_like_summary_only(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
+    let trimmed = value.trim();
+    if trimmed.starts_with("$ ") && trimmed.lines().count() == 1 {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
     lower.starts_with("error: could not compile")
         || lower.starts_with("test result: failed")
         || lower.starts_with("failures:")
 }
 
-fn infer_command(evidence: &[String], sequence: u64) -> String {
+fn infer_command(evidence: &[String], _sequence: u64) -> String {
     evidence
         .iter()
         .flat_map(|item| item.lines())
         .find_map(|line| line.trim().strip_prefix("$ ").map(str::to_owned))
-        .unwrap_or_else(|| format!("authoritative-verification-{sequence}"))
+        .unwrap_or_else(|| "authoritative-verification".to_owned())
 }
 
 fn classify(value: &str) -> String {
