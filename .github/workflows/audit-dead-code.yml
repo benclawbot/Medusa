@@ -13,16 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inventory scoped suppression attributes
+      - name: Inventory suppressions and reference counts
         shell: bash
         run: |
           set -euo pipefail
           pattern='#\[allow\((dead_code|unused_[^)]*)\)\]'
-          echo '=== all scoped suppressions ==='
+          echo '=== scoped suppressions ==='
           grep -RInE --include='*.rs' "$pattern" crates tools apps/medusa-desktop/src-tauri/src || status=$?
           if [[ ${status:-0} -gt 1 ]]; then exit "$status"; fi
-          echo '=== production candidates (exclude obvious tests/bin) ==='
-          find crates tools apps/medusa-desktop/src-tauri/src -type f -name '*.rs' \
-            ! -path '*/tests/*' ! -path '*/test/*' ! -path '*/bin/*' -print0 \
-            | xargs -0 grep -nHE "$pattern" || status=$?
-          if [[ ${status:-0} -gt 1 ]]; then exit "$status"; fi
+          echo '=== reference audit ==='
+          for symbol in \
+            FrontendArtifactExport 'export(' take_runtime_metrics skill_outcomes SessionUsage session_usage \
+            'reset(' AppendDisposition 'append_event(' 'commit_snapshot(' browser_dispatch \
+            'draw_portable(' 'SessionBrowser {' refinement_core verification_evidence; do
+            echo "--- $symbol"
+            grep -RInF --include='*.rs' "$symbol" crates tools apps/medusa-desktop/src-tauri/src || true
+          done
