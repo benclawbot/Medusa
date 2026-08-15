@@ -1692,20 +1692,29 @@ impl<P: ModelProvider> AgentEngine<P> {
                     )?;
                     observer(&AgentUpdate::Plan(plan.clone()));
                 }
+                let awaiting_approval = result.as_ref().err().is_some_and(|error| {
+                    error.code == ErrorCode::PolicyDenied
+                        && self.config.agent.mode != Mode::ReadOnly
+                        && self.execution_policy.denial_reason(&name, &input).is_none()
+                        && interactively_approvable(&name, &input)
+                });
                 if let Err(error) = &result
                     && error.code == ErrorCode::PolicyDenied
-                    && self.config.agent.mode != Mode::ReadOnly
-                    && self.execution_policy.denial_reason(&name, &input).is_none()
-                    && interactively_approvable(&name, &input)
                 {
                     append_observed(
                         session,
                         EventPayload::ToolCallDenied {
                             tool: audited_tool_name(&name, &input),
-                            reason: "tool requires explicit user approval".to_owned(),
+                            reason: if awaiting_approval {
+                                "tool requires explicit user approval".to_owned()
+                            } else {
+                                error.to_string()
+                            },
                         },
                         &mut observer,
                     )?;
+                }
+                if awaiting_approval {
                     let action = approval_action_label(&name, &input);
                     pause_for_question(
                         session,

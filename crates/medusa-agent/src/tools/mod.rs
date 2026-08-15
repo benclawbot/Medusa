@@ -1032,8 +1032,9 @@ mod tests {
             &AtomicBool::new(false),
             &policy,
         )
-        .err()
-        .expect("researcher write must be denied by certified pipeline");
+        .expect("certified execution")
+        .result
+        .expect_err("researcher write must be denied by certified pipeline");
         assert_eq!(error.code, ErrorCode::PolicyDenied);
         assert!(!directory.path().join("denied.txt").exists());
     }

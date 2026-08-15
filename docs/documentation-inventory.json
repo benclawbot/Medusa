@@ -364,6 +364,11 @@
       "sha256": "01af17a8daafd342252ce15397288960c3d6e0040aacadaefa705e4e0a71faba"
     },
     {
+      "path": "docs/TOOL-EXECUTION-PIPELINE.md",
+      "disposition": "current",
+      "sha256": "e04928c1774c318f61c328f425b6696b9518e46447a5560d834e43ff315a9dff"
+    },
+    {
       "path": "docs/TRANSACTIONAL-PATCH-RECOVERY.md",
       "disposition": "current",
       "sha256": "61960cc3824e8e748f11ae04c7d41552f649db84aaa1001fdef60f5da2a9b4dd"
