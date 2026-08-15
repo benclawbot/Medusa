@@ -660,12 +660,7 @@ pub(crate) fn execute_approved_tool_cancellable(
     request.approval_granted = true;
     pipeline
         .execute(request, cancellation, |canonical_input| {
-            execute_approved_tool_cancellable_unchecked(
-                repo,
-                name,
-                canonical_input,
-                cancellation,
-            )
+            execute_approved_tool_cancellable_unchecked(repo, name, canonical_input, cancellation)
         })
         .into_result()
 }
