@@ -1,0 +1,27 @@
+name: Temporary dead-code suppression audit
+
+on:
+  push:
+    branches:
+      - codex/issue-858-dead-code-migrations
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inventory scoped suppression attributes
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== all scoped suppressions ==='
+          rg -n '#\[allow\((dead_code|unused_[^)]*)\)\]' crates tools apps/medusa-desktop/src-tauri/src || true
+          echo '=== production candidates (exclude obvious tests/bin) ==='
+          rg -n '#\[allow\((dead_code|unused_[^)]*)\)\]' crates tools apps/medusa-desktop/src-tauri/src \
+            -g '*.rs' \
+            -g '!**/tests/**' \
+            -g '!**/test/**' \
+            -g '!**/bin/**' || true
