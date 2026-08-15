@@ -19,8 +19,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Apply source patch
-        run: python3 .github/issue-876-patch.py
+      - name: Apply source patches
+        run: |
+          python3 .github/issue-876-patch.py
+          python3 .github/issue-876-fix.py
       - name: Format source
         run: cargo fmt --all
       - name: Continuity tests
@@ -33,7 +35,7 @@ jobs:
         run: cargo clippy -p medusa-session-continuity -p medusa-runtime --all-targets -- -D warnings
       - name: Commit production changes
         run: |
-          git rm .github/workflows/issue-876-bootstrap.yml .github/issue-876-patch.py
+          git rm .github/workflows/issue-876-bootstrap.yml .github/issue-876-patch.py .github/issue-876-fix.py
           git add crates/medusa-session-continuity/src/root.rs crates/medusa-runtime/src/coding_trajectory.rs crates/medusa-runtime/src/repair_ledger.rs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
