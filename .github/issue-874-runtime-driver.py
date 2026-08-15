@@ -94,13 +94,15 @@ script = script.replace(
     'medusa_agent::record_session_event(&mut session, Actor::System("verifier".to_owned()), EventPayload::VerificationCompleted',
 )
 
-# Replace the brittle engine-call patch with a one-line structural insertion.
-begin = script.index(
+# Replace the brittle engine-call patch with a structural insertion independent of indentation.
+engine_begin = script.index(
     "old = '''                match engine.step_with_observer_and_context_and_turn_instruction_for_phase("
 )
-finish_marker = "          s = s.replace(old, new, 1)\n"
-finish = script.index(finish_marker, begin) + len(finish_marker)
-replacement = '''marker = "                match engine.step_with_observer_and_context_and_turn_instruction_for_phase(\\n"
+post_begin = script.index(
+    "old = '''            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });",
+    engine_begin,
+)
+engine_replacement = '''marker = "                match engine.step_with_observer_and_context_and_turn_instruction_for_phase(\\n"
 if marker not in s:
     raise SystemExit("engine call marker missing")
 turn_prefix = """                let trajectory_context = crate::coding_trajectory::sync_and_render(
@@ -116,20 +118,20 @@ if context_arg not in s:
     raise SystemExit("engine context argument missing")
 s = s.replace(context_arg, "                    Some(turn_context.as_str()),", 1)
 '''
-script = script[:begin] + replacement + script[finish:]
+script = script[:engine_begin] + engine_replacement + script[post_begin:]
 
-# Replace the post-step patch structurally as well.
-begin = script.index(
+# Replace the post-step patch up to the final lib write.
+post_begin = script.index(
     "old = '''            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });"
 )
-finish = script.index(finish_marker, begin) + len(finish_marker)
-replacement = '''marker = "            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });\\n"
+post_finish = script.index("lib.write_text(s)", post_begin)
+post_replacement = '''marker = "            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });\\n"
 if marker not in s:
     raise SystemExit("post-step marker missing")
 replacement_line = marker + "            let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;\\n"
 s = s.replace(marker, replacement_line, 1)
 '''
-script = script[:begin] + replacement + script[finish:]
+script = script[:post_begin] + post_replacement + script[post_finish:]
 
 Path('/tmp/issue874.py').write_text(script)
 exec(compile(script, '/tmp/issue874.py', 'exec'), {'__name__': '__main__'})
