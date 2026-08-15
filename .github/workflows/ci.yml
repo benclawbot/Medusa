@@ -117,6 +117,22 @@ jobs:
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-deny,cargo-audit
+      - name: Install pinned cargo-machete
+        shell: bash
+        run: cargo install cargo-machete --version 0.9.2 --locked
+      - name: Reject unused direct dependencies
+        id: cargo_machete
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo machete 2>&1 | tee cargo-machete.log
+      - name: Upload cargo-machete diagnostics
+        if: failure() && steps.cargo_machete.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cargo-machete-diagnostics
+          path: cargo-machete.log
+          if-no-files-found: error
       - name: Validate committed dependency authority
         shell: bash
         run: |

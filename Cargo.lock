@@ -1139,7 +1139,6 @@ dependencies = [
  "medusa-provider",
  "medusa-skill",
  "medusa-testkit",
- "medusa-transaction-coordinator",
  "medusa-worker-leases",
  "medusa-workers",
  "medusa-world-model",
@@ -1210,7 +1209,6 @@ dependencies = [
  "medusa-config",
  "medusa-core",
  "medusa-daemon",
- "medusa-escalation",
  "medusa-extensions",
  "medusa-github",
  "medusa-hardening",
@@ -1416,7 +1414,6 @@ name = "medusa-failure"
 version = "1.0.0"
 dependencies = [
  "serde",
- "thiserror",
  "time",
 ]
 
@@ -1511,7 +1508,6 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "time",
  "ulid",
@@ -1663,7 +1659,6 @@ dependencies = [
  "medusa-capabilities",
  "medusa-config",
  "medusa-context",
- "medusa-continuation",
  "medusa-core",
  "medusa-evidence",
  "medusa-execution-checkpoint",
@@ -1671,11 +1666,7 @@ dependencies = [
  "medusa-external-provider",
  "medusa-improvement",
  "medusa-intelligence",
- "medusa-markdown-memory",
- "medusa-mcp-cache",
  "medusa-memory",
- "medusa-memory-consolidation",
- "medusa-memory-writeback",
  "medusa-multi-agent-scheduler",
  "medusa-openai-realtime",
  "medusa-protocol",
@@ -1686,7 +1677,6 @@ dependencies = [
  "medusa-time-travel",
  "medusa-tool-control",
  "medusa-tool-policy",
- "medusa-turn-assembly",
  "medusa-wakeup",
  "medusa-workers",
  "png",
@@ -1810,8 +1800,6 @@ version = "1.0.0"
 dependencies = [
  "hex",
  "medusa-context",
- "medusa-context-retrieval",
- "medusa-prompt-cache",
  "serde",
  "sha2",
  "time",

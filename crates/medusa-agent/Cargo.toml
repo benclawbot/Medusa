@@ -31,7 +31,6 @@ medusa-skill = { path = "../medusa-skill" }
 medusa-progress = { path = "../medusa-progress" }
 medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
-medusa-transaction-coordinator = { path = "../medusa-transaction-coordinator" }
 medusa-worker-leases = { path = "../medusa-worker-leases" }
 medusa-workers = { path = "../medusa-workers" }
 medusa-world-model.workspace = true

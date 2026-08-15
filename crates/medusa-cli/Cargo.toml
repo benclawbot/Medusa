@@ -54,7 +54,6 @@ medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-clearops = { path = "../medusa-clearops" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
-medusa-escalation = { path = "../medusa-escalation" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-github = { path = "../medusa-github" }

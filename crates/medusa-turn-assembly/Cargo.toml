@@ -12,8 +12,6 @@ sha2.workspace = true
 hex.workspace = true
 time.workspace = true
 medusa-context = { path = "../medusa-context" }
-medusa-context-retrieval = { path = "../medusa-context-retrieval" }
-medusa-prompt-cache = { path = "../medusa-prompt-cache" }
 
 [lints]
 workspace = true

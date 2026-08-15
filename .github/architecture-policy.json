@@ -16,5 +16,36 @@
     "medusa-testkit"
   ],
   "ignored_unreferenced_rs": [],
-  "crate_exemptions": {}
+  "crate_exemptions": {
+    "medusa-context-retrieval": {
+      "owner": "intelligence",
+      "reason": "Preserved deterministic context-retrieval component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "expires": "2026-11-30"
+    },
+    "medusa-markdown-memory": {
+      "owner": "state-and-recovery",
+      "reason": "Preserved Markdown memory index/retrieval component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "expires": "2026-11-30"
+    },
+    "medusa-mcp-cache": {
+      "owner": "intelligence",
+      "reason": "Preserved MCP schema-cache and lazy-connection component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "expires": "2026-11-30"
+    },
+    "medusa-memory-consolidation": {
+      "owner": "state-and-recovery",
+      "reason": "Preserved deterministic memory-consolidation component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "expires": "2026-11-30"
+    },
+    "medusa-memory-writeback": {
+      "owner": "state-and-recovery",
+      "reason": "Preserved conflict-safe Markdown memory writeback component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "expires": "2026-11-30"
+    },
+    "medusa-turn-assembly": {
+      "owner": "intelligence",
+      "reason": "Preserved deterministic model-turn assembly component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "expires": "2026-11-30"
+    }
+  }
 }
