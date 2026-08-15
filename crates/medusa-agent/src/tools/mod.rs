@@ -8,7 +8,7 @@ mod intelligence;
 mod shell;
 pub(crate) mod skills;
 mod web;
-mod pipeline {
+pub mod pipeline {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tool_pipeline.rs"));
 }
 
@@ -738,23 +738,6 @@ pub(crate) fn execute_engine_tool_with_policy(
     ))
 }
 
-pub(crate) fn execute_tool_cancellable_with_policy(
-    repo: &Path,
-    name: &str,
-    input: &Value,
-    cancellation: &AtomicBool,
-    execution_policy: &AgentExecutionPolicy,
-) -> MedusaResult<String> {
-    execute_tool_cancellable_with_policy_certified(
-        repo,
-        name,
-        input,
-        cancellation,
-        execution_policy,
-    )?
-    .result
-}
-
 pub(crate) fn execute_tool_cancellable(
     repo: &Path,
     name: &str,
@@ -1042,14 +1025,15 @@ mod tests {
     fn policy_aware_dispatch_denies_role_forbidden_tool_inside_pipeline() {
         let directory = tempfile::tempdir().expect("temporary repository");
         let policy = AgentExecutionPolicy::for_team_role(crate::team::TeamRole::Researcher);
-        let error = execute_tool_cancellable_with_policy(
+        let error = execute_tool_cancellable_with_policy_certified(
             directory.path(),
             "fs_write",
             &json!({"path":"denied.txt","content":"no"}),
             &AtomicBool::new(false),
             &policy,
         )
-        .expect_err("researcher write must be denied by certified pipeline");
+        .err()
+        .expect("researcher write must be denied by certified pipeline");
         assert_eq!(error.code, ErrorCode::PolicyDenied);
         assert!(!directory.path().join("denied.txt").exists());
     }

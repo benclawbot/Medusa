@@ -232,15 +232,19 @@ fn journal_certified_tool_execution(
     persist(session)
 }
 
+struct SessionToolAuthority<'a> {
+    execution_policy: &'a AgentExecutionPolicy,
+    session_id: &'a str,
+    task_step_id: Option<&'a str>,
+    activity_id: &'a str,
+}
+
 fn execute_session_tool(
     repo: &Path,
     name: &str,
     input: &serde_json::Value,
     cancellation: &AtomicBool,
-    execution_policy: &AgentExecutionPolicy,
-    session_id: &str,
-    task_step_id: Option<&str>,
-    activity_id: &str,
+    authority: SessionToolAuthority<'_>,
 ) -> MedusaResult<CertifiedToolExecution> {
     if name != "fs_write" {
         return execute_tool_cancellable_with_policy_certified(
@@ -248,7 +252,7 @@ fn execute_session_tool(
             name,
             input,
             cancellation,
-            execution_policy,
+            authority.execution_policy,
         );
     }
 
@@ -271,7 +275,7 @@ fn execute_session_tool(
             name,
             input,
             cancellation,
-            execution_policy,
+            authority.execution_policy,
         );
     }
 
@@ -288,7 +292,7 @@ fn execute_session_tool(
             name,
             input,
             cancellation,
-            execution_policy,
+            authority.execution_policy,
         )?;
         execution.result = execution.result.map(|output| {
             format!(
@@ -298,7 +302,7 @@ fn execute_session_tool(
         return Ok(execution);
     }
 
-    let sequence = crate::transaction::next_mutation_sequence(repo, session_id)?;
+    let sequence = crate::transaction::next_mutation_sequence(repo, authority.session_id)?;
     let occurred_at_unix_ms = i64::try_from(
         OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
     )
@@ -310,9 +314,9 @@ fn execute_session_tool(
         )
     })?;
     let context = crate::transaction::MutationContext {
-        session_id: session_id.to_owned(),
-        task_step_id: task_step_id.map(str::to_owned),
-        activity_id: activity_id.to_owned(),
+        session_id: authority.session_id.to_owned(),
+        task_step_id: authority.task_step_id.map(str::to_owned),
+        activity_id: authority.activity_id.to_owned(),
         actor: "medusa-agent".to_owned(),
         sequence,
         occurred_at_unix_ms,
@@ -323,7 +327,7 @@ fn execute_session_tool(
         input,
         cancellation,
         Some(&context),
-        execution_policy,
+        authority.execution_policy,
     )
 }
 
@@ -353,7 +357,7 @@ struct ToolExecutionTiming {
 
 enum PostToolAction {
     PlanUpdated(Vec<AgentPlanStep>),
-    AskQuestion(AgentQuestion),
+    AskQuestion(Box<AgentQuestion>),
 }
 
 struct EarlyToolExecution {
@@ -1310,10 +1314,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                                 &name,
                                 &input,
                                 cancellation.as_ref(),
-                                &execution_policy,
-                                &mutation_session_id,
-                                mutation_task_step.as_deref(),
-                                &id,
+                                SessionToolAuthority {
+                                    execution_policy: &execution_policy,
+                                    session_id: &mutation_session_id,
+                                    task_step_id: mutation_task_step.as_deref(),
+                                    activity_id: &id,
+                                },
                             )
                         },
                         |output| {
@@ -1416,7 +1422,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    let execution = execute_engine_tool_with_policy(
+                    execute_engine_tool_with_policy(
                         &name,
                         &input,
                         self.cancellation.as_ref(),
@@ -1443,8 +1449,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                                 Ok("Visible task plan updated.".to_owned())
                             }
                         },
-                    )?;
-                    execution
+                    )?
                 } else if name == "ask_user_question" {
                     measured = true;
                     append_observed(
@@ -1454,18 +1459,17 @@ impl<P: ModelProvider> AgentEngine<P> {
                         },
                         &mut observer,
                     )?;
-                    let execution = execute_engine_tool_with_policy(
+                    execute_engine_tool_with_policy(
                         &name,
                         &input,
                         self.cancellation.as_ref(),
                         &self.execution_policy,
                         |canonical_input| {
                             let question = question_from_input(id.clone(), canonical_input)?;
-                            post_action = Some(PostToolAction::AskQuestion(question));
+                            post_action = Some(PostToolAction::AskQuestion(Box::new(question)));
                             Ok("User question prepared.".to_owned())
                         },
-                    )?;
-                    execution
+                    )?
                 } else if self
                     .team_context
                     .as_ref()
@@ -1543,10 +1547,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                             &name,
                             &input,
                             self.cancellation.as_ref(),
-                            &self.execution_policy,
-                            session.id.as_str(),
-                            active_plan_step_id(session),
-                            &id,
+                            SessionToolAuthority {
+                                execution_policy: &self.execution_policy,
+                                session_id: session.id.as_str(),
+                                task_step_id: active_plan_step_id(session),
+                                activity_id: &id,
+                            },
                         )?
                     }
                 } else {
@@ -1756,7 +1762,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 if let Some(PostToolAction::AskQuestion(question)) = post_action
                     && result.is_ok()
                 {
-                    pause_for_question(session, question, &mut observer)?;
+                    pause_for_question(session, *question, &mut observer)?;
                     return Ok(StepOutcome::WaitingForUser);
                 }
                 if let Some(timing) = timing {
