@@ -518,7 +518,8 @@ mod tests {
         stale_digest.digest = "stale-or-unverified".to_owned();
         assert_eq!(digest_bundle(&stale_digest), original);
 
-        let mutations: Vec<Box<dyn Fn(&mut ReplayBundle)>> = vec![
+        type ReplayMutation = Box<dyn Fn(&mut ReplayBundle)>;
+        let mutations: Vec<ReplayMutation> = vec![
             Box::new(|value| value.id.push_str("-changed")),
             Box::new(|value| value.lesson_id.push_str("-changed")),
             Box::new(|value| value.source_signal_ids.push("extra-signal".to_owned())),
