@@ -68,27 +68,65 @@ def main() -> int:
     )
 
     required_engine_entrypoints = [
-        "execute_tool_cancellable_with_policy(",
-        "execute_tool_cancellable_with_context_and_policy(",
-        "execute_approved_tool_cancellable_with_policy(",
+        "execute_tool_cancellable_with_policy_certified(",
+        "execute_tool_cancellable_with_context_and_policy_certified(",
+        "execute_approved_tool_cancellable_with_policy_certified(",
+        "execute_engine_tool_with_policy(",
+        "certify_cached_tool_with_policy(",
     ]
     for entrypoint in required_engine_entrypoints:
         if entrypoint not in engine:
-            fail(f"engine is missing certified production entrypoint: {entrypoint}")
+            fail(f"engine is missing receipt-preserving certified entrypoint: {entrypoint}")
 
     forbidden_legacy_calls = [
         r"\bexecute_tool_cancellable\(",
         r"\bexecute_tool_cancellable_with_context\(",
         r"\bexecute_approved_tool_cancellable\(",
+        r"\bexecute_tool_cancellable_with_policy\(",
+        r"\bexecute_tool_cancellable_with_context_and_policy\(",
+        r"\bexecute_approved_tool_cancellable_with_policy\(",
     ]
     for pattern in forbidden_legacy_calls:
         if re.search(pattern, engine):
-            fail(f"engine contains legacy dispatch that bypasses active policy: {pattern}")
+            fail(f"engine contains legacy dispatch that bypasses immutable receipts: {pattern}")
 
     if "let execution_policy = self.execution_policy.clone();" not in engine:
         fail("parallel tool-DAG dispatch must carry the active execution policy")
     if "ProviderStreamEvent::ToolUseReady" not in engine:
         fail("early streamed dispatch entrypoint disappeared")
+    if "execution: CertifiedToolExecution" not in engine:
+        fail("early streamed execution must retain the immutable certified execution")
+
+    publication_markers = [
+        "fn journal_certified_tool_execution(",
+        "EventPayload::WorkerEvidenceRecorded",
+        '"kind": "certified_tool_execution"',
+        "persist(session)",
+        "journal_certified_tool_execution(session, &id, &name, &input, receipt)?;",
+    ]
+    for marker in publication_markers:
+        if marker not in engine:
+            fail(f"durable certified publication contract is missing: {marker}")
+    central_journal = engine.find(
+        "journal_certified_tool_execution(session, &id, &name, &input, receipt)?;"
+    )
+    completion = engine.find("EventPayload::ToolExecutionCompleted", central_journal)
+    frontend = engine.find("observer(&AgentUpdate::ToolOutput", central_journal)
+    model_projection = engine.find("MessageBlock::ToolResult", central_journal)
+    if central_journal < 0 or min(completion, frontend, model_projection) < 0:
+        fail("could not prove durable receipt publication before projections")
+    if not (central_journal < completion < frontend < model_projection):
+        fail("receipt must be journaled before completion/frontend/model publication")
+
+    for pseudo_tool in [
+        "ANALYSIS_WORKSPACE_TOOL",
+        'name == "update_plan"',
+        'name == "ask_user_question"',
+        'name == "desktop_commander"',
+        ".handles(&name)",
+    ]:
+        if pseudo_tool not in engine:
+            fail(f"engine-owned executable path disappeared: {pseudo_tool}")
 
     if not DOC.is_file():
         fail("certified tool pipeline architecture documentation is missing")
