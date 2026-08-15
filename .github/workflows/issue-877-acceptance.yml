@@ -1,0 +1,43 @@
+name: Issue 877 acceptance hardening
+
+on:
+  push:
+    branches:
+      - codex/issue-877-roadblock-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Apply acceptance hardening
+        run: python .github/issue-877-acceptance.py
+      - name: Format source
+        run: cargo fmt --all --check
+      - name: Continuity tests
+        run: cargo test -p medusa-session-continuity --locked
+      - name: Roadblock recovery tests
+        run: cargo test -p medusa-runtime roadblock_recovery --locked -- --nocapture
+      - name: Coding trajectory tests
+        run: cargo test -p medusa-runtime coding_trajectory --locked -- --nocapture
+      - name: Clippy
+        run: cargo clippy -p medusa-runtime -p medusa-session-continuity --all-targets --locked -- -D warnings
+      - name: Commit production hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/issue-877-acceptance.py .github/workflows/issue-877-acceptance.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "test(runtime): harden adaptive recovery acceptance"
+          git push
