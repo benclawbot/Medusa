@@ -44,6 +44,56 @@ root.write_text(s.replace(marker, project_task + marker, 1))
 '''
 script = script[:begin] + replacement + script[finish:]
 
+# Align the reducer with the actual medusa-protocol event shapes before emitting source.
+script = script.replace(
+    '''                      EventPayload::FileTransactionCommitted { receipt } => {
+                          collect_paths(receipt, &mut modified, &mut relevant);
+                      }
+''',
+    '''                      EventPayload::FileTransactionCommitted { paths, .. } => {
+                          let value = serde_json::to_value(paths).map_err(RuntimeError::agent)?;
+                          collect_paths(&value, &mut modified, &mut relevant);
+                      }
+''',
+)
+script = script.replace(
+    '''                      EventPayload::RuntimeFailed { message }
+                      | EventPayload::SessionFailed { error: message } => {
+                          let fingerprint = hex_digest(message.as_bytes());
+                          failures.push(FailureCheckpoint {
+                              fingerprint,
+                              classification: "runtime".to_owned(),
+                              summary: bounded(message, 1000),
+                              repairs: Vec::new(),
+                          });
+                      }
+''',
+    '''                      EventPayload::RuntimeFailed { message } => {
+                          let fingerprint = hex_digest(message.as_bytes());
+                          failures.push(FailureCheckpoint {
+                              fingerprint,
+                              classification: "runtime".to_owned(),
+                              summary: bounded(message, 1000),
+                              repairs: Vec::new(),
+                          });
+                      }
+                      EventPayload::SessionFailed { error } => {
+                          let message = error.to_string();
+                          let fingerprint = hex_digest(message.as_bytes());
+                          failures.push(FailureCheckpoint {
+                              fingerprint,
+                              classification: "session".to_owned(),
+                              summary: bounded(&message, 1000),
+                              repairs: Vec::new(),
+                          });
+                      }
+''',
+)
+script = script.replace(
+    'medusa_agent::record_session_event(&mut session, Actor::Verifier, EventPayload::VerificationCompleted',
+    'medusa_agent::record_session_event(&mut session, Actor::System("verifier".to_owned()), EventPayload::VerificationCompleted',
+)
+
 # Replace the brittle engine-call patch with a one-line structural insertion.
 begin = script.index(
     "old = '''                match engine.step_with_observer_and_context_and_turn_instruction_for_phase("
