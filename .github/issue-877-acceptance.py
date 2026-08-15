@@ -84,7 +84,10 @@ assert_anchor = '''        assert_eq!(second.modified_files, original.modified_f
 assert_repl = '''        assert_eq!(second.modified_files, original.modified_files);
         assert_eq!(second.plan_steps, original.plan_steps);
         assert_eq!(second.roadblocks, original.roadblocks);
-        assert_eq!(second.strategy_transition_count, original.strategy_transition_count);
+        assert_eq!(
+            second.strategy_transition_count,
+            original.strategy_transition_count
+        );
 '''
 assert text.count(assert_anchor) == 1
 root.write_text(text.replace(assert_anchor, assert_repl))
