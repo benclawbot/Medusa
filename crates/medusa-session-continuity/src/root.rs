@@ -164,6 +164,10 @@ pub struct RepairAttemptCheckpoint {
     pub failure_fingerprint: String,
     pub changed_files: Vec<String>,
     pub outcome: VerificationOutcome,
+    #[serde(default)]
+    pub hypothesis: String,
+    #[serde(default)]
+    pub repository_fingerprint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +176,51 @@ pub struct FailureCheckpoint {
     pub classification: String,
     pub summary: String,
     pub repairs: Vec<RepairAttemptCheckpoint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairLedgerTransition {
+    New,
+    Persisted,
+    Resolved,
+    Transformed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairLedgerEntry {
+    pub fingerprint: String,
+    pub source: String,
+    pub command: String,
+    pub scope: String,
+    pub file: Option<String>,
+    pub symbol: Option<String>,
+    pub test: Option<String>,
+    pub diagnostic_class: String,
+    pub summary: String,
+    pub first_generation: u64,
+    pub last_generation: u64,
+    pub occurrence_count: u32,
+    #[serde(default)]
+    pub changed_details: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    pub root_fingerprint: Option<String>,
+    pub cascade: bool,
+    pub transition: RepairLedgerTransition,
+    #[serde(default)]
+    pub repairs: Vec<RepairAttemptCheckpoint>,
+}
+
+impl RepairLedgerEntry {
+    pub fn unresolved(&self) -> bool {
+        matches!(
+            self.transition,
+            RepairLedgerTransition::New
+                | RepairLedgerTransition::Persisted
+                | RepairLedgerTransition::Transformed
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +252,12 @@ pub struct CodingTrajectoryCheckpoint {
     pub verification_requirements: Vec<String>,
     pub verification_receipts: Vec<VerificationReceipt>,
     pub failure_history: Vec<FailureCheckpoint>,
+    #[serde(default)]
+    pub repair_ledger: Vec<RepairLedgerEntry>,
+    #[serde(default)]
+    pub verification_generation: u64,
+    #[serde(default)]
+    pub repair_ledger_cursor: u64,
     pub disproved_hypotheses: Vec<DisprovedHypothesisCheckpoint>,
     pub unresolved_uncertainties: Vec<String>,
     pub remaining_blockers: Vec<String>,
@@ -230,6 +285,9 @@ impl Default for CodingTrajectoryCheckpoint {
             verification_requirements: Vec::new(),
             verification_receipts: Vec::new(),
             failure_history: Vec::new(),
+            repair_ledger: Vec::new(),
+            verification_generation: 0,
+            repair_ledger_cursor: 0,
             disproved_hypotheses: Vec::new(),
             unresolved_uncertainties: Vec::new(),
             remaining_blockers: Vec::new(),
@@ -262,6 +320,7 @@ impl CodingTrajectoryCheckpoint {
             self.verification_requirements.len(),
             self.verification_receipts.len(),
             self.failure_history.len(),
+            self.repair_ledger.len(),
             self.disproved_hypotheses.len(),
             self.unresolved_uncertainties.len(),
             self.remaining_blockers.len(),
@@ -291,6 +350,25 @@ impl CodingTrajectoryCheckpoint {
     pub fn allows_hypothesis_attempt(&self, signature: &str, repository_fingerprint: &str) -> bool {
         !self.disproved_hypotheses.iter().any(|item| {
             item.signature == signature && item.repository_fingerprint == repository_fingerprint
+        })
+    }
+
+    pub fn allows_repair_attempt(
+        &self,
+        failure_fingerprint: &str,
+        changed_files: &[String],
+        hypothesis: &str,
+        repository_fingerprint: &str,
+    ) -> bool {
+        !self.repair_ledger.iter().any(|failure| {
+            failure.fingerprint == failure_fingerprint
+                && failure.unresolved()
+                && failure.repairs.iter().any(|repair| {
+                    repair.changed_files == changed_files
+                        && repair.hypothesis == hypothesis
+                        && repair.repository_fingerprint == repository_fingerprint
+                        && repair.outcome == VerificationOutcome::Failed
+                })
         })
     }
 
@@ -1236,6 +1314,8 @@ mod coding_trajectory_tests {
                     failure_fingerprint: "failure:test:resume-mismatch".into(),
                     changed_files: vec!["crates/medusa-session-continuity/src/root.rs".into()],
                     outcome: VerificationOutcome::Failed,
+                    hypothesis: "preserve continuity".into(),
+                    repository_fingerprint: "repo-a".into(),
                 }],
             }],
             disproved_hypotheses: vec![DisprovedHypothesisCheckpoint {
@@ -1266,6 +1346,57 @@ mod coding_trajectory_tests {
             coding_trajectory: Some(value),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn identical_failed_repair_is_blocked_until_strategy_or_repository_changes() {
+        let mut value = trajectory();
+        value.repair_ledger.push(RepairLedgerEntry {
+            fingerprint: "failure:test:resume-mismatch".into(),
+            source: "verification".into(),
+            command: "cargo test -p medusa-session-continuity".into(),
+            scope: "crates".into(),
+            file: Some("crates/medusa-session-continuity/src/root.rs".into()),
+            symbol: None,
+            test: Some("resume".into()),
+            diagnostic_class: "test".into(),
+            summary: "resume mismatch".into(),
+            first_generation: 1,
+            last_generation: 1,
+            occurrence_count: 1,
+            changed_details: Vec::new(),
+            source_refs: vec!["journal#7".into()],
+            root_fingerprint: None,
+            cascade: false,
+            transition: RepairLedgerTransition::Persisted,
+            repairs: vec![RepairAttemptCheckpoint {
+                id: "repair-1".into(),
+                failure_fingerprint: "failure:test:resume-mismatch".into(),
+                changed_files: vec!["crates/medusa-session-continuity/src/root.rs".into()],
+                outcome: VerificationOutcome::Failed,
+                hypothesis: "preserve continuity".into(),
+                repository_fingerprint: "repo-a".into(),
+            }],
+        });
+        let files = vec!["crates/medusa-session-continuity/src/root.rs".into()];
+        assert!(!value.allows_repair_attempt(
+            "failure:test:resume-mismatch",
+            &files,
+            "preserve continuity",
+            "repo-a"
+        ));
+        assert!(value.allows_repair_attempt(
+            "failure:test:resume-mismatch",
+            &files,
+            "different strategy",
+            "repo-a"
+        ));
+        assert!(value.allows_repair_attempt(
+            "failure:test:resume-mismatch",
+            &files,
+            "preserve continuity",
+            "repo-b"
+        ));
     }
 
     #[test]
