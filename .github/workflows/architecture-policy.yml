@@ -31,6 +31,8 @@ jobs:
             --report architecture-policy-report.md
       - name: Enforce sole GitHub operation authority
         run: python3 scripts/github-authority-policy.py
+      - name: Enforce certified tool execution pipeline
+        run: python3 scripts/check-certified-tool-pipeline.py
       - name: Publish architecture report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
