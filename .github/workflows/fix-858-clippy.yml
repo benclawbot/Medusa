@@ -1,0 +1,63 @@
+name: Temporary issue 858 Clippy fix
+
+on:
+  push:
+    branches:
+      - codex/issue-858-dead-code-migrations
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: rustfmt,clippy
+      - name: Narrow test-only refinement helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/medusa-context/src/refinement.rs')
+          text = p.read_text()
+          replacements = [
+              ('use crate::{ContextItem, ContextKind};', '#[cfg(test)]\nuse crate::{ContextItem, ContextKind};'),
+              ('    #[must_use]\n    pub fn active_for_scope(', '    #[cfg(test)]\n    #[must_use]\n    pub fn active_for_scope('),
+              ('    #[must_use]\n    pub fn conflict_keys(', '    #[cfg(test)]\n    #[must_use]\n    pub fn conflict_keys('),
+              ('    pub fn context_items(', '    #[cfg(test)]\n    pub fn context_items('),
+              ('#[derive(Clone, Debug, Eq, PartialEq)]\npub struct RecoveryResult {', '#[cfg(test)]\n#[derive(Clone, Debug, Eq, PartialEq)]\npub struct RecoveryResult {'),
+              ('    #[must_use]\n    pub fn recover(entries: &[JournalEntry]) -> RecoveryResult {', '    #[cfg(test)]\n    #[must_use]\n    pub fn recover(entries: &[JournalEntry]) -> RecoveryResult {'),
+              ('fn artifact_kind_key(kind: RefinementArtifactKind) -> \'static str {', 'PLACEHOLDER'),
+          ]
+          # Handle the return type separately to avoid quote escaping ambiguity.
+          replacements[-1] = ("fn artifact_kind_key(kind: RefinementArtifactKind) -> &'static str {", "#[cfg(test)]\nfn artifact_kind_key(kind: RefinementArtifactKind) -> &'static str {")
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected one occurrence, found {count}: {old!r}')
+              text = text.replace(old, new)
+          p.write_text(text)
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+      - name: Validate full workspace Clippy
+        shell: bash
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Validate context tests
+        shell: bash
+        run: cargo test -p medusa-context --locked
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-context/src/refinement.rs
+          git commit -m 'refactor: scope refinement test helpers to tests'
+          git push origin HEAD:codex/issue-858-dead-code-migrations
