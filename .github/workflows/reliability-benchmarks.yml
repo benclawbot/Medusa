@@ -10,6 +10,8 @@ on:
       - 'scripts/test-orchestration-benchmark.py'
       - 'scripts/coding-harness-benchmark.py'
       - 'scripts/test-coding-harness-benchmark.py'
+      - 'scripts/compare-coding-harness-benchmarks.py'
+      - 'scripts/test-compare-coding-harness-benchmarks.py'
       - 'docs/BENCHMARKS.md'
       - '.github/workflows/reliability-benchmarks.yml'
   push:
@@ -33,6 +35,7 @@ jobs:
           python3 scripts/test-reliability-benchmark.py
           python3 scripts/test-orchestration-benchmark.py
           python3 scripts/test-coding-harness-benchmark.py
+          python3 scripts/test-compare-coding-harness-benchmarks.py
 
   coding-harness-pr:
     name: Same-model coding harness baseline
