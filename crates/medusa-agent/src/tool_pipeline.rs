@@ -458,33 +458,30 @@ impl ToolExecutionPipeline {
         let mut result = terminal_error.map_or_else(|| handler(&input), Err);
 
         stages.push(ToolPipelineStage::PostExecute);
-        if let Ok(mut output) = result {
-            for (owner, middleware_id, transform) in &self.post_transforms {
-                match transform(output) {
-                    Ok(next) => {
-                        output = next;
-                        middleware_receipts.push(middleware_receipt(
-                            owner,
-                            middleware_id,
-                            ToolPipelineStage::PostExecute,
-                            MiddlewareStatus::Passed,
-                        ));
-                    }
-                    Err(error) => {
-                        middleware_receipts.push(middleware_receipt(
-                            owner,
-                            middleware_id,
-                            ToolPipelineStage::PostExecute,
-                            MiddlewareStatus::Failed,
-                        ));
-                        result = Err(error);
-                        break;
-                    }
+        for (owner, middleware_id, transform) in &self.post_transforms {
+            if result.is_err() {
+                break;
+            }
+            result = result.and_then(|output| match transform(output) {
+                Ok(next) => {
+                    middleware_receipts.push(middleware_receipt(
+                        owner,
+                        middleware_id,
+                        ToolPipelineStage::PostExecute,
+                        MiddlewareStatus::Passed,
+                    ));
+                    Ok(next)
                 }
-            }
-            if result.is_ok() {
-                result = Ok(output);
-            }
+                Err(error) => {
+                    middleware_receipts.push(middleware_receipt(
+                        owner,
+                        middleware_id,
+                        ToolPipelineStage::PostExecute,
+                        MiddlewareStatus::Failed,
+                    ));
+                    Err(error)
+                }
+            });
         }
 
         let (outcome, output, error) = match result {
