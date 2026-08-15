@@ -74,6 +74,37 @@ Run the complete benchmark through the shipped runtime acceptance entry point:
 python3 scripts/orchestration-benchmark.py
 ```
 
+## Same-model coding harness quality benchmark
+
+`benchmarks/coding-harness-suite-v1.json` freezes the coding-harness corpus and feature matrix for issues #873 through #877. The corpus covers localized fixes, unfamiliar navigation, cross-module changes, regression tests, simultaneous diagnostics, architecture failures, dependency/configuration work, long-horizon repair loops, forced compaction/resume, repository drift, disproved hypotheses, broad-verification failures, blocked primary paths, truthful partial completion, and no-change controls.
+
+The runner is deliberately downstream of the production acceptance authority:
+
+```bash
+python3 scripts/coding-harness-benchmark.py
+```
+
+It executes `cargo product-acceptance` twice by default and binds every report to the exact suite hash, suite/task version, repository revision, harness feature set, provider/model/configuration identity, and hashes of the authoritative verification receipts. Success is impossible when required verification is absent. Correctness, verification coverage, false completion, and safety are promotion guards; latency, token, context, repair, and cost measurements cannot override a correctness or safety regression.
+
+The report includes task success, first-pass correctness, repair cycles, duplicate calls, deterministic retries, retained/reread context, verification coverage, stale-evidence incidents, roadblock recovery, wall-clock/tool latency, token/cost counters, manual intervention, final-diff evidence when emitted by the authoritative scenario, and exact receipt fingerprints. Metrics unavailable from a given production receipt are recorded as zero or unavailable rather than invented.
+
+Feature variants are versioned as baseline, each of #873/#874/#875/#876/#877 independently, and the current cumulative production harness. Runs intended for comparison must use the same provider, model, non-secret configuration, frozen suite, and task revision. Compare retained reports with:
+
+```bash
+python3 scripts/compare-coding-harness-benchmarks.py BASELINE.json CANDIDATE.json
+```
+
+The comparison rejects model/configuration or corpus mismatches and enforces feature-specific assertions plus global correctness/safety guards. This allows historical or controlled harness revisions to be compared without task-specific prompt tuning.
+
+The deterministic scoring contracts are independently testable:
+
+```bash
+python3 scripts/test-coding-harness-benchmark.py
+python3 scripts/test-compare-coding-harness-benchmarks.py
+```
+
+Pull requests touching this benchmark run a production coding-harness baseline in `Reliability Benchmarks`; main-branch runs retain it alongside the reliability and orchestration evidence.
+
 ## TypeScript/JavaScript workspace benchmark
 
 `crates/medusa-intelligence/benches/typescript_workspace.rs` measures deterministic production workspace discovery and content fingerprinting for 100, 1,000, and 5,000 supported source files. Every iteration verifies the exact source count and stable workspace fingerprint before emitting a machine-readable timing line. Generated and dependency paths are present in the fixture but excluded from adapter coverage.
