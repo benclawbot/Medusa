@@ -25,8 +25,15 @@ jobs:
           start = next(i for i, line in enumerate(src) if "python3 - <<'PY'" in line) + 1
           end = next(i for i in range(start, len(src)) if src[i].strip() == 'PY')
           prefix = '          '
-          lines = [line[len(prefix):] if line.startswith(prefix) else line for line in src[start:end]]
-          Path('/tmp/issue874.py').write_text('\n'.join(lines) + '\n')
+          script = '\n'.join(line[len(prefix):] if line.startswith(prefix) else line for line in src[start:end]) + '\n'
+          begin = script.index("anchor = '''    pub fn mutate")
+          finish = script.index("module = r'''", begin)
+          replacement = '''marker = "    pub fn handoff("
+          if marker not in s:
+              raise SystemExit("handoff insertion marker missing")
+          project_task = r'''\n    /// Replaces the journal-derived task projection without claiming frontend ownership.\n    ///\n    /// The canonical session journal remains the execution authority; this writes only the\n    /// bounded deterministic projection consumed by continuity/resume.\n    pub fn project_task(\n        &self,\n        event_id: &str,\n        event: SessionEventKind,\n        task: AuthoritativeTaskState,\n    ) -> Result<ApplyOutcome, ContinuityError> {\n        let current = self.load()?;\n        self.update(\n            current.revision,\n            event_id,\n            |session| {\n                session.task = task;\n                Ok(event)\n            },\n            \"runtime-projection\",\n            0,\n        )\n    }\n\n'''\n          root.write_text(s.replace(marker, project_task + marker, 1))\n\n          '''
+          script = script[:begin] + replacement + script[finish:]
+          Path('/tmp/issue874.py').write_text(script)
           PY
           python3 /tmp/issue874.py
           cargo fmt --all
