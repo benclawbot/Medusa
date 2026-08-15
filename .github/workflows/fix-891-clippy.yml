@@ -1,0 +1,64 @@
+name: Temporary PR 891 Clippy fix
+
+on:
+  push:
+    branches: [codex/issue-860-replay-digest-panic-safety]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-891-clippy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Replace complex test type with alias
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/medusa-improvement/src/regression_replay.rs')
+          text = p.read_text()
+          old = '        let mutations: Vec<Box<dyn Fn(&mut ReplayBundle)>> = vec![\n'
+          new = '        type ReplayMutation = Box<dyn Fn(&mut ReplayBundle)>;\n        let mutations: Vec<ReplayMutation> = vec![\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one target, found {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+      - name: Validate full Clippy
+        shell: bash
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Validate production panic contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-production-panic-exemptions.py
+          python3 scripts/check-production-panic-exemptions.py
+          cargo clippy -p medusa-improvement --all-features --locked --lib -- \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic
+      - name: Validate replay tests
+        run: cargo test -p medusa-improvement --locked regression_replay
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-improvement/src/regression_replay.rs
+          git commit -m 'test: simplify replay mutation type'
+          git push
