@@ -53,8 +53,9 @@ use crate::{
     },
     team::{AgentExecutionPolicy, TeamMemberContext},
     tools::{
-        execute_approved_tool_cancellable_with_policy, execute_tool_cancellable_with_policy,
-        execute_tool_cancellable_with_context_and_policy, input_string,
+        execute_approved_tool_cancellable_with_policy,
+        execute_tool_cancellable_with_context_and_policy, execute_tool_cancellable_with_policy,
+        input_string,
     },
     verification_authority::{
         authoritative_verification_for_paths, prepare_paths_for_verification,
@@ -238,6 +239,8 @@ fn execute_session_tool(
             )
         })?;
 
+    // Absolute/external writes must reach the existing path-policy and approval boundary before
+    // any provenance work. They are not repository mutations and cannot be selectively reverted.
     if Path::new(requested_path).is_absolute() {
         return execute_tool_cancellable_with_policy(
             repo,
@@ -248,6 +251,8 @@ fn execute_session_tool(
         );
     }
 
+    // Non-Git workspaces remain writable, but repository-diff provenance is unavailable there.
+    // Keep that limitation explicit instead of failing the write or manufacturing authority.
     let provenance_available = std::process::Command::new("git")
         .args(["diff", "--binary", "--no-ext-diff", "--", "."])
         .current_dir(repo)
@@ -501,6 +506,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         load(repo, session)
     }
 
+    /// Loads the durable evidence model associated with a session, when enabled.
     pub fn load_session_world_model(
         &self,
         session: &AgentSession,
@@ -519,6 +525,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             })
     }
 
+    /// Adds a follow-up prompt to an existing session so later turns retain context.
     pub fn append_user_message(
         &self,
         session: &mut AgentSession,
@@ -547,6 +554,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
+    /// Applies one previously accepted queued follow-up exactly once.
     pub fn append_queued_user_message(
         &self,
         session: &mut AgentSession,
@@ -576,6 +584,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
+    /// Resolves a blocking question with a single user response and resumes the same session.
     pub fn answer_pending_question(
         &self,
         session: &mut AgentSession,
@@ -708,6 +717,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
+    /// Updates the durable session objective without creating a new conversation.
     pub fn update_objective(
         &self,
         session: &mut AgentSession,
@@ -716,6 +726,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         update_session_objective(session, objective)
     }
 
+    /// Replaces prior message history with a bounded durable summary for the next model request.
     pub fn compact_session(
         &self,
         session: &mut AgentSession,
@@ -861,6 +872,9 @@ impl<P: ModelProvider> AgentEngine<P> {
         )
     }
 
+    /// Executes one model step with ephemeral system context and an optional latest-turn
+    /// instruction. The instruction is sent only in the provider request and is never persisted in
+    /// the durable session history.
     pub fn step_with_observer_and_context_and_turn_instruction<F>(
         &self,
         session: &mut AgentSession,
@@ -1627,6 +1641,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                         &mut observer,
                     )?;
                 }
+                // The TUI sees the full body verbatim; the model sees the compact
+                // head/tail envelope with a pointer to the on-disk artifact.
                 observer(&AgentUpdate::ToolOutput {
                     tool: name.clone(),
                     output: raw_content.clone(),
@@ -1641,6 +1657,9 @@ impl<P: ModelProvider> AgentEngine<P> {
                 ) {
                     Ok(env) => {
                         let compact = compact_envelope_for_model(&env);
+                        // Persist the artifact path on the session for later
+                        // reference (cleanup, replay). Currently unused by
+                        // downstream consumers — Task 7 wires SessionBrowser on top.
                         session.tool_artifacts.push(env.path.clone());
                         if is_error {
                             format!("[error]\n{compact}")
@@ -1648,7 +1667,11 @@ impl<P: ModelProvider> AgentEngine<P> {
                             compact
                         }
                     }
-                    Err(_) => raw_content.clone(),
+                    Err(_) => {
+                        // Envelope wrap failed (rare — disk full, perms). Fall back
+                        // to the raw body so the model still sees output.
+                        raw_content.clone()
+                    }
                 };
                 session.messages.push(Message {
                     role: Role::User,
@@ -2046,7 +2069,7 @@ mod phase_budget_tests {
         );
         let mut session = engine
             .create_session(directory.path(), "repair failed verification".to_owned())
-            .expect("create delegated session");
+            .expect("create session");
 
         engine
             .step_for_provider_phase(&mut session, ProviderExecutionPhase::Repair)
