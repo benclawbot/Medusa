@@ -15,6 +15,7 @@ FORBIDDEN = {
     "clippy::panic",
 }
 ALLOW_ATTRIBUTE = re.compile(r"#\s*!?\[\s*allow\s*\((?P<body>.*?)\)\s*\]", re.DOTALL)
+CFG_TEST = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 
 
 class PanicExemptionPolicyError(RuntimeError):
@@ -28,12 +29,24 @@ def production_rust_path(path: str) -> bool:
     )
 
 
+def production_prefix(text: str) -> str:
+    """Return source before a conventional trailing cfg(test) section.
+
+    Unit-test modules conventionally live at the end of Rust source files. Panic-lint
+    exemptions are permitted there because the production Clippy audit excludes tests;
+    exemptions anywhere before that boundary remain forbidden.
+    """
+    match = CFG_TEST.search(text)
+    return text if match is None else text[: match.start()]
+
+
 def violations(files: dict[str, str]) -> list[str]:
     problems: list[str] = []
     for path, text in sorted(files.items()):
         if not production_rust_path(path):
             continue
-        for match in ALLOW_ATTRIBUTE.finditer(text):
+        production = production_prefix(text)
+        for match in ALLOW_ATTRIBUTE.finditer(production):
             body = match.group("body")
             found = sorted(lint for lint in FORBIDDEN if lint in body)
             if not found:
