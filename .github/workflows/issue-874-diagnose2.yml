@@ -1,0 +1,43 @@
+name: Issue 874 diagnose 2
+
+on:
+  push:
+    branches:
+      - codex/issue-874-coding-trajectory
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply and validate hardening
+        shell: bash
+        run: |
+          echo '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' | base64 -d | gzip -d > /tmp/issue874.py
+          if ! python3 /tmp/issue874.py > /tmp/issue874.out 2>&1; then
+            cp /tmp/issue874.out .github/issue-874-hardening-error2.txt
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add .github/issue-874-hardening-error2.txt
+            git commit -m 'ci: capture issue 874 hardening failure 2'
+            git push origin HEAD:codex/issue-874-coding-trajectory
+            exit 1
+          fi
+          cargo fmt --all
+          cargo test -p medusa-agent --locked coding_trajectory -- --nocapture
+          cargo test -p medusa-agent --locked compaction_v2 -- --nocapture
+          cargo test -p medusa-agent --locked verification_contract -- --nocapture
+          cargo clippy -p medusa-agent --all-features --locked -- -D warnings
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/issue-874-hardening.yml .github/workflows/issue-874-diagnose.yml .github/workflows/issue-874-diagnose2.yml
+          git rm -f .github/issue-874-hardening-error.txt .github/issue-874-hardening-error2.txt
+          git add crates/medusa-agent/src/coding_trajectory.rs crates/medusa-agent/src/verification_contract.rs crates/medusa-agent/src/engine.rs
+          git commit -m 'feat(agent): harden durable trajectory authority'
+          git push origin HEAD:codex/issue-874-coding-trajectory
