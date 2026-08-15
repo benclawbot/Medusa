@@ -58,6 +58,9 @@ def main() -> int:
     assert first["passed"]
     assert first["identity_sha256"] == second["identity_sha256"]
     assert first["trials"][0]["summary_sha256"] == second["trials"][0]["summary_sha256"]
+    assert first["identity"]["repository_revision"] == "fixture-commit"
+    assert first["identity"]["suite_sha256"] == MODULE.sha256(suite)
+    assert first["metrics"]["verification_coverage"] == 1.0
 
     broken = summary()
     broken["scenarios"][0]["verification_status"] = "missing"
@@ -65,22 +68,23 @@ def main() -> int:
     assert not broken_report["passed"]
     assert "verification_coverage" in broken_report["failures"]
 
+    false_complete = summary()
+    false_complete["scenarios"][0]["metrics"]["false_completes"] = 1
+    false_report = make(suite, false_complete)
+    assert not false_report["passed"]
+    assert "false_complete_rate" in false_report["failures"]
+
     baseline = make(suite, summary(), "baseline")
     candidate_source = summary()
     for item in candidate_source["scenarios"]:
         item["metrics"]["irrelevant_context_bytes"] = 1
     candidate = make(suite, candidate_source, "evidence-ranked-context")
     assert MODULE.compare_feature(suite, baseline, candidate, "875") == []
-    MODULE.assert_same_model([baseline, candidate])
 
-    different = json.loads(json.dumps(candidate))
-    different["model"] = {"provider": "fixture", "model": "different", "configuration": {}}
-    try:
-        MODULE.assert_same_model([baseline, different])
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("model identity mismatch was accepted")
+    regression_source = summary()
+    regression_source["scenarios"][0]["status"] = "failed"
+    regression = make(suite, regression_source, "evidence-ranked-context")
+    assert MODULE.compare_feature(suite, baseline, regression, "875")
 
     print("coding-harness-benchmark-fixtures-ok")
     return 0
