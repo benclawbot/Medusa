@@ -71,6 +71,8 @@ jobs:
           ])
 
           apply('crates/medusa-agent/src/verification_authority_legacy.rs', [
+              ('        ExecutedVerificationCommand, VerificationResult, execute_verification_command,\n        required_browser_verification,\n    },', '        ExecutedVerificationCommand, execute_verification_command, required_browser_verification,\n    },\n'),
+              ('use verification_schedule::{dag_for_plan, execute_command_wave};', '#[cfg(test)]\nuse crate::verification::VerificationResult;\n\nuse verification_schedule::{dag_for_plan, execute_command_wave};'),
               ('pub fn authoritative_verification_for_components(\n', '#[cfg(test)]\npub fn authoritative_verification_for_components(\n'),
               ('pub(crate) fn authoritative_verification_for_paths(\n', '#[cfg(test)]\npub(crate) fn authoritative_verification_for_paths(\n'),
               ('fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {', '#[cfg(test)]\nfn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {')
