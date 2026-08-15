@@ -23,6 +23,25 @@ if old not in ledger:
     raise SystemExit("stable command marker missing")
 ledger = ledger.replace(old, new, 1)
 
+old = '''fn infer_command(evidence: &[String], sequence: u64) -> String {'''
+new = '''fn infer_command(evidence: &[String], _sequence: u64) -> String {'''
+if old not in ledger:
+    raise SystemExit("infer command signature marker missing")
+ledger = ledger.replace(old, new, 1)
+
+old = '''    for event in session.events.iter().filter(|event| event.sequence > cursor) {
+        cursor = cursor.max(event.sequence);'''
+new = '''    let starting_cursor = cursor;
+    for event in session
+        .events
+        .iter()
+        .filter(|event| event.sequence > starting_cursor)
+    {
+        cursor = cursor.max(event.sequence);'''
+if old not in ledger:
+    raise SystemExit("cursor iteration marker missing")
+ledger = ledger.replace(old, new, 1)
+
 old = '''fn looks_like_summary_only(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.starts_with("error: could not compile")
