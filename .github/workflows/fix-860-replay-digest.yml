@@ -63,6 +63,30 @@ jobs:
                   "fn digest_bundle(bundle: &ReplayBundle) -> String {\n    let mut clone = bundle.clone();\n    clone.digest.clear();\n    let bytes = serde_json::to_vec(&clone).expect(\"serializable replay bundle\");\n    format!(\"{:x}\", Sha256::digest(bytes))\n}\n",
                   "fn digest_bundle(bundle: &ReplayBundle) -> Result<String, ReplayBundleBuildError> {\n    let mut clone = bundle.clone();\n    clone.digest.clear();\n    let bytes = serde_json::to_vec(&clone)?;\n    Ok(format!(\"{:x}\", Sha256::digest(bytes)))\n}\n",
               ),
+              (
+                  "#[cfg(test)]\nmod tests {\n",
+                  "#[cfg(test)]\n#[allow(clippy::unwrap_used, clippy::expect_used)]\nmod tests {\n",
+              ),
+              (
+                  "        let bundle = builder.build(\n            &lesson,\n            &proposal,\n            \"fixture password=hunter2\",\n            vec![\"read\".to_owned(), \"write\".to_owned()],\n        );\n",
+                  "        let bundle = builder\n            .build(\n                &lesson,\n                &proposal,\n                \"fixture password=hunter2\",\n                vec![\"read\".to_owned(), \"write\".to_owned()],\n            )\n            .expect(\"fixture replay bundle serializes\");\n",
+              ),
+              (
+                  "        assert_eq!(bundle.digest, digest_bundle(&bundle));\n",
+                  "        assert_eq!(\n            bundle.digest,\n            digest_bundle(&bundle).expect(\"fixture replay bundle serializes\")\n        );\n",
+              ),
+              (
+                  "        let bundle = ReplayBundleBuilder.build(&lesson, &proposal, \"repo\", vec![\"read\".to_owned()]);\n",
+                  "        let bundle = ReplayBundleBuilder\n            .build(&lesson, &proposal, \"repo\", vec![\"read\".to_owned()])\n            .expect(\"fixture replay bundle serializes\");\n",
+              ),
+              (
+                  "        let bundle = ReplayBundleBuilder.build(&lesson, &proposal, \"repo\", Vec::new());\n",
+                  "        let bundle = ReplayBundleBuilder\n            .build(&lesson, &proposal, \"repo\", Vec::new())\n            .expect(\"fixture replay bundle serializes\");\n",
+              ),
+              (
+                  "        let mut bundle = ReplayBundleBuilder.build(&lesson, &proposal, \"repo\", Vec::new());\n",
+                  "        let mut bundle = ReplayBundleBuilder\n            .build(&lesson, &proposal, \"repo\", Vec::new())\n            .expect(\"fixture replay bundle serializes\");\n",
+              ),
           ])
 
           apply(".github/workflows/ci.yml", [
@@ -99,6 +123,7 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-improvement/src/lib.rs \
                   crates/medusa-improvement/src/regression_replay.rs \
+                  crates/medusa-improvement/src/correction_loop.rs \
                   .github/workflows/ci.yml \
                   scripts/check-production-panic-exemptions.py \
                   scripts/test-production-panic-exemptions.py
