@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
+#[cfg(test)]
 use crate::{ContextItem, ContextKind};
 
 const GENESIS_HASH: &str = "genesis";
@@ -385,6 +386,7 @@ impl RefinementProjection {
             .collect()
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn active_for_scope(&self, scope: RefinementScope) -> Vec<&RefinementProposal> {
         self.active()
@@ -414,6 +416,7 @@ impl RefinementProjection {
         &self.head_hash
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn conflict_keys(&self) -> Vec<String> {
         let mut counts = BTreeMap::new();
@@ -435,6 +438,7 @@ impl RefinementProjection {
             > 1
     }
 
+    #[cfg(test)]
     pub fn context_items(
         &self,
         mut next_sequence: u64,
@@ -473,6 +477,7 @@ impl RefinementProjection {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecoveryResult {
     pub projection: RefinementProjection,
@@ -563,6 +568,7 @@ impl RefinementJournal {
         Ok(replay(&self.entries)?.1)
     }
 
+    #[cfg(test)]
     #[must_use]
     pub fn recover(entries: &[JournalEntry]) -> RecoveryResult {
         let mut accepted = Vec::new();
@@ -1017,6 +1023,7 @@ fn serialized_digest<T: Serialize>(value: &T) -> Result<String, RefinementError>
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
+#[cfg(test)]
 fn artifact_kind_key(kind: RefinementArtifactKind) -> &'static str {
     match kind {
         RefinementArtifactKind::Memory => "memory",

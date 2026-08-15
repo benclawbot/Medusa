@@ -23,7 +23,7 @@ const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 static JOURNAL_LOCKS: OnceLock<Mutex<BTreeMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AppendDisposition {
     Appended,
@@ -247,7 +247,7 @@ fn merge_committed_events(
     Ok(())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn append_event(
     session: &AgentSession,
     event: &EventEnvelope,
@@ -323,7 +323,7 @@ pub(crate) fn append_event(
     Ok(AppendDisposition::Appended)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSession> {
     let lock = session_lock(&session.repo, &session.id);
     let _guard = lock_mutex(&lock);

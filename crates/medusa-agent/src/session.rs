@@ -28,7 +28,6 @@ mod lessons;
 mod manual_escalation;
 mod recall;
 mod skill_drafts;
-#[allow(dead_code)]
 mod skill_outcomes;
 mod skill_probation;
 #[path = "usage.rs"]
@@ -43,7 +42,6 @@ pub use escalation_state::{
 };
 pub use manual_escalation::{export_manual_escalation, import_manual_advice};
 pub(crate) use usage::record_turn_usage;
-#[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
 
 pub(crate) fn record_loaded_skills(session: &AgentSession) -> MedusaResult<()> {

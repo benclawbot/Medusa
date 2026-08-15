@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -12,13 +11,22 @@ use super::AgentSession;
 use crate::tools::skills::automatically_loaded_names;
 use medusa_failure::FailureDecision;
 
+#[cfg(test)]
+use std::collections::BTreeMap;
+
+#[cfg(test)]
 const ACTIVE_SKILLS_ROOT: &str = ".medusa/skills";
 const SESSION_SKILLS_ROOT: &str = ".medusa/learning/session-skills";
 const OUTCOME_ROOT: &str = ".medusa/learning/skill-outcomes";
+#[cfg(test)]
 const METRICS_PATH: &str = ".medusa/learning/skill-metrics/summary.json";
+#[cfg(test)]
 const REVIEW_PATH: &str = ".medusa/learning/skill-reviews/recommendations.json";
+#[cfg(test)]
 const MIN_REVIEW_SAMPLES: usize = 5;
+#[cfg(test)]
 const HEALTHY_RATE_MILLI: u16 = 750;
+#[cfg(test)]
 const REVIEW_RATE_MILLI: u16 = 500;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -44,6 +52,7 @@ struct TerminalFailure {
     reason: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Default, Eq, PartialEq, Serialize)]
 struct SkillEffectivenessMetric {
     observed_sessions: usize,
@@ -58,6 +67,7 @@ struct SkillEffectivenessMetric {
     latest_recorded_at: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct SkillEffectivenessSummary {
     schema_version: u8,
@@ -65,6 +75,7 @@ struct SkillEffectivenessSummary {
     skills: BTreeMap<String, SkillEffectivenessMetric>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct ConfidencePolicy {
     minimum_review_samples: usize,
@@ -74,12 +85,14 @@ struct ConfidencePolicy {
     prior_observed: usize,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct SkillReviewSummary {
     schema_version: u8,
     recommendations: Vec<SkillReviewRecommendation>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct SkillReviewRecommendation {
     skill: String,
@@ -90,6 +103,7 @@ struct SkillReviewRecommendation {
     latest_recorded_at: String,
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct MetricAccumulator {
     observed_sessions: usize,
@@ -101,6 +115,7 @@ struct MetricAccumulator {
 
 /// Retains the legacy loaded-skill inventory for compatibility. Production causal attribution is
 /// intentionally owned by `LearningMonitorStore`; this helper is not called by session completion.
+#[cfg(test)]
 pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<Option<PathBuf>> {
     if !session.completed {
         return Ok(None);
@@ -172,6 +187,7 @@ fn loaded_skill_names(session: &AgentSession) -> Vec<String> {
     .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(super) fn verification_passed(session: &AgentSession) -> bool {
     session
         .events
@@ -229,6 +245,7 @@ pub(crate) fn record_terminal_skill_outcome(
     Ok(Some(destination))
 }
 
+#[cfg(test)]
 fn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {
     let mut accumulators = BTreeMap::<String, MetricAccumulator>::new();
     for record in outcome_records(repo) {
@@ -307,6 +324,7 @@ fn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {
     Ok(destination)
 }
 
+#[cfg(test)]
 fn write_review_recommendations(
     repo: &Path,
     mut recommendations: Vec<SkillReviewRecommendation>,
@@ -325,6 +343,7 @@ fn write_review_recommendations(
     )
 }
 
+#[cfg(test)]
 fn evidence_state(
     observed_sessions: usize,
     verification_rate_milli: u16,
@@ -350,10 +369,12 @@ fn evidence_state(
     }
 }
 
+#[cfg(test)]
 fn calibrated_confidence_milli(verified: usize, observed: usize) -> u16 {
     ratio_milli(verified.saturating_add(2), observed.saturating_add(4))
 }
 
+#[cfg(test)]
 fn outcome_records(repo: &Path) -> Vec<SkillOutcomeRecord> {
     let mut paths = fs::read_dir(repo.join(OUTCOME_ROOT))
         .into_iter()
@@ -373,6 +394,7 @@ fn outcome_records(repo: &Path) -> Vec<SkillOutcomeRecord> {
         .collect()
 }
 
+#[cfg(test)]
 fn ratio_milli(numerator: usize, denominator: usize) -> u16 {
     if denominator == 0 {
         0
@@ -381,6 +403,7 @@ fn ratio_milli(numerator: usize, denominator: usize) -> u16 {
     }
 }
 
+#[cfg(test)]
 fn average_milli(total: u64, samples: u64) -> u64 {
     if samples == 0 {
         0

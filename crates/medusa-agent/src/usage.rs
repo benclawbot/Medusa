@@ -48,7 +48,6 @@ pub struct SessionUsage {
     pub estimated_cost_microusd: u64,
 }
 
-#[allow(dead_code)]
 impl SessionUsage {
     fn push(&mut self, turn: TurnUsage) {
         self.input_tokens = self.input_tokens.saturating_add(turn.input_tokens);
@@ -70,7 +69,6 @@ impl SessionUsage {
 
 /// Reconstructs cumulative usage from normalized model-response events.
 #[must_use]
-#[allow(dead_code)]
 pub fn session_usage(session: &AgentSession) -> SessionUsage {
     let mut aggregate = SessionUsage::default();
     for event in &session.events {

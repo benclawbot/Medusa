@@ -161,7 +161,7 @@ pub(crate) fn record(
     persist(repo, &profile)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn reset(repo: &Path) -> MedusaResult<()> {
     let path = profile_path(repo);
     if path.exists() {

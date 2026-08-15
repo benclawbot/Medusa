@@ -32,7 +32,6 @@ use verification_cancellation::{
 };
 use verification_checkpoint::VerificationCheckpointStore;
 
-#[allow(dead_code)]
 #[path = "verification_authority_legacy.rs"]
 mod legacy;
 
