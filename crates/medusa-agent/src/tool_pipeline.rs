@@ -35,6 +35,15 @@ impl ToolPipelineStage {
         Self::Finalize,
         Self::Publish,
     ];
+    const BEFORE_FINALIZE: [Self; 7] = [
+        Self::Resolve,
+        Self::PreExecute,
+        Self::Guards,
+        Self::Approval,
+        Self::AroundDispatch,
+        Self::Execute,
+        Self::PostExecute,
+    ];
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -79,15 +88,15 @@ pub enum ToolOutcomeClass {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FinalToolOutcome {
-    pub pipeline_version: u32,
-    pub identity: ResolvedToolIdentity,
-    pub input_fingerprint: String,
-    pub outcome: ToolOutcomeClass,
-    pub output: Option<String>,
-    pub error: Option<MedusaError>,
-    pub guard_receipts: Vec<GuardReceipt>,
-    pub stages: Vec<ToolPipelineStage>,
-    pub elapsed_ns: u64,
+    pipeline_version: u32,
+    identity: ResolvedToolIdentity,
+    input_fingerprint: String,
+    outcome: ToolOutcomeClass,
+    output: Option<String>,
+    error: Option<MedusaError>,
+    guard_receipts: Vec<GuardReceipt>,
+    stages: Vec<ToolPipelineStage>,
+    elapsed_ns: u64,
 }
 
 impl FinalToolOutcome {
@@ -260,16 +269,24 @@ fn finalize(input: FinalizeInput) -> FinalToolOutcome {
     let FinalizeInput {
         identity,
         input_fingerprint,
-        outcome,
-        output,
-        error,
+        mut outcome,
+        mut output,
+        mut error,
         guard_receipts,
         mut stages,
         elapsed,
     } = input;
+    if stages != ToolPipelineStage::BEFORE_FINALIZE {
+        outcome = ToolOutcomeClass::Failed;
+        output = None;
+        error = Some(MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("tool pipeline stage invariant failed before finalization: {stages:?}"),
+        ));
+    }
     stages.push(ToolPipelineStage::Finalize);
     stages.push(ToolPipelineStage::Publish);
-    debug_assert_eq!(stages, ToolPipelineStage::REQUIRED);
     FinalToolOutcome {
         pipeline_version: TOOL_PIPELINE_VERSION,
         identity,
@@ -441,5 +458,25 @@ mod tests {
 
         assert_eq!(outcome.error.as_ref(), Some(&expected));
         assert_eq!(outcome.into_result(), Err(expected));
+    }
+
+    #[test]
+    fn malformed_stage_sequence_fails_closed_in_finalization() {
+        let outcome = finalize(FinalizeInput {
+            identity: ResolvedToolIdentity::built_in("fs_read"),
+            input_fingerprint: "fixture".to_owned(),
+            outcome: ToolOutcomeClass::Success,
+            output: Some("must not escape".to_owned()),
+            error: None,
+            guard_receipts: Vec::new(),
+            stages: vec![ToolPipelineStage::Resolve, ToolPipelineStage::Execute],
+            elapsed: Duration::ZERO,
+        });
+        assert_eq!(outcome.outcome, ToolOutcomeClass::Failed);
+        assert!(outcome.output.is_none());
+        assert_eq!(
+            outcome.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::InternalInvariant)
+        );
     }
 }
