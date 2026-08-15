@@ -17,19 +17,6 @@ pub(super) fn draw(
 }
 
 #[cfg(not(unix))]
-#[allow(dead_code)]
-pub(super) fn draw_portable(
-    stdout: &mut io::Stdout,
-    _options: &TuiOptions,
-    identity: &UiIdentity,
-    app: &AppState,
-) -> io::Result<()> {
-    let (width, height) = size()?;
-    let frame = render_frame(identity, app, width, height);
-    draw_portable_frame(stdout, width, &frame, None)
-}
-
-#[cfg(not(unix))]
 pub(super) fn draw_portable_frame(
     stdout: &mut io::Stdout,
     width: u16,

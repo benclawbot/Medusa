@@ -147,8 +147,7 @@ pub(crate) fn record_command_wave(
     }
 }
 
-// Staged API for the immediately following authority-summary tranche.
-#[allow(dead_code)]
+// Drains repository-scoped verification runtime metrics after an authority run.
 pub(crate) fn take_runtime_metrics(repo: &Path) -> VerificationRuntimeMetrics {
     runtime_metrics()
         .lock()

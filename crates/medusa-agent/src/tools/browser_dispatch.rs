@@ -1,7 +1,6 @@
 use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse, ElementRef, TabInfo};
 use serde_json::Value;
 
-#[allow(dead_code)]
 pub fn build(method: &str, input: &Value) -> Result<BrowserRequest, String> {
     match method {
         "browser_navigate" => {
@@ -66,7 +65,6 @@ pub fn build(method: &str, input: &Value) -> Result<BrowserRequest, String> {
     }
 }
 
-#[allow(dead_code)]
 pub fn format_response(response: BrowserResponse) -> (String, Vec<u8>) {
     match response {
         BrowserResponse::Ok => ("ok".to_owned(), Vec::new()),

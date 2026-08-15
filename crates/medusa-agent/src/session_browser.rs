@@ -159,29 +159,20 @@ impl Default for SessionBrowserConfig {
 }
 
 pub struct SessionBrowser {
-    #[allow(dead_code)]
-    config: SessionBrowserConfig,
     client: Option<BrowserClient>,
 }
 
 impl SessionBrowser {
     pub fn connect(config: &SessionBrowserConfig) -> MedusaResult<Self> {
         if !config.enabled {
-            return Ok(Self {
-                config: config.clone(),
-                client: None,
-            });
+            return Ok(Self { client: None });
         }
         let path = resolve_path(config.path.as_deref())?;
         if !path.exists() {
-            return Ok(Self {
-                config: config.clone(),
-                client: None,
-            });
+            return Ok(Self { client: None });
         }
         let client = BrowserClient::spawn(path.to_str().ok_or_else(|| invalid("non-utf8 path"))?)?;
         Ok(Self {
-            config: config.clone(),
             client: Some(client),
         })
     }
