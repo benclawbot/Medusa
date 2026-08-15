@@ -437,6 +437,36 @@ mod tests {
     }
 
     #[test]
+    fn repository_conflict_selects_refresh_and_replan() {
+        let projected = project(&trajectory(failure("stale repository conflict after head drift", 1)));
+        assert_eq!(projected.roadblocks[0].class, RoadblockClass::RepositoryConflict);
+        assert_eq!(
+            projected.roadblocks[0].selected_alternative.as_deref(),
+            Some("refresh-and-replan")
+        );
+    }
+
+    #[test]
+    fn unavailable_dependency_preserves_independent_work_path() {
+        let projected = project(&trajectory(failure("service unavailable: dependency offline", 1)));
+        assert_eq!(projected.roadblocks[0].class, RoadblockClass::DependencyUnavailable);
+        assert!(projected.roadblocks[0]
+            .alternatives
+            .iter()
+            .any(|item| item.strategy == "continue-independent-work"));
+    }
+
+    #[test]
+    fn platform_capability_can_defer_proof_to_authoritative_ci() {
+        let projected = project(&trajectory(failure("unsupported platform tool not installed", 1)));
+        assert_eq!(projected.roadblocks[0].class, RoadblockClass::MissingCapability);
+        assert!(projected.roadblocks[0]
+            .alternatives
+            .iter()
+            .any(|item| item.strategy == "defer-platform-proof-to-ci"));
+    }
+
+    #[test]
     fn transition_budget_forces_truthful_escalation() {
         let mut state = trajectory(failure("mismatched types", 3));
         state.strategy_transition_count = MAX_TRANSITIONS;

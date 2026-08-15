@@ -1388,6 +1388,31 @@ mod coding_trajectory_tests {
                     repository_fingerprint: "repo-a".into(),
                 }],
             }],
+            roadblocks: vec![RoadblockCheckpoint {
+                fingerprint: "roadblock-a".into(),
+                class: RoadblockClass::MissingCapability,
+                summary: "required platform command unavailable".into(),
+                first_generation: 1,
+                last_generation: 2,
+                repository_fingerprint: "repo-a".into(),
+                abandoned_strategy: "run-unavailable-command".into(),
+                selected_alternative: Some("defer-platform-proof-to-ci".into()),
+                alternatives: vec![AlternativePathCheckpoint {
+                    strategy: "defer-platform-proof-to-ci".into(),
+                    rationale: "preserve bounded local work".into(),
+                    success_probability: 82,
+                    blast_radius: 8,
+                    verifiability: 96,
+                    reversibility: 90,
+                    evidence_refs: vec!["journal#4".into()],
+                    verification_requirements: vec!["windows-ci".into()],
+                    selected: true,
+                    rejected_reason: None,
+                }],
+                source_refs: vec!["journal#4".into()],
+                disposition: RoadblockDisposition::AlternativeSelected,
+            }],
+            strategy_transition_count: 1,
             disproved_hypotheses: vec![DisprovedHypothesisCheckpoint {
                 signature: "retry-same-fix".into(),
                 repository_fingerprint: "repo-a".into(),
@@ -1551,6 +1576,11 @@ mod coding_trajectory_tests {
         assert_eq!(second.continuation_intent, original.continuation_intent);
         assert_eq!(second.modified_files, original.modified_files);
         assert_eq!(second.plan_steps, original.plan_steps);
+        assert_eq!(second.roadblocks, original.roadblocks);
+        assert_eq!(
+            second.strategy_transition_count,
+            original.strategy_transition_count
+        );
     }
 
     #[test]
