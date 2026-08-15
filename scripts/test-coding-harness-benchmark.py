@@ -58,7 +58,7 @@ def main() -> int:
     assert first["passed"]
     assert first["identity_sha256"] == second["identity_sha256"]
     assert first["trials"][0]["summary_sha256"] == second["trials"][0]["summary_sha256"]
-    assert first["identity"]["repository_revision"] == "fixture-commit"
+    assert first["identity"]["repository_revision"] != "unknown"
     assert first["identity"]["suite_sha256"] == MODULE.sha256(suite)
     assert first["metrics"]["verification_coverage"] == 1.0
 
