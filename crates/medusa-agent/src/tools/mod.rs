@@ -8,6 +8,9 @@ mod intelligence;
 mod shell;
 pub(crate) mod skills;
 mod web;
+mod pipeline {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tool_pipeline.rs"));
+}
 
 use std::{
     collections::BTreeMap,
@@ -30,6 +33,8 @@ use medusa_provider::ToolDefinition;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
+
+use pipeline::{GuardDecision, ToolExecutionPipeline, ToolPipelineRequest};
 
 const BROWSER_VERIFY_URL_ENV: &str = "MEDUSA_BROWSER_VERIFY_URL";
 const BROWSER_VERIFICATION_ORIGIN_ENV: &str = "MEDUSA_BROWSER_VERIFICATION_ORIGIN";
@@ -87,27 +92,11 @@ impl ToolManager {
     }
 
     pub fn execute(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
-        let registry = CapabilityRegistry::discover_with_desktop(
-            repo.to_path_buf(),
-            &SystemProbe,
-            self.desktop_commander.clone(),
-        )?;
-        let id = format!("tool.{name}");
-        let entry = registry
-            .entry(&id)
-            .ok_or_else(|| invalid_tool(format!("tool is not registered: {name}")))?;
-        if !entry.projected_to(medusa_capabilities::CapabilitySurface::Model) {
-            return Err(MedusaError::new(
-                ErrorCode::PolicyDenied,
-                ErrorCategory::Policy,
-                format!("tool is unavailable: {name}: {}", entry.readiness.detail),
-            ));
-        }
-        execute_tool(repo, name, input)
+        execute_tool_cancellable(repo, name, input, &BROWSER_NEVER_CANCELLED)
     }
 
     pub fn execute_approved(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
-        execute_approved_tool(repo, name, input)
+        execute_approved_tool_cancellable(repo, name, input, &BROWSER_NEVER_CANCELLED)
     }
 }
 
@@ -520,7 +509,25 @@ fn execute_browser_tool(
     result
 }
 
-pub(crate) fn execute_tool_cancellable_with_context(
+fn capability_guard(repo: &Path, name: &str) -> GuardDecision {
+    let registry = match CapabilityRegistry::discover(repo) {
+        Ok(registry) => registry,
+        Err(error) => return GuardDecision::Deny(format!("capability discovery failed: {error}")),
+    };
+    let id = format!("tool.{name}");
+    let Some(entry) = registry.entry(&id) else {
+        return GuardDecision::Deny(format!("tool is not registered: {name}"));
+    };
+    if !entry.projected_to(medusa_capabilities::CapabilitySurface::Model) {
+        return GuardDecision::Deny(format!(
+            "tool is unavailable: {name}: {}",
+            entry.readiness.detail
+        ));
+    }
+    GuardDecision::Allow
+}
+
+fn execute_tool_cancellable_with_context_unchecked(
     repo: &Path,
     name: &str,
     input: &Value,
@@ -569,6 +576,35 @@ pub(crate) fn execute_tool_cancellable_with_context(
     shell::run_cancellable(repo, program, &args, output_mode, cancellation)
 }
 
+pub(crate) fn execute_tool_cancellable_with_context(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+    mutation_context: Option<&crate::transaction::MutationContext>,
+) -> MedusaResult<String> {
+    let repo_owned = repo.to_path_buf();
+    let name_owned = name.to_owned();
+    let pipeline = ToolExecutionPipeline::new().with_guard("capability_readiness", move |_| {
+        capability_guard(&repo_owned, &name_owned)
+    });
+    pipeline
+        .execute(
+            ToolPipelineRequest::built_in(name, input),
+            cancellation,
+            |canonical_input| {
+                execute_tool_cancellable_with_context_unchecked(
+                    repo,
+                    name,
+                    canonical_input,
+                    cancellation,
+                    mutation_context,
+                )
+            },
+        )
+        .into_result()
+}
+
 pub(crate) fn execute_tool_cancellable(
     repo: &Path,
     name: &str,
@@ -578,7 +614,7 @@ pub(crate) fn execute_tool_cancellable(
     execute_tool_cancellable_with_context(repo, name, input, cancellation, None)
 }
 
-pub(crate) fn execute_approved_tool_cancellable(
+fn execute_approved_tool_cancellable_unchecked(
     repo: &Path,
     name: &str,
     input: &Value,
@@ -606,6 +642,32 @@ pub(crate) fn execute_approved_tool_cancellable(
     let output_mode =
         crate::output_envelope::OutputMode::parse(input_optional_string(input, "output_mode")?)?;
     shell::run_approved_cancellable(repo, program, &args, output_mode, cancellation)
+}
+
+pub(crate) fn execute_approved_tool_cancellable(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    let repo_owned = repo.to_path_buf();
+    let name_owned = name.to_owned();
+    let pipeline = ToolExecutionPipeline::new().with_guard("capability_readiness", move |_| {
+        capability_guard(&repo_owned, &name_owned)
+    });
+    let mut request = ToolPipelineRequest::built_in(name, input);
+    request.approval_required = true;
+    request.approval_granted = true;
+    pipeline
+        .execute(request, cancellation, |canonical_input| {
+            execute_approved_tool_cancellable_unchecked(
+                repo,
+                name,
+                canonical_input,
+                cancellation,
+            )
+        })
+        .into_result()
 }
 
 pub(crate) fn execute_approved_tool(
@@ -752,7 +814,7 @@ mod tests {
         for invalid in [Value::Null, json!(42), json!({"mode": "compact"})] {
             let input = json!({"output_mode": invalid});
             let error = input_optional_string(&input, "output_mode")
-                .expect_err("present non-string mode must fail");
+                .expect_err("present non-string mode must fail closed");
             assert!(error.to_string().contains("output_mode must be a string"));
         }
     }
