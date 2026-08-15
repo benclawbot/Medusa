@@ -47,6 +47,7 @@ jobs:
           replace('crates/medusa-agent/src/usage.rs', '#[allow(dead_code)]\npub fn session_usage', 'pub fn session_usage')
           replace('crates/medusa-context/src/refinement_root.rs', '#[allow(dead_code)]\n#[path = "refinement.rs"]', '#[path = "refinement.rs"]')
           PY
+          cargo fmt --all
           cargo fmt --all -- --check
           echo '=== remaining scoped suppressions ==='
           grep -RInE --include='*.rs' '#\[allow\((dead_code|unused_[^)]*)\)\]' crates tools apps/medusa-desktop/src-tauri/src || true
