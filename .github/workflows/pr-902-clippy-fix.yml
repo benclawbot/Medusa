@@ -141,6 +141,13 @@ jobs:
           )
           tools, count = obsolete_pattern.subn('', tools, count=1)
           assert count == 1
+          old_test_call = 'let error = execute_tool_cancellable_with_policy('
+          assert tools.count(old_test_call) == 1
+          tools = tools.replace(
+              old_test_call,
+              'let error = execute_tool_cancellable_with_policy_certified(',
+              1,
+          )
           tools_path.write_text(tools)
           PY
           cargo fmt --all
