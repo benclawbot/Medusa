@@ -17,11 +17,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          pattern='#\[allow\((dead_code|unused_[^)]*)\)\]'
           echo '=== all scoped suppressions ==='
-          rg -n '#\[allow\((dead_code|unused_[^)]*)\)\]' crates tools apps/medusa-desktop/src-tauri/src || true
+          grep -RInE --include='*.rs' "$pattern" crates tools apps/medusa-desktop/src-tauri/src || status=$?
+          if [[ ${status:-0} -gt 1 ]]; then exit "$status"; fi
           echo '=== production candidates (exclude obvious tests/bin) ==='
-          rg -n '#\[allow\((dead_code|unused_[^)]*)\)\]' crates tools apps/medusa-desktop/src-tauri/src \
-            -g '*.rs' \
-            -g '!**/tests/**' \
-            -g '!**/test/**' \
-            -g '!**/bin/**' || true
+          find crates tools apps/medusa-desktop/src-tauri/src -type f -name '*.rs' \
+            ! -path '*/tests/*' ! -path '*/test/*' ! -path '*/bin/*' -print0 \
+            | xargs -0 grep -nHE "$pattern" || status=$?
+          if [[ ${status:-0} -gt 1 ]]; then exit "$status"; fi
