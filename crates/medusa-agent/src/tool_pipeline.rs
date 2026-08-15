@@ -6,6 +6,9 @@ use serde_json::Value;
 
 pub const TOOL_PIPELINE_VERSION: u32 = 1;
 
+type GuardFn = dyn Fn(&ToolPipelineRequest) -> GuardDecision + Send + Sync;
+type GuardEntry = (String, Box<GuardFn>);
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPipelineStage {
@@ -127,7 +130,7 @@ impl ToolPipelineRequest {
 
 #[derive(Default)]
 pub struct ToolExecutionPipeline {
-    guards: Vec<(String, Box<dyn Fn(&ToolPipelineRequest) -> GuardDecision + Send + Sync>)>,
+    guards: Vec<GuardEntry>,
 }
 
 impl ToolExecutionPipeline {
@@ -187,16 +190,16 @@ impl ToolExecutionPipeline {
 
         stages.push(ToolPipelineStage::AroundDispatch);
         if denied.is_none() && cancellation.load(std::sync::atomic::Ordering::Acquire) {
-            return finalize(
+            return finalize(FinalizeInput {
                 identity,
                 input_fingerprint,
-                ToolOutcomeClass::Cancelled,
-                None,
-                Some("tool execution cancelled".to_owned()),
+                outcome: ToolOutcomeClass::Cancelled,
+                output: None,
+                error: Some("tool execution cancelled".to_owned()),
                 guard_receipts,
                 stages,
-                started.elapsed(),
-            );
+                elapsed: started.elapsed(),
+            });
         }
 
         stages.push(ToolPipelineStage::Execute);
@@ -217,7 +220,7 @@ impl ToolExecutionPipeline {
             Err(error) => (ToolOutcomeClass::Failed, None, Some(error.to_string())),
         };
 
-        finalize(
+        finalize(FinalizeInput {
             identity,
             input_fingerprint,
             outcome,
@@ -225,21 +228,33 @@ impl ToolExecutionPipeline {
             error,
             guard_receipts,
             stages,
-            started.elapsed(),
-        )
+            elapsed: started.elapsed(),
+        })
     }
 }
 
-fn finalize(
+struct FinalizeInput {
     identity: ResolvedToolIdentity,
     input_fingerprint: String,
     outcome: ToolOutcomeClass,
     output: Option<String>,
     error: Option<String>,
     guard_receipts: Vec<GuardReceipt>,
-    mut stages: Vec<ToolPipelineStage>,
+    stages: Vec<ToolPipelineStage>,
     elapsed: Duration,
-) -> FinalToolOutcome {
+}
+
+fn finalize(input: FinalizeInput) -> FinalToolOutcome {
+    let FinalizeInput {
+        identity,
+        input_fingerprint,
+        outcome,
+        output,
+        error,
+        guard_receipts,
+        mut stages,
+        elapsed,
+    } = input;
     stages.push(ToolPipelineStage::Finalize);
     stages.push(ToolPipelineStage::Publish);
     debug_assert_eq!(stages, ToolPipelineStage::REQUIRED);
