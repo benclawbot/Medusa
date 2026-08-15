@@ -315,11 +315,7 @@ fn apply_event(
             record_blocker(snapshot, source, redact_text(reason));
         }
         EventPayload::SessionStateChanged { to, .. } if *to == SessionState::Blocked => {
-            record_blocker(
-                snapshot,
-                source,
-                "Session entered blocked state".to_owned(),
-            );
+            record_blocker(snapshot, source, "Session entered blocked state".to_owned());
         }
         EventPayload::RuntimeFailed { message } => {
             record_blocker(snapshot, source, redact_text(message));
@@ -804,11 +800,13 @@ mod tests {
             FrontendKind::Telegram,
             FrontendKind::Other,
         ] {
-            assert!(canonical.semantically_matches(&project_execution_report_for_frontend(
-                &events,
-                ExecutionReportDetail::Concise,
-                frontend,
-            )));
+            assert!(
+                canonical.semantically_matches(&project_execution_report_for_frontend(
+                    &events,
+                    ExecutionReportDetail::Concise,
+                    frontend,
+                ))
+            );
         }
     }
 
