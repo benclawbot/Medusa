@@ -1349,6 +1349,57 @@ mod coding_trajectory_tests {
     }
 
     #[test]
+    fn identical_failed_repair_is_blocked_until_strategy_or_repository_changes() {
+        let mut value = trajectory();
+        value.repair_ledger.push(RepairLedgerEntry {
+            fingerprint: "failure:test:resume-mismatch".into(),
+            source: "verification".into(),
+            command: "cargo test -p medusa-session-continuity".into(),
+            scope: "crates".into(),
+            file: Some("crates/medusa-session-continuity/src/root.rs".into()),
+            symbol: None,
+            test: Some("resume".into()),
+            diagnostic_class: "test".into(),
+            summary: "resume mismatch".into(),
+            first_generation: 1,
+            last_generation: 1,
+            occurrence_count: 1,
+            changed_details: Vec::new(),
+            source_refs: vec!["journal#7".into()],
+            root_fingerprint: None,
+            cascade: false,
+            transition: RepairLedgerTransition::Persisted,
+            repairs: vec![RepairAttemptCheckpoint {
+                id: "repair-1".into(),
+                failure_fingerprint: "failure:test:resume-mismatch".into(),
+                changed_files: vec!["crates/medusa-session-continuity/src/root.rs".into()],
+                outcome: VerificationOutcome::Failed,
+                hypothesis: "preserve continuity".into(),
+                repository_fingerprint: "repo-a".into(),
+            }],
+        });
+        let files = vec!["crates/medusa-session-continuity/src/root.rs".into()];
+        assert!(!value.allows_repair_attempt(
+            "failure:test:resume-mismatch",
+            &files,
+            "preserve continuity",
+            "repo-a"
+        ));
+        assert!(value.allows_repair_attempt(
+            "failure:test:resume-mismatch",
+            &files,
+            "different strategy",
+            "repo-a"
+        ));
+        assert!(value.allows_repair_attempt(
+            "failure:test:resume-mismatch",
+            &files,
+            "preserve continuity",
+            "repo-b"
+        ));
+    }
+
+    #[test]
     fn trajectory_survives_repair_compaction_and_multi_hop_resume() {
         let temp = tempfile::tempdir().expect("tempdir");
         let store = ContinuityStore::new(temp.path().join("session.json"));
