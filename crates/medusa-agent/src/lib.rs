@@ -3,6 +3,7 @@
 pub mod analysis_host;
 mod approval;
 pub mod branch_summary;
+mod coding_trajectory;
 pub mod compaction_v2;
 mod engine;
 mod engine_support;

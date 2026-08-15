@@ -884,6 +884,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             return Ok(StepOutcome::WaitingForUser);
         }
         validate_messages(&session.messages, &self.provider.capabilities())?;
+        let trajectory_context = crate::coding_trajectory::refresh_and_render(session)?;
         session.turn = session.turn.saturating_add(1);
         append_observed(
             session,
@@ -916,6 +917,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             system.push_str("\n\n");
             system.push_str(&branch_context);
         }
+        system.push_str("\n\n");
+        system.push_str(&trajectory_context);
         let mut tools = available_tools(
             self.config.agent.mode,
             &session.repo,
@@ -1482,6 +1485,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     &verification_mutation_paths,
                     self.config.model.max_output_tokens,
                 )?;
+                crate::coding_trajectory::record_mutation(session, &verification_mutation_paths)?;
             }
 
             let failed_dependencies = executed
@@ -1742,6 +1746,11 @@ impl<P: ModelProvider> AgentEngine<P> {
             let contract = crate::verification_contract::apply_persisted_authoritative_summary(
                 &session.repo,
                 session.id.as_str(),
+                &verification.evidence,
+                verification.passed,
+            )?;
+            crate::coding_trajectory::record_verification(
+                session,
                 &verification.evidence,
                 verification.passed,
             )?;

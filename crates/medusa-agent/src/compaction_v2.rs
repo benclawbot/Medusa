@@ -53,6 +53,7 @@ pub struct AuthoritativeState {
     pub approval_receipts: serde_json::Value,
     pub rollback_receipts: serde_json::Value,
     pub verification_evidence: Vec<String>,
+    pub coding_trajectory: serde_json::Value,
     pub tool_artifacts: Vec<String>,
     pub repository: RepositoryIdentity,
     pub action_worker_process_state: Vec<serde_json::Value>,
@@ -348,6 +349,7 @@ fn build_authoritative(session: &AgentSession) -> MedusaResult<AuthoritativeStat
         approval_receipts: serde_json::to_value(&session.approval_receipts).map_err(json_error)?,
         rollback_receipts: serde_json::to_value(&session.rollback_receipts).map_err(json_error)?,
         verification_evidence: session.evidence.clone(),
+        coding_trajectory: crate::coding_trajectory::snapshot(session)?,
         tool_artifacts: session
             .tool_artifacts
             .iter()
