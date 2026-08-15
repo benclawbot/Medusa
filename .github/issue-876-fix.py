@@ -42,6 +42,12 @@ if old not in ledger:
     raise SystemExit("cursor iteration marker missing")
 ledger = ledger.replace(old, new, 1)
 
+old = '''                existing.source_refs.extend(item.source_refs.drain(..));'''
+new = '''                existing.source_refs.append(&mut item.source_refs);'''
+if old not in ledger:
+    raise SystemExit("clippy append marker missing")
+ledger = ledger.replace(old, new, 1)
+
 old = '''fn looks_like_summary_only(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.starts_with("error: could not compile")
