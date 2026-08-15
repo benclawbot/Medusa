@@ -84,7 +84,7 @@ pub struct FinalToolOutcome {
     pub input_fingerprint: String,
     pub outcome: ToolOutcomeClass,
     pub output: Option<String>,
-    pub error: Option<String>,
+    pub error: Option<MedusaError>,
     pub guard_receipts: Vec<GuardReceipt>,
     pub stages: Vec<ToolPipelineStage>,
     pub elapsed_ns: u64,
@@ -94,16 +94,22 @@ impl FinalToolOutcome {
     pub fn into_result(self) -> MedusaResult<String> {
         match self.outcome {
             ToolOutcomeClass::Success => Ok(self.output.unwrap_or_default()),
-            ToolOutcomeClass::Denied => Err(MedusaError::new(
-                ErrorCode::PolicyDenied,
-                ErrorCategory::Policy,
-                self.error.unwrap_or_else(|| "tool execution denied".to_owned()),
-            )),
-            ToolOutcomeClass::Cancelled | ToolOutcomeClass::Failed => Err(MedusaError::new(
-                ErrorCode::ToolExecutionFailed,
-                ErrorCategory::Execution,
-                self.error.unwrap_or_else(|| "tool execution failed".to_owned()),
-            )),
+            ToolOutcomeClass::Denied => Err(self.error.unwrap_or_else(|| {
+                MedusaError::new(
+                    ErrorCode::PolicyDenied,
+                    ErrorCategory::Policy,
+                    "tool execution denied",
+                )
+            })),
+            ToolOutcomeClass::Cancelled | ToolOutcomeClass::Failed => {
+                Err(self.error.unwrap_or_else(|| {
+                    MedusaError::new(
+                        ErrorCode::ToolExecutionFailed,
+                        ErrorCategory::Execution,
+                        "tool execution failed",
+                    )
+                }))
+            }
         }
     }
 }
@@ -190,12 +196,18 @@ impl ToolExecutionPipeline {
 
         stages.push(ToolPipelineStage::AroundDispatch);
         if denied.is_none() && cancellation.load(std::sync::atomic::Ordering::Acquire) {
+            stages.push(ToolPipelineStage::Execute);
+            stages.push(ToolPipelineStage::PostExecute);
             return finalize(FinalizeInput {
                 identity,
                 input_fingerprint,
                 outcome: ToolOutcomeClass::Cancelled,
                 output: None,
-                error: Some("tool execution cancelled".to_owned()),
+                error: Some(MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Execution,
+                    "tool execution cancelled",
+                )),
                 guard_receipts,
                 stages,
                 elapsed: started.elapsed(),
@@ -215,9 +227,9 @@ impl ToolExecutionPipeline {
         let (outcome, output, error) = match result {
             Ok(output) => (ToolOutcomeClass::Success, Some(output), None),
             Err(error) if error.code == ErrorCode::PolicyDenied => {
-                (ToolOutcomeClass::Denied, None, Some(error.to_string()))
+                (ToolOutcomeClass::Denied, None, Some(error))
             }
-            Err(error) => (ToolOutcomeClass::Failed, None, Some(error.to_string())),
+            Err(error) => (ToolOutcomeClass::Failed, None, Some(error)),
         };
 
         finalize(FinalizeInput {
@@ -238,7 +250,7 @@ struct FinalizeInput {
     input_fingerprint: String,
     outcome: ToolOutcomeClass,
     output: Option<String>,
-    error: Option<String>,
+    error: Option<MedusaError>,
     guard_receipts: Vec<GuardReceipt>,
     stages: Vec<ToolPipelineStage>,
     elapsed: Duration,
@@ -335,7 +347,10 @@ mod tests {
         );
         assert_eq!(outcome.outcome, ToolOutcomeClass::Denied);
         assert_eq!(called.load(Ordering::SeqCst), 0);
-        assert!(matches!(outcome.guard_receipts[1].decision, GuardDecision::Deny(_)));
+        assert!(matches!(
+            outcome.guard_receipts[1].decision,
+            GuardDecision::Deny(_)
+        ));
     }
 
     #[test]
@@ -360,13 +375,18 @@ mod tests {
 
     #[test]
     fn cancellation_has_one_terminal_normalized_outcome() {
+        let called = AtomicUsize::new(0);
         let outcome = ToolExecutionPipeline::new().execute(
             ToolPipelineRequest::built_in("fs_read", &json!({"path":"x"})),
             &AtomicBool::new(true),
-            |_| Ok("should not run".to_owned()),
+            |_| {
+                called.fetch_add(1, Ordering::SeqCst);
+                Ok("should not run".to_owned())
+            },
         );
         assert_eq!(outcome.outcome, ToolOutcomeClass::Cancelled);
-        assert_eq!(outcome.stages.last(), Some(&ToolPipelineStage::Publish));
+        assert_eq!(outcome.stages, ToolPipelineStage::REQUIRED);
+        assert_eq!(called.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -395,5 +415,31 @@ mod tests {
             |_| Ok("ok".to_owned()),
         );
         assert_eq!(outcome.identity, identity);
+    }
+
+    #[test]
+    fn structured_handler_error_survives_finalization() {
+        let mut source = MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Transient,
+            "browser deadline exceeded",
+        )
+        .with_retryable(true);
+        source
+            .context
+            .insert("browser_error_kind".to_owned(), json!("timeout"));
+        source
+            .context
+            .insert("browser_sidecar_reset".to_owned(), json!(true));
+        let expected = source.clone();
+
+        let outcome = ToolExecutionPipeline::new().execute(
+            ToolPipelineRequest::built_in("browser_click", &json!({"selector":"#missing"})),
+            &AtomicBool::new(false),
+            |_| Err(source),
+        );
+
+        assert_eq!(outcome.error.as_ref(), Some(&expected));
+        assert_eq!(outcome.into_result(), Err(expected));
     }
 }
