@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 src = Path('.github/workflows/issue-874-runtime-wiring.yml').read_text().splitlines()
@@ -44,50 +45,43 @@ root.write_text(s.replace(marker, project_task + marker, 1))
 '''
 script = script[:begin] + replacement + script[finish:]
 
-# Align the reducer with the actual medusa-protocol event shapes before emitting source.
+# Align the generated reducer with the actual protocol shapes regardless of indentation.
 script = script.replace(
-    '''                      EventPayload::FileTransactionCommitted { receipt } => {
-                          collect_paths(receipt, &mut modified, &mut relevant);
-                      }
-''',
-    '''                      EventPayload::FileTransactionCommitted { paths, .. } => {
-                          let value = serde_json::to_value(paths).map_err(RuntimeError::agent)?;
-                          collect_paths(&value, &mut modified, &mut relevant);
-                      }
-''',
+    'AuthoritativeTaskState, CodingTrajectoryCheckpoint, DisprovedHypothesisCheckpoint,',
+    'CodingTrajectoryCheckpoint, DisprovedHypothesisCheckpoint,',
 )
-script = script.replace(
-    '''                      EventPayload::RuntimeFailed { message }
-                      | EventPayload::SessionFailed { error: message } => {
-                          let fingerprint = hex_digest(message.as_bytes());
-                          failures.push(FailureCheckpoint {
-                              fingerprint,
-                              classification: "runtime".to_owned(),
-                              summary: bounded(message, 1000),
-                              repairs: Vec::new(),
-                          });
-                      }
-''',
-    '''                      EventPayload::RuntimeFailed { message } => {
-                          let fingerprint = hex_digest(message.as_bytes());
-                          failures.push(FailureCheckpoint {
-                              fingerprint,
-                              classification: "runtime".to_owned(),
-                              summary: bounded(message, 1000),
-                              repairs: Vec::new(),
-                          });
-                      }
-                      EventPayload::SessionFailed { error } => {
-                          let message = error.to_string();
-                          let fingerprint = hex_digest(message.as_bytes());
-                          failures.push(FailureCheckpoint {
-                              fingerprint,
-                              classification: "session".to_owned(),
-                              summary: bounded(&message, 1000),
-                              repairs: Vec::new(),
-                          });
-                      }
-''',
+script = re.sub(
+    r'EventPayload::FileTransactionCommitted \{ receipt \} => \{\s*collect_paths\(receipt, &mut modified, &mut relevant\);\s*\}',
+    '''EventPayload::FileTransactionCommitted { paths, .. } => {
+                let value = serde_json::to_value(paths).map_err(RuntimeError::agent)?;
+                collect_paths(&value, &mut modified, &mut relevant);
+            }''',
+    script,
+    count=1,
+)
+script = re.sub(
+    r'EventPayload::RuntimeFailed \{ message \}\s*\| EventPayload::SessionFailed \{ error: message \} => \{\s*let fingerprint = hex_digest\(message\.as_bytes\(\)\);\s*failures\.push\(FailureCheckpoint \{\s*fingerprint,\s*classification: "runtime"\.to_owned\(\),\s*summary: bounded\(message, 1000\),\s*repairs: Vec::new\(\),\s*\}\);\s*\}',
+    '''EventPayload::RuntimeFailed { message } => {
+                let fingerprint = hex_digest(message.as_bytes());
+                failures.push(FailureCheckpoint {
+                    fingerprint,
+                    classification: "runtime".to_owned(),
+                    summary: bounded(message, 1000),
+                    repairs: Vec::new(),
+                });
+            }
+            EventPayload::SessionFailed { error } => {
+                let message = error.to_string();
+                let fingerprint = hex_digest(message.as_bytes());
+                failures.push(FailureCheckpoint {
+                    fingerprint,
+                    classification: "session".to_owned(),
+                    summary: bounded(&message, 1000),
+                    repairs: Vec::new(),
+                });
+            }''',
+    script,
+    count=1,
 )
 script = script.replace(
     'medusa_agent::record_session_event(&mut session, Actor::Verifier, EventPayload::VerificationCompleted',
