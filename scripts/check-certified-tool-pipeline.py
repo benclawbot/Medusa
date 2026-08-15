@@ -51,8 +51,16 @@ def main() -> int:
     )
     if "stages != ToolPipelineStage::BEFORE_FINALIZE" not in pipeline:
         fail("pipeline must fail closed on malformed stage order in release builds")
-    if 'GuardDecision::Deny("prior monotonic guard denial"' not in pipeline:
-        fail("pipeline must preserve monotonic denial")
+    monotonic_markers = [
+        "let mut terminal_error = None;",
+        "if terminal_error.is_some()",
+        "GuardDecision::Deny(\"prior monotonic denial\".to_owned())",
+        "if terminal_error.is_none()",
+        "monotonic_denial_cannot_be_restored_by_later_guard",
+    ]
+    for marker in monotonic_markers:
+        if marker not in pipeline:
+            fail(f"pipeline must preserve monotonic denial: missing {marker}")
     ordered(
         tools,
         ['with_guard("capability_readiness"', 'with_guard("agent_execution_policy"'],
