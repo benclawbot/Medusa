@@ -66,5 +66,32 @@ new_resume = r''' + "'''" + r'''pub(crate) fn restore_for_resume(
 }
 ''' + "'''" + r'''
 script = script[:resume_begin] + new_resume + script[resume_end:]
+
+script = script.replace("render_for_resume(repo.path(), &session, true)", "restore_for_resume(repo.path(), &session, true)")
+script = script.replace("render_for_resume(repo.path(), &session, false)", "restore_for_resume(repo.path(), &session, false)")
+verification_assert = 'assert!(first.contains("verification"));'
+if verification_assert not in script:
+    raise SystemExit("verification assertion missing")
+script = script.replace(
+    verification_assert,
+    verification_assert + '\n        medusa_agent::compact_session(&mut session, Some("repair regression"))\n            .expect("forced compaction");',
+    1,
+)
+provider_assert = 'assert!(!restored.contains("provider-native-1"));'
+if provider_assert not in script:
+    raise SystemExit("provider fallback assertion missing")
+script = script.replace(
+    provider_assert,
+    'assert!(restored.contains("keep public API stable"));\n        ' + provider_assert + '\n        let stored = store(repo.path(), session.id.as_str()).load().expect("stored resume");\n        assert_eq!(stored.task.coding_trajectory.as_ref().expect("trajectory").resume_hops, 1);',
+    1,
+)
+drift_assert = 'assert!(drifted.contains("repository drift requires trajectory revalidation"));'
+if drift_assert not in script:
+    raise SystemExit("drift assertion missing")
+script = script.replace(
+    drift_assert,
+    drift_assert + '\n        let drifted_stored = store(repo.path(), session.id.as_str()).load().expect("stored drift");\n        let drifted_trajectory = drifted_stored.task.coding_trajectory.as_ref().expect("trajectory");\n        assert_eq!(drifted_trajectory.resume_hops, 2);\n        assert!(drifted_trajectory.relevant_paths.iter().all(|path| path.stale));',
+    1,
+)
 '''
 path.write_text(source[:start] + replacement + source[end:])
