@@ -1,0 +1,871 @@
+name: Issue 876 repair ledger bootstrap
+
+on:
+  push:
+    branches:
+      - codex/issue-876-repair-ledger
+
+permissions:
+  contents: write
+
+jobs:
+  implement-and-validate:
+    if: github.event.head_commit.message == 'chore: bootstrap issue 876 repair ledger'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-876-repair-ledger
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Implement repair ledger
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          root_path = Path('crates/medusa-session-continuity/src/root.rs')
+          root = root_path.read_text()
+
+          root = root.replace(
+          '''pub struct RepairAttemptCheckpoint {
+    pub id: String,
+    pub failure_fingerprint: String,
+    pub changed_files: Vec<String>,
+    pub outcome: VerificationOutcome,
+}''',
+          '''pub struct RepairAttemptCheckpoint {
+    pub id: String,
+    pub failure_fingerprint: String,
+    pub changed_files: Vec<String>,
+    pub outcome: VerificationOutcome,
+    #[serde(default)]
+    pub hypothesis: String,
+    #[serde(default)]
+    pub repository_fingerprint: String,
+}''')
+
+          marker = '''pub struct FailureCheckpoint {
+    pub fingerprint: String,
+    pub classification: String,
+    pub summary: String,
+    pub repairs: Vec<RepairAttemptCheckpoint>,
+}
+'''
+          addition = marker + '''
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairLedgerTransition {
+    New,
+    Persisted,
+    Resolved,
+    Transformed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairLedgerEntry {
+    pub fingerprint: String,
+    pub source: String,
+    pub command: String,
+    pub scope: String,
+    pub file: Option<String>,
+    pub symbol: Option<String>,
+    pub test: Option<String>,
+    pub diagnostic_class: String,
+    pub summary: String,
+    pub first_generation: u64,
+    pub last_generation: u64,
+    pub occurrence_count: u32,
+    #[serde(default)]
+    pub changed_details: Vec<String>,
+    #[serde(default)]
+    pub source_refs: Vec<String>,
+    pub root_fingerprint: Option<String>,
+    pub cascade: bool,
+    pub transition: RepairLedgerTransition,
+    #[serde(default)]
+    pub repairs: Vec<RepairAttemptCheckpoint>,
+}
+
+impl RepairLedgerEntry {
+    pub fn unresolved(&self) -> bool {
+        matches!(
+            self.transition,
+            RepairLedgerTransition::New
+                | RepairLedgerTransition::Persisted
+                | RepairLedgerTransition::Transformed
+        )
+    }
+}
+'''
+          if marker not in root:
+              raise SystemExit('FailureCheckpoint marker missing')
+          root = root.replace(marker, addition, 1)
+
+          root = root.replace(
+          '''    pub failure_history: Vec<FailureCheckpoint>,
+    pub disproved_hypotheses: Vec<DisprovedHypothesisCheckpoint>,''',
+          '''    pub failure_history: Vec<FailureCheckpoint>,
+    #[serde(default)]
+    pub repair_ledger: Vec<RepairLedgerEntry>,
+    #[serde(default)]
+    pub verification_generation: u64,
+    #[serde(default)]
+    pub repair_ledger_cursor: u64,
+    pub disproved_hypotheses: Vec<DisprovedHypothesisCheckpoint>,''', 1)
+
+          root = root.replace(
+          '''            failure_history: Vec::new(),
+            disproved_hypotheses: Vec::new(),''',
+          '''            failure_history: Vec::new(),
+            repair_ledger: Vec::new(),
+            verification_generation: 0,
+            repair_ledger_cursor: 0,
+            disproved_hypotheses: Vec::new(),''', 1)
+
+          root = root.replace(
+          '''            self.failure_history.len(),
+            self.disproved_hypotheses.len(),''',
+          '''            self.failure_history.len(),
+            self.repair_ledger.len(),
+            self.disproved_hypotheses.len(),''', 1)
+
+          method_marker = '''    pub fn allows_hypothesis_attempt(&self, signature: &str, repository_fingerprint: &str) -> bool {
+        !self.disproved_hypotheses.iter().any(|item| {
+            item.signature == signature && item.repository_fingerprint == repository_fingerprint
+        })
+    }
+'''
+          method_addition = method_marker + '''
+    pub fn allows_repair_attempt(
+        &self,
+        failure_fingerprint: &str,
+        changed_files: &[String],
+        hypothesis: &str,
+        repository_fingerprint: &str,
+    ) -> bool {
+        !self.repair_ledger.iter().any(|failure| {
+            failure.fingerprint == failure_fingerprint
+                && failure.unresolved()
+                && failure.repairs.iter().any(|repair| {
+                    repair.changed_files == changed_files
+                        && repair.hypothesis == hypothesis
+                        && repair.repository_fingerprint == repository_fingerprint
+                        && repair.outcome == VerificationOutcome::Failed
+                })
+        })
+    }
+'''
+          if method_marker not in root:
+              raise SystemExit('allows_hypothesis_attempt marker missing')
+          root = root.replace(method_marker, method_addition, 1)
+          root_path.write_text(root)
+
+          ledger = r'''use std::collections::{BTreeMap, BTreeSet};
+
+use medusa_agent::AgentSession;
+use medusa_protocol::EventPayload;
+use medusa_session_continuity::{
+    RepairAttemptCheckpoint, RepairLedgerEntry, RepairLedgerTransition, VerificationOutcome,
+};
+use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone)]
+pub(crate) struct Projection {
+    pub entries: Vec<RepairLedgerEntry>,
+    pub generation: u64,
+    pub cursor: u64,
+}
+
+pub(crate) fn project(
+    session: &AgentSession,
+    repository_fingerprint: &str,
+    existing: &[RepairLedgerEntry],
+    generation: u64,
+    cursor: u64,
+) -> Projection {
+    let mut entries = existing.to_vec();
+    let mut generation = generation;
+    let mut cursor = cursor;
+    let mut changed_files = BTreeSet::new();
+
+    for event in session.events.iter().filter(|event| event.sequence > cursor) {
+        cursor = cursor.max(event.sequence);
+        match &event.payload {
+            EventPayload::FileTransactionCommitted { paths, .. } => {
+                if let Ok(value) = serde_json::to_value(paths) {
+                    collect_paths(&value, &mut changed_files);
+                }
+            }
+            EventPayload::VerificationCompleted { passed, evidence } => {
+                generation = generation.saturating_add(1);
+                let source_ref = format!(
+                    ".medusa/sessions/{}/journal.jsonl#{}",
+                    session.id, event.sequence
+                );
+                let command = infer_command(evidence, event.sequence);
+                let parsed = if *passed {
+                    Vec::new()
+                } else {
+                    parse_diagnostics(evidence, &command, &source_ref, generation)
+                };
+                reconcile_generation(
+                    &mut entries,
+                    parsed,
+                    generation,
+                    &changed_files,
+                    repository_fingerprint,
+                    *passed,
+                );
+                changed_files.clear();
+            }
+            EventPayload::RuntimeFailed { message } => {
+                generation = generation.max(1);
+                add_non_verification_failure(
+                    &mut entries,
+                    "runtime",
+                    message,
+                    generation,
+                    format!(
+                        ".medusa/sessions/{}/journal.jsonl#{}",
+                        session.id, event.sequence
+                    ),
+                );
+            }
+            EventPayload::SessionFailed { error } => {
+                generation = generation.max(1);
+                add_non_verification_failure(
+                    &mut entries,
+                    "session",
+                    &error.to_string(),
+                    generation,
+                    format!(
+                        ".medusa/sessions/{}/journal.jsonl#{}",
+                        session.id, event.sequence
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    entries.sort_by(|left, right| {
+        right
+            .unresolved()
+            .cmp(&left.unresolved())
+            .then_with(|| right.last_generation.cmp(&left.last_generation))
+            .then_with(|| left.fingerprint.cmp(&right.fingerprint))
+    });
+    entries.truncate(128);
+
+    Projection {
+        entries,
+        generation,
+        cursor,
+    }
+}
+
+fn reconcile_generation(
+    entries: &mut Vec<RepairLedgerEntry>,
+    mut observed: Vec<RepairLedgerEntry>,
+    generation: u64,
+    changed_files: &BTreeSet<String>,
+    repository_fingerprint: &str,
+    passed: bool,
+) {
+    cluster_common_roots(&mut observed);
+    let observed_fingerprints = observed
+        .iter()
+        .map(|entry| entry.fingerprint.clone())
+        .collect::<BTreeSet<_>>();
+
+    for existing in entries.iter_mut().filter(|entry| entry.unresolved()) {
+        if !changed_files.is_empty() {
+            let files = changed_files.iter().cloned().collect::<Vec<_>>();
+            let attempt_id = format!("repair:{}:{}", generation, existing.fingerprint);
+            if !existing.repairs.iter().any(|attempt| attempt.id == attempt_id) {
+                existing.repairs.push(RepairAttemptCheckpoint {
+                    id: attempt_id,
+                    failure_fingerprint: existing.fingerprint.clone(),
+                    changed_files: files,
+                    outcome: if passed {
+                        VerificationOutcome::Passed
+                    } else {
+                        VerificationOutcome::Failed
+                    },
+                    hypothesis: format!(
+                        "mutation before verification generation {generation}"
+                    ),
+                    repository_fingerprint: repository_fingerprint.to_owned(),
+                });
+            }
+        }
+
+        if passed {
+            existing.transition = RepairLedgerTransition::Resolved;
+            existing.last_generation = generation;
+        } else if observed_fingerprints.contains(&existing.fingerprint) {
+            existing.transition = RepairLedgerTransition::Persisted;
+            existing.last_generation = generation;
+        } else if same_identity_exists(existing, &observed) {
+            existing.transition = RepairLedgerTransition::Transformed;
+            existing.last_generation = generation;
+        } else if !changed_files.is_empty() {
+            existing.transition = RepairLedgerTransition::Resolved;
+            existing.last_generation = generation;
+        }
+    }
+
+    for mut item in observed {
+        if let Some(existing) = entries
+            .iter_mut()
+            .find(|entry| entry.fingerprint == item.fingerprint)
+        {
+            let is_new_occurrence = item
+                .source_refs
+                .first()
+                .is_some_and(|source| !existing.source_refs.contains(source));
+            if is_new_occurrence {
+                existing.occurrence_count = existing.occurrence_count.saturating_add(1);
+                existing.source_refs.extend(item.source_refs.drain(..));
+            }
+            if !existing.changed_details.contains(&item.summary)
+                && existing.summary != item.summary
+            {
+                existing.changed_details.push(item.summary.clone());
+                existing.changed_details.truncate(16);
+            }
+            existing.summary = item.summary;
+            existing.last_generation = generation;
+            existing.transition = RepairLedgerTransition::Persisted;
+            existing.root_fingerprint = item.root_fingerprint;
+            existing.cascade = item.cascade;
+        } else {
+            entries.push(item);
+        }
+    }
+}
+
+fn same_identity_exists(existing: &RepairLedgerEntry, observed: &[RepairLedgerEntry]) -> bool {
+    observed.iter().any(|candidate| {
+        candidate.file == existing.file
+            && candidate.test == existing.test
+            && candidate.symbol == existing.symbol
+            && candidate.diagnostic_class == existing.diagnostic_class
+    })
+}
+
+fn cluster_common_roots(entries: &mut [RepairLedgerEntry]) {
+    let mut roots = BTreeMap::<(String, String), String>::new();
+    for entry in entries.iter_mut() {
+        let Some(file) = entry.file.clone() else {
+            continue;
+        };
+        let key = (file, entry.diagnostic_class.clone());
+        if let Some(root) = roots.get(&key) {
+            entry.root_fingerprint = Some(root.clone());
+            entry.cascade = true;
+        } else {
+            roots.insert(key, entry.fingerprint.clone());
+        }
+    }
+}
+
+fn parse_diagnostics(
+    evidence: &[String],
+    command: &str,
+    source_ref: &str,
+    generation: u64,
+) -> Vec<RepairLedgerEntry> {
+    let chunks = diagnostic_chunks(evidence);
+    let mut result = Vec::new();
+    let mut seen = BTreeSet::new();
+    for chunk in chunks {
+        if chunk.trim().is_empty() || looks_like_summary_only(&chunk) {
+            continue;
+        }
+        let diagnostic_class = classify(&chunk);
+        let file = extract_file(&chunk);
+        let test = extract_test(&chunk);
+        let symbol = extract_symbol(&chunk);
+        let scope = file
+            .as_deref()
+            .and_then(|path| path.split('/').next())
+            .unwrap_or("workspace")
+            .to_owned();
+        let summary = compact_summary(&chunk);
+        let normalized = normalize_for_fingerprint(&summary);
+        let fingerprint = digest(
+            format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                diagnostic_class,
+                command,
+                scope,
+                file.as_deref().unwrap_or(""),
+                symbol.as_deref().unwrap_or(""),
+                test.as_deref().unwrap_or(""),
+                normalized
+            )
+            .as_bytes(),
+        );
+        if !seen.insert(fingerprint.clone()) {
+            continue;
+        }
+        result.push(RepairLedgerEntry {
+            fingerprint,
+            source: "verification".to_owned(),
+            command: command.to_owned(),
+            scope,
+            file,
+            symbol,
+            test,
+            diagnostic_class,
+            summary,
+            first_generation: generation,
+            last_generation: generation,
+            occurrence_count: 1,
+            changed_details: Vec::new(),
+            source_refs: vec![source_ref.to_owned()],
+            root_fingerprint: None,
+            cascade: false,
+            transition: RepairLedgerTransition::New,
+            repairs: Vec::new(),
+        });
+    }
+    if result.is_empty() {
+        let summary = evidence
+            .iter()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| compact_summary(line))
+            .unwrap_or_else(|| "authoritative verification failed".to_owned());
+        let fingerprint = digest(format!("verification|{command}|{summary}").as_bytes());
+        result.push(RepairLedgerEntry {
+            fingerprint,
+            source: "verification".to_owned(),
+            command: command.to_owned(),
+            scope: "workspace".to_owned(),
+            file: None,
+            symbol: None,
+            test: None,
+            diagnostic_class: "verification".to_owned(),
+            summary,
+            first_generation: generation,
+            last_generation: generation,
+            occurrence_count: 1,
+            changed_details: Vec::new(),
+            source_refs: vec![source_ref.to_owned()],
+            root_fingerprint: None,
+            cascade: false,
+            transition: RepairLedgerTransition::New,
+            repairs: Vec::new(),
+        });
+    }
+    result
+}
+
+fn diagnostic_chunks(evidence: &[String]) -> Vec<String> {
+    let mut chunks = Vec::new();
+    for item in evidence {
+        let lines = item.lines().collect::<Vec<_>>();
+        if lines.len() <= 1 {
+            chunks.push(item.clone());
+            continue;
+        }
+        let mut current = String::new();
+        for line in lines {
+            if is_diagnostic_start(line) && !current.trim().is_empty() {
+                chunks.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push('\n');
+            }
+            current.push_str(line);
+        }
+        if !current.trim().is_empty() {
+            chunks.push(current);
+        }
+    }
+    chunks
+}
+
+fn is_diagnostic_start(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("error")
+        || trimmed.starts_with("warning")
+        || trimmed.starts_with("test ") && trimmed.ends_with("FAILED")
+        || trimmed.contains(": error TS")
+        || trimmed.contains(" - error TS")
+        || trimmed.contains("[ERROR]")
+}
+
+fn looks_like_summary_only(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("error: could not compile")
+        || lower.starts_with("test result: failed")
+        || lower.starts_with("failures:")
+}
+
+fn infer_command(evidence: &[String], sequence: u64) -> String {
+    evidence
+        .iter()
+        .flat_map(|item| item.lines())
+        .find_map(|line| line.trim().strip_prefix("$ ").map(str::to_owned))
+        .unwrap_or_else(|| format!("authoritative-verification-{sequence}"))
+}
+
+fn classify(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("clippy") || lower.contains("warning:") {
+        "lint"
+    } else if lower.contains("error ts") || lower.contains("typecheck") {
+        "typecheck"
+    } else if lower.contains("test ") && lower.contains("failed")
+        || lower.contains("assertion")
+        || lower.contains("panicked at")
+    {
+        "test"
+    } else if lower.contains("architecture") || lower.contains("boundary") {
+        "architecture"
+    } else if lower.contains("error[") || lower.contains("error:") {
+        "compile"
+    } else {
+        "verification"
+    }
+    .to_owned()
+}
+
+fn extract_file(value: &str) -> Option<String> {
+    for line in value.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("-->") {
+            return path_before_position(rest.trim());
+        }
+        if let Some(index) = trimmed.find(": error TS") {
+            return path_before_position(&trimmed[..index]);
+        }
+        if let Some(index) = trimmed.find(" - error TS") {
+            return path_before_position(&trimmed[..index]);
+        }
+    }
+    None
+}
+
+fn path_before_position(value: &str) -> Option<String> {
+    let cleaned = value.trim();
+    let mut parts = cleaned.rsplitn(3, ':');
+    let last = parts.next();
+    let second = parts.next();
+    let prefix = parts.next();
+    if last.is_some_and(|part| part.chars().all(|ch| ch.is_ascii_digit()))
+        && second.is_some_and(|part| part.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        prefix.map(|path| path.trim().replace('\\', "/"))
+    } else {
+        Some(cleaned.replace('\\', "/"))
+    }
+}
+
+fn extract_test(value: &str) -> Option<String> {
+    value.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .strip_prefix("test ")
+            .and_then(|rest| rest.strip_suffix(" ... FAILED"))
+            .map(str::to_owned)
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("---- ")
+                    .and_then(|rest| rest.strip_suffix(" stdout ----"))
+                    .map(str::to_owned)
+            })
+    })
+}
+
+fn extract_symbol(value: &str) -> Option<String> {
+    value.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .strip_prefix("in function `")
+            .and_then(|rest| rest.strip_suffix('`'))
+            .map(str::to_owned)
+    })
+}
+
+fn compact_summary(value: &str) -> String {
+    let joined = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    joined.chars().take(1200).collect()
+}
+
+fn normalize_for_fingerprint(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut digit_run = false;
+    for ch in value.chars() {
+        if ch.is_ascii_digit() {
+            if !digit_run {
+                output.push('#');
+            }
+            digit_run = true;
+        } else {
+            digit_run = false;
+            output.push(ch.to_ascii_lowercase());
+        }
+    }
+    output
+}
+
+fn add_non_verification_failure(
+    entries: &mut Vec<RepairLedgerEntry>,
+    class: &str,
+    message: &str,
+    generation: u64,
+    source_ref: String,
+) {
+    let summary = compact_summary(message);
+    let fingerprint = digest(format!("{class}|{}", normalize_for_fingerprint(&summary)).as_bytes());
+    if let Some(existing) = entries.iter_mut().find(|entry| entry.fingerprint == fingerprint) {
+        if !existing.source_refs.contains(&source_ref) {
+            existing.occurrence_count = existing.occurrence_count.saturating_add(1);
+            existing.source_refs.push(source_ref);
+        }
+        existing.last_generation = generation;
+        existing.transition = RepairLedgerTransition::Persisted;
+        return;
+    }
+    entries.push(RepairLedgerEntry {
+        fingerprint,
+        source: class.to_owned(),
+        command: class.to_owned(),
+        scope: "runtime".to_owned(),
+        file: None,
+        symbol: None,
+        test: None,
+        diagnostic_class: class.to_owned(),
+        summary,
+        first_generation: generation,
+        last_generation: generation,
+        occurrence_count: 1,
+        changed_details: Vec::new(),
+        source_refs: vec![source_ref],
+        root_fingerprint: None,
+        cascade: false,
+        transition: RepairLedgerTransition::New,
+        repairs: Vec::new(),
+    });
+}
+
+fn collect_paths(value: &serde_json::Value, output: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::String(value) if value.contains('/') || value.contains('\\') => {
+            output.insert(value.replace('\\', "/"));
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_paths(value, output);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            for (key, value) in values {
+                if matches!(
+                    key.as_str(),
+                    "path" | "file" | "files" | "changed_paths" | "modified_files"
+                ) {
+                    collect_paths(value, output);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn digest(value: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_multiple_diagnostics_and_keeps_expansion_handle() {
+        let evidence = vec![r#"error[E0308]: mismatched types
+  --> crates/a/src/lib.rs:12:3
+error[E0425]: cannot find value `x`
+  --> crates/b/src/lib.rs:8:9"#.to_owned()];
+        let entries = parse_diagnostics(evidence.as_slice(), "cargo check", "journal#9", 3);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| entry.source_refs == ["journal#9"]));
+        assert!(entries.iter().any(|entry| entry.file.as_deref() == Some("crates/a/src/lib.rs")));
+        assert!(entries.iter().any(|entry| entry.file.as_deref() == Some("crates/b/src/lib.rs")));
+    }
+
+    #[test]
+    fn normalization_deduplicates_location_only_changes() {
+        let first = normalize_for_fingerprint("error E0308 at src/lib.rs:12:3 expected 4 values");
+        let second = normalize_for_fingerprint("error E0308 at src/lib.rs:88:7 expected 9 values");
+        assert_eq!(first, second);
+    }
+}
+'''
+          Path('crates/medusa-runtime/src/repair_ledger.rs').write_text(ledger)
+
+          trajectory_path = Path('crates/medusa-runtime/src/coding_trajectory.rs')
+          trajectory = trajectory_path.read_text()
+          trajectory = trajectory.replace(
+          '''use crate::RuntimeError;
+
+const CONTEXT_LIMIT: usize = 12_000;''',
+          '''use crate::RuntimeError;
+
+#[path = "repair_ledger.rs"]
+mod repair_ledger;
+
+const CONTEXT_LIMIT: usize = 12_000;''', 1)
+
+          marker = '''    trajectory.continuation_intent = session
+        .plan
+        .iter()
+        .find(|step| step.status != AgentPlanStepStatus::Completed)
+        .map(|step| format!("continue plan step: {}", step.title));
+    Ok(trajectory)
+}'''
+          replacement = '''    let repair_projection = repair_ledger::project(
+        session,
+        repository.workspace_fingerprint.as_str(),
+        trajectory.repair_ledger.as_slice(),
+        trajectory.verification_generation,
+        trajectory.repair_ledger_cursor,
+    );
+    trajectory.repair_ledger = repair_projection.entries;
+    trajectory.verification_generation = repair_projection.generation;
+    trajectory.repair_ledger_cursor = repair_projection.cursor;
+    trajectory.continuation_intent = session
+        .plan
+        .iter()
+        .find(|step| step.status != AgentPlanStepStatus::Completed)
+        .map(|step| format!("continue plan step: {}", step.title));
+    Ok(trajectory)
+}'''
+          if marker not in trajectory:
+              raise SystemExit('trajectory continuation marker missing')
+          trajectory = trajectory.replace(marker, replacement, 1)
+
+          trajectory = trajectory.replace(
+          '''        "[medusa-coding-trajectory-v1]\\nAuthoritative compact trajectory derived from the canonical journal. Preserve immutable objective/constraints, continue from retained plan/failure/verification state, do not retry disproved hypotheses on the same repository fingerprint without new evidence, and revalidate stale paths after repository drift.\\n{}",''',
+          '''        "[medusa-coding-trajectory-v1]\\nAuthoritative compact trajectory derived from the canonical journal. Preserve immutable objective/constraints and use repair_ledger as the complete actionable failure set. Repair all independent diagnostics from the latest verification generation together, expand exact source_refs only when needed, rerun the narrowest authoritative check after mutation, and do not repeat an identical failed repair on an unchanged repository fingerprint; re-plan or escalate instead. Revalidate stale paths after repository drift.\\n{}",''', 1)
+
+          test_marker = '''    #[test]
+    fn journal_projection_survives_restart_and_repository_drift() {'''
+          new_test = '''    #[test]
+    fn repair_ledger_collects_full_generation_deduplicates_and_resolves() {
+        let repo = tempfile::tempdir().expect("repo");
+        Command::new("git").arg("init").arg(repo.path()).status().expect("git init");
+        let engine = AgentEngine::new(UnusedProvider, Config::default());
+        let mut session = engine
+            .create_session(repo.path(), "repair simultaneous diagnostics".to_owned())
+            .expect("session");
+        let diagnostics = vec![r#"$ cargo check
+error[E0308]: mismatched types
+  --> crates/a/src/lib.rs:12:3
+error[E0425]: cannot find value `x`
+  --> crates/b/src/lib.rs:8:9"#.to_owned()];
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::System("verifier".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: false,
+                evidence: diagnostics.clone(),
+            },
+        )
+        .expect("first verification");
+        sync_and_render(repo.path(), &session, None).expect("first sync");
+        let first = store(repo.path(), session.id.as_str()).load().expect("stored");
+        let first_trajectory = first.task.coding_trajectory.as_ref().expect("trajectory");
+        assert_eq!(first_trajectory.verification_generation, 1);
+        assert_eq!(first_trajectory.repair_ledger.len(), 2);
+        assert!(first_trajectory.repair_ledger.iter().all(|entry| entry.occurrence_count == 1));
+        assert!(first_trajectory.repair_ledger.iter().all(|entry| !entry.source_refs.is_empty()));
+
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::System("verifier".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: false,
+                evidence: diagnostics,
+            },
+        )
+        .expect("repeat verification");
+        sync_and_render(repo.path(), &session, None).expect("repeat sync");
+        let repeated = store(repo.path(), session.id.as_str()).load().expect("stored repeat");
+        let repeated_trajectory = repeated.task.coding_trajectory.as_ref().expect("trajectory");
+        assert_eq!(repeated_trajectory.verification_generation, 2);
+        assert_eq!(repeated_trajectory.repair_ledger.len(), 2);
+        assert!(repeated_trajectory.repair_ledger.iter().all(|entry| entry.occurrence_count == 2));
+
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::System("verifier".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: true,
+                evidence: vec!["$ cargo check".to_owned()],
+            },
+        )
+        .expect("passing verification");
+        sync_and_render(repo.path(), &session, None).expect("passing sync");
+        let passed = store(repo.path(), session.id.as_str()).load().expect("stored pass");
+        let passed_trajectory = passed.task.coding_trajectory.as_ref().expect("trajectory");
+        assert_eq!(passed_trajectory.verification_generation, 3);
+        assert!(passed_trajectory.repair_ledger.iter().all(|entry| !entry.unresolved()));
+
+        medusa_agent::compact_session(&mut session, Some("repair simultaneous diagnostics"))
+            .expect("compaction");
+        let restored = restore_for_resume(repo.path(), &session, false)
+            .expect("restore")
+            .expect("context");
+        assert!(restored.contains("repair_ledger"));
+        let restored_state = store(repo.path(), session.id.as_str()).load().expect("restored state");
+        assert_eq!(
+            restored_state
+                .task
+                .coding_trajectory
+                .as_ref()
+                .expect("trajectory")
+                .verification_generation,
+            3
+        );
+    }
+
+    #[test]
+    fn journal_projection_survives_restart_and_repository_drift() {'''
+          if test_marker not in trajectory:
+              raise SystemExit('test marker missing')
+          trajectory = trajectory.replace(test_marker, new_test, 1)
+          trajectory_path.write_text(trajectory)
+          PY
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Continuity tests
+        run: cargo test -p medusa-session-continuity
+      - name: Repair ledger tests
+        run: cargo test -p medusa-runtime repair_ledger --lib
+      - name: Coding trajectory tests
+        run: cargo test -p medusa-runtime coding_trajectory --lib
+      - name: Clippy
+        run: cargo clippy -p medusa-session-continuity -p medusa-runtime --all-targets -- -D warnings
+      - name: Commit production changes
+        if: success()
+        shell: bash
+        run: |
+          git rm .github/workflows/issue-876-bootstrap.yml
+          git add crates/medusa-session-continuity/src/root.rs crates/medusa-runtime/src/coding_trajectory.rs crates/medusa-runtime/src/repair_ledger.rs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(runtime): add structured coding repair ledger"
+          git push origin HEAD:codex/issue-876-repair-ledger
