@@ -263,7 +263,7 @@ impl RepositoryContextAssembly {
 fn effective_query(session: &AgentSession, turn_query: &str) -> String {
     let mut parts = vec![turn_query.trim().to_owned(), session.objective.trim().to_owned()];
     for step in &session.plan {
-        parts.push(step.description.trim().to_owned());
+        parts.push(step.title.trim().to_owned());
     }
     parts
         .into_iter()
@@ -428,13 +428,24 @@ mod tests {
 
     use medusa_agent::AgentEngine;
     use medusa_config::Config;
-    use medusa_provider::ScriptedProvider;
+    use medusa_core::MedusaResult;
+    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
 
     use super::*;
 
+    struct UnusedProvider;
+
+    impl ModelProvider for UnusedProvider {
+        fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
+            unreachable!("not used")
+        }
+    }
+
     fn session(repo: &Path, objective: &str) -> AgentSession {
-        let engine = AgentEngine::new(ScriptedProvider::new(Vec::new()), Config::default());
-        engine.create_session(repo, objective).expect("session")
+        let engine = AgentEngine::new(UnusedProvider, Config::default());
+        engine
+            .create_session(repo, objective.to_owned())
+            .expect("session")
     }
 
     #[test]

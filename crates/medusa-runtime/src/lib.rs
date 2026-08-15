@@ -46,6 +46,7 @@ mod learning_authority;
 pub mod learning_review;
 mod multi_agent_coordinator;
 mod mutating_worker_coordinator;
+mod repository_context;
 mod mutation_transaction;
 pub mod openai_realtime;
 pub mod observer;
@@ -1454,9 +1455,14 @@ fn run_prompt(
                     &session,
                     None,
                 )?;
-                let turn_context = format!("{skill_context}
-
-{trajectory_context}");
+                let repository_context = crate::repository_context::assemble_and_render(
+                    &state.repo,
+                    &session,
+                    &draft.text,
+                )?;
+                let turn_context = format!(
+                    "{skill_context}\n\n{trajectory_context}\n\n{repository_context}"
+                );
                 match engine.step_with_observer_and_context_and_turn_instruction_for_phase(
                     &mut session,
                     Some(turn_context.as_str()),
