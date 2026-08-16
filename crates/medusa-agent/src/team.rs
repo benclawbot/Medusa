@@ -131,8 +131,7 @@ pub struct AgentExecutionPolicy {
 }
 
 impl AgentExecutionPolicy {
-    #[must_use]
-    pub fn unrestricted() -> Self {
+    #[must_use]\n    pub fn unrestricted() -> Self {
         Self {
             allowed_tools: None,
             allow_user_questions: true,
@@ -634,8 +633,12 @@ impl TeamMemberContext {
             }
             visible.push(message.clone());
             message.delivery_state = match message.delivery_state {
-                TeamMessageDeliveryState::CoordinationOnly => TeamMessageDeliveryState::Acknowledged,
-                TeamMessageDeliveryState::LegacyQueued => TeamMessageDeliveryState::LegacyAcknowledged,
+                TeamMessageDeliveryState::CoordinationOnly => {
+                    TeamMessageDeliveryState::Acknowledged
+                }
+                TeamMessageDeliveryState::LegacyQueued => {
+                    TeamMessageDeliveryState::LegacyAcknowledged
+                }
                 state => state,
             };
         }
