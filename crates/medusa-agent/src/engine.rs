@@ -785,6 +785,17 @@ impl<P: ModelProvider> AgentEngine<P> {
         focus: Option<&str>,
     ) -> MedusaResult<()> {
         let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
+        let summary_provenance = BTreeMap::from([
+            (
+                "compaction_v2_system".to_owned(),
+                effective_request::fragment_fingerprint(&summary_request.system),
+            ),
+            (
+                "compaction_v2_focus".to_owned(),
+                effective_request::fragment_fingerprint(focus.unwrap_or_default()),
+            ),
+        ]);
+        let execution_policy = self.execution_policy.audit_projection();
         let manifest = effective_request::persist_before_provider_call(
             session,
             &summary_request,
@@ -792,6 +803,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             &self.config.model.provider,
             &self.config.model.name,
             &self.provider.capabilities(),
+            &execution_policy,
+            summary_provenance,
             None,
         )?;
         append_event(
@@ -953,8 +966,8 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     /// Executes one model step with ephemeral system context and an optional latest-turn
-    /// instruction. The instruction is sent only in the provider request and is never persisted in
-    /// the durable session history.
+    /// instruction. It is not appended to conversational session history, but the exact effective
+    /// request is retained through the protected request-manifest authority for audit/replay.
     pub fn step_with_observer_and_context_and_turn_instruction<F>(
         &self,
         session: &mut AgentSession,
@@ -1000,6 +1013,19 @@ impl<P: ModelProvider> AgentEngine<P> {
                 is_error: false,
             });
         }
+        let mut assembly_provenance = BTreeMap::new();
+        if let Some(context) = additional_system_context.filter(|text| !text.trim().is_empty()) {
+            assembly_provenance.insert(
+                "additional_system_context".to_owned(),
+                effective_request::fragment_fingerprint(context),
+            );
+        }
+        if let Some(instruction) = turn_instruction.filter(|text| !text.trim().is_empty()) {
+            assembly_provenance.insert(
+                "turn_instruction".to_owned(),
+                effective_request::fragment_fingerprint(instruction),
+            );
+        }
         let mut system = coding_policy::apply(
             system_prompt_with_context(
                 self.config.agent.mode,
@@ -1008,11 +1034,24 @@ impl<P: ModelProvider> AgentEngine<P> {
             ),
             self.config.agent.mode,
         );
+        assembly_provenance.insert(
+            "base_system_projection".to_owned(),
+            effective_request::fragment_fingerprint(&system),
+        );
         if let Some(team) = &self.team_context {
+            let team_context = team.prompt_context()?;
+            assembly_provenance.insert(
+                "team_context".to_owned(),
+                effective_request::fragment_fingerprint(&team_context),
+            );
             system.push_str("\n\n");
-            system.push_str(&team.prompt_context()?);
+            system.push_str(&team_context);
         }
         if let Some(branch_context) = crate::branch_summary::advisory_context(session) {
+            assembly_provenance.insert(
+                "branch_summary".to_owned(),
+                effective_request::fragment_fingerprint(&branch_context),
+            );
             system.push_str("\n\n");
             system.push_str(&branch_context);
         }
@@ -1047,6 +1086,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             &session.objective,
             repository_capacity,
         )? {
+            assembly_provenance.insert(
+                "repository_context".to_owned(),
+                effective_request::fragment_fingerprint(&retrieval.system_fragment),
+            );
             system.push_str("\n\n");
             system.push_str(&retrieval.system_fragment);
             observer(&AgentUpdate::ToolOutput {
@@ -1085,6 +1128,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             max_tokens: max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
+        let execution_policy = self.execution_policy.audit_projection();
         let mut active_manifest = effective_request::persist_before_provider_call(
             session,
             &request,
@@ -1092,6 +1136,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             &self.config.model.provider,
             &self.config.model.name,
             &self.provider.capabilities(),
+            &execution_policy,
+            assembly_provenance.clone(),
             None,
         )?;
         append_observed(
@@ -1219,6 +1265,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                     &self.config.model.provider,
                     &self.config.model.name,
                     &self.provider.capabilities(),
+                    &execution_policy,
+                    assembly_provenance.clone(),
                     Some(&active_manifest),
                 )?;
                 append_observed(

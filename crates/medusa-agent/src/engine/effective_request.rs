@@ -51,6 +51,9 @@ struct EffectiveModelRequestManifestV1 {
     model: String,
     provider_profile_fingerprint: String,
     capability_fingerprint: String,
+    execution_policy_fingerprint: String,
+    execution_policy: Value,
+    assembly_provenance: BTreeMap<String, String>,
     source_event_sequences: Vec<u64>,
     delivered_action_ids: Vec<String>,
     compaction_generation: Option<u32>,
@@ -77,6 +80,8 @@ struct RequestFingerprintMaterial<'a> {
     model: &'a str,
     provider_profile_fingerprint: &'a str,
     capability_fingerprint: &'a str,
+    execution_policy_fingerprint: &'a str,
+    assembly_provenance: &'a BTreeMap<String, String>,
     request_content_fingerprint: &'a str,
     component_fingerprints: &'a BTreeMap<String, String>,
     tool_schema_fingerprints: &'a BTreeMap<String, String>,
@@ -107,6 +112,8 @@ pub(crate) fn persist_before_provider_call(
     provider: &str,
     model: &str,
     capabilities: &ProviderCapabilities,
+    execution_policy: &Value,
+    assembly_provenance: BTreeMap<String, String>,
     previous: Option<&ManifestRef>,
 ) -> MedusaResult<ManifestRef> {
     let preceding_event_sequence = session.events.last().map_or(0, |event| event.sequence);
@@ -129,6 +136,8 @@ pub(crate) fn persist_before_provider_call(
     let capability_value =
         canonicalize_value(serde_json::to_value(capabilities).map_err(json_error)?);
     let capability_fingerprint = fingerprint_value(&capability_value)?;
+    let execution_policy = canonicalize_value(execution_policy.clone());
+    let execution_policy_fingerprint = fingerprint_value(&execution_policy)?;
     let provider_profile_fingerprint = fingerprint_value(&canonicalize_value(json!({
         "provider": provider,
         "model": model,
@@ -197,6 +206,8 @@ pub(crate) fn persist_before_provider_call(
         model,
         provider_profile_fingerprint: &provider_profile_fingerprint,
         capability_fingerprint: &capability_fingerprint,
+        execution_policy_fingerprint: &execution_policy_fingerprint,
+        assembly_provenance: &assembly_provenance,
         request_content_fingerprint: &request_content_fingerprint,
         component_fingerprints: &component_fingerprints,
         tool_schema_fingerprints: &tool_schema_fingerprints,
@@ -243,6 +254,9 @@ pub(crate) fn persist_before_provider_call(
         model: model.to_owned(),
         provider_profile_fingerprint,
         capability_fingerprint,
+        execution_policy_fingerprint,
+        execution_policy,
+        assembly_provenance,
         source_event_sequences,
         delivered_action_ids,
         compaction_generation,
@@ -375,14 +389,24 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
     let reconstructed_components = component_fingerprints_from_value(&canonical_request)?;
     let mismatches =
         component_mismatches(&manifest.component_fingerprints, &reconstructed_components);
+    let reconstructed_tool_schemas = tool_schema_fingerprints_from_value(&canonical_request)?;
+    let mismatched_tool_schemas = component_mismatches(
+        &manifest.tool_schema_fingerprints,
+        &reconstructed_tool_schemas,
+    );
     if reconstructed_content_fingerprint != manifest.request_content_fingerprint
         || !mismatches.is_empty()
+        || !mismatched_tool_schemas.is_empty()
     {
         let mut error =
             audit_error("effective model request content does not match its durable manifest");
         error
             .context
             .insert("mismatched_components".to_owned(), json!(mismatches));
+        error.context.insert(
+            "mismatched_tool_schemas".to_owned(),
+            json!(mismatched_tool_schemas),
+        );
         error.context.insert(
             "recorded_content_fingerprint".to_owned(),
             json!(manifest.request_content_fingerprint),
@@ -400,6 +424,8 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         model: &manifest.model,
         provider_profile_fingerprint: &manifest.provider_profile_fingerprint,
         capability_fingerprint: &manifest.capability_fingerprint,
+        execution_policy_fingerprint: &manifest.execution_policy_fingerprint,
+        assembly_provenance: &manifest.assembly_provenance,
         request_content_fingerprint: &manifest.request_content_fingerprint,
         component_fingerprints: &manifest.component_fingerprints,
         tool_schema_fingerprints: &manifest.tool_schema_fingerprints,
@@ -446,7 +472,7 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         );
         return Err(error);
     }
-    let provider_attempts = load_provider_attempts(repo, session_id, &manifest.request_id)?;
+    let provider_attempts = load_provider_attempts(repo, session_id, &manifest)?;
     let provider_execution = provider_execution_status(repo, session_id, &manifest.request_id);
     Ok(json!({
         "healthy": true,
@@ -467,6 +493,9 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         "model": manifest.model,
         "component_fingerprints": manifest.component_fingerprints,
         "tool_schema_fingerprints": manifest.tool_schema_fingerprints,
+        "execution_policy_fingerprint": manifest.execution_policy_fingerprint,
+        "execution_policy": manifest.execution_policy,
+        "assembly_provenance": manifest.assembly_provenance,
         "delivered_action_ids": manifest.delivered_action_ids,
         "compaction_generation": manifest.compaction_generation,
         "compaction_source_event_sequences": manifest.compaction_source_event_sequences,
@@ -529,6 +558,29 @@ fn component_fingerprints_from_value(request: &Value) -> MedusaResult<BTreeMap<S
         ),
         ("request_config".to_owned(), fingerprint_value(&config)?),
     ]))
+}
+
+fn tool_schema_fingerprints_from_value(request: &Value) -> MedusaResult<BTreeMap<String, String>> {
+    request
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| audit_error("protected request tools must be an array"))?
+        .iter()
+        .map(|tool| {
+            let name = tool
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| audit_error("protected tool definition has no name"))?;
+            let schema = tool
+                .get("input_schema")
+                .ok_or_else(|| audit_error("protected tool definition has no input_schema"))?;
+            Ok((name.to_owned(), fingerprint_value(schema)?))
+        })
+        .collect()
+}
+
+pub(crate) fn fragment_fingerprint(text: &str) -> String {
+    sha256(text.as_bytes())
 }
 
 fn component_mismatches(
@@ -603,7 +655,7 @@ fn read_immutable(
 fn load_provider_attempts(
     repo: &Path,
     session_id: &str,
-    request_id: &str,
+    request: &EffectiveModelRequestManifestV1,
 ) -> MedusaResult<Vec<Value>> {
     let roots = [
         repo.join(".medusa")
@@ -624,8 +676,14 @@ fn load_provider_attempts(
             let bytes = fs::read(entry.path())?;
             let attempt: ProviderAttemptManifestV1 =
                 serde_json::from_slice(&bytes).map_err(json_error)?;
-            if attempt.request_id != request_id {
+            if attempt.request_id != request.request_id {
                 continue;
+            }
+            if attempt.request_fingerprint != request.request_fingerprint {
+                return Err(audit_error(format!(
+                    "provider attempt is linked to the wrong request fingerprint: {}",
+                    attempt.attempt_fingerprint
+                )));
             }
             let material = canonicalize_value(json!({
                 "schema_version": attempt.schema_version,
@@ -646,7 +704,21 @@ fn load_provider_attempts(
             );
         }
     }
-    Ok(attempts.into_values().collect())
+    let mut attempts = attempts.into_values().collect::<Vec<_>>();
+    attempts.sort_by_key(|attempt| {
+        (
+            attempt["descriptor"]["route_ordinal"]
+                .as_u64()
+                .unwrap_or(u64::MAX),
+            attempt["descriptor"]["retry_ordinal"]
+                .as_u64()
+                .unwrap_or(u64::MAX),
+            attempt["descriptor"]["conditional"]
+                .as_bool()
+                .unwrap_or(false),
+        )
+    });
+    Ok(attempts)
 }
 
 fn provider_execution_status(repo: &Path, session_id: &str, request_id: &str) -> Option<Value> {
