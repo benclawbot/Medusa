@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -25,6 +25,8 @@ use crate::{
     evidence::append_event,
     session::{load, persist},
 };
+
+static TEAM_REPOSITORIES: OnceLock<Mutex<BTreeMap<String, PathBuf>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -346,6 +348,7 @@ impl TeamRuntime {
             })),
         };
         validate_state(&*runtime.lock()?)?;
+        runtime.register_repository()?;
         runtime.persist()?;
         Ok(runtime)
     }
@@ -362,6 +365,7 @@ impl TeamRuntime {
             path,
             state: Arc::new(Mutex::new(state)),
         };
+        runtime.register_repository()?;
         if migrated {
             runtime.persist()?;
         }
@@ -444,6 +448,26 @@ impl TeamRuntime {
 
     pub fn team_id(&self) -> Result<String, String> {
         Ok(self.lock()?.team_id.clone())
+    }
+
+    fn register_repository(&self) -> Result<(), String> {
+        let Some(repo) = self.repo.as_ref() else {
+            return Ok(());
+        };
+        let team_id = self.lock()?.team_id.clone();
+        let registry = TEAM_REPOSITORIES.get_or_init(|| Mutex::new(BTreeMap::new()));
+        let mut registry = registry
+            .lock()
+            .map_err(|_| "team repository registry lock was poisoned".to_owned())?;
+        if let Some(existing) = registry.get(&team_id)
+            && existing != repo
+        {
+            return Err(format!(
+                "team `{team_id}` is already bound to a different repository"
+            ));
+        }
+        registry.insert(team_id, repo.clone());
+        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, DurableTeamState>, String> {
@@ -724,7 +748,36 @@ impl TeamMemberContext {
     }
 }
 
-pub(crate) fn admit_team_instruction(
+/// Admits one runtime team-control instruction through the canonical worker session action plane.
+/// The execution id must have been bound to a `TeamRuntime` in this process, which is rebuilt from
+/// the durable team state on restart. The idempotency key is supplied by the control plane so a
+/// crash after session persistence but before the UI receipt can coalesce on replay.
+pub fn admit_control_instruction(
+    execution_id: &str,
+    session_id: &str,
+    recipient: &str,
+    body: &str,
+    idempotency_key: &str,
+) -> Result<String, String> {
+    let registry = TEAM_REPOSITORIES.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let repo = registry
+        .lock()
+        .map_err(|_| "team repository registry lock was poisoned".to_owned())?
+        .get(execution_id)
+        .cloned()
+        .ok_or_else(|| format!("team execution `{execution_id}` has no durable repository binding"))?;
+    admit_team_instruction(
+        &repo,
+        session_id,
+        "lead",
+        recipient,
+        body,
+        idempotency_key,
+    )
+    .map_err(|error| error.to_string())
+}
+
+pub fn admit_team_instruction(
     repo: &Path,
     session_id: &str,
     sender: &str,
@@ -1003,6 +1056,32 @@ mod tests {
     }
 
     #[test]
+    fn control_instruction_uses_registered_team_repository() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(NoopProvider, Config::default());
+        let session = engine
+            .create_session(directory.path(), "review".to_owned())
+            .expect("session");
+        let _ = team_with_worker(&directory, session.id.as_str());
+        let action_id = admit_control_instruction(
+            "team-1",
+            session.id.as_str(),
+            "reviewer",
+            "check durable steering",
+            "team-control:team-1:reviewer:1",
+        )
+        .expect("admit control instruction");
+        let restored = engine
+            .load_session(directory.path(), session.id.as_str())
+            .expect("restore session");
+        assert!(restored.events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::SessionActionAccepted { action }
+                if action.action_id == action_id && action.source == "team:lead:reviewer"
+        )));
+    }
+
+    #[test]
     fn mailbox_read_cannot_claim_model_visibility() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let engine = AgentEngine::new(NoopProvider, Config::default());
@@ -1032,7 +1111,7 @@ mod tests {
             .expect("session");
         let team = TeamRuntime::create(
             directory.path().join(".medusa/executions/test/team.json"),
-            "team-1",
+            "team-1-peer",
             vec![
                 ("researcher".to_owned(), TeamRole::Researcher),
                 ("reviewer".to_owned(), TeamRole::Reviewer),
@@ -1071,7 +1150,7 @@ mod tests {
         fs::write(
             &path,
             serde_json::to_vec_pretty(&json!({
-                "team_id": "team-1",
+                "team_id": "legacy-team",
                 "members": {
                     "lead": {"id":"lead","role":"lead","lifecycle":"running","current_task":null,"session_id":null},
                     "reviewer": {"id":"reviewer","role":"reviewer","lifecycle":"idle","current_task":null,"session_id":null}
