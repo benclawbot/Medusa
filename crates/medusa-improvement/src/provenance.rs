@@ -544,6 +544,13 @@ fn adapt_event(
             "artifact transaction recorded".to_owned(),
             None,
         ),
+        EventPayload::ModelRequestFailed { .. } => (
+            ProvenanceSource::ProviderExecution,
+            ProvenanceOutcome::Negative,
+            ProvenanceAuthority::SystemRecord,
+            "provider request failure recorded".to_owned(),
+            None,
+        ),
         EventPayload::ProviderExecutionRecorded { .. }
         | EventPayload::ModelRequestStarted { .. }
         | EventPayload::ModelResponseReceived { .. } => (

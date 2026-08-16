@@ -37,6 +37,15 @@ pub use engine_support::{compact_session, update_session_objective};
 pub use identity_guard::{compatibility_context, validate_provider_text};
 pub use policy::validate_shell_command;
 
+/// Reconstructs and verifies one durable effective-model-request manifest.
+pub fn inspect_effective_model_request(
+    repo: &std::path::Path,
+    session_id: &str,
+    manifest_ref: &str,
+) -> medusa_core::MedusaResult<serde_json::Value> {
+    engine::effective_request::inspect(repo, session_id, manifest_ref)
+}
+
 /// Runs a host-owned analysis helper inside the same fail-closed command containment used by
 /// Medusa tools. The caller supplies the containment root; analysis callers use only their
 /// session-scoped scratch directory, never the authoritative repository.

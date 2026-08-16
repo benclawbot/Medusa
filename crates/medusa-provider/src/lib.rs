@@ -24,7 +24,8 @@ pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
 pub use contracts::{
     ImageSource, Message, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
-    ProviderCapabilities, ProviderExecutionPhase, ResponseBlock, Role, ToolDefinition, Usage,
+    ProviderAttemptDescriptor, ProviderAttemptKind, ProviderCapabilities, ProviderExecutionPhase,
+    ResponseBlock, Role, ToolDefinition, Usage,
 };
 pub use health_store::ProviderHealthStore;
 pub use hedge_acceptance::{

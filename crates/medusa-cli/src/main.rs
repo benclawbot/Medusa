@@ -23,7 +23,7 @@ use config_profiles::{
     list as list_config_profiles, reset_section as reset_config_section, rollback as rollback_config,
     set as set_config, unset as unset_config, use_profile as use_config_profile,
 };
-use medusa_agent::{bootstrap, session_browser::list_sessions};
+use medusa_agent::{bootstrap, inspect_effective_model_request, session_browser::list_sessions};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve, serve_with_config};
@@ -111,6 +111,11 @@ enum CommandKind {
     },
     Checkpoint {
         message: String,
+    },
+    /// Verify and inspect one durable effective-model-request manifest.
+    RequestAudit {
+        session: String,
+        manifest: String,
     },
     Run {
         objective: String,
@@ -325,6 +330,18 @@ fn run() -> MedusaResult<()> {
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
+        CommandKind::RequestAudit { session, manifest } => {
+            let audit = inspect_effective_model_request(&repo, &session, &manifest)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&audit).map_err(|error| MedusaError::new(
+                    ErrorCode::InvalidEvent,
+                    ErrorCategory::Internal,
+                    format!("could not render request audit: {error}"),
+                ))?
+            );
+            Ok(())
+        }
         CommandKind::Run {
             objective,
             non_interactive,

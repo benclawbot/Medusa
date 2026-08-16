@@ -146,6 +146,19 @@ impl AgentExecutionPolicy {
         self
     }
 
+    pub(crate) fn audit_projection(&self) -> Value {
+        let mut allowed_write_paths = self.allowed_write_paths.clone();
+        if let Some(paths) = &mut allowed_write_paths {
+            paths.sort();
+            paths.dedup();
+        }
+        json!({
+            "allowed_tools": self.allowed_tools.as_ref().map(|tools| tools.iter().cloned().collect::<Vec<_>>()),
+            "allow_user_questions": self.allow_user_questions,
+            "allowed_write_paths": allowed_write_paths,
+        })
+    }
+
     #[must_use]
     pub fn allows(&self, tool: &str) -> bool {
         if tool == "ask_user_question" && !self.allow_user_questions {

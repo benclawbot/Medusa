@@ -489,6 +489,7 @@ fn payload_kind(payload: &EventPayload) -> &'static str {
         EventPayload::SessionReset { .. } => "session_reset",
         EventPayload::ModelRequestStarted { .. } => "model_request_started",
         EventPayload::ModelResponseReceived { .. } => "model_response_received",
+        EventPayload::ModelRequestFailed { .. } => "model_request_failed",
         EventPayload::ProviderExecutionRecorded { .. } => "provider_execution_recorded",
         EventPayload::ToolCallRequested { .. } => "tool_call_requested",
         EventPayload::ToolCallDenied { .. } => "tool_call_denied",

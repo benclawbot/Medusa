@@ -190,11 +190,21 @@ pub fn project_event(
             title: "Session reset".to_owned(),
             details: vec![reason.clone()],
         },
-        EventPayload::ModelRequestStarted { provider, model } => FrontendEvent::Activity(activity(
+        EventPayload::ModelRequestStarted {
+            provider, model, ..
+        } => FrontendEvent::Activity(activity(
             event,
             PresentationActivityKind::Assistant,
             PresentationLifecycle::Active,
             format!("Requesting {provider}/{model}"),
+            Vec::new(),
+            None,
+        )),
+        EventPayload::ModelRequestFailed { .. } => FrontendEvent::Activity(activity(
+            event,
+            PresentationActivityKind::Assistant,
+            PresentationLifecycle::Failed,
+            "Model request failed".to_owned(),
             Vec::new(),
             None,
         )),

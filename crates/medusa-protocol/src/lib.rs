@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 /// Current wire protocol version.
-pub const CURRENT_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 3 };
+pub const CURRENT_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 4 };
 
 /// Independently versioned wire protocol.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -287,10 +287,29 @@ pub enum EventPayload {
     ModelRequestStarted {
         provider: String,
         model: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_fingerprint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        manifest_ref: Option<String>,
+        #[serde(default)]
+        attempt_ordinal: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_request_id: Option<String>,
     },
     ModelResponseReceived {
         response_id: Option<String>,
         usage: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_fingerprint: Option<String>,
+    },
+    ModelRequestFailed {
+        request_id: String,
+        request_fingerprint: String,
+        error: String,
     },
     ProviderExecutionRecorded {
         status: Value,

@@ -19,6 +19,7 @@ mod world_model_observation {
         "/src/world_model_observation.rs"
     ));
 }
+pub(crate) mod effective_request;
 mod runtime_failure;
 
 use std::{
@@ -784,19 +785,59 @@ impl<P: ModelProvider> AgentEngine<P> {
         focus: Option<&str>,
     ) -> MedusaResult<()> {
         let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
+        let summary_provenance = BTreeMap::from([
+            (
+                "compaction_v2_system".to_owned(),
+                effective_request::fragment_fingerprint(&summary_request.system),
+            ),
+            (
+                "compaction_v2_focus".to_owned(),
+                effective_request::fragment_fingerprint(focus.unwrap_or_default()),
+            ),
+        ]);
+        let execution_policy = self.execution_policy.audit_projection();
+        let capabilities = self.provider.capabilities();
+        let manifest = effective_request::persist_before_provider_call(
+            session,
+            &summary_request,
+            effective_request::RequestManifestInput {
+                phase: ProviderExecutionPhase::Summarization,
+                provider: &self.config.model.provider,
+                model: &self.config.model.name,
+                capabilities: &capabilities,
+                execution_policy: &execution_policy,
+                assembly_provenance: summary_provenance,
+                previous: None,
+            },
+        )?;
         append_event(
             session,
             Actor::Coordinator,
-            EventPayload::ModelRequestStarted {
-                provider: self.config.model.provider.clone(),
-                model: self.config.model.name.clone(),
-            },
+            effective_request::started_event(
+                &manifest,
+                &self.config.model.provider,
+                &self.config.model.name,
+            ),
         )?;
+        session.updated_at = OffsetDateTime::now_utc();
+        persist(session)?;
         let request_started = std::time::Instant::now();
-        let semantic = match self.provider.complete_cancellable_for_phase(
+        let audit_repo = session.repo.clone();
+        let audit_session_id = session.id.to_string();
+        let mut before_provider_attempt = |attempt: &medusa_provider::ProviderAttemptDescriptor| {
+            effective_request::persist_provider_attempt(
+                &audit_repo,
+                &audit_session_id,
+                &manifest,
+                attempt,
+            )
+            .map(|_| ())
+        };
+        let semantic = match self.provider.complete_cancellable_for_phase_with_attempts(
             &summary_request,
             ProviderExecutionPhase::Summarization,
             &self.cancellation,
+            &mut before_provider_attempt,
         ) {
             Ok(response) => {
                 let turn_usage = crate::session::record_turn_usage(
@@ -808,18 +849,30 @@ impl<P: ModelProvider> AgentEngine<P> {
                 append_event(
                     session,
                     Actor::Coordinator,
-                    EventPayload::ModelResponseReceived {
-                        response_id: response.response_id.clone(),
-                        usage: serde_json::to_value(turn_usage).map_err(json_error)?,
-                    },
+                    effective_request::response_event(
+                        &manifest,
+                        response.response_id.clone(),
+                        serde_json::to_value(turn_usage).map_err(json_error)?,
+                    ),
                 )?;
+                session.updated_at = OffsetDateTime::now_utc();
+                persist(session)?;
                 crate::compaction_v2::validate_semantic_response(
                     &response,
                     &self.config.model.name,
                     &self.config.model.provider,
                 )
             }
-            Err(_) => None,
+            Err(error) => {
+                append_event(
+                    session,
+                    Actor::Coordinator,
+                    effective_request::failure_event(&manifest, &error),
+                )?;
+                session.updated_at = OffsetDateTime::now_utc();
+                persist(session)?;
+                None
+            }
         };
         crate::engine_support::compact_session_with_semantic(session, focus, semantic)
     }
@@ -916,8 +969,8 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     /// Executes one model step with ephemeral system context and an optional latest-turn
-    /// instruction. The instruction is sent only in the provider request and is never persisted in
-    /// the durable session history.
+    /// instruction. It is not appended to conversational session history, but the exact effective
+    /// request is retained through the protected request-manifest authority for audit/replay.
     pub fn step_with_observer_and_context_and_turn_instruction<F>(
         &self,
         session: &mut AgentSession,
@@ -956,20 +1009,25 @@ impl<P: ModelProvider> AgentEngine<P> {
         }
         validate_messages(&session.messages, &self.provider.capabilities())?;
         session.turn = session.turn.saturating_add(1);
-        append_observed(
-            session,
-            EventPayload::ModelRequestStarted {
-                provider: self.config.model.provider.clone(),
-                model: self.config.model.name.clone(),
-            },
-            &mut observer,
-        )?;
         if let Some(refresh) = repository_index::refresh(&session.repo)? {
             observer(&AgentUpdate::ToolOutput {
                 tool: "code_index".to_owned(),
                 output: repository_index::summary(&refresh),
                 is_error: false,
             });
+        }
+        let mut assembly_provenance = BTreeMap::new();
+        if let Some(context) = additional_system_context.filter(|text| !text.trim().is_empty()) {
+            assembly_provenance.insert(
+                "additional_system_context".to_owned(),
+                effective_request::fragment_fingerprint(context),
+            );
+        }
+        if let Some(instruction) = turn_instruction.filter(|text| !text.trim().is_empty()) {
+            assembly_provenance.insert(
+                "turn_instruction".to_owned(),
+                effective_request::fragment_fingerprint(instruction),
+            );
         }
         let mut system = coding_policy::apply(
             system_prompt_with_context(
@@ -979,11 +1037,24 @@ impl<P: ModelProvider> AgentEngine<P> {
             ),
             self.config.agent.mode,
         );
+        assembly_provenance.insert(
+            "base_system_projection".to_owned(),
+            effective_request::fragment_fingerprint(&system),
+        );
         if let Some(team) = &self.team_context {
+            let team_context = team.prompt_context()?;
+            assembly_provenance.insert(
+                "team_context".to_owned(),
+                effective_request::fragment_fingerprint(&team_context),
+            );
             system.push_str("\n\n");
-            system.push_str(&team.prompt_context()?);
+            system.push_str(&team_context);
         }
         if let Some(branch_context) = crate::branch_summary::advisory_context(session) {
+            assembly_provenance.insert(
+                "branch_summary".to_owned(),
+                effective_request::fragment_fingerprint(&branch_context),
+            );
             system.push_str("\n\n");
             system.push_str(&branch_context);
         }
@@ -1018,6 +1089,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             &session.objective,
             repository_capacity,
         )? {
+            assembly_provenance.insert(
+                "repository_context".to_owned(),
+                effective_request::fragment_fingerprint(&retrieval.system_fragment),
+            );
             system.push_str("\n\n");
             system.push_str(&retrieval.system_fragment);
             observer(&AgentUpdate::ToolOutput {
@@ -1056,6 +1131,30 @@ impl<P: ModelProvider> AgentEngine<P> {
             max_tokens: max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
+        let execution_policy = self.execution_policy.audit_projection();
+        let capabilities = self.provider.capabilities();
+        let mut active_manifest = effective_request::persist_before_provider_call(
+            session,
+            &request,
+            effective_request::RequestManifestInput {
+                phase,
+                provider: &self.config.model.provider,
+                model: &self.config.model.name,
+                capabilities: &capabilities,
+                execution_policy: &execution_policy,
+                assembly_provenance: assembly_provenance.clone(),
+                previous: None,
+            },
+        )?;
+        append_observed(
+            session,
+            effective_request::started_event(
+                &active_manifest,
+                &self.config.model.provider,
+                &self.config.model.name,
+            ),
+            &mut observer,
+        )?;
         let request_started = std::time::Instant::now();
         let streaming = self.provider.capabilities().streaming;
         let mut stream_transcript = ProviderStreamTranscript::default();
@@ -1063,74 +1162,97 @@ impl<P: ModelProvider> AgentEngine<P> {
         let mut stream_text_rejected = false;
         let mut early_tool_executions = BTreeMap::<String, EarlyToolExecution>::new();
         let streaming_repo = session.repo.clone();
-        let mut complete_request = |request: &ModelRequest| {
-            if !streaming {
-                return self.provider.complete_cancellable_for_phase(
-                    request,
-                    phase,
-                    &self.cancellation,
-                );
-            }
-            let mut sink = |event: ProviderStreamEvent| {
-                stream_transcript.push(event.clone())?;
-                match event {
-                    ProviderStreamEvent::TextDelta { text } if !stream_text_rejected => {
-                        streamed_text.push_str(&text);
-                        if validate_provider_text(&streamed_text).is_ok() {
-                            observer(&AgentUpdate::AssistantText(text));
-                        } else {
-                            stream_text_rejected = true;
-                            observer(&AgentUpdate::AssistantText(
-                                "[provider output rejected: identity or policy contamination]"
-                                    .to_owned(),
-                            ));
+        let audit_repo = session.repo.clone();
+        let audit_session_id = session.id.to_string();
+        macro_rules! complete_request {
+            ($request:expr, $manifest:expr) => {{
+                let mut before_provider_attempt = |attempt: &medusa_provider::ProviderAttemptDescriptor| {
+                    effective_request::persist_provider_attempt(
+                        &audit_repo,
+                        &audit_session_id,
+                        $manifest,
+                        attempt,
+                    )
+                    .map(|_| ())
+                };
+                if !streaming {
+                    self.provider.complete_cancellable_for_phase_with_attempts(
+                        $request,
+                        phase,
+                        &self.cancellation,
+                        &mut before_provider_attempt,
+                    )
+                } else {
+                    let mut sink = |event: ProviderStreamEvent| {
+                        stream_transcript.push(event.clone())?;
+                        match event {
+                            ProviderStreamEvent::TextDelta { text } if !stream_text_rejected => {
+                                streamed_text.push_str(&text);
+                                if validate_provider_text(&streamed_text).is_ok() {
+                                    observer(&AgentUpdate::AssistantText(text));
+                                } else {
+                                    stream_text_rejected = true;
+                                    observer(&AgentUpdate::AssistantText(
+                                        "[provider output rejected: identity or policy contamination]"
+                                            .to_owned(),
+                                    ));
+                                }
+                            }
+                            ProviderStreamEvent::ToolUseReady { id, name, input }
+                                if !early_tool_executions.contains_key(&id)
+                                    && stream_dispatch_safe_tool(&name, &input)
+                                    && tool_allowed(self.config.agent.mode, &name) =>
+                            {
+                                let requested_at = std::time::Instant::now();
+                                let started = std::time::Instant::now();
+                                if let Ok(execution) =
+                                    execute_tool_cancellable_with_policy_certified(
+                                        &streaming_repo,
+                                        &name,
+                                        &input,
+                                        self.cancellation.as_ref(),
+                                        &self.execution_policy,
+                                    ) && execution.result.is_ok()
+                                {
+                                    early_tool_executions.insert(
+                                        id,
+                                        EarlyToolExecution {
+                                            name,
+                                            input,
+                                            execution,
+                                            requested_at,
+                                            timing: ToolExecutionTiming {
+                                                queue_duration_ns: 0,
+                                                execution_duration_ns: duration_ns(started.elapsed()),
+                                                cached: false,
+                                            },
+                                        },
+                                    );
+                                }
+                            }
+                            _ => {}
                         }
-                    }
-                    ProviderStreamEvent::ToolUseReady { id, name, input }
-                        if !early_tool_executions.contains_key(&id)
-                            && stream_dispatch_safe_tool(&name, &input)
-                            && tool_allowed(self.config.agent.mode, &name) =>
-                    {
-                        let requested_at = std::time::Instant::now();
-                        let started = std::time::Instant::now();
-                        if let Ok(execution) = execute_tool_cancellable_with_policy_certified(
-                            &streaming_repo,
-                            &name,
-                            &input,
-                            self.cancellation.as_ref(),
-                            &self.execution_policy,
-                        ) && execution.result.is_ok()
-                        {
-                            early_tool_executions.insert(
-                                id,
-                                EarlyToolExecution {
-                                    name,
-                                    input,
-                                    execution,
-                                    requested_at,
-                                    timing: ToolExecutionTiming {
-                                        queue_duration_ns: 0,
-                                        execution_duration_ns: duration_ns(started.elapsed()),
-                                        cached: false,
-                                    },
-                                },
-                            );
-                        }
-                    }
-                    _ => {}
+                        Ok(())
+                    };
+                    self.provider
+                        .complete_streaming_cancellable_for_phase_with_attempts(
+                            $request,
+                            phase,
+                            &self.cancellation,
+                            &mut before_provider_attempt,
+                            &mut sink,
+                        )
                 }
-                Ok(())
-            };
-            self.provider.complete_streaming_cancellable_for_phase(
-                request,
-                phase,
-                &self.cancellation,
-                &mut sink,
-            )
-        };
-        let response = match complete_request(&request) {
+            }};
+        }
+        let response = match complete_request!(&request, &active_manifest) {
             Ok(response) => response,
             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
+                append_observed(
+                    session,
+                    effective_request::failure_event(&active_manifest, &error),
+                    &mut observer,
+                )?;
                 if !compacted {
                     self.compact_session_v2(
                         session,
@@ -1142,9 +1264,50 @@ impl<P: ModelProvider> AgentEngine<P> {
                     request.messages = messages_with_turn_instruction(session, turn_instruction);
                     validate_messages(&request.messages, &self.provider.capabilities())?;
                 }
-                complete_request(&request)?
+                let retry_capabilities = self.provider.capabilities();
+                let retry_manifest = effective_request::persist_before_provider_call(
+                    session,
+                    &request,
+                    effective_request::RequestManifestInput {
+                        phase,
+                        provider: &self.config.model.provider,
+                        model: &self.config.model.name,
+                        capabilities: &retry_capabilities,
+                        execution_policy: &execution_policy,
+                        assembly_provenance: assembly_provenance.clone(),
+                        previous: Some(&active_manifest),
+                    },
+                )?;
+                append_observed(
+                    session,
+                    effective_request::started_event(
+                        &retry_manifest,
+                        &self.config.model.provider,
+                        &self.config.model.name,
+                    ),
+                    &mut observer,
+                )?;
+                active_manifest = retry_manifest;
+                match complete_request!(&request, &active_manifest) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        append_observed(
+                            session,
+                            effective_request::failure_event(&active_manifest, &error),
+                            &mut observer,
+                        )?;
+                        return Err(error);
+                    }
+                }
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                append_observed(
+                    session,
+                    effective_request::failure_event(&active_manifest, &error),
+                    &mut observer,
+                )?;
+                return Err(error);
+            }
         };
         let turn_usage = crate::session::record_turn_usage(
             session.turn,
@@ -1154,19 +1317,23 @@ impl<P: ModelProvider> AgentEngine<P> {
         );
         append_observed(
             session,
-            EventPayload::ModelResponseReceived {
-                response_id: response.response_id.clone(),
-                usage: serde_json::to_value(turn_usage).map_err(json_error)?,
+            effective_request::response_event(
+                &active_manifest,
+                response.response_id.clone(),
+                serde_json::to_value(turn_usage).map_err(json_error)?,
+            ),
+            &mut observer,
+        )?;
+        append_observed(
+            session,
+            EventPayload::ProviderExecutionRecorded {
+                status: effective_request::augment_execution_status(
+                    self.provider.execution_status(),
+                    &active_manifest,
+                ),
             },
             &mut observer,
         )?;
-        if let Some(status) = self.provider.execution_status() {
-            append_observed(
-                session,
-                EventPayload::ProviderExecutionRecorded { status },
-                &mut observer,
-            )?;
-        }
 
         let mut assistant_blocks = Vec::new();
         let mut assistant_text = Vec::new();

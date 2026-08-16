@@ -452,6 +452,11 @@ mod tests {
             &EventPayload::ModelRequestStarted {
                 provider: "provider".to_owned(),
                 model: "model".to_owned(),
+                request_id: None,
+                request_fingerprint: None,
+                manifest_ref: None,
+                attempt_ordinal: 0,
+                parent_request_id: None,
             }
         ));
         assert!(!is_checkpoint_boundary(&EventPayload::CheckpointCreated {
