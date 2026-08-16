@@ -136,15 +136,18 @@ impl TeamControlPlane {
         session_id: Option<&str>,
         message: impl Into<String>,
     ) -> Result<TeamSnapshot, String> {
-        self.update(worker_id, |worker| {
-            if let Some(session_id) = session_id {
-                worker.session_id = Some(session_id.to_owned());
+        let session_id = session_id.map(str::to_owned);
+        let snapshot = self.update(worker_id, |worker| {
+            if let Some(session_id) = &session_id {
+                worker.session_id = Some(session_id.clone());
             }
             if worker.lifecycle != TeamWorkerLifecycle::CancellationRequested {
                 worker.lifecycle = TeamWorkerLifecycle::Running;
                 worker.last_update = message.into();
             }
-        })
+        })?;
+        self.bind_published_session(worker_id, session_id.as_deref(), &snapshot)?;
+        Ok(snapshot)
     }
 
     pub fn progress(
@@ -154,16 +157,19 @@ impl TeamControlPlane {
         turn: u32,
         message: impl Into<String>,
     ) -> Result<TeamSnapshot, String> {
-        self.update(worker_id, |worker| {
-            if let Some(session_id) = session_id {
-                worker.session_id = Some(session_id.to_owned());
+        let session_id = session_id.map(str::to_owned);
+        let snapshot = self.update(worker_id, |worker| {
+            if let Some(session_id) = &session_id {
+                worker.session_id = Some(session_id.clone());
             }
             worker.turn = turn;
             if worker.lifecycle != TeamWorkerLifecycle::CancellationRequested {
                 worker.lifecycle = TeamWorkerLifecycle::Running;
                 worker.last_update = message.into();
             }
-        })
+        })?;
+        self.bind_published_session(worker_id, session_id.as_deref(), &snapshot)?;
+        Ok(snapshot)
     }
 
     pub fn retrying(
@@ -354,6 +360,22 @@ impl TeamControlPlane {
             .collect()
     }
 
+    fn bind_published_session(
+        &self,
+        worker_id: &str,
+        session_id: Option<&str>,
+        snapshot: &TeamSnapshot,
+    ) -> Result<(), String> {
+        let Some(session_id) = session_id else {
+            return Ok(());
+        };
+        let execution_id = snapshot
+            .execution_id
+            .as_deref()
+            .ok_or_else(|| "no coordinated team is active".to_owned())?;
+        medusa_agent::team::bind_control_session(execution_id, worker_id, session_id)
+    }
+
     fn update(
         &self,
         worker_id: &str,
@@ -447,7 +469,7 @@ mod tests {
         let session = engine
             .create_session(directory.path(), "analyze".to_owned())
             .expect("session");
-        TeamRuntime::create(
+        let team = TeamRuntime::create(
             directory.path().join(".medusa/executions/test/team.json"),
             "execution-1",
             vec![
@@ -456,6 +478,7 @@ mod tests {
             ],
         )
         .expect("team runtime");
+        let worker_context = team.member_context("worker-a").expect("worker context");
         let control = control();
         control
             .start("worker-a", Some(session.id.as_str()), "running")
@@ -465,6 +488,12 @@ mod tests {
             .unwrap();
         assert_eq!(snapshot.workers[0].queued_instructions, 0);
         assert_eq!(control.take_instruction("worker-a").unwrap(), None);
+        assert!(
+            worker_context
+                .prompt_context()
+                .expect("prompt context")
+                .contains("inspect the failing test")
+        );
 
         let restored = engine
             .load_session(directory.path(), session.id.as_str())
@@ -513,10 +542,11 @@ mod tests {
         let control = control();
         control
             .start("worker-a", Some("session-a"), "running")
-            .unwrap();
+            .unwrap_err();
+        let control = control();
         control.stop_worker("worker-a").unwrap();
         control
-            .progress("worker-a", Some("session-a"), 2, "late progress")
+            .progress("worker-a", None, 2, "late progress")
             .unwrap();
         control.retrying("worker-a", "late retry").unwrap();
 
