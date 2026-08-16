@@ -41,6 +41,10 @@ use medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_
 use time::OffsetDateTime;
 
 use crate::{
+    agent_scope::{
+        AgentScopePreparation, AgentScopeRef, prepare_agent_scope, publish_agent_scope,
+        resume_agent_scope, stop_agent_scope, validate_agent_scope,
+    },
     analysis_host::{ANALYSIS_WORKSPACE_TOOL, AnalysisWorkspaceHost},
     approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},
     engine_support::*,
@@ -218,6 +222,7 @@ fn journal_certified_tool_execution(
     receipt: serde_json::Value,
     execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<()> {
+    let scope = crate::agent_scope::load_published_scope_ref(&session.repo, session.id.as_str())?;
     append_event(
         session,
         Actor::Coordinator,
@@ -228,6 +233,9 @@ fn journal_certified_tool_execution(
                 "tool": audited_tool_name(name, input),
                 "receipt": receipt,
                 "execution_authority": execution_policy.audit_projection(),
+                "agent_scope_id": scope.scope_id,
+                "agent_scope_fingerprint": scope.scope_fingerprint,
+                "agent_scope_generation": scope.generation,
             }),
         },
     )?;
@@ -442,6 +450,64 @@ impl<P: ModelProvider> AgentEngine<P> {
         self
     }
 
+    fn scope_provider_profile(&self) -> MedusaResult<serde_json::Value> {
+        serde_json::to_value(&self.config.model).map_err(json_error)
+    }
+
+    fn scope_effective_tools(&self, repo: &Path) -> MedusaResult<Vec<String>> {
+        let mut tools = available_tools(
+            self.config.agent.mode,
+            repo,
+            &self.desktop_commander_settings,
+        )?;
+        if let Some(team) = &self.team_context {
+            tools.extend(team.definitions());
+        }
+        if self.analysis_host.is_some() {
+            tools.push(crate::analysis_host::tool_definition());
+        }
+        tools.retain(|tool| self.execution_policy.allows(&tool.name));
+        let mut names = tools.into_iter().map(|tool| tool.name).collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    fn scope_team_identity(&self) -> MedusaResult<(Option<String>, Option<String>)> {
+        let Some(team) = &self.team_context else {
+            return Ok((None, None));
+        };
+        Ok((
+            Some(team.team_id().map_err(|error| {
+                MedusaError::new(ErrorCode::InternalInvariant, ErrorCategory::Internal, error)
+            })?),
+            Some(team.member_id().to_owned()),
+        ))
+    }
+
+    fn validate_scope(&self, session: &AgentSession) -> MedusaResult<AgentScopeRef> {
+        validate_agent_scope(
+            &session.repo,
+            session.id.as_str(),
+            self.scope_provider_profile()?,
+            self.execution_policy.audit_projection(),
+            self.scope_effective_tools(&session.repo)?,
+        )
+    }
+
+    pub fn stop_session_scope(
+        &self,
+        session: &AgentSession,
+        cause: impl Into<String>,
+    ) -> MedusaResult<crate::agent_scope::AgentScopeStopReceipt> {
+        self.cancellation
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut client) = self.desktop_commander.lock() {
+            client.take();
+        }
+        stop_agent_scope(&session.repo, session.id.as_str(), cause)
+    }
+
     fn execute_desktop_commander(
         &self,
         repo: &Path,
@@ -525,6 +591,30 @@ impl<P: ModelProvider> AgentEngine<P> {
         validate_user_content(&content, &self.provider.capabilities())?;
         bootstrap(repo)?;
         medusa_intelligence::recover_patch_transactions(repo)?;
+        let effective_tools = self.scope_effective_tools(repo)?;
+        let provider_profile = self.scope_provider_profile()?;
+        let execution_policy = self.execution_policy.audit_projection();
+        let (team_id, member_id) = self.scope_team_identity()?;
+        let scope = prepare_agent_scope(
+            repo,
+            &id,
+            AgentScopePreparation {
+                mode: self.config.agent.mode,
+                provider_profile: provider_profile.clone(),
+                execution_policy: execution_policy.clone(),
+                effective_tools: effective_tools.clone(),
+                team_id,
+                member_id,
+                analysis_workspace: self.analysis_host.is_some(),
+            },
+        )?;
+        publish_agent_scope(
+            repo,
+            &scope,
+            provider_profile,
+            execution_policy,
+            effective_tools,
+        )?;
         let now = OffsetDateTime::now_utc();
         let world_model = create_for_session(repo, id.as_str(), objective.clone()).ok();
         let mut session = AgentSession {
@@ -560,7 +650,15 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     pub fn load_session(&self, repo: &Path, session: &str) -> MedusaResult<AgentSession> {
         medusa_intelligence::recover_patch_transactions(repo)?;
-        load(repo, session)
+        let loaded = load(repo, session)?;
+        resume_agent_scope(
+            repo,
+            loaded.id.as_str(),
+            self.scope_provider_profile()?,
+            self.execution_policy.audit_projection(),
+            self.scope_effective_tools(repo)?,
+        )?;
+        Ok(loaded)
     }
 
     /// Loads the durable evidence model associated with a session, when enabled.
@@ -588,6 +686,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         session: &mut AgentSession,
         mut content: Vec<MessageBlock>,
     ) -> MedusaResult<()> {
+        self.validate_scope(session)?;
         content.insert(
             0,
             MessageBlock::Text {
@@ -618,6 +717,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         command_id: String,
         mut content: Vec<MessageBlock>,
     ) -> MedusaResult<()> {
+        self.validate_scope(session)?;
         content.insert(
             0,
             MessageBlock::Text {
@@ -647,6 +747,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         session: &mut AgentSession,
         content: Vec<MessageBlock>,
     ) -> MedusaResult<()> {
+        self.validate_scope(session)?;
         let question = session.pending_question.take().ok_or_else(|| {
             MedusaError::new(
                 ErrorCode::InvalidConfiguration,
@@ -1023,6 +1124,7 @@ impl<P: ModelProvider> AgentEngine<P> {
     where
         F: FnMut(&AgentUpdate),
     {
+        self.validate_scope(session)?;
         if session.completed {
             return Ok(StepOutcome::Completed);
         }

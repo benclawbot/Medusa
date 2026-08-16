@@ -78,6 +78,17 @@ pub struct AgentScopeStopReceipt {
     pub stopped_at_unix_ms: i64,
 }
 
+#[derive(Clone, Debug)]
+pub struct AgentScopePreparation {
+    pub mode: Mode,
+    pub provider_profile: Value,
+    pub execution_policy: Value,
+    pub effective_tools: Vec<String>,
+    pub team_id: Option<String>,
+    pub member_id: Option<String>,
+    pub analysis_workspace: bool,
+}
+
 #[derive(Serialize)]
 struct ScopeAuthorityMaterial<'a> {
     schema_version: u16,
@@ -98,14 +109,17 @@ struct ScopeAuthorityMaterial<'a> {
 pub fn prepare_agent_scope(
     repo: &Path,
     session_id: &SessionId,
-    mode: Mode,
-    provider_profile: Value,
-    execution_policy: Value,
-    effective_tools: Vec<String>,
-    team_id: Option<String>,
-    member_id: Option<String>,
-    analysis_workspace: bool,
+    preparation: AgentScopePreparation,
 ) -> MedusaResult<AgentScopeContract> {
+    let AgentScopePreparation {
+        mode,
+        provider_profile,
+        execution_policy,
+        effective_tools,
+        team_id,
+        member_id,
+        analysis_workspace,
+    } = preparation;
     let repository_identity = repository_identity(repo)?;
     let initial_repository_revision = repository_revision(repo);
     let provider_profile = canonicalize_value(provider_profile);
@@ -177,7 +191,9 @@ pub fn publish_agent_scope(
     validate_contract(contract)?;
     let stored = load_contract(repo, &contract.session_id)?;
     if stored != *contract {
-        return Err(scope_error("agent scope contract changed before publication"));
+        return Err(scope_error(
+            "agent scope contract changed before publication",
+        ));
     }
     validate_runtime_authority(
         contract,
@@ -253,9 +269,10 @@ pub fn resume_agent_scope(
             state.lifecycle
         )));
     }
-    state.generation = state.generation.checked_add(1).ok_or_else(|| {
-        scope_error("agent scope lifecycle generation overflowed during resume")
-    })?;
+    state.generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| scope_error("agent scope lifecycle generation overflowed during resume"))?;
     state.updated_at_unix_ms = unix_ms();
     persist_state(&path, &state)?;
     Ok(scope_ref(&state))
@@ -363,10 +380,7 @@ fn policy_narrows_or_equals(accepted: &Value, current: &Value) -> bool {
     if !accepted_questions && current_questions {
         return false;
     }
-    for key in [
-        "delegation_contract_id",
-        "delegation_contract_fingerprint",
-    ] {
+    for key in ["delegation_contract_id", "delegation_contract_fingerprint"] {
         if accepted.get(key) != current.get(key) {
             return false;
         }
@@ -425,7 +439,8 @@ fn validate_contract(contract: &AgentScopeContract) -> MedusaResult<()> {
         cancellation_owner: &contract.cancellation_owner,
     };
     let expected = sha256(&serde_json::to_vec(&material).map_err(json_error)?);
-    if contract.fingerprint != expected || contract.scope_id != format!("agent-scope-v1-{expected}") {
+    if contract.fingerprint != expected || contract.scope_id != format!("agent-scope-v1-{expected}")
+    {
         return Err(scope_error("agent scope contract fingerprint mismatch"));
     }
     Ok(())
@@ -464,7 +479,9 @@ fn load_contract(repo: &Path, session_id: &str) -> MedusaResult<AgentScopeContra
 
 fn load_state(path: &Path) -> MedusaResult<AgentScopeState> {
     serde_json::from_slice(&fs::read(path).map_err(|error| {
-        scope_error(format!("agent scope lifecycle state is unavailable: {error}"))
+        scope_error(format!(
+            "agent scope lifecycle state is unavailable: {error}"
+        ))
     })?)
     .map_err(json_error)
 }
@@ -566,9 +583,7 @@ fn canonical_strings(mut values: Vec<String>) -> Vec<String> {
 
 fn canonicalize_value(value: Value) -> Value {
     match value {
-        Value::Array(values) => {
-            Value::Array(values.into_iter().map(canonicalize_value).collect())
-        }
+        Value::Array(values) => Value::Array(values.into_iter().map(canonicalize_value).collect()),
         Value::Object(values) => {
             let mut entries = values.into_iter().collect::<Vec<_>>();
             entries.sort_by(|left, right| left.0.cmp(&right.0));
@@ -583,8 +598,7 @@ fn canonicalize_value(value: Value) -> Value {
 }
 
 fn unix_ms() -> i64 {
-    i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
-        .unwrap_or(i64::MAX)
+    i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -596,15 +610,14 @@ fn json_error(error: serde_json::Error) -> MedusaError {
 }
 
 fn scope_error(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::PolicyDenied,
-        ErrorCategory::Policy,
-        message,
-    )
+    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
 fn reconciliation_error(message: impl Into<String>) -> MedusaError {
-    let mut error = scope_error(format!("agent_scope_reconciliation_required: {}", message.into()));
+    let mut error = scope_error(format!(
+        "agent_scope_reconciliation_required: {}",
+        message.into()
+    ));
     error.context.insert(
         "agent_scope_reconciliation_required".to_owned(),
         json!(true),
@@ -636,7 +649,11 @@ mod tests {
         ));
         assert!(!policy_narrows_or_equals(
             &accepted,
-            &policy(Some(&["fs_read", "fs_write", "shell_run"]), Some(&["src/lib.rs"]), false)
+            &policy(
+                Some(&["fs_read", "fs_write", "shell_run"]),
+                Some(&["src/lib.rs"]),
+                false
+            )
         ));
         assert!(!policy_narrows_or_equals(
             &accepted,
@@ -662,13 +679,15 @@ mod tests {
         let contract = prepare_agent_scope(
             repo.path(),
             &session,
-            Mode::ReadOnly,
-            provider.clone(),
-            execution.clone(),
-            vec!["fs_read".into()],
-            None,
-            None,
-            false,
+            AgentScopePreparation {
+                mode: Mode::ReadOnly,
+                provider_profile: provider.clone(),
+                execution_policy: execution.clone(),
+                effective_tools: vec!["fs_read".into()],
+                team_id: None,
+                member_id: None,
+                analysis_workspace: false,
+            },
         )
         .expect("prepare");
         publish_agent_scope(
@@ -680,7 +699,8 @@ mod tests {
         )
         .expect("publish");
         let first = stop_agent_scope(repo.path(), session.as_str(), "done").expect("stop");
-        let second = stop_agent_scope(repo.path(), session.as_str(), "ignored").expect("idempotent");
+        let second =
+            stop_agent_scope(repo.path(), session.as_str(), "ignored").expect("idempotent");
         assert_eq!(first.scope, second.scope);
         assert_eq!(second.cause, "done");
         assert!(load_published_scope_ref(repo.path(), session.as_str()).is_err());
@@ -695,13 +715,15 @@ mod tests {
         let contract = prepare_agent_scope(
             repo.path(),
             &session,
-            Mode::ReadOnly,
-            provider.clone(),
-            execution.clone(),
-            vec!["fs_read".into()],
-            None,
-            None,
-            false,
+            AgentScopePreparation {
+                mode: Mode::ReadOnly,
+                provider_profile: provider.clone(),
+                execution_policy: execution.clone(),
+                effective_tools: vec!["fs_read".into()],
+                team_id: None,
+                member_id: None,
+                analysis_workspace: false,
+            },
         )
         .expect("prepare");
         let first = publish_agent_scope(
