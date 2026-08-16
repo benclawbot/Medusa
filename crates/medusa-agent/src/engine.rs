@@ -19,6 +19,7 @@ mod world_model_observation {
         "/src/world_model_observation.rs"
     ));
 }
+pub(crate) mod effective_request;
 mod runtime_failure;
 
 use std::{
@@ -784,14 +785,26 @@ impl<P: ModelProvider> AgentEngine<P> {
         focus: Option<&str>,
     ) -> MedusaResult<()> {
         let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
+        let manifest = effective_request::persist_before_provider_call(
+            session,
+            &summary_request,
+            ProviderExecutionPhase::Summarization,
+            &self.config.model.provider,
+            &self.config.model.name,
+            &self.provider.capabilities(),
+            None,
+        )?;
         append_event(
             session,
             Actor::Coordinator,
-            EventPayload::ModelRequestStarted {
-                provider: self.config.model.provider.clone(),
-                model: self.config.model.name.clone(),
-            },
+            effective_request::started_event(
+                &manifest,
+                &self.config.model.provider,
+                &self.config.model.name,
+            ),
         )?;
+        session.updated_at = OffsetDateTime::now_utc();
+        persist(session)?;
         let request_started = std::time::Instant::now();
         let semantic = match self.provider.complete_cancellable_for_phase(
             &summary_request,
@@ -808,18 +821,30 @@ impl<P: ModelProvider> AgentEngine<P> {
                 append_event(
                     session,
                     Actor::Coordinator,
-                    EventPayload::ModelResponseReceived {
-                        response_id: response.response_id.clone(),
-                        usage: serde_json::to_value(turn_usage).map_err(json_error)?,
-                    },
+                    effective_request::response_event(
+                        &manifest,
+                        response.response_id.clone(),
+                        serde_json::to_value(turn_usage).map_err(json_error)?,
+                    ),
                 )?;
+                session.updated_at = OffsetDateTime::now_utc();
+                persist(session)?;
                 crate::compaction_v2::validate_semantic_response(
                     &response,
                     &self.config.model.name,
                     &self.config.model.provider,
                 )
             }
-            Err(_) => None,
+            Err(error) => {
+                append_event(
+                    session,
+                    Actor::Coordinator,
+                    effective_request::failure_event(&manifest, &error),
+                )?;
+                session.updated_at = OffsetDateTime::now_utc();
+                persist(session)?;
+                None
+            }
         };
         crate::engine_support::compact_session_with_semantic(session, focus, semantic)
     }
@@ -956,14 +981,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         }
         validate_messages(&session.messages, &self.provider.capabilities())?;
         session.turn = session.turn.saturating_add(1);
-        append_observed(
-            session,
-            EventPayload::ModelRequestStarted {
-                provider: self.config.model.provider.clone(),
-                model: self.config.model.name.clone(),
-            },
-            &mut observer,
-        )?;
         if let Some(refresh) = repository_index::refresh(&session.repo)? {
             observer(&AgentUpdate::ToolOutput {
                 tool: "code_index".to_owned(),
@@ -1056,6 +1073,24 @@ impl<P: ModelProvider> AgentEngine<P> {
             max_tokens: max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
+        let mut active_manifest = effective_request::persist_before_provider_call(
+            session,
+            &request,
+            phase,
+            &self.config.model.provider,
+            &self.config.model.name,
+            &self.provider.capabilities(),
+            None,
+        )?;
+        append_observed(
+            session,
+            effective_request::started_event(
+                &active_manifest,
+                &self.config.model.provider,
+                &self.config.model.name,
+            ),
+            &mut observer,
+        )?;
         let request_started = std::time::Instant::now();
         let streaming = self.provider.capabilities().streaming;
         let mut stream_transcript = ProviderStreamTranscript::default();
@@ -1131,6 +1166,11 @@ impl<P: ModelProvider> AgentEngine<P> {
         let response = match complete_request(&request) {
             Ok(response) => response,
             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
+                append_observed(
+                    session,
+                    effective_request::failure_event(&active_manifest, &error),
+                    &mut observer,
+                )?;
                 if !compacted {
                     self.compact_session_v2(
                         session,
@@ -1142,9 +1182,45 @@ impl<P: ModelProvider> AgentEngine<P> {
                     request.messages = messages_with_turn_instruction(session, turn_instruction);
                     validate_messages(&request.messages, &self.provider.capabilities())?;
                 }
-                complete_request(&request)?
+                let retry_manifest = effective_request::persist_before_provider_call(
+                    session,
+                    &request,
+                    phase,
+                    &self.config.model.provider,
+                    &self.config.model.name,
+                    &self.provider.capabilities(),
+                    Some(&active_manifest),
+                )?;
+                append_observed(
+                    session,
+                    effective_request::started_event(
+                        &retry_manifest,
+                        &self.config.model.provider,
+                        &self.config.model.name,
+                    ),
+                    &mut observer,
+                )?;
+                active_manifest = retry_manifest;
+                match complete_request(&request) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        append_observed(
+                            session,
+                            effective_request::failure_event(&active_manifest, &error),
+                            &mut observer,
+                        )?;
+                        return Err(error);
+                    }
+                }
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                append_observed(
+                    session,
+                    effective_request::failure_event(&active_manifest, &error),
+                    &mut observer,
+                )?;
+                return Err(error);
+            }
         };
         let turn_usage = crate::session::record_turn_usage(
             session.turn,
@@ -1154,19 +1230,23 @@ impl<P: ModelProvider> AgentEngine<P> {
         );
         append_observed(
             session,
-            EventPayload::ModelResponseReceived {
-                response_id: response.response_id.clone(),
-                usage: serde_json::to_value(turn_usage).map_err(json_error)?,
+            effective_request::response_event(
+                &active_manifest,
+                response.response_id.clone(),
+                serde_json::to_value(turn_usage).map_err(json_error)?,
+            ),
+            &mut observer,
+        )?;
+        append_observed(
+            session,
+            EventPayload::ProviderExecutionRecorded {
+                status: effective_request::augment_execution_status(
+                    self.provider.execution_status(),
+                    &active_manifest,
+                ),
             },
             &mut observer,
         )?;
-        if let Some(status) = self.provider.execution_status() {
-            append_observed(
-                session,
-                EventPayload::ProviderExecutionRecorded { status },
-                &mut observer,
-            )?;
-        }
 
         let mut assistant_blocks = Vec::new();
         let mut assistant_text = Vec::new();

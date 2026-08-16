@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::BTreeMap,
     fs,
     io::Write,
@@ -20,52 +19,30 @@ use crate::session::AgentSession;
 const MANIFEST_SCHEMA_VERSION: u16 = 1;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone, Debug)]
-pub(super) struct AuditSessionContext {
-    pub repo: PathBuf,
-    pub session_id: String,
-}
-
-thread_local! {
-    static ACTIVE_CONTEXT: RefCell<Option<AuditSessionContext>> = const { RefCell::new(None) };
-}
-
-pub(super) fn with_session_context<T>(session: &AgentSession, operation: impl FnOnce() -> T) -> T {
-    let context = AuditSessionContext {
-        repo: session.repo.clone(),
-        session_id: session.id.to_string(),
-    };
-    ACTIVE_CONTEXT.with(|slot| {
-        let previous = slot.replace(Some(context));
-        let result = operation();
-        slot.replace(previous);
-        result
-    })
-}
-
-pub(super) fn active_context() -> Option<AuditSessionContext> {
-    ACTIVE_CONTEXT.with(|slot| slot.borrow().clone())
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(super) struct ManifestRef {
+pub(crate) struct ManifestRef {
     pub request_id: String,
     pub request_fingerprint: String,
-    pub artifact_ref: String,
-    pub started_event_sequence: u64,
+    pub manifest_ref: String,
     pub attempt_ordinal: u32,
+    pub parent_request_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EffectiveModelRequestManifestV1 {
     schema_version: u16,
+    manifest_fingerprint: String,
     request_id: String,
+    request_fingerprint: String,
+    request_content_fingerprint: String,
+    request_content_ref: String,
     session_id: String,
     started_event_sequence: u64,
     preceding_event_sequence: u64,
     turn: u32,
     attempt_ordinal: u32,
+    parent_request_id: Option<String>,
     parent_request_fingerprint: Option<String>,
     execution_phase: ProviderExecutionPhase,
     provider: String,
@@ -77,81 +54,95 @@ struct EffectiveModelRequestManifestV1 {
     compaction_generation: Option<u32>,
     compaction_source_event_sequences: Vec<u64>,
     component_fingerprints: BTreeMap<String, String>,
-    canonical_request: Value,
-    request_fingerprint: String,
+    tool_schema_fingerprints: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
-struct FingerprintMaterial<'a> {
+struct RequestFingerprintMaterial<'a> {
     schema_version: u16,
-    session_id: &'a str,
-    started_event_sequence: u64,
-    preceding_event_sequence: u64,
-    turn: u32,
-    attempt_ordinal: u32,
-    parent_request_fingerprint: &'a Option<String>,
     execution_phase: ProviderExecutionPhase,
     provider: &'a str,
     model: &'a str,
     provider_profile_fingerprint: &'a str,
     capability_fingerprint: &'a str,
+    request_content_fingerprint: &'a str,
+    component_fingerprints: &'a BTreeMap<String, String>,
+    tool_schema_fingerprints: &'a BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct ManifestFingerprintMaterial<'a> {
+    schema_version: u16,
+    request_id: &'a str,
+    request_fingerprint: &'a str,
+    session_id: &'a str,
+    started_event_sequence: u64,
+    preceding_event_sequence: u64,
+    turn: u32,
+    attempt_ordinal: u32,
+    parent_request_id: &'a Option<String>,
+    parent_request_fingerprint: &'a Option<String>,
     source_event_sequences: &'a [u64],
     delivered_action_ids: &'a [String],
     compaction_generation: Option<u32>,
     compaction_source_event_sequences: &'a [u64],
-    component_fingerprints: &'a BTreeMap<String, String>,
-    canonical_request: &'a Value,
 }
 
-pub(super) fn persist_before_provider_call(
-    context: &AuditSessionContext,
+pub(crate) fn persist_before_provider_call(
+    session: &AgentSession,
     request: &ModelRequest,
     phase: ProviderExecutionPhase,
+    provider: &str,
+    model: &str,
     capabilities: &ProviderCapabilities,
     previous: Option<&ManifestRef>,
 ) -> MedusaResult<ManifestRef> {
-    let session = crate::session::load(&context.repo, &context.session_id)?;
-    let (started_event_sequence, provider, model) = latest_started_request(&session)?;
-    let preceding_event_sequence = started_event_sequence.saturating_sub(1);
-    let same_started_boundary = previous
-        .is_some_and(|manifest| manifest.started_event_sequence == started_event_sequence);
-    let attempt_ordinal = previous
-        .filter(|_| same_started_boundary)
-        .map_or(0, |manifest| manifest.attempt_ordinal.saturating_add(1));
-    let parent_request_fingerprint = previous
-        .filter(|_| same_started_boundary)
-        .map(|manifest| manifest.request_fingerprint.clone());
+    let preceding_event_sequence = session.events.last().map_or(0, |event| event.sequence);
+    let started_event_sequence = preceding_event_sequence.saturating_add(1);
+    let attempt_ordinal = previous.map_or(0, |manifest| manifest.attempt_ordinal.saturating_add(1));
+    let parent_request_id = previous.map(|manifest| manifest.request_id.clone());
+    let parent_request_fingerprint = previous.map(|manifest| manifest.request_fingerprint.clone());
 
     let canonical_request = canonicalize_value(serde_json::to_value(request).map_err(json_error)?);
-    let capability_value = canonicalize_value(serde_json::to_value(capabilities).map_err(json_error)?);
+    let request_content_fingerprint = fingerprint_value(&canonical_request)?;
+    let request_content_ref = logical_ref("request-content", &request_content_fingerprint);
+    persist_immutable(
+        &session.repo,
+        "request-artifacts",
+        session.id.as_str(),
+        &request_content_fingerprint,
+        &serde_json::to_vec_pretty(&canonical_request).map_err(json_error)?,
+    )?;
+
+    let capability_value =
+        canonicalize_value(serde_json::to_value(capabilities).map_err(json_error)?);
     let capability_fingerprint = fingerprint_value(&capability_value)?;
-    let provider_profile_fingerprint = fingerprint_value(&json!({
+    let provider_profile_fingerprint = fingerprint_value(&canonicalize_value(json!({
         "provider": provider,
         "model": model,
         "capabilities": capability_value,
-    }))?;
-    let mut component_fingerprints = BTreeMap::new();
-    component_fingerprints.insert("system".to_owned(), fingerprint_value(&json!(request.system))?);
-    component_fingerprints.insert(
-        "messages".to_owned(),
-        fingerprint_value(&canonicalize_value(
-            serde_json::to_value(&request.messages).map_err(json_error)?,
-        ))?,
-    );
-    component_fingerprints.insert(
-        "tools".to_owned(),
-        fingerprint_value(&canonicalize_value(
-            serde_json::to_value(&request.tools).map_err(json_error)?,
-        ))?,
-    );
-    component_fingerprints.insert(
-        "request_config".to_owned(),
-        fingerprint_value(&json!({
-            "max_tokens": request.max_tokens,
-            "temperature_milli": request.temperature_milli,
-        }))?,
-    );
+    })))?;
+    let component_fingerprints = request_component_fingerprints(request)?;
+    let tool_schema_fingerprints = request
+        .tools
+        .iter()
+        .map(|tool| {
+            Ok((
+                tool.name.clone(),
+                fingerprint_value(&canonicalize_value(tool.input_schema.clone()))?,
+            ))
+        })
+        .collect::<MedusaResult<BTreeMap<_, _>>>()?;
 
+    let previous_started_sequence = session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| {
+            matches!(event.payload, EventPayload::ModelRequestStarted { .. })
+                .then_some(event.sequence)
+        })
+        .unwrap_or(0);
     let source_event_sequences = session
         .events
         .iter()
@@ -161,9 +152,13 @@ pub(super) fn persist_before_provider_call(
     let delivered_action_ids = session
         .events
         .iter()
-        .filter(|event| event.sequence <= preceding_event_sequence)
+        .filter(|event| {
+            event.sequence > previous_started_sequence && event.sequence <= preceding_event_sequence
+        })
         .filter_map(|event| match &event.payload {
-            EventPayload::SessionActionTranscriptLinked { action_id, .. } => Some(action_id.clone()),
+            EventPayload::SessionActionTranscriptLinked { action_id, .. } => {
+                Some(action_id.clone())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -183,45 +178,57 @@ pub(super) fn persist_before_provider_call(
         })
         .unwrap_or_default();
 
-    let material = FingerprintMaterial {
+    let request_material = RequestFingerprintMaterial {
         schema_version: MANIFEST_SCHEMA_VERSION,
-        session_id: &context.session_id,
+        execution_phase: phase,
+        provider,
+        model,
+        provider_profile_fingerprint: &provider_profile_fingerprint,
+        capability_fingerprint: &capability_fingerprint,
+        request_content_fingerprint: &request_content_fingerprint,
+        component_fingerprints: &component_fingerprints,
+        tool_schema_fingerprints: &tool_schema_fingerprints,
+    };
+    let request_fingerprint = sha256(&serde_json::to_vec(&request_material).map_err(json_error)?);
+    let request_id = format!(
+        "{}:{}:{}",
+        session.id, started_event_sequence, attempt_ordinal,
+    );
+    let manifest_material = ManifestFingerprintMaterial {
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        request_id: &request_id,
+        request_fingerprint: &request_fingerprint,
+        session_id: session.id.as_str(),
         started_event_sequence,
         preceding_event_sequence,
         turn: session.turn,
         attempt_ordinal,
+        parent_request_id: &parent_request_id,
         parent_request_fingerprint: &parent_request_fingerprint,
-        execution_phase: phase,
-        provider: &provider,
-        model: &model,
-        provider_profile_fingerprint: &provider_profile_fingerprint,
-        capability_fingerprint: &capability_fingerprint,
         source_event_sequences: &source_event_sequences,
         delivered_action_ids: &delivered_action_ids,
         compaction_generation,
         compaction_source_event_sequences: &compaction_source_event_sequences,
-        component_fingerprints: &component_fingerprints,
-        canonical_request: &canonical_request,
     };
-    let request_fingerprint = sha256(&serde_json::to_vec(&material).map_err(json_error)?);
-    let request_id = format!(
-        "request-{}-{}-{}",
-        started_event_sequence,
-        attempt_ordinal,
-        &request_fingerprint[..16]
-    );
+    let manifest_fingerprint = sha256(&serde_json::to_vec(&manifest_material).map_err(json_error)?);
+    let manifest_ref = logical_ref("request-manifest", &manifest_fingerprint);
     let manifest = EffectiveModelRequestManifestV1 {
         schema_version: MANIFEST_SCHEMA_VERSION,
+        manifest_fingerprint: manifest_fingerprint.clone(),
         request_id: request_id.clone(),
-        session_id: context.session_id.clone(),
+        request_fingerprint: request_fingerprint.clone(),
+        request_content_fingerprint,
+        request_content_ref,
+        session_id: session.id.to_string(),
         started_event_sequence,
         preceding_event_sequence,
         turn: session.turn,
         attempt_ordinal,
+        parent_request_id: parent_request_id.clone(),
         parent_request_fingerprint,
         execution_phase: phase,
-        provider,
-        model,
+        provider: provider.to_owned(),
+        model: model.to_owned(),
         provider_profile_fingerprint,
         capability_fingerprint,
         source_event_sequences,
@@ -229,21 +236,58 @@ pub(super) fn persist_before_provider_call(
         compaction_generation,
         compaction_source_event_sequences,
         component_fingerprints,
-        canonical_request,
-        request_fingerprint: request_fingerprint.clone(),
+        tool_schema_fingerprints,
     };
-    let bytes = serde_json::to_vec_pretty(&manifest).map_err(json_error)?;
-    let path = persist_manifest(&context.repo, &context.session_id, &request_fingerprint, &bytes)?;
+    persist_immutable(
+        &session.repo,
+        "request-manifests",
+        session.id.as_str(),
+        &manifest_fingerprint,
+        &serde_json::to_vec_pretty(&manifest).map_err(json_error)?,
+    )?;
     Ok(ManifestRef {
         request_id,
         request_fingerprint,
-        artifact_ref: path.display().to_string(),
-        started_event_sequence,
+        manifest_ref,
         attempt_ordinal,
+        parent_request_id,
     })
 }
 
-pub(super) fn augment_execution_status(status: Option<Value>, manifest: &ManifestRef) -> Value {
+pub(crate) fn started_event(manifest: &ManifestRef, provider: &str, model: &str) -> EventPayload {
+    EventPayload::ModelRequestStarted {
+        provider: provider.to_owned(),
+        model: model.to_owned(),
+        request_id: Some(manifest.request_id.clone()),
+        request_fingerprint: Some(manifest.request_fingerprint.clone()),
+        manifest_ref: Some(manifest.manifest_ref.clone()),
+        attempt_ordinal: manifest.attempt_ordinal,
+        parent_request_id: manifest.parent_request_id.clone(),
+    }
+}
+
+pub(crate) fn response_event(
+    manifest: &ManifestRef,
+    response_id: Option<String>,
+    usage: Value,
+) -> EventPayload {
+    EventPayload::ModelResponseReceived {
+        response_id,
+        usage,
+        request_id: Some(manifest.request_id.clone()),
+        request_fingerprint: Some(manifest.request_fingerprint.clone()),
+    }
+}
+
+pub(crate) fn failure_event(manifest: &ManifestRef, error: &MedusaError) -> EventPayload {
+    EventPayload::ModelRequestFailed {
+        request_id: manifest.request_id.clone(),
+        request_fingerprint: manifest.request_fingerprint.clone(),
+        error: error.to_string(),
+    }
+}
+
+pub(crate) fn augment_execution_status(status: Option<Value>, manifest: &ManifestRef) -> Value {
     let mut status = status.unwrap_or_else(|| json!({}));
     if !status.is_object() {
         status = json!({"provider_status": status});
@@ -251,108 +295,254 @@ pub(super) fn augment_execution_status(status: Option<Value>, manifest: &Manifes
     if let Some(object) = status.as_object_mut() {
         object.insert(
             "effective_model_request".to_owned(),
-            serde_json::to_value(manifest).unwrap_or_else(|_| json!({
-                "request_id": manifest.request_id,
-                "request_fingerprint": manifest.request_fingerprint,
-                "artifact_ref": manifest.artifact_ref,
-            })),
+            serde_json::to_value(manifest).unwrap_or_else(|_| {
+                json!({
+                    "request_id": manifest.request_id,
+                    "request_fingerprint": manifest.request_fingerprint,
+                    "manifest_ref": manifest.manifest_ref,
+                })
+            }),
         );
     }
     status
 }
 
-pub(super) fn inspect(
-    repo: &Path,
-    session_id: &str,
-    request_fingerprint: &str,
-) -> MedusaResult<Value> {
-    let path = resolve_manifest_path(repo, session_id, request_fingerprint)?;
-    let bytes = fs::read(&path)?;
+pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> MedusaResult<Value> {
+    let manifest_fingerprint = parse_logical_ref("request-manifest", manifest_ref)?;
+    let manifest_bytes =
+        read_immutable(repo, "request-manifests", session_id, manifest_fingerprint)?;
     let manifest: EffectiveModelRequestManifestV1 =
-        serde_json::from_slice(&bytes).map_err(json_error)?;
-    let material = FingerprintMaterial {
+        serde_json::from_slice(&manifest_bytes).map_err(json_error)?;
+    if manifest.manifest_fingerprint != manifest_fingerprint {
+        return Err(audit_error(format!(
+            "request manifest identity mismatch: requested={manifest_fingerprint}, recorded={}",
+            manifest.manifest_fingerprint
+        )));
+    }
+    let content_fingerprint = parse_logical_ref("request-content", &manifest.request_content_ref)?;
+    let content_bytes = read_immutable(repo, "request-artifacts", session_id, content_fingerprint)
+        .map_err(|_| {
+            audit_error(format!(
+                "protected request artifact is unavailable or redacted: {}",
+                manifest.request_content_ref
+            ))
+        })?;
+    let canonical_request: Value = serde_json::from_slice(&content_bytes).map_err(json_error)?;
+    let reconstructed_content_fingerprint = fingerprint_value(&canonical_request)?;
+    let reconstructed_components = component_fingerprints_from_value(&canonical_request)?;
+    let mismatches =
+        component_mismatches(&manifest.component_fingerprints, &reconstructed_components);
+    if reconstructed_content_fingerprint != manifest.request_content_fingerprint
+        || !mismatches.is_empty()
+    {
+        let mut error =
+            audit_error("effective model request content does not match its durable manifest");
+        error
+            .context
+            .insert("mismatched_components".to_owned(), json!(mismatches));
+        error.context.insert(
+            "recorded_content_fingerprint".to_owned(),
+            json!(manifest.request_content_fingerprint),
+        );
+        error.context.insert(
+            "reconstructed_content_fingerprint".to_owned(),
+            json!(reconstructed_content_fingerprint),
+        );
+        return Err(error);
+    }
+    let request_material = RequestFingerprintMaterial {
         schema_version: manifest.schema_version,
-        session_id: &manifest.session_id,
-        started_event_sequence: manifest.started_event_sequence,
-        preceding_event_sequence: manifest.preceding_event_sequence,
-        turn: manifest.turn,
-        attempt_ordinal: manifest.attempt_ordinal,
-        parent_request_fingerprint: &manifest.parent_request_fingerprint,
         execution_phase: manifest.execution_phase,
         provider: &manifest.provider,
         model: &manifest.model,
         provider_profile_fingerprint: &manifest.provider_profile_fingerprint,
         capability_fingerprint: &manifest.capability_fingerprint,
+        request_content_fingerprint: &manifest.request_content_fingerprint,
+        component_fingerprints: &manifest.component_fingerprints,
+        tool_schema_fingerprints: &manifest.tool_schema_fingerprints,
+    };
+    let reconstructed_request_fingerprint =
+        sha256(&serde_json::to_vec(&request_material).map_err(json_error)?);
+    let manifest_material = ManifestFingerprintMaterial {
+        schema_version: manifest.schema_version,
+        request_id: &manifest.request_id,
+        request_fingerprint: &manifest.request_fingerprint,
+        session_id: &manifest.session_id,
+        started_event_sequence: manifest.started_event_sequence,
+        preceding_event_sequence: manifest.preceding_event_sequence,
+        turn: manifest.turn,
+        attempt_ordinal: manifest.attempt_ordinal,
+        parent_request_id: &manifest.parent_request_id,
+        parent_request_fingerprint: &manifest.parent_request_fingerprint,
         source_event_sequences: &manifest.source_event_sequences,
         delivered_action_ids: &manifest.delivered_action_ids,
         compaction_generation: manifest.compaction_generation,
         compaction_source_event_sequences: &manifest.compaction_source_event_sequences,
-        component_fingerprints: &manifest.component_fingerprints,
-        canonical_request: &manifest.canonical_request,
     };
-    let reconstructed = sha256(&serde_json::to_vec(&material).map_err(json_error)?);
-    if reconstructed != manifest.request_fingerprint || reconstructed != request_fingerprint {
-        return Err(audit_error(format!(
-            "effective model request manifest fingerprint mismatch: recorded={}, reconstructed={reconstructed}, requested={request_fingerprint}",
-            manifest.request_fingerprint
-        )));
+    let reconstructed_manifest_fingerprint =
+        sha256(&serde_json::to_vec(&manifest_material).map_err(json_error)?);
+    if reconstructed_request_fingerprint != manifest.request_fingerprint
+        || reconstructed_manifest_fingerprint != manifest.manifest_fingerprint
+    {
+        let mut error = audit_error("effective model request manifest fingerprint mismatch");
+        error.context.insert(
+            "recorded_request_fingerprint".to_owned(),
+            json!(manifest.request_fingerprint),
+        );
+        error.context.insert(
+            "reconstructed_request_fingerprint".to_owned(),
+            json!(reconstructed_request_fingerprint),
+        );
+        error.context.insert(
+            "recorded_manifest_fingerprint".to_owned(),
+            json!(manifest.manifest_fingerprint),
+        );
+        error.context.insert(
+            "reconstructed_manifest_fingerprint".to_owned(),
+            json!(reconstructed_manifest_fingerprint),
+        );
+        return Err(error);
     }
     Ok(json!({
         "healthy": true,
+        "schema_version": manifest.schema_version,
+        "manifest_ref": logical_ref("request-manifest", &manifest.manifest_fingerprint),
         "request_id": manifest.request_id,
         "request_fingerprint": manifest.request_fingerprint,
-        "artifact_ref": path,
+        "request_content_ref": manifest.request_content_ref,
         "session_id": manifest.session_id,
-        "started_event_sequence": manifest.started_event_sequence,
         "preceding_event_sequence": manifest.preceding_event_sequence,
+        "started_event_sequence": manifest.started_event_sequence,
         "turn": manifest.turn,
         "attempt_ordinal": manifest.attempt_ordinal,
+        "parent_request_id": manifest.parent_request_id,
         "parent_request_fingerprint": manifest.parent_request_fingerprint,
         "execution_phase": manifest.execution_phase,
         "provider": manifest.provider,
         "model": manifest.model,
         "component_fingerprints": manifest.component_fingerprints,
+        "tool_schema_fingerprints": manifest.tool_schema_fingerprints,
         "delivered_action_ids": manifest.delivered_action_ids,
         "compaction_generation": manifest.compaction_generation,
         "compaction_source_event_sequences": manifest.compaction_source_event_sequences,
-        "canonical_request": manifest.canonical_request,
+        "canonical_request": canonical_request,
     }))
 }
 
-fn latest_started_request(session: &AgentSession) -> MedusaResult<(u64, String, String)> {
-    session
-        .events
-        .iter()
-        .rev()
-        .find_map(|event| match &event.payload {
-            EventPayload::ModelRequestStarted { provider, model } => {
-                Some((event.sequence, provider.clone(), model.clone()))
-            }
-            _ => None,
-        })
-        .ok_or_else(|| audit_error("provider execution has no durable ModelRequestStarted boundary"))
+fn request_component_fingerprints(
+    request: &ModelRequest,
+) -> MedusaResult<BTreeMap<String, String>> {
+    Ok(BTreeMap::from([
+        (
+            "system".to_owned(),
+            fingerprint_value(&json!(request.system))?,
+        ),
+        (
+            "messages".to_owned(),
+            fingerprint_value(&canonicalize_value(
+                serde_json::to_value(&request.messages).map_err(json_error)?,
+            ))?,
+        ),
+        (
+            "tools".to_owned(),
+            fingerprint_value(&canonicalize_value(
+                serde_json::to_value(&request.tools).map_err(json_error)?,
+            ))?,
+        ),
+        (
+            "request_config".to_owned(),
+            fingerprint_value(&canonicalize_value(json!({
+                "max_tokens": request.max_tokens,
+                "temperature_milli": request.temperature_milli,
+            })))?,
+        ),
+    ]))
 }
 
-fn persist_manifest(
+fn component_fingerprints_from_value(request: &Value) -> MedusaResult<BTreeMap<String, String>> {
+    let object = request
+        .as_object()
+        .ok_or_else(|| audit_error("protected request artifact must be a JSON object"))?;
+    let config = canonicalize_value(json!({
+        "max_tokens": object.get("max_tokens").cloned().unwrap_or(Value::Null),
+        "temperature_milli": object.get("temperature_milli").cloned().unwrap_or(Value::Null),
+    }));
+    Ok(BTreeMap::from([
+        (
+            "system".to_owned(),
+            fingerprint_value(object.get("system").unwrap_or(&Value::Null))?,
+        ),
+        (
+            "messages".to_owned(),
+            fingerprint_value(object.get("messages").unwrap_or(&Value::Null))?,
+        ),
+        (
+            "tools".to_owned(),
+            fingerprint_value(object.get("tools").unwrap_or(&Value::Null))?,
+        ),
+        ("request_config".to_owned(), fingerprint_value(&config)?),
+    ]))
+}
+
+fn component_mismatches(
+    recorded: &BTreeMap<String, String>,
+    reconstructed: &BTreeMap<String, String>,
+) -> Vec<String> {
+    recorded
+        .iter()
+        .filter_map(|(name, fingerprint)| {
+            (reconstructed.get(name) != Some(fingerprint)).then_some(name.clone())
+        })
+        .collect()
+}
+
+fn persist_immutable(
     repo: &Path,
+    category: &str,
     session_id: &str,
-    fingerprint: &str,
+    key: &str,
     bytes: &[u8],
 ) -> MedusaResult<PathBuf> {
     let primary = repo
-        .join(".medusa/request-manifests")
+        .join(".medusa")
+        .join(category)
         .join(session_id)
-        .join(format!("{fingerprint}.json"));
+        .join(format!("{key}.json"));
     match persist_at(&primary, bytes) {
         Ok(()) => Ok(primary),
         Err(_) => {
-            let fallback = crate::session::fallback_storage_root(repo, "request-manifests")
+            let fallback = crate::session::fallback_storage_root(repo, category)
                 .join(session_id)
-                .join(format!("{fingerprint}.json"));
+                .join(format!("{key}.json"));
             persist_at(&fallback, bytes)?;
             Ok(fallback)
         }
     }
+}
+
+fn read_immutable(
+    repo: &Path,
+    category: &str,
+    session_id: &str,
+    key: &str,
+) -> MedusaResult<Vec<u8>> {
+    let primary = repo
+        .join(".medusa")
+        .join(category)
+        .join(session_id)
+        .join(format!("{key}.json"));
+    if primary.is_file() {
+        return fs::read(primary).map_err(Into::into);
+    }
+    let fallback = crate::session::fallback_storage_root(repo, category)
+        .join(session_id)
+        .join(format!("{key}.json"));
+    if fallback.is_file() {
+        return fs::read(fallback).map_err(Into::into);
+    }
+    Err(audit_error(format!(
+        "immutable {category} artifact {key} is unavailable"
+    )))
 }
 
 fn persist_at(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
@@ -365,7 +555,7 @@ fn persist_at(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
             return Ok(());
         }
         return Err(audit_error(format!(
-            "immutable effective request manifest already exists with different content: {}",
+            "immutable request artifact already exists with different content: {}",
             path.display()
         )));
     }
@@ -388,25 +578,6 @@ fn persist_at(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
     result
 }
 
-fn resolve_manifest_path(repo: &Path, session_id: &str, fingerprint: &str) -> MedusaResult<PathBuf> {
-    let primary = repo
-        .join(".medusa/request-manifests")
-        .join(session_id)
-        .join(format!("{fingerprint}.json"));
-    if primary.is_file() {
-        return Ok(primary);
-    }
-    let fallback = crate::session::fallback_storage_root(repo, "request-manifests")
-        .join(session_id)
-        .join(format!("{fingerprint}.json"));
-    if fallback.is_file() {
-        return Ok(fallback);
-    }
-    Err(audit_error(format!(
-        "effective model request manifest is unavailable for fingerprint {fingerprint}"
-    )))
-}
-
 fn canonicalize_value(value: Value) -> Value {
     match value {
         Value::Array(items) => Value::Array(items.into_iter().map(canonicalize_value).collect()),
@@ -422,8 +593,22 @@ fn canonicalize_value(value: Value) -> Value {
 }
 
 fn fingerprint_value(value: &Value) -> MedusaResult<String> {
-    let canonical = canonicalize_value(value.clone());
-    Ok(sha256(&serde_json::to_vec(&canonical).map_err(json_error)?))
+    Ok(sha256(
+        &serde_json::to_vec(&canonicalize_value(value.clone())).map_err(json_error)?,
+    ))
+}
+
+fn logical_ref(kind: &str, fingerprint: &str) -> String {
+    format!("{kind}:sha256:{fingerprint}")
+}
+
+fn parse_logical_ref<'a>(kind: &str, reference: &'a str) -> MedusaResult<&'a str> {
+    reference
+        .strip_prefix(&format!("{kind}:sha256:"))
+        .filter(|fingerprint| {
+            fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+        .ok_or_else(|| audit_error(format!("invalid {kind} reference: {reference}")))
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -443,15 +628,15 @@ fn sync_parent(path: &Path) {
 
 fn json_error(error: serde_json::Error) -> MedusaError {
     MedusaError::new(
-        ErrorCode::InvalidConfiguration,
-        ErrorCategory::Validation,
-        format!("effective model request manifest is not serializable: {error}"),
+        ErrorCode::InvalidEvent,
+        ErrorCategory::Persistence,
+        format!("could not serialize effective model request authority: {error}"),
     )
 }
 
 fn audit_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
-        ErrorCode::InternalInvariant,
+        ErrorCode::InvalidEvent,
         ErrorCategory::Persistence,
         message.into(),
     )
@@ -460,52 +645,56 @@ fn audit_error(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use medusa_provider::{Message, MessageBlock, Role, ToolDefinition};
+
+    fn request() -> ModelRequest {
+        ModelRequest {
+            system: "system".to_owned(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![MessageBlock::Text {
+                    text: "hello".to_owned(),
+                }],
+            }],
+            tools: vec![ToolDefinition {
+                name: "read".to_owned(),
+                description: "read a file".to_owned(),
+                input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
+            }],
+            max_tokens: 1024,
+            temperature_milli: 200,
+        }
+    }
 
     #[test]
-    fn canonical_json_ignores_object_insertion_order() {
-        let left = json!({"z": 1, "a": {"y": 2, "b": 3}});
-        let right = json!({"a": {"b": 3, "y": 2}, "z": 1});
+    fn canonical_json_is_deterministic_for_object_key_order() {
+        let left = canonicalize_value(json!({"b": 2, "a": {"d": 4, "c": 3}}));
+        let right = canonicalize_value(json!({"a": {"c": 3, "d": 4}, "b": 2}));
         assert_eq!(
-            fingerprint_value(&left).expect("left fingerprint"),
-            fingerprint_value(&right).expect("right fingerprint")
+            fingerprint_value(&left).unwrap(),
+            fingerprint_value(&right).unwrap()
         );
     }
 
     #[test]
-    fn canonical_request_fingerprint_changes_with_model_visible_config() {
-        let base = json!({
-            "system": "system",
-            "messages": [],
-            "tools": [],
-            "max_tokens": 1024,
-            "temperature_milli": 200,
-        });
-        let changed = json!({
-            "system": "system",
-            "messages": [],
-            "tools": [],
-            "max_tokens": 2048,
-            "temperature_milli": 200,
-        });
-        assert_ne!(
-            fingerprint_value(&base).expect("base fingerprint"),
-            fingerprint_value(&changed).expect("changed fingerprint")
-        );
+    fn component_fingerprints_attribute_visible_changes() {
+        let first = request_component_fingerprints(&request()).unwrap();
+        let mut changed = request();
+        changed.system.push_str(" changed");
+        let second = request_component_fingerprints(&changed).unwrap();
+        assert_ne!(first["system"], second["system"]);
+        assert_eq!(first["messages"], second["messages"]);
+        assert_eq!(first["tools"], second["tools"]);
+        assert_eq!(first["request_config"], second["request_config"]);
     }
 
     #[test]
-    fn canonical_tool_schema_is_stable_across_map_order() {
-        let left = json!({
-            "name": "search_text",
-            "input_schema": {"properties": {"query": {"type": "string"}}, "type": "object"}
-        });
-        let right = json!({
-            "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
-            "name": "search_text"
-        });
+    fn logical_refs_reject_non_hash_paths() {
+        assert!(parse_logical_ref("request-manifest", "../../secret").is_err());
+        let hash = "a".repeat(64);
         assert_eq!(
-            fingerprint_value(&left).expect("left fingerprint"),
-            fingerprint_value(&right).expect("right fingerprint")
+            parse_logical_ref("request-manifest", &logical_ref("request-manifest", &hash)).unwrap(),
+            hash,
         );
     }
 }
