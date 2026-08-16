@@ -539,8 +539,8 @@ mod tests {
 
     #[test]
     fn progress_cannot_overwrite_a_cancellation_request() {
-        let control = control();
-        control
+        let unpublished = control();
+        unpublished
             .start("worker-a", Some("session-a"), "running")
             .unwrap_err();
         let control = control();
