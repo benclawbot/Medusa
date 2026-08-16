@@ -4,12 +4,22 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable release tag to recover
+        required: true
+        type: string
+      release_sha:
+        description: Exact commit SHA the tag must resolve to
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-release-${{ github.ref_name }}
+  group: publish-release-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -18,11 +28,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release-tag: ${{ steps.release.outputs.tag }}
+      release-sha: ${{ steps.release.outputs.sha }}
       version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.release_sha || github.sha }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -35,8 +47,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
           RELEASE_TAG: ${{ github.ref_name }}
+          DISPATCH_RELEASE_SHA: ${{ inputs.release_sha }}
+          DISPATCH_RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          if [[ "$RELEASE_EVENT" == "workflow_dispatch" ]]; then
+            RELEASE_SHA="$DISPATCH_RELEASE_SHA"
+            RELEASE_TAG="$DISPATCH_RELEASE_TAG"
+          fi
+          if [[ ! "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release SHA must be a full lowercase Git commit SHA" >&2
+            exit 2
+          fi
           version=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
           git fetch --force --tags origin
           git fetch --no-tags origin main
@@ -54,6 +77,7 @@ jobs:
             exit 2
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   linux:
@@ -63,6 +87,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.release-sha }}
       - name: Install Linux Tauri dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -118,7 +144,7 @@ jobs:
           cp desktop-package-linux.json release-assets/desktop-package-linux.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: medusa-release-linux-${{ github.sha }}
+          name: medusa-release-linux-${{ needs.validate.outputs.release-sha }}
           path: release-assets
           if-no-files-found: error
           retention-days: 30
@@ -130,6 +156,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.release-sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
@@ -179,7 +207,7 @@ jobs:
           cp desktop-package-macos.json release-assets/desktop-package-macos.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: medusa-release-macos-${{ github.sha }}
+          name: medusa-release-macos-${{ needs.validate.outputs.release-sha }}
           path: release-assets
           if-no-files-found: error
           retention-days: 30
@@ -191,6 +219,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.release-sha }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
@@ -240,7 +270,7 @@ jobs:
           Copy-Item desktop-package-windows.json release-assets/desktop-package-windows.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: medusa-release-windows-${{ github.sha }}
+          name: medusa-release-windows-${{ needs.validate.outputs.release-sha }}
           path: release-assets
           if-no-files-found: error
           retention-days: 30
@@ -258,19 +288,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.validate.outputs.release-sha }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: medusa-release-*-${{ github.sha }}
+          pattern: medusa-release-*-${{ needs.validate.outputs.release-sha }}
           path: release-assets
           merge-multiple: true
       - name: Revalidate tag binding and generate complete release evidence
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
-          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_SHA: ${{ needs.validate.outputs.release-sha }}
           RELEASE_SEQUENCE: ${{ github.run_number }}
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
