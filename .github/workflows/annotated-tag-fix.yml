@@ -1,0 +1,52 @@
+name: Apply annotated tag workflow fix
+
+on:
+  push:
+    branches:
+      - fix/annotated-release-tags
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/annotated-release-tags
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Patch annotated-tag fetches
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/publish-release.yml')
+          text = path.read_text(encoding='utf-8')
+          old = 'git fetch --tags origin'
+          new = 'git fetch --force --tags origin'
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f'expected exactly 2 release tag fetches, found {count}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Validate release integrity policy
+        run: |
+          python3 scripts/release-workflow-policy.py self-test
+          python3 scripts/release-workflow-policy.py check --root .
+          grep -c 'git fetch --force --tags origin' .github/workflows/publish-release.yml | grep -x '2'
+      - name: Commit durable fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/annotated-tag-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/publish-release.yml .github/workflows/annotated-tag-fix.yml
+          changed=$(git diff --cached --name-only)
+          test "$(printf '%s\n' "$changed" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 2
+          printf '%s\n' "$changed" | grep -Fx '.github/workflows/publish-release.yml'
+          printf '%s\n' "$changed" | grep -Fx '.github/workflows/annotated-tag-fix.yml'
+          git commit -m 'ci: support annotated release tags'
+          git push origin HEAD:fix/annotated-release-tags
