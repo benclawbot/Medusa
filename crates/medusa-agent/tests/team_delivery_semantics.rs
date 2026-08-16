@@ -259,6 +259,89 @@ fn repeated_prompt_assembly_does_not_acknowledge_or_duplicate_instruction() {
 }
 
 #[test]
+fn accepted_instruction_survives_cold_restart_before_model_request() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let engine = AgentEngine::new(NoopProvider, Config::default());
+    let session = engine
+        .create_session(directory.path(), "implement".to_owned())
+        .expect("create session");
+    let team_id = "team-cold-before-request";
+    let team_path = directory
+        .path()
+        .join(format!(".medusa/executions/{team_id}/team.json"));
+    let (team, lead, worker) = team_for_session(directory.path(), team_id, session.id.as_str());
+    lead.execute(
+        "team_send_message",
+        &serde_json::json!({"recipient":"worker","body":"survive cold restart"}),
+    )
+    .expect("send instruction");
+    drop(worker);
+    drop(lead);
+    drop(team);
+
+    let restored_session = engine
+        .load_session(directory.path(), session.id.as_str())
+        .expect("restore worker session");
+    assert!(manifest_references(&restored_session).is_empty());
+    assert_eq!(
+        restored_session
+            .events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::SessionActionAccepted { .. }))
+            .count(),
+        1
+    );
+
+    let restored_team = TeamRuntime::load(team_path).expect("restore team runtime");
+    let restored_worker = restored_team
+        .member_context("worker")
+        .expect("restore worker context");
+    let prompt = restored_worker
+        .prompt_context()
+        .expect("restored prompt context");
+    assert!(prompt.contains("survive cold restart"));
+}
+
+#[test]
+fn multiple_instructions_preserve_durable_order_across_restart() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let engine = AgentEngine::new(NoopProvider, Config::default());
+    let session = engine
+        .create_session(directory.path(), "implement".to_owned())
+        .expect("create session");
+    let team_id = "team-ordered-restart";
+    let team_path = directory
+        .path()
+        .join(format!(".medusa/executions/{team_id}/team.json"));
+    let (team, lead, worker) = team_for_session(directory.path(), team_id, session.id.as_str());
+    lead.execute(
+        "team_send_message",
+        &serde_json::json!({"recipient":"worker","body":"instruction first"}),
+    )
+    .expect("send first instruction");
+    lead.execute(
+        "team_send_message",
+        &serde_json::json!({"recipient":"worker","body":"instruction second"}),
+    )
+    .expect("send second instruction");
+    drop(worker);
+    drop(lead);
+    drop(team);
+
+    let restored_team = TeamRuntime::load(team_path).expect("restore team runtime");
+    let prompt = restored_team
+        .member_context("worker")
+        .expect("restore worker")
+        .prompt_context()
+        .expect("prompt context");
+    let first = prompt.find("instruction first").expect("first instruction");
+    let second = prompt
+        .find("instruction second")
+        .expect("second instruction");
+    assert!(first < second, "accepted instruction order must survive restart");
+}
+
+#[test]
 fn team_instruction_is_model_visible_in_exactly_one_effective_request() {
     let directory = tempfile::tempdir().expect("temporary repository");
     let bootstrap = AgentEngine::new(NoopProvider, Config::default());
