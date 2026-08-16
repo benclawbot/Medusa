@@ -373,7 +373,11 @@ impl TeamControlPlane {
             .execution_id
             .as_deref()
             .ok_or_else(|| "no coordinated team is active".to_owned())?;
-        medusa_agent::team::bind_control_session(execution_id, worker_id, session_id)
+        match medusa_agent::team::bind_control_session(execution_id, worker_id, session_id) {
+            Ok(()) => Ok(()),
+            Err(error) if error.contains("has no durable repository binding") => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     fn update(
@@ -539,10 +543,15 @@ mod tests {
 
     #[test]
     fn progress_cannot_overwrite_a_cancellation_request() {
-        let unpublished = control();
-        unpublished
+        let observational = control();
+        observational
             .start("worker-a", Some("session-a"), "running")
-            .unwrap_err();
+            .unwrap();
+        assert_eq!(
+            observational.snapshot().workers[0].session_id.as_deref(),
+            Some("session-a")
+        );
+
         let control = control();
         control.stop_worker("worker-a").unwrap();
         control
