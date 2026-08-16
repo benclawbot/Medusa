@@ -9,7 +9,9 @@ use std::{
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_protocol::EventPayload;
-use medusa_provider::{ModelRequest, ProviderCapabilities, ProviderExecutionPhase};
+use medusa_provider::{
+    ModelRequest, ProviderAttemptDescriptor, ProviderCapabilities, ProviderExecutionPhase,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -55,6 +57,16 @@ struct EffectiveModelRequestManifestV1 {
     compaction_source_event_sequences: Vec<u64>,
     component_fingerprints: BTreeMap<String, String>,
     tool_schema_fingerprints: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderAttemptManifestV1 {
+    schema_version: u16,
+    attempt_fingerprint: String,
+    request_id: String,
+    request_fingerprint: String,
+    descriptor: ProviderAttemptDescriptor,
 }
 
 #[derive(Serialize)]
@@ -287,6 +299,37 @@ pub(crate) fn failure_event(manifest: &ManifestRef, error: &MedusaError) -> Even
     }
 }
 
+pub(crate) fn persist_provider_attempt(
+    repo: &Path,
+    session_id: &str,
+    manifest: &ManifestRef,
+    descriptor: &ProviderAttemptDescriptor,
+) -> MedusaResult<String> {
+    let material = canonicalize_value(json!({
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "request_id": manifest.request_id,
+        "request_fingerprint": manifest.request_fingerprint,
+        "descriptor": descriptor,
+    }));
+    let attempt_fingerprint = fingerprint_value(&material)?;
+    let attempt_ref = logical_ref("provider-attempt", &attempt_fingerprint);
+    let attempt = ProviderAttemptManifestV1 {
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        attempt_fingerprint: attempt_fingerprint.clone(),
+        request_id: manifest.request_id.clone(),
+        request_fingerprint: manifest.request_fingerprint.clone(),
+        descriptor: descriptor.clone(),
+    };
+    persist_immutable(
+        repo,
+        "request-attempts",
+        session_id,
+        &attempt_fingerprint,
+        &serde_json::to_vec_pretty(&attempt).map_err(json_error)?,
+    )?;
+    Ok(attempt_ref)
+}
+
 pub(crate) fn augment_execution_status(status: Option<Value>, manifest: &ManifestRef) -> Value {
     let mut status = status.unwrap_or_else(|| json!({}));
     if !status.is_object() {
@@ -403,6 +446,8 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         );
         return Err(error);
     }
+    let provider_attempts = load_provider_attempts(repo, session_id, &manifest.request_id)?;
+    let provider_execution = provider_execution_status(repo, session_id, &manifest.request_id);
     Ok(json!({
         "healthy": true,
         "schema_version": manifest.schema_version,
@@ -425,6 +470,8 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         "delivered_action_ids": manifest.delivered_action_ids,
         "compaction_generation": manifest.compaction_generation,
         "compaction_source_event_sequences": manifest.compaction_source_event_sequences,
+        "provider_attempts": provider_attempts,
+        "provider_execution": provider_execution,
         "canonical_request": canonical_request,
     }))
 }
@@ -508,9 +555,17 @@ fn persist_immutable(
         .join(category)
         .join(session_id)
         .join(format!("{key}.json"));
+    if primary.is_file() {
+        persist_at(&primary, bytes)?;
+        return Ok(primary);
+    }
     match persist_at(&primary, bytes) {
         Ok(()) => Ok(primary),
-        Err(_) => {
+        Err(primary_error) => {
+            // A concurrent immutable write must never be bypassed by fallback storage.
+            if primary.is_file() {
+                return Err(primary_error);
+            }
             let fallback = crate::session::fallback_storage_root(repo, category)
                 .join(session_id)
                 .join(format!("{key}.json"));
@@ -543,6 +598,75 @@ fn read_immutable(
     Err(audit_error(format!(
         "immutable {category} artifact {key} is unavailable"
     )))
+}
+
+fn load_provider_attempts(
+    repo: &Path,
+    session_id: &str,
+    request_id: &str,
+) -> MedusaResult<Vec<Value>> {
+    let roots = [
+        repo.join(".medusa")
+            .join("request-attempts")
+            .join(session_id),
+        crate::session::fallback_storage_root(repo, "request-attempts").join(session_id),
+    ];
+    let mut attempts = BTreeMap::<String, Value>::new();
+    for root in roots {
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries {
+            let entry = entry?;
+            if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let bytes = fs::read(entry.path())?;
+            let attempt: ProviderAttemptManifestV1 =
+                serde_json::from_slice(&bytes).map_err(json_error)?;
+            if attempt.request_id != request_id {
+                continue;
+            }
+            let material = canonicalize_value(json!({
+                "schema_version": attempt.schema_version,
+                "request_id": attempt.request_id,
+                "request_fingerprint": attempt.request_fingerprint,
+                "descriptor": attempt.descriptor,
+            }));
+            let reconstructed = fingerprint_value(&material)?;
+            if reconstructed != attempt.attempt_fingerprint {
+                return Err(audit_error(format!(
+                    "provider attempt fingerprint mismatch: recorded={}, reconstructed={reconstructed}",
+                    attempt.attempt_fingerprint
+                )));
+            }
+            attempts.insert(
+                attempt.attempt_fingerprint.clone(),
+                serde_json::to_value(attempt).map_err(json_error)?,
+            );
+        }
+    }
+    Ok(attempts.into_values().collect())
+}
+
+fn provider_execution_status(repo: &Path, session_id: &str, request_id: &str) -> Option<Value> {
+    let session = crate::session::load(repo, session_id).ok()?;
+    session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::ProviderExecutionRecorded { status }
+                if status
+                    .get("effective_model_request")
+                    .and_then(|request| request.get("request_id"))
+                    .and_then(Value::as_str)
+                    == Some(request_id) =>
+            {
+                Some(status.clone())
+            }
+            _ => None,
+        })
 }
 
 fn persist_at(path: &Path, bytes: &[u8]) -> MedusaResult<()> {

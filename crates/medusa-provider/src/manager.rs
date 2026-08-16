@@ -21,10 +21,10 @@ use time::OffsetDateTime;
 
 use crate::hedge_runtime::{HedgeCandidateOutcome, HedgeRacePlan, race_provider_candidates};
 use crate::{
-    HedgePolicy, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
-    ProviderContinuationCapabilities, ProviderExecutionPhase, ProviderHealthStore,
-    ProviderRouteLatencyStore, ProviderStreamEvent, RouteLatencyPolicy, RouteLatencyStats,
-    hedge_decision, latency_aware_route_order,
+    HedgePolicy, ModelProvider, ModelRequest, ModelResponse, ProviderAttemptDescriptor,
+    ProviderAttemptKind, ProviderCapabilities, ProviderContinuationCapabilities,
+    ProviderExecutionPhase, ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent,
+    RouteLatencyPolicy, RouteLatencyStats, hedge_decision, latency_aware_route_order,
 };
 
 /// Observable health state for a configured provider position.
@@ -568,6 +568,22 @@ impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
         self.complete_with_cancel_and_sink(request, phase, Some(cancel), None)
     }
 
+    fn complete_cancellable_for_phase_with_attempts(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+        before_attempt: &mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel_and_sink_audited(
+            request,
+            phase,
+            Some(cancel),
+            None,
+            Some(before_attempt),
+        )
+    }
+
     fn complete_streaming_cancellable_for_phase(
         &self,
         request: &ModelRequest,
@@ -576,6 +592,23 @@ impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
     ) -> MedusaResult<ModelResponse> {
         self.complete_with_cancel_and_sink(request, phase, Some(cancel), Some(sink))
+    }
+
+    fn complete_streaming_cancellable_for_phase_with_attempts(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+        before_attempt: &mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel_and_sink_audited(
+            request,
+            phase,
+            Some(cancel),
+            Some(sink),
+            Some(before_attempt),
+        )
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -619,12 +652,54 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
             .find_map(|key| self.role_routes.get(*key).copied())
     }
 
+    fn provider_attempt_descriptor(
+        &self,
+        index: usize,
+        route_ordinal: usize,
+        retry_ordinal: u8,
+        kind: ProviderAttemptKind,
+        conditional: bool,
+        conditional_launch_after_ms: Option<u64>,
+    ) -> MedusaResult<ProviderAttemptDescriptor> {
+        let profile = self.profiles.get(index).ok_or_else(|| {
+            cache_validation_error(format!("provider profile {index} is missing"))
+        })?;
+        Ok(ProviderAttemptDescriptor {
+            route_id: profile.id.clone(),
+            provider: profile.provider.clone(),
+            model: profile.model.clone(),
+            protocol: profile.protocol.clone(),
+            tool_calling: profile.tool_calling,
+            streaming: profile.streaming,
+            max_retries: profile.retry.max_retries,
+            retry_base_delay_ms: profile.retry.base_delay_ms,
+            retry_max_delay_ms: profile.retry.max_delay_ms,
+            retry_jitter_ms: profile.retry.jitter_ms,
+            route_ordinal,
+            retry_ordinal,
+            kind,
+            conditional,
+            conditional_launch_after_ms,
+        })
+    }
+
     fn complete_with_cancel_and_sink(
         &self,
         request: &ModelRequest,
         phase: ProviderExecutionPhase,
         cancel: Option<&AtomicBool>,
+        sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel_and_sink_audited(request, phase, cancel, sink, None)
+    }
+
+    fn complete_with_cancel_and_sink_audited(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: Option<&AtomicBool>,
         mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
+        mut before_attempt: Option<&mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>>,
     ) -> MedusaResult<ModelResponse> {
         let key = serde_json::to_string(request).map_err(|error| {
             MedusaError::new(
@@ -672,6 +747,34 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
             None
         };
         if let Some(decision) = hedge {
+            let primary_ordinal = route_order
+                .iter()
+                .position(|index| *index == decision.primary_index)
+                .unwrap_or_default();
+            let secondary_ordinal = route_order
+                .iter()
+                .position(|index| *index == decision.secondary_index)
+                .unwrap_or(1);
+            if let Some(audit) = before_attempt.as_deref_mut() {
+                audit(&self.provider_attempt_descriptor(
+                    decision.primary_index,
+                    primary_ordinal,
+                    0,
+                    ProviderAttemptKind::HedgePrimary,
+                    false,
+                    None,
+                )?)?;
+                // The secondary is an explicit conditional intent. It is persisted before the
+                // race starts, and the race outcome records whether the delayed candidate launched.
+                audit(&self.provider_attempt_descriptor(
+                    decision.secondary_index,
+                    secondary_ordinal,
+                    0,
+                    ProviderAttemptKind::HedgeSecondary,
+                    true,
+                    Some(decision.launch_after_ms),
+                )?)?;
+            }
             self.record_attempt(decision.primary_index)?;
             let mut race_sink = sink.take();
             let race_result = race_provider_candidates(
@@ -719,6 +822,18 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                 .get(index)
                 .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
             for attempt in 0..=policy.max_retries {
+                let kind = if attempt > 0 {
+                    ProviderAttemptKind::Retry
+                } else if position > 0 {
+                    ProviderAttemptKind::Failover
+                } else {
+                    ProviderAttemptKind::Primary
+                };
+                if let Some(audit) = before_attempt.as_deref_mut() {
+                    audit(&self.provider_attempt_descriptor(
+                        index, position, attempt, kind, false, None,
+                    )?)?;
+                }
                 self.record_attempt(index)?;
                 let started = Instant::now();
                 let streaming = self
@@ -1041,14 +1156,45 @@ mod tests {
         let (primary, primary_calls) = provider(Err(failure(ErrorCategory::Transient, true)));
         let (fallback, fallback_calls) = provider(Ok(success()));
         let manager = ProviderManager::new(vec![primary, fallback]).without_sleep();
+        let mut attempts = Vec::new();
+        let mut before_attempt = |attempt: &ProviderAttemptDescriptor| {
+            attempts.push(attempt.clone());
+            Ok(())
+        };
 
-        manager.complete(&request()).expect("fallback response");
+        manager
+            .complete_cancellable_for_phase_with_attempts(
+                &request(),
+                ProviderExecutionPhase::Default,
+                &AtomicBool::new(false),
+                &mut before_attempt,
+            )
+            .expect("fallback response");
         let uncached = manager.execution_status().expect("uncached status");
         manager.complete(&request()).expect("cached response");
         let cached = manager.execution_status().expect("cached status");
 
         assert_eq!(primary_calls.load(Ordering::SeqCst), 2);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|attempt| attempt.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                ProviderAttemptKind::Primary,
+                ProviderAttemptKind::Retry,
+                ProviderAttemptKind::Failover,
+            ]
+        );
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|attempt| attempt.retry_ordinal)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 0]
+        );
+        assert!(attempts.iter().all(|attempt| !attempt.conditional));
         assert_eq!(manager.health()[0].retries, 1);
         assert_eq!(manager.health()[0].failovers, 1);
         assert_eq!(manager.health()[1].successes, 1);

@@ -78,6 +78,41 @@ pub enum ProviderExecutionPhase {
     Formatting,
 }
 
+/// Why one physical provider route is being attempted for an effective request.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderAttemptKind {
+    Primary,
+    Retry,
+    Failover,
+    HedgePrimary,
+    HedgeSecondary,
+}
+
+/// Sanitized route identity persisted before a physical provider invocation.
+///
+/// Endpoint URLs and authentication sources are deliberately excluded so an audit record cannot
+/// become a credential or signed-URL side channel.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderAttemptDescriptor {
+    pub route_id: String,
+    pub provider: String,
+    pub model: String,
+    pub protocol: String,
+    pub tool_calling: bool,
+    pub streaming: bool,
+    pub max_retries: u8,
+    pub retry_base_delay_ms: u64,
+    pub retry_max_delay_ms: u64,
+    pub retry_jitter_ms: u64,
+    pub route_ordinal: usize,
+    pub retry_ordinal: u8,
+    pub kind: ProviderAttemptKind,
+    pub conditional: bool,
+    pub conditional_launch_after_ms: Option<u64>,
+}
+
 /// One model request.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ModelRequest {
@@ -223,6 +258,20 @@ pub trait ModelProvider {
         self.complete_streaming_cancellable(request, cancel, sink)
     }
 
+    /// Streams while allowing route-managing providers to durably certify each physical attempt
+    /// before it starts. Direct providers use the already-persisted logical request manifest and
+    /// therefore do not emit an additional nested attempt by default.
+    fn complete_streaming_cancellable_for_phase_with_attempts(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+        _before_attempt: &mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_streaming_cancellable_for_phase(request, phase, cancel, sink)
+    }
+
     fn complete_cancellable(
         &self,
         request: &ModelRequest,
@@ -247,6 +296,18 @@ pub trait ModelProvider {
         cancel: &AtomicBool,
     ) -> MedusaResult<ModelResponse> {
         self.complete_cancellable(request, cancel)
+    }
+
+    /// Completes while allowing route-managing providers to durably certify each physical attempt
+    /// before it starts. The callback must fail closed: returning an error prevents invocation.
+    fn complete_cancellable_for_phase_with_attempts(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+        _before_attempt: &mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_cancellable_for_phase(request, phase, cancel)
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
