@@ -537,6 +537,15 @@ impl TeamRuntime {
 
 impl TeamMemberContext {
     #[must_use]
+    pub fn member_id(&self) -> &str {
+        &self.member_id
+    }
+
+    pub fn team_id(&self) -> Result<String, String> {
+        self.team.team_id()
+    }
+
+    #[must_use]
     pub fn definitions(&self) -> Vec<ToolDefinition> {
         vec![
             tool(

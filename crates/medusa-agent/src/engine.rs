@@ -41,6 +41,13 @@ use medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_
 use time::OffsetDateTime;
 
 use crate::{
+    agent_scope::{
+        AgentRuntimeHandle, AgentScopePreparation, AgentScopeRef, AgentScopeResourceKind,
+        agent_runtime_handle, effective_agent_scope_tools, fail_agent_scope_start,
+        load_published_scope_ref, prepare_agent_scope, publish_agent_scope,
+        register_agent_scope_resource, release_agent_scope_resource, resume_agent_scope,
+        stop_agent_scope, validate_agent_scope,
+    },
     analysis_host::{ANALYSIS_WORKSPACE_TOOL, AnalysisWorkspaceHost},
     approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},
     engine_support::*,
@@ -218,6 +225,7 @@ fn journal_certified_tool_execution(
     receipt: serde_json::Value,
     execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<()> {
+    let scope = crate::agent_scope::load_published_scope_ref(&session.repo, session.id.as_str())?;
     append_event(
         session,
         Actor::Coordinator,
@@ -228,6 +236,9 @@ fn journal_certified_tool_execution(
                 "tool": audited_tool_name(name, input),
                 "receipt": receipt,
                 "execution_authority": execution_policy.audit_projection(),
+                "agent_scope_id": scope.scope_id,
+                "agent_scope_fingerprint": scope.scope_fingerprint,
+                "agent_scope_generation": scope.generation,
             }),
         },
     )?;
@@ -442,9 +453,82 @@ impl<P: ModelProvider> AgentEngine<P> {
         self
     }
 
+    fn scope_provider_profile(&self) -> MedusaResult<serde_json::Value> {
+        serde_json::to_value(&self.config.model).map_err(json_error)
+    }
+
+    fn scope_effective_tools(&self, repo: &Path) -> MedusaResult<Vec<String>> {
+        let mut tools = available_tools(
+            self.config.agent.mode,
+            repo,
+            &self.desktop_commander_settings,
+        )?;
+        if let Some(team) = &self.team_context {
+            tools.extend(team.definitions());
+        }
+        if self.analysis_host.is_some() {
+            tools.push(crate::analysis_host::tool_definition());
+        }
+        tools.retain(|tool| self.execution_policy.allows(&tool.name));
+        let mut names = tools.into_iter().map(|tool| tool.name).collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    fn scope_team_identity(&self) -> MedusaResult<(Option<String>, Option<String>)> {
+        let Some(team) = &self.team_context else {
+            return Ok((None, None));
+        };
+        Ok((
+            Some(team.team_id().map_err(|error| {
+                MedusaError::new(ErrorCode::InternalInvariant, ErrorCategory::Internal, error)
+            })?),
+            Some(team.member_id().to_owned()),
+        ))
+    }
+
+    fn scoped_runtime_tools(&self, session: &AgentSession) -> MedusaResult<Vec<String>> {
+        effective_agent_scope_tools(
+            &session.repo,
+            session.id.as_str(),
+            self.scope_effective_tools(&session.repo)?,
+        )
+    }
+
+    pub fn runtime_handle(&self, session: &AgentSession) -> MedusaResult<AgentRuntimeHandle> {
+        agent_runtime_handle(
+            &session.repo,
+            session.id.as_str(),
+            Arc::clone(&self.cancellation),
+        )
+    }
+
+    fn validate_scope(&self, session: &AgentSession) -> MedusaResult<AgentScopeRef> {
+        validate_agent_scope(
+            &session.repo,
+            session.id.as_str(),
+            self.scope_provider_profile()?,
+            self.execution_policy.audit_projection(),
+            self.scope_effective_tools(&session.repo)?,
+        )
+    }
+
+    pub fn stop_session_scope(
+        &self,
+        session: &AgentSession,
+        cause: impl Into<String>,
+    ) -> MedusaResult<crate::agent_scope::AgentScopeStopReceipt> {
+        if let Ok(mut client) = self.desktop_commander.lock() {
+            client.take();
+        }
+        stop_agent_scope(&session.repo, session.id.as_str(), cause)
+    }
+
     fn execute_desktop_commander(
         &self,
         repo: &Path,
+        session_id: &str,
         input: &serde_json::Value,
     ) -> MedusaResult<String> {
         let tool = input_string(input, "tool")?;
@@ -463,10 +547,22 @@ impl<P: ModelProvider> AgentEngine<P> {
             )
         })?;
         if client.is_none() {
-            *client = Some(DesktopCommanderClient::connect(
+            let scope = load_published_scope_ref(repo, session_id)?;
+            register_agent_scope_resource(
                 repo,
-                self.desktop_commander_settings.clone(),
-            )?);
+                session_id,
+                &scope,
+                "desktop-commander",
+                AgentScopeResourceKind::DesktopCommander,
+            )?;
+            match DesktopCommanderClient::connect(repo, self.desktop_commander_settings.clone()) {
+                Ok(connected) => *client = Some(connected),
+                Err(error) => {
+                    let _ =
+                        release_agent_scope_resource(repo, session_id, &scope, "desktop-commander");
+                    return Err(error);
+                }
+            }
         }
         let initialized = client.as_mut().ok_or_else(|| {
             MedusaError::new(
@@ -525,6 +621,33 @@ impl<P: ModelProvider> AgentEngine<P> {
         validate_user_content(&content, &self.provider.capabilities())?;
         bootstrap(repo)?;
         medusa_intelligence::recover_patch_transactions(repo)?;
+        let effective_tools = self.scope_effective_tools(repo)?;
+        let provider_profile = self.scope_provider_profile()?;
+        let execution_policy = self.execution_policy.audit_projection();
+        let (team_id, member_id) = self.scope_team_identity()?;
+        let scope = prepare_agent_scope(
+            repo,
+            &id,
+            AgentScopePreparation {
+                mode: self.config.agent.mode,
+                provider_profile: provider_profile.clone(),
+                execution_policy: execution_policy.clone(),
+                effective_tools: effective_tools.clone(),
+                team_id,
+                member_id,
+                analysis_workspace: self.analysis_host.is_some(),
+            },
+        )?;
+        if let Err(error) = publish_agent_scope(
+            repo,
+            &scope,
+            provider_profile,
+            execution_policy,
+            effective_tools,
+        ) {
+            let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
+            return Err(error);
+        }
         let now = OffsetDateTime::now_utc();
         let world_model = create_for_session(repo, id.as_str(), objective.clone()).ok();
         let mut session = AgentSession {
@@ -549,18 +672,32 @@ impl<P: ModelProvider> AgentEngine<P> {
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
         };
-        append_event(
+        if let Err(error) = append_event(
             &mut session,
             Actor::User,
             EventPayload::SessionCreated { objective },
-        )?;
-        persist(&session)?;
+        ) {
+            let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
+            return Err(error);
+        }
+        if let Err(error) = persist(&session) {
+            let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
+            return Err(error);
+        }
         Ok(session)
     }
 
     pub fn load_session(&self, repo: &Path, session: &str) -> MedusaResult<AgentSession> {
         medusa_intelligence::recover_patch_transactions(repo)?;
-        load(repo, session)
+        let loaded = load(repo, session)?;
+        resume_agent_scope(
+            repo,
+            loaded.id.as_str(),
+            self.scope_provider_profile()?,
+            self.execution_policy.audit_projection(),
+            self.scope_effective_tools(repo)?,
+        )?;
+        Ok(loaded)
     }
 
     /// Loads the durable evidence model associated with a session, when enabled.
@@ -588,6 +725,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         session: &mut AgentSession,
         mut content: Vec<MessageBlock>,
     ) -> MedusaResult<()> {
+        self.validate_scope(session)?;
         content.insert(
             0,
             MessageBlock::Text {
@@ -618,6 +756,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         command_id: String,
         mut content: Vec<MessageBlock>,
     ) -> MedusaResult<()> {
+        self.validate_scope(session)?;
         content.insert(
             0,
             MessageBlock::Text {
@@ -647,6 +786,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         session: &mut AgentSession,
         content: Vec<MessageBlock>,
     ) -> MedusaResult<()> {
+        self.validate_scope(session)?;
         let question = session.pending_question.take().ok_or_else(|| {
             MedusaError::new(
                 ErrorCode::InvalidConfiguration,
@@ -706,6 +846,17 @@ impl<P: ModelProvider> AgentEngine<P> {
             persist(session)?;
 
             let (content, is_error) = if decision == ApprovalDecision::Approved {
+                let scoped_tools = self.scoped_runtime_tools(session)?;
+                if scoped_tools.binary_search(&approval.tool).is_err() {
+                    return Err(MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        format!(
+                            "approved tool {} was revoked from the active agent scope before execution",
+                            approval.tool
+                        ),
+                    ));
+                }
                 let event_tool = audited_tool_name(&approval.tool, &approval.input);
                 append_event(
                     session,
@@ -1023,6 +1174,7 @@ impl<P: ModelProvider> AgentEngine<P> {
     where
         F: FnMut(&AgentUpdate),
     {
+        self.validate_scope(session)?;
         if session.completed {
             return Ok(StepOutcome::Completed);
         }
@@ -1092,6 +1244,13 @@ impl<P: ModelProvider> AgentEngine<P> {
             tools.push(crate::analysis_host::tool_definition());
         }
         tools.retain(|tool| self.execution_policy.allows(&tool.name));
+        let current_tool_names = tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        let scoped_tool_names =
+            effective_agent_scope_tools(&session.repo, session.id.as_str(), current_tool_names)?;
+        tools.retain(|tool| scoped_tool_names.binary_search(&tool.name).is_ok());
         let mut request_messages = messages_with_turn_instruction(session, turn_instruction);
         validate_messages(&request_messages, &self.provider.capabilities())?;
         let max_output_tokens =
@@ -1223,7 +1382,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                             ProviderStreamEvent::ToolUseReady { id, name, input }
                                 if !early_tool_executions.contains_key(&id)
                                     && stream_dispatch_safe_tool(&name, &input)
-                                    && tool_allowed(self.config.agent.mode, &name) =>
+                                    && tool_allowed(self.config.agent.mode, &name)
+                                    && scoped_tool_names.binary_search(&name).is_ok() =>
                             {
                                 let requested_at = std::time::Instant::now();
                                 let started = std::time::Instant::now();
@@ -1430,7 +1590,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             let positions = calls
                 .iter()
                 .position(|(_, name, _)| {
-                    name == ANALYSIS_WORKSPACE_TOOL
+                    scoped_tool_names.binary_search(name).is_err()
+                        || name == ANALYSIS_WORKSPACE_TOOL
                         || name == "update_plan"
                         || name == "ask_user_question"
                         || name == "desktop_commander"
@@ -1561,7 +1722,29 @@ impl<P: ModelProvider> AgentEngine<P> {
                 let mut cached = false;
                 let mut timing_override = None;
                 let mut post_action = None;
-                let execution = if let Some(early) = early_tool_executions.remove(&id) {
+                let execution = if scoped_tool_names.binary_search(&name).is_err() {
+                    measured = true;
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
+                    execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |_| {
+                            Err(MedusaError::new(
+                                ErrorCode::PolicyDenied,
+                                ErrorCategory::Policy,
+                                format!("tool {name} is revoked or outside the active agent scope"),
+                            ))
+                        },
+                    )?
+                } else if let Some(early) = early_tool_executions.remove(&id) {
                     if early.name != name || early.input != input {
                         return Err(early_tool_identity_error(&id));
                     }
@@ -1706,7 +1889,11 @@ impl<P: ModelProvider> AgentEngine<P> {
                         self.cancellation.as_ref(),
                         &self.execution_policy,
                         |canonical_input| {
-                            self.execute_desktop_commander(&session.repo, canonical_input)
+                            self.execute_desktop_commander(
+                                &session.repo,
+                                session.id.as_str(),
+                                canonical_input,
+                            )
                         },
                     )?
                 } else if tool_allowed(self.config.agent.mode, &name) {

@@ -1,5 +1,6 @@
 //! Persistent single-agent execution, role-bound team contexts, and built-in tools.
 
+pub mod agent_scope;
 pub mod analysis_host;
 mod approval;
 pub mod branch_summary;
@@ -25,6 +26,15 @@ pub mod verification_dag;
 mod worker_execution;
 pub mod world_model_session;
 
+pub use agent_scope::{
+    AGENT_SCOPE_SCHEMA_VERSION, AgentRuntimeHandle, AgentScopeContract, AgentScopeLifecycle,
+    AgentScopeOwnedResource, AgentScopePreparation, AgentScopeRef, AgentScopeResourceKind,
+    AgentScopeStopReceipt, agent_runtime_handle, effective_agent_scope_tools,
+    fail_agent_scope_start, load_published_scope_ref, prepare_agent_scope, publish_agent_scope,
+    register_agent_scope_resource, release_agent_scope_resource, resume_agent_scope,
+    revoke_agent_scope_tool, stop_agent_scope, stop_agent_scope_generation, validate_agent_scope,
+    validate_scope_generation,
+};
 pub use approval::{
     ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome,
     RollbackReceipt,
