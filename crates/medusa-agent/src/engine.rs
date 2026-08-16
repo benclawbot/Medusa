@@ -1533,13 +1533,6 @@ impl<P: ModelProvider> AgentEngine<P> {
                     assistant_blocks.push(MessageBlock::Text { text });
                 }
                 ResponseBlock::ToolUse { id, name, input } => {
-                    if scoped_tool_names.binary_search(&name).is_err() {
-                        return Err(MedusaError::new(
-                            ErrorCode::PolicyDenied,
-                            ErrorCategory::Policy,
-                            format!("tool {name} is revoked or outside the active agent scope"),
-                        ));
-                    }
                     if let Some(early) = early_tool_executions.get(&id)
                         && (early.name != name || early.input != input)
                     {
@@ -1597,7 +1590,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             let positions = calls
                 .iter()
                 .position(|(_, name, _)| {
-                    name == ANALYSIS_WORKSPACE_TOOL
+                    scoped_tool_names.binary_search(name).is_err()
+                        || name == ANALYSIS_WORKSPACE_TOOL
                         || name == "update_plan"
                         || name == "ask_user_question"
                         || name == "desktop_commander"
@@ -1728,7 +1722,29 @@ impl<P: ModelProvider> AgentEngine<P> {
                 let mut cached = false;
                 let mut timing_override = None;
                 let mut post_action = None;
-                let execution = if let Some(early) = early_tool_executions.remove(&id) {
+                let execution = if scoped_tool_names.binary_search(&name).is_err() {
+                    measured = true;
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
+                    execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |_| {
+                            Err(MedusaError::new(
+                                ErrorCode::PolicyDenied,
+                                ErrorCategory::Policy,
+                                format!("tool {name} is revoked or outside the active agent scope"),
+                            ))
+                        },
+                    )?
+                } else if let Some(early) = early_tool_executions.remove(&id) {
                     if early.name != name || early.input != input {
                         return Err(early_tool_identity_error(&id));
                     }
