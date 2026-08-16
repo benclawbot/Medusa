@@ -430,9 +430,6 @@ CLI / TUI / Desktop / daemon frontend / Telegram
        -> Git + safe decomposition: bounded mutation DAG -> isolated child worktrees -> IntegrationBarrier -> aggregate candidate
        -> Git fallback: one isolated worktree implementer
        -> directory/ephemeral: one isolated content-addressed snapshot implementer
-  -> sealed worker delegation contract + published AgentScope before model/tool admission
-  -> durable session instruction/action delivery
-  -> effective model-request manifest persisted before each provider call
   -> dedicated zero-tool parent review
   -> independent immutable-candidate verification
   -> integration authorization
@@ -441,7 +438,17 @@ CLI / TUI / Desktop / daemon frontend / Telegram
   -> typed events and durable evidence
 ```
 
-The delegation/scope/request-manifest steps apply where a model-backed agent/worker is created or called; they do not create recursive delegation or a second orchestration authority.
+For each model-backed session or worker, admission/request authority is enforced at the point that session is created and each request is sent:
+
+```text
+delegated worker only: sealed DelegationContract before session creation
+  -> prepare and publish AgentScope before model/tool admission
+  -> admit durable session instruction/action state
+  -> persist effective model-request manifest before provider call
+  -> execute the provider attempt under the bound scope/request authority
+```
+
+Those per-session invariants strengthen the production path; they do not create recursive delegation or a second orchestration authority.
 
 ### Major layers
 
