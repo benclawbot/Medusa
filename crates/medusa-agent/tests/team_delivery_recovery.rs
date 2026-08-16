@@ -129,7 +129,10 @@ fn legacy_undelivered_boolean_migrates_to_unknown_queue_idempotently() {
     let second = TeamRuntime::load(&path).expect("reload migrated team state");
     drop(second);
     let migrated_twice = fs::read_to_string(path).expect("read reloaded team state");
-    assert_eq!(migrated_twice, migrated_once, "migration must be idempotent");
+    assert_eq!(
+        migrated_twice, migrated_once,
+        "migration must be idempotent"
+    );
 }
 
 #[test]
@@ -191,7 +194,8 @@ fn model_visible_team_instruction_stays_consumed_after_compaction() {
         .load_session(directory.path(), session.id.as_str())
         .expect("load admitted session");
     let action_id = accepted_action_id(&admitted);
-    let engine = AgentEngine::new(NoopProvider, Config::default()).with_team_context(worker.clone());
+    let engine =
+        AgentEngine::new(NoopProvider, Config::default()).with_team_context(worker.clone());
     let mut running = engine
         .load_session(directory.path(), session.id.as_str())
         .expect("load worker session");
