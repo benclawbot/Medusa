@@ -761,7 +761,8 @@ pub fn bind_control_session(
     worker_id: &str,
     session_id: &str,
 ) -> Result<(), String> {
-    if execution_id.trim().is_empty() || worker_id.trim().is_empty() || session_id.trim().is_empty() {
+    if execution_id.trim().is_empty() || worker_id.trim().is_empty() || session_id.trim().is_empty()
+    {
         return Err("team execution, worker, and session identities are required".to_owned());
     }
     let registry = TEAM_CONTROL_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
@@ -798,16 +799,11 @@ pub fn admit_control_instruction(
         .map_err(|_| "team repository registry lock was poisoned".to_owned())?
         .get(execution_id)
         .cloned()
-        .ok_or_else(|| format!("team execution `{execution_id}` has no durable repository binding"))?;
-    admit_team_instruction(
-        &repo,
-        session_id,
-        "lead",
-        recipient,
-        body,
-        idempotency_key,
-    )
-    .map_err(|error| error.to_string())
+        .ok_or_else(|| {
+            format!("team execution `{execution_id}` has no durable repository binding")
+        })?;
+    admit_team_instruction(&repo, session_id, "lead", recipient, body, idempotency_key)
+        .map_err(|error| error.to_string())
 }
 
 pub fn admit_team_instruction(
@@ -1042,7 +1038,9 @@ mod tests {
         session_id: &str,
     ) -> (TeamRuntime, TeamMemberContext, TeamMemberContext) {
         let team = TeamRuntime::create(
-            directory.path().join(format!(".medusa/executions/{team_id}/team.json")),
+            directory
+                .path()
+                .join(format!(".medusa/executions/{team_id}/team.json")),
             team_id,
             vec![
                 ("lead".to_owned(), TeamRole::Lead),
@@ -1095,7 +1093,9 @@ mod tests {
             .create_session(directory.path(), "review".to_owned())
             .expect("session");
         let team = TeamRuntime::create(
-            directory.path().join(".medusa/executions/control-team/team.json"),
+            directory
+                .path()
+                .join(".medusa/executions/control-team/team.json"),
             "control-team",
             vec![
                 ("lead".to_owned(), TeamRole::Lead),
@@ -1147,7 +1147,9 @@ mod tests {
             .create_session(directory.path(), "review".to_owned())
             .expect("session");
         let team = TeamRuntime::create(
-            directory.path().join(".medusa/executions/team-peer/team.json"),
+            directory
+                .path()
+                .join(".medusa/executions/team-peer/team.json"),
             "team-peer",
             vec![
                 ("researcher".to_owned(), TeamRole::Researcher),
@@ -1182,7 +1184,9 @@ mod tests {
     #[test]
     fn legacy_delivered_boolean_migrates_without_claiming_model_visibility() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join(".medusa/executions/legacy-team/team.json");
+        let path = directory
+            .path()
+            .join(".medusa/executions/legacy-team/team.json");
         fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
         fs::write(
             &path,
