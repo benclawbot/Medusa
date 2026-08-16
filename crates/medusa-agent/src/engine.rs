@@ -1112,85 +1112,88 @@ impl<P: ModelProvider> AgentEngine<P> {
         let streaming_repo = session.repo.clone();
         let audit_repo = session.repo.clone();
         let audit_session_id = session.id.to_string();
-        let mut complete_request =
-            |request: &ModelRequest, manifest: &effective_request::ManifestRef| {
+        macro_rules! complete_request {
+            ($request:expr, $manifest:expr) => {{
                 let mut before_provider_attempt = |attempt| {
                     effective_request::persist_provider_attempt(
                         &audit_repo,
                         &audit_session_id,
-                        manifest,
+                        $manifest,
                         attempt,
                     )
                     .map(|_| ())
                 };
                 if !streaming {
-                    return self.provider.complete_cancellable_for_phase_with_attempts(
-                        request,
+                    self.provider.complete_cancellable_for_phase_with_attempts(
+                        $request,
                         phase,
                         &self.cancellation,
                         &mut before_provider_attempt,
-                    );
-                }
-                let mut sink = |event: ProviderStreamEvent| {
-                    stream_transcript.push(event.clone())?;
-                    match event {
-                        ProviderStreamEvent::TextDelta { text } if !stream_text_rejected => {
-                            streamed_text.push_str(&text);
-                            if validate_provider_text(&streamed_text).is_ok() {
-                                observer(&AgentUpdate::AssistantText(text));
-                            } else {
-                                stream_text_rejected = true;
-                                observer(&AgentUpdate::AssistantText(
-                                    "[provider output rejected: identity or policy contamination]"
-                                        .to_owned(),
-                                ));
-                            }
-                        }
-                        ProviderStreamEvent::ToolUseReady { id, name, input }
-                            if !early_tool_executions.contains_key(&id)
-                                && stream_dispatch_safe_tool(&name, &input)
-                                && tool_allowed(self.config.agent.mode, &name) =>
-                        {
-                            let requested_at = std::time::Instant::now();
-                            let started = std::time::Instant::now();
-                            if let Ok(execution) = execute_tool_cancellable_with_policy_certified(
-                                &streaming_repo,
-                                &name,
-                                &input,
-                                self.cancellation.as_ref(),
-                                &self.execution_policy,
-                            ) && execution.result.is_ok()
-                            {
-                                early_tool_executions.insert(
-                                    id,
-                                    EarlyToolExecution {
-                                        name,
-                                        input,
-                                        execution,
-                                        requested_at,
-                                        timing: ToolExecutionTiming {
-                                            queue_duration_ns: 0,
-                                            execution_duration_ns: duration_ns(started.elapsed()),
-                                            cached: false,
-                                        },
-                                    },
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
-                    Ok(())
-                };
-                self.provider
-                    .complete_streaming_cancellable_for_phase_with_attempts(
-                        request,
-                        phase,
-                        &self.cancellation,
-                        &mut before_provider_attempt,
-                        &mut sink,
                     )
-            };
-        let response = match complete_request(&request, &active_manifest) {
+                } else {
+                    let mut sink = |event: ProviderStreamEvent| {
+                        stream_transcript.push(event.clone())?;
+                        match event {
+                            ProviderStreamEvent::TextDelta { text } if !stream_text_rejected => {
+                                streamed_text.push_str(&text);
+                                if validate_provider_text(&streamed_text).is_ok() {
+                                    observer(&AgentUpdate::AssistantText(text));
+                                } else {
+                                    stream_text_rejected = true;
+                                    observer(&AgentUpdate::AssistantText(
+                                        "[provider output rejected: identity or policy contamination]"
+                                            .to_owned(),
+                                    ));
+                                }
+                            }
+                            ProviderStreamEvent::ToolUseReady { id, name, input }
+                                if !early_tool_executions.contains_key(&id)
+                                    && stream_dispatch_safe_tool(&name, &input)
+                                    && tool_allowed(self.config.agent.mode, &name) =>
+                            {
+                                let requested_at = std::time::Instant::now();
+                                let started = std::time::Instant::now();
+                                if let Ok(execution) =
+                                    execute_tool_cancellable_with_policy_certified(
+                                        &streaming_repo,
+                                        &name,
+                                        &input,
+                                        self.cancellation.as_ref(),
+                                        &self.execution_policy,
+                                    ) && execution.result.is_ok()
+                                {
+                                    early_tool_executions.insert(
+                                        id,
+                                        EarlyToolExecution {
+                                            name,
+                                            input,
+                                            execution,
+                                            requested_at,
+                                            timing: ToolExecutionTiming {
+                                                queue_duration_ns: 0,
+                                                execution_duration_ns: duration_ns(started.elapsed()),
+                                                cached: false,
+                                            },
+                                        },
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
+                        Ok(())
+                    };
+                    self.provider
+                        .complete_streaming_cancellable_for_phase_with_attempts(
+                            $request,
+                            phase,
+                            &self.cancellation,
+                            &mut before_provider_attempt,
+                            &mut sink,
+                        )
+                }
+            }};
+        }
+        let response = match complete_request!(&request, &active_manifest) {
             Ok(response) => response,
             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
                 append_observed(
@@ -1228,7 +1231,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     &mut observer,
                 )?;
                 active_manifest = retry_manifest;
-                match complete_request(&request, &active_manifest) {
+                match complete_request!(&request, &active_manifest) {
                     Ok(response) => response,
                     Err(error) => {
                         append_observed(
