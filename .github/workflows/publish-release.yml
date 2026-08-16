@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
-          git fetch --tags origin
+          git fetch --force --tags origin
           git fetch --no-tags origin main
           tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
           if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
@@ -276,7 +276,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG"
-          git fetch --tags origin
+          git fetch --force --tags origin
           tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
           if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
             echo "release tag $RELEASE_TAG moved away from workflow event SHA $RELEASE_SHA" >&2
