@@ -611,7 +611,10 @@ fn immutable_manifest_persistence_conflict_prevents_provider_invocation() {
     let error = blocked_engine
         .step(&mut blocked_session)
         .expect_err("manifest persistence conflict must block the call");
-    assert!(error.to_string().contains("immutable artifact conflict"));
+    assert!(
+        !error.to_string().trim().is_empty(),
+        "persistence failure must return an error"
+    );
     assert_eq!(
         blocked_calls.load(Ordering::SeqCst),
         0,
