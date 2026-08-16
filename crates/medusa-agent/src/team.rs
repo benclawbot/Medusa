@@ -70,17 +70,6 @@ pub struct TeamMember {
     pub session_id: Option<String>,
 }
 
-/// Compatibility projection for callers that still deserialize the historical mailbox shape.
-/// New durable team state does not use `delivered` as reasoning-delivery authority.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TeamMessage {
-    pub sequence: u64,
-    pub from: String,
-    pub to: String,
-    pub body: String,
-    pub delivered: bool,
-}
-
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TeamMessageDeliveryState {
@@ -1421,17 +1410,5 @@ mod tests {
         let context = reviewer.prompt_context().expect("context");
         assert!(context.contains("inspect canonical delivery"));
         assert!(context.contains("action_id"));
-    }
-
-    #[test]
-    fn public_legacy_team_message_shape_remains_constructible() {
-        let message = TeamMessage {
-            sequence: 1,
-            from: "lead".to_owned(),
-            to: "reviewer".to_owned(),
-            body: "legacy projection".to_owned(),
-            delivered: false,
-        };
-        assert!(!message.delivered);
     }
 }
