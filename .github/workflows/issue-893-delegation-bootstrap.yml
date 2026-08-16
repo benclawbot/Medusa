@@ -41,6 +41,34 @@ jobs:
           Path('/tmp/issue893.py').write_text(script)
           PY
           python3 /tmp/issue893.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-agent/src/engine.rs')
+          text = path.read_text()
+          old = '\n'.join([
+              '                journal_certified_tool_execution(',
+              '                    session,',
+              '                    &approval.tool_use_id,',
+              '                    &approval.tool,',
+              '                    &approval.input,',
+              '                    execution.receipt,',
+              '                )?;',
+          ])
+          new = '\n'.join([
+              '                journal_certified_tool_execution(',
+              '                    session,',
+              '                    &approval.tool_use_id,',
+              '                    &approval.tool,',
+              '                    &approval.input,',
+              '                    execution.receipt,',
+              '                    &self.execution_policy,',
+              '                )?;',
+          ])
+          if old not in text:
+              raise SystemExit('approved tool receipt call anchor not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
           cargo fmt --all
           cargo check -p medusa-agent -p medusa-runtime --all-targets --locked
           cargo test -p medusa-agent delegation --locked
