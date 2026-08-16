@@ -23,7 +23,7 @@ struct PreflightReport {
 }
 
 pub(crate) fn run_if_needed(config: &Config) -> MedusaResult<()> {
-    if !requires_preflight(config) {
+    if !eager_model_command() || !requires_preflight(config) {
         return Ok(());
     }
     if preflight_disabled() {
@@ -68,6 +68,12 @@ fn requires_preflight(config: &Config) -> bool {
     config.model.provider == OAUTH_PROVIDER
 }
 
+fn eager_model_command() -> bool {
+    env::args_os()
+        .skip(1)
+        .any(|argument| matches!(argument.to_str(), Some("run" | "resume")))
+}
+
 fn preflight_disabled() -> bool {
     env::var(PREFLIGHT_ENV).ok().is_some_and(|value| {
         matches!(
@@ -75,6 +81,10 @@ fn preflight_disabled() -> bool {
             "0" | "false" | "off" | "skip" | "disabled"
         )
     })
+}
+
+fn npx_program() -> &'static str {
+    if cfg!(windows) { "npx.cmd" } else { "npx" }
 }
 
 fn ensure_gateway_running() -> MedusaResult<()> {
@@ -87,14 +97,15 @@ fn ensure_gateway_running() -> MedusaResult<()> {
     if TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok() {
         return Ok(());
     }
-    let status = Command::new("npx")
+    let status = Command::new(npx_program())
         .args(["--yes", "openai-oauth@latest", "--detach"])
         .status()
         .map_err(|error| {
             preflight_error(
                 ErrorCategory::Environment,
                 format!(
-                    "OAuth gateway is unavailable and openai-oauth could not be started with npx: {error}"
+                    "OAuth gateway is unavailable and openai-oauth could not be started with {}: {error}",
+                    npx_program()
                 ),
             )
         })?;
@@ -311,6 +322,11 @@ mod tests {
 
         config.model.provider = "openai".into();
         assert!(!requires_preflight(&config));
+    }
+
+    #[test]
+    fn platform_npx_program_uses_windows_command_wrapper() {
+        assert_eq!(npx_program(), if cfg!(windows) { "npx.cmd" } else { "npx" });
     }
 
     #[test]
