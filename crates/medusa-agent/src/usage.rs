@@ -277,6 +277,8 @@ mod tests {
             EventPayload::ModelResponseReceived {
                 response_id: Some("fixture".to_owned()),
                 usage: serde_json::to_value(usage).expect("usage json"),
+                request_id: None,
+                request_fingerprint: None,
             },
             None,
             OffsetDateTime::now_utc(),
