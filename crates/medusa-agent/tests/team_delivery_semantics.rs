@@ -390,10 +390,12 @@ fn lead_instruction_rejects_terminal_worker_without_session_mutation() {
     let restored = engine
         .load_session(directory.path(), session.id.as_str())
         .expect("restore worker session");
-    assert!(!restored.events.iter().any(|event| matches!(
-        event.payload,
-        EventPayload::SessionActionAccepted { .. }
-    )));
+    assert!(
+        !restored
+            .events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::SessionActionAccepted { .. }))
+    );
 }
 
 #[test]
@@ -430,10 +432,12 @@ fn ambiguous_multiple_leads_cannot_admit_worker_instruction() {
     let restored = engine
         .load_session(directory.path(), session.id.as_str())
         .expect("restore worker session");
-    assert!(!restored.events.iter().any(|event| matches!(
-        event.payload,
-        EventPayload::SessionActionAccepted { .. }
-    )));
+    assert!(
+        !restored
+            .events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::SessionActionAccepted { .. }))
+    );
 }
 
 #[test]
