@@ -247,6 +247,9 @@ pub fn prepare_combined(
         repository_fingerprint: preflight.repository_fingerprint.clone(),
         task_id,
         worker_id: staging.id.clone(),
+        delegation_contract_id: String::new(),
+        delegation_contract_fingerprint: String::new(),
+        delegation_attempt_fingerprint: String::new(),
         session_id: format!("parallel-{}", hash(&parallel.dag_fingerprint)),
         turns: parallel
             .children

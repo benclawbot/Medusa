@@ -51,15 +51,16 @@ pub(crate) fn resolve_delegation(
     let base_policy = AgentExecutionPolicy::for_team_role(request.role)
         .with_allowed_write_paths(request.write_scopes.clone());
     let existing = controller.delegation_contract_binding(request.task_id);
+    validate_contract_presence(existing.as_ref(), request.task_id, request.lease_epoch)?;
+    let current_capabilities =
+        snapshot_delegated_capabilities(request.capability_repo, request.mode, &base_policy)?;
 
     let contract = if let Some(binding) = existing.as_ref() {
         let contract = store.load_contract(&binding.contract_id)?;
         validate_existing(&contract, &request, binding)?;
         contract
     } else {
-        let capabilities =
-            snapshot_delegated_capabilities(request.capability_repo, request.mode, &base_policy)?;
-        let allowed_tools = capabilities.allowed_tools;
+        let allowed_tools = current_capabilities.allowed_tools.clone();
         let role_policy_fingerprint = fingerprint_json(&base_policy.audit_projection())?;
         let network_allowed = allowed_tools
             .iter()
@@ -84,8 +85,8 @@ pub(crate) fn resolve_delegation(
             read_scopes: vec!["repository".to_owned()],
             write_scopes: request.write_scopes.clone(),
             mutation_authority: request.mutation_authority,
-            capability_registry_schema_version: capabilities.schema_version,
-            capability_registry_fingerprint: capabilities.fingerprint,
+            capability_registry_schema_version: current_capabilities.schema_version,
+            capability_registry_fingerprint: current_capabilities.fingerprint.clone(),
             allowed_tools,
             role_policy_version: DELEGATION_ROLE_POLICY_VERSION,
             role_policy_fingerprint,
@@ -124,6 +125,13 @@ pub(crate) fn resolve_delegation(
         binding,
     )?;
 
+    let effective_allowed_tools = contract
+        .authority
+        .allowed_tools
+        .iter()
+        .filter(|tool| current_capabilities.allowed_tools.binary_search(tool).is_ok())
+        .cloned()
+        .collect::<Vec<_>>();
     let previous = store.latest_attempt(&contract.contract_id)?;
     let attempt_ordinal = previous
         .as_ref()
@@ -134,14 +142,38 @@ pub(crate) fn resolve_delegation(
         attempt_ordinal,
         request.session_id.to_string(),
         previous.map(|attempt| attempt.session_id),
+        effective_allowed_tools,
     )?;
     store.persist_attempt(&attempt)?;
 
     Ok(ResolvedDelegation { contract, attempt })
 }
 
-pub(crate) fn policy_for(contract: &DelegationContract, role: TeamRole) -> AgentExecutionPolicy {
-    delegation_execution_policy(contract, role)
+pub(crate) fn policy_for(
+    contract: &DelegationContract,
+    attempt: &DelegationAttemptBinding,
+    role: TeamRole,
+) -> AgentExecutionPolicy {
+    delegation_execution_policy(contract, role, attempt.effective_allowed_tools.clone())
+}
+
+fn validate_contract_presence(
+    binding: Option<&DelegationLeaseBinding>,
+    task_id: &str,
+    lease_epoch: u64,
+) -> Result<(), String> {
+    if binding.is_none() && lease_epoch > 1 {
+        return Err(format!(
+            "legacy_contract_unknown: task {task_id} reached lease epoch {lease_epoch} without a durable delegation contract"
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_strings(mut values: Vec<String>) -> Vec<String> {
+    values.sort();
+    values.dedup();
+    values
 }
 
 fn validate_existing(
@@ -158,9 +190,13 @@ fn validate_existing(
         "context_fingerprint": request.context_fingerprint,
         "repository_identity": request.repository_identity,
         "repository_revision": request.repository_revision,
-        "write_scopes": request.write_scopes,
+        "write_scopes": canonical_strings(request.write_scopes.clone()),
         "mutation_authority": request.mutation_authority,
         "role_mode": request.mode,
+        "root_execution_id": request.root_execution_id,
+        "objective": request.objective,
+        "required_evidence": canonical_strings(request.required_evidence.to_vec()),
+        "max_delegation_depth": request.max_delegation_depth,
     });
     let recorded = json!({
         "task_id": authority.task_id,
@@ -172,6 +208,10 @@ fn validate_existing(
         "write_scopes": authority.write_scopes,
         "mutation_authority": authority.mutation_authority,
         "role_mode": authority.mode,
+        "root_execution_id": authority.root_execution_id,
+        "objective": authority.objective,
+        "required_evidence": authority.required_evidence,
+        "max_delegation_depth": authority.max_delegation_depth,
     });
     if expected != recorded
         || binding.contract_fingerprint != contract.fingerprint
@@ -184,4 +224,29 @@ fn validate_existing(
         ));
     }
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_retry_without_contract_is_rejected() {
+        assert!(validate_contract_presence(None, "implement", 1).is_ok());
+        let error = validate_contract_presence(None, "implement", 2).expect_err("legacy retry");
+        assert!(error.contains("legacy_contract_unknown"));
+    }
+
+    #[test]
+    fn retry_authority_sets_are_canonicalized_before_reconciliation() {
+        assert_eq!(
+            canonical_strings(vec![
+                "patch or commit evidence".to_owned(),
+                "focused tests".to_owned(),
+                "focused tests".to_owned(),
+            ]),
+            vec!["focused tests".to_owned(), "patch or commit evidence".to_owned()]
+        );
+    }
 }

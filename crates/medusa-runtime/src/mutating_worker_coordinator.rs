@@ -119,6 +119,12 @@ struct DurableImplementationState {
     status: ImplementationStatus,
     worker: Worker,
     context_fingerprint: String,
+    #[serde(default)]
+    delegation_contract_id: String,
+    #[serde(default)]
+    delegation_contract_fingerprint: String,
+    #[serde(default)]
+    delegation_attempt_fingerprint: String,
     session_id: String,
     turns: u32,
     summary: String,
@@ -147,6 +153,9 @@ pub struct ImplementationEvidence {
     pub repository_fingerprint: String,
     pub task_id: String,
     pub worker_id: String,
+    pub delegation_contract_id: String,
+    pub delegation_contract_fingerprint: String,
+    pub delegation_attempt_fingerprint: String,
     pub session_id: String,
     pub turns: u32,
     pub summary: String,
@@ -622,6 +631,9 @@ fn speculative_preflight(
             role,
             context_fingerprint: assumptions.fingerprint.clone(),
             lease_epoch: 1,
+            delegation_contract_id: String::new(),
+            delegation_contract_fingerprint: String::new(),
+            delegation_attempt_fingerprint: String::new(),
             session_id: format!("speculative-assumption-{dependency}"),
             turns: 0,
             summary: format!(
@@ -1066,6 +1078,9 @@ where
                 mutation_authority: DelegatedMutationAuthority::IsolatedWorktree,
             },
         )?;
+        let delegation_contract_id = resolved.contract.contract_id.clone();
+        let delegation_contract_fingerprint = resolved.contract.fingerprint.clone();
+        let delegation_attempt_fingerprint = resolved.attempt.fingerprint.clone();
         let team_context = team.member_context(&assignment.worker_id)?;
         team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;
         if let Ok(snapshot) = control.start(
@@ -1083,6 +1098,9 @@ where
             status: ImplementationStatus::Running,
             worker: worker.clone(),
             context_fingerprint: packet.fingerprint.clone(),
+            delegation_contract_id,
+            delegation_contract_fingerprint,
+            delegation_attempt_fingerprint,
             session_id: String::new(),
             turns: 0,
             summary: String::new(),
@@ -1524,6 +1542,9 @@ where
             status: ImplementationStatus::Prepared,
             worker: finalized,
             context_fingerprint: packet.fingerprint.clone(),
+            delegation_contract_id: running.delegation_contract_id.clone(),
+            delegation_contract_fingerprint: running.delegation_contract_fingerprint.clone(),
+            delegation_attempt_fingerprint: running.delegation_attempt_fingerprint.clone(),
             session_id: run.session_id,
             turns: run.turns,
             summary: run.summary,
@@ -1665,7 +1686,7 @@ fn execute_production_implementer(
         .min(request.max_model_turns.max(1));
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
-    let policy = policy_for(&request.delegation, TeamRole::Implementer);
+    let policy = policy_for(&request.delegation, &request.attempt, TeamRole::Implementer);
     let engine =
         AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
             .with_execution_policy(policy)

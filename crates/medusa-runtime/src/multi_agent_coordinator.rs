@@ -21,7 +21,7 @@ use std::{
 use medusa_agent::{
     AgentEngine, AgentUpdate, DelegatedMutationAuthority, DelegationAttemptBinding,
     DelegationContract, StepOutcome, TeamMemberContext, TeamRole, TeamRuntime,
-    WorkerExecutionController, bind_session_to_delegation,
+    DelegationContractStore, WorkerExecutionController, bind_session_to_delegation,
 };
 use medusa_config::{Config, Mode};
 use medusa_core::SessionId;
@@ -53,6 +53,12 @@ pub struct WorkerEvidence {
     pub context_fingerprint: String,
     #[serde(default)]
     pub lease_epoch: u64,
+    #[serde(default)]
+    pub delegation_contract_id: String,
+    #[serde(default)]
+    pub delegation_contract_fingerprint: String,
+    #[serde(default)]
+    pub delegation_attempt_fingerprint: String,
     pub session_id: String,
     pub turns: u32,
     pub summary: String,
@@ -74,8 +80,16 @@ impl CoordinatorEvidence {
             .iter()
             .map(|worker| {
                 format!(
-                    "## {} ({:?}, session {})\n{}",
-                    worker.task_id, worker.role, worker.session_id, worker.summary
+                    "## {} ({:?}, session {}, delegation {})\n{}",
+                    worker.task_id,
+                    worker.role,
+                    worker.session_id,
+                    if worker.delegation_contract_id.is_empty() {
+                        "deterministic"
+                    } else {
+                        worker.delegation_contract_id.as_str()
+                    },
+                    worker.summary
                 )
             })
             .collect::<Vec<_>>()
@@ -183,6 +197,9 @@ pub fn run_deterministic_fast_preflight(
             role: contract.role,
             context_fingerprint: packet.fingerprint,
             lease_epoch: 1,
+            delegation_contract_id: String::new(),
+            delegation_contract_fingerprint: String::new(),
+            delegation_attempt_fingerprint: String::new(),
             session_id: format!(
                 "deterministic-fast-{}-{}",
                 contract.task_id,
@@ -374,9 +391,11 @@ where
     };
 
     let evidence_directory = root.join("worker-evidence");
+    let delegation_store = DelegationContractStore::new(&root);
     let mut evidence = load_worker_evidence(&evidence_directory)?;
     for worker in &evidence {
         validate_worker_evidence(plan, &contract_by_task, worker)?;
+        validate_worker_delegation_evidence(&delegation_store, &controller, worker)?;
         let state = controller
             .task_views()
             .into_iter()
@@ -572,6 +591,14 @@ where
             continue;
         }
         result.lease_epoch = assignment.lease_epoch;
+        if let Err(error) =
+            validate_worker_delegation_evidence(&delegation_store, &controller, &result)
+        {
+            controller.fail(&task_id, &worker_id, assignment.lease_epoch, &error, true)?;
+            team.finish_member(&worker_id, true)?;
+            failures.push(format!("{task_id} ({worker_id}): {error}"));
+            continue;
+        }
         write_atomic(
             &evidence_directory.join(format!("{}.json", result.task_id)),
             &result,
@@ -656,7 +683,7 @@ fn execute_production_worker(
     let role = team_role_for(request.contract.role);
     let engine =
         AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
-            .with_execution_policy(policy_for(&request.delegation, role))
+            .with_execution_policy(policy_for(&request.delegation, &request.attempt, role))
             .with_team_context(request.team_context.clone());
     let objective = format!(
         "Complete delegated read-only task `{}`. Objective: {}. Return a concise evidence-backed report; do not ask the user questions and do not modify repository state.",
@@ -755,6 +782,9 @@ fn execute_production_worker(
         role: request.contract.role,
         context_fingerprint: request.packet.fingerprint,
         lease_epoch: 0,
+        delegation_contract_id: request.delegation.contract_id,
+        delegation_contract_fingerprint: request.delegation.fingerprint,
+        delegation_attempt_fingerprint: request.attempt.fingerprint,
         session_id: session.id.to_string(),
         turns: session.turn,
         summary,
@@ -817,6 +847,60 @@ fn load_worker_evidence(directory: &Path) -> Result<Vec<WorkerEvidence>, String>
                 .map_err(|error| error.to_string())
         })
         .collect()
+}
+
+fn validate_worker_delegation_evidence(
+    store: &DelegationContractStore,
+    controller: &WorkerExecutionController,
+    evidence: &WorkerEvidence,
+) -> Result<(), String> {
+    if evidence.delegation_contract_id.trim().is_empty()
+        || evidence.delegation_contract_fingerprint.trim().is_empty()
+        || evidence.delegation_attempt_fingerprint.trim().is_empty()
+    {
+        return Err(format!(
+            "legacy_contract_unknown: worker evidence for {} has no delegation identity",
+            evidence.task_id
+        ));
+    }
+    let binding = controller
+        .delegation_contract_binding(&evidence.task_id)
+        .ok_or_else(|| {
+            format!(
+                "legacy_contract_unknown: worker evidence for {} has no scheduler contract binding",
+                evidence.task_id
+            )
+        })?;
+    if binding.contract_id != evidence.delegation_contract_id
+        || binding.contract_fingerprint != evidence.delegation_contract_fingerprint
+        || binding.worker_id != evidence.worker_id
+    {
+        return Err(format!(
+            "delegation evidence for {} does not match durable scheduler authority",
+            evidence.task_id
+        ));
+    }
+    let contract = store.load_contract(&binding.contract_id)?;
+    if contract.fingerprint != evidence.delegation_contract_fingerprint {
+        return Err(format!(
+            "delegation evidence for {} does not match the persisted contract",
+            evidence.task_id
+        ));
+    }
+    let attempt = store
+        .latest_attempt(&binding.contract_id)?
+        .ok_or_else(|| format!("delegation attempt is missing for {}", evidence.task_id))?;
+    attempt.validate(&contract)?;
+    if attempt.fingerprint != evidence.delegation_attempt_fingerprint
+        || attempt.session_id != evidence.session_id
+        || attempt.lease_epoch != evidence.lease_epoch
+    {
+        return Err(format!(
+            "delegation evidence for {} does not match its persisted attempt",
+            evidence.task_id
+        ));
+    }
+    Ok(())
 }
 
 fn validate_worker_evidence(
@@ -1074,7 +1158,10 @@ mod tests {
                     role: request.contract.role,
                     context_fingerprint: request.packet.fingerprint,
                     lease_epoch: 0,
-                    session_id: format!("session-{sequence}"),
+                    delegation_contract_id: request.delegation.contract_id,
+                    delegation_contract_fingerprint: request.delegation.fingerprint,
+                    delegation_attempt_fingerprint: request.attempt.fingerprint,
+                    session_id: request.session_id.to_string(),
                     turns: 1,
                     summary: "repository evidence collected".to_owned(),
                 })
@@ -1130,14 +1217,17 @@ mod tests {
         let (events, _) = mpsc::channel();
         let calls = Arc::new(AtomicUsize::new(0));
         let execute = |request: WorkerRequest, calls: &AtomicUsize| {
-            let sequence = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            calls.fetch_add(1, Ordering::SeqCst);
             Ok(WorkerEvidence {
                 task_id: request.contract.task_id,
                 worker_id: request.worker_id,
                 role: request.contract.role,
                 context_fingerprint: request.packet.fingerprint,
                 lease_epoch: 0,
-                session_id: format!("session-{sequence}"),
+                delegation_contract_id: request.delegation.contract_id,
+                delegation_contract_fingerprint: request.delegation.fingerprint,
+                delegation_attempt_fingerprint: request.attempt.fingerprint,
+                session_id: request.session_id.to_string(),
                 turns: 1,
                 summary: "fresh repository evidence".to_owned(),
             })
@@ -1180,7 +1270,10 @@ mod tests {
                 role: request.contract.role,
                 context_fingerprint: request.packet.fingerprint,
                 lease_epoch: 0,
-                session_id: "session-risk".to_owned(),
+                delegation_contract_id: request.delegation.contract_id,
+                delegation_contract_fingerprint: request.delegation.fingerprint,
+                delegation_attempt_fingerprint: request.attempt.fingerprint,
+                session_id: request.session_id.to_string(),
                 turns: 1,
                 summary: "risk evidence".to_owned(),
             })

@@ -206,6 +206,8 @@ pub struct DelegationAttemptBinding {
     pub attempt_ordinal: u32,
     pub session_id: String,
     pub predecessor_session_id: Option<String>,
+    pub effective_allowed_tools: Vec<String>,
+    pub unavailable_tools: Vec<String>,
 }
 
 impl DelegationAttemptBinding {
@@ -215,11 +217,30 @@ impl DelegationAttemptBinding {
         attempt_ordinal: u32,
         session_id: String,
         predecessor_session_id: Option<String>,
+        mut effective_allowed_tools: Vec<String>,
     ) -> Result<Self, String> {
         if lease_epoch == 0 || attempt_ordinal == 0 || session_id.trim().is_empty() {
             return Err("delegation attempt binding is incomplete".to_owned());
         }
         contract.validate()?;
+        effective_allowed_tools.sort();
+        effective_allowed_tools.dedup();
+        if effective_allowed_tools.iter().any(|tool| {
+            contract
+                .authority
+                .allowed_tools
+                .binary_search(tool)
+                .is_err()
+        }) {
+            return Err("delegation attempt cannot add tools outside its contract".to_owned());
+        }
+        let unavailable_tools = contract
+            .authority
+            .allowed_tools
+            .iter()
+            .filter(|tool| effective_allowed_tools.binary_search(tool).is_err())
+            .cloned()
+            .collect::<Vec<_>>();
         let fingerprint = sha256(
             &serde_json::to_vec(&(
                 DELEGATION_CONTRACT_SCHEMA_VERSION,
@@ -229,6 +250,8 @@ impl DelegationAttemptBinding {
                 attempt_ordinal,
                 &session_id,
                 &predecessor_session_id,
+                &effective_allowed_tools,
+                &unavailable_tools,
             ))
             .map_err(|error| error.to_string())?,
         );
@@ -241,6 +264,8 @@ impl DelegationAttemptBinding {
             attempt_ordinal,
             session_id,
             predecessor_session_id,
+            effective_allowed_tools,
+            unavailable_tools,
         })
     }
 
@@ -260,9 +285,10 @@ impl DelegationAttemptBinding {
             self.attempt_ordinal,
             self.session_id.clone(),
             self.predecessor_session_id.clone(),
+            self.effective_allowed_tools.clone(),
         )?;
-        if expected.fingerprint != self.fingerprint {
-            return Err("delegation attempt fingerprint mismatch".to_owned());
+        if expected != *self {
+            return Err("delegation attempt fingerprint or narrowing mismatch".to_owned());
         }
         Ok(())
     }
@@ -313,9 +339,11 @@ pub fn snapshot_delegated_capabilities(
 pub fn delegation_execution_policy(
     contract: &DelegationContract,
     role: TeamRole,
+    effective_allowed_tools: impl IntoIterator<Item = String>,
 ) -> AgentExecutionPolicy {
     AgentExecutionPolicy::for_team_role(role)
         .intersect_allowed_tools(contract.authority.allowed_tools.clone())
+        .intersect_allowed_tools(effective_allowed_tools)
         .with_allowed_write_paths(contract.authority.write_scopes.clone())
         .with_delegation_binding(contract.contract_id.clone(), contract.fingerprint.clone())
 }
@@ -344,6 +372,8 @@ pub fn bind_session_to_delegation(
                 "lease_epoch": attempt.lease_epoch,
                 "attempt_ordinal": attempt.attempt_ordinal,
                 "predecessor_session_id": attempt.predecessor_session_id,
+                "effective_allowed_tools": attempt.effective_allowed_tools,
+                "unavailable_tools": attempt.unavailable_tools,
             }),
         },
     )?;
@@ -548,5 +578,127 @@ mod tests {
         store.persist_contract(&contract).expect("persist");
         let restored = store.load_contract(&contract.contract_id).expect("load");
         assert_eq!(restored, contract);
+    }
+
+    #[test]
+    fn attempt_cannot_inherit_new_global_tools() {
+        let contract = DelegationContract::seal(None, material()).expect("contract");
+        let attempt = DelegationAttemptBinding::new(
+            &contract,
+            1,
+            1,
+            "session-a".into(),
+            None,
+            vec!["fs_read".into()],
+        )
+        .expect("attempt");
+        assert_eq!(attempt.effective_allowed_tools, vec!["fs_read"]);
+        assert!(
+            DelegationAttemptBinding::new(
+                &contract,
+                1,
+                2,
+                "session-b".into(),
+                Some("session-a".into()),
+                vec!["fs_read".into(), "fs_write".into()],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn retry_attempt_records_capability_loss_and_session_lineage() {
+        let mut authority = material();
+        authority.allowed_tools = vec!["fs_read".into(), "web_fetch".into()];
+        let contract = DelegationContract::seal(None, authority).expect("contract");
+        let first = DelegationAttemptBinding::new(
+            &contract,
+            1,
+            1,
+            "session-a".into(),
+            None,
+            contract.authority.allowed_tools.clone(),
+        )
+        .expect("first");
+        let second = DelegationAttemptBinding::new(
+            &contract,
+            2,
+            2,
+            "session-b".into(),
+            Some(first.session_id.clone()),
+            vec!["fs_read".into()],
+        )
+        .expect("second");
+        assert_eq!(second.contract_id, first.contract_id);
+        assert_eq!(second.predecessor_session_id.as_deref(), Some("session-a"));
+        assert_eq!(second.unavailable_tools, vec!["web_fetch"]);
+    }
+
+    #[test]
+    fn delegated_write_scope_remains_bounded_after_round_trip() {
+        let mut authority = material();
+        authority.mode = Mode::Yolo;
+        authority.write_scopes = vec!["src/lib.rs".into()];
+        authority.mutation_authority = DelegatedMutationAuthority::IsolatedWorktree;
+        authority.allowed_tools = vec!["fs_read".into(), "fs_write".into()];
+        let contract = DelegationContract::seal(None, authority).expect("contract");
+        let encoded = serde_json::to_vec(&contract).expect("serialize");
+        let restored: DelegationContract = serde_json::from_slice(&encoded).expect("restore");
+        let policy = delegation_execution_policy(
+            &restored,
+            TeamRole::Implementer,
+            restored.authority.allowed_tools.clone(),
+        );
+        assert!(
+            policy
+                .denial_reason("fs_write", &json!({"path":"src/lib.rs"}))
+                .is_none()
+        );
+        assert!(
+            policy
+                .denial_reason("fs_write", &json!({"path":"src/sibling.rs"}))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn provider_route_is_pinned_in_contract() {
+        let mut authority = material();
+        authority.model.provider = "pinned-provider".into();
+        authority.model.name = "pinned-model".into();
+        let contract = DelegationContract::seal(None, authority).expect("contract");
+        let ambient = ModelConfig {
+            provider: "new-default".into(),
+            name: "new-model".into(),
+            ..Default::default()
+        };
+        assert_eq!(contract.authority.model.provider, "pinned-provider");
+        assert_eq!(contract.authority.model.name, "pinned-model");
+        assert_ne!(contract.authority.model, ambient);
+    }
+
+    #[test]
+    fn successor_contract_explicitly_links_predecessor() {
+        let base = DelegationContract::seal(None, material()).expect("base");
+        let mut authority = material();
+        authority.allowed_tools.push("web_fetch".into());
+        let successor =
+            DelegationContract::seal(Some(base.contract_id.clone()), authority).expect("successor");
+        assert_eq!(
+            successor.predecessor_contract_id.as_deref(),
+            Some(base.contract_id.as_str())
+        );
+        assert_ne!(successor.contract_id, base.contract_id);
+    }
+
+    #[test]
+    fn corrupt_or_missing_contract_fails_closed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = DelegationContractStore::new(directory.path());
+        assert!(store.load_contract("delegation-v1-missing").is_err());
+        let contract = DelegationContract::seal(None, material()).expect("contract");
+        let path = store.persist_contract(&contract).expect("persist");
+        fs::write(&path, b"{not-json").expect("corrupt");
+        assert!(store.load_contract(&contract.contract_id).is_err());
     }
 }
