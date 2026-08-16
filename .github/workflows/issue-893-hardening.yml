@@ -25,6 +25,7 @@ jobs:
           python3 scripts/issue-893-hardening.py
           python3 scripts/issue-893-hardening-fix.py
           python3 scripts/issue-893-compile-fix.py
+          python3 scripts/issue-893-clippy-fix.py
           cargo fmt --all
       - name: Validate authority and recovery
         shell: bash
@@ -43,7 +44,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/issue-893-hardening.yml scripts/issue-893-hardening.py scripts/issue-893-hardening-fix.py scripts/issue-893-compile-fix.py
+          git rm .github/workflows/issue-893-hardening.yml scripts/issue-893-hardening.py scripts/issue-893-hardening-fix.py scripts/issue-893-compile-fix.py scripts/issue-893-clippy-fix.py
           git add crates/medusa-agent crates/medusa-runtime
           git diff --cached --check
           git commit -m "Harden delegation retry authority"
