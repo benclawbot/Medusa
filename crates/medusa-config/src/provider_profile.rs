@@ -151,6 +151,20 @@ impl ProviderProfile {
             _ => None,
         }
     }
+
+    fn normalize_legacy_route(mut self) -> Self {
+        if self.connection == "chatgpt-oauth"
+            && self.provider == "openai-oauth"
+            && self.model == "MiniMax-M3"
+        {
+            self.connection = "direct".into();
+            self.provider = "minimax".into();
+            self.auth = "api-key".into();
+            self.base_url = None;
+            self.configured = true;
+        }
+        self
+    }
 }
 
 /// Returns the registered environment-variable credential source for a provider.
@@ -184,6 +198,7 @@ impl fmt::Display for ProviderProfileValue {
     }
 }
 
+/// Persisted provider-profile storage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProviderProfileStore {
     path: PathBuf,
@@ -226,6 +241,7 @@ impl ProviderProfileStore {
             .map_err(|error| store_error(format!("read {}: {error}", self.path.display())))?;
         let profile: ProviderProfile = toml::from_str(&text)
             .map_err(|error| store_error(format!("parse {}: {error}", self.path.display())))?;
+        let profile = profile.normalize_legacy_route();
         profile.validate()?;
         Ok(profile)
     }
@@ -331,6 +347,26 @@ mod tests {
         let encoded = toml::to_string(&profile).expect("serialize");
         assert!(!encoded.to_ascii_lowercase().contains("token"));
         assert!(!encoded.to_ascii_lowercase().contains("api_key"));
+    }
+
+    #[test]
+    fn legacy_oauth_minimax_route_is_restored_to_direct_api_key() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("provider.toml");
+        fs::write(
+            &path,
+            "connection = 'chatgpt-oauth'\nprovider = 'openai-oauth'\nmodel = 'MiniMax-M3'\nspeed = 'balanced'\nreasoning = 'medium'\nauth = 'none'\nbase_url = 'http://127.0.0.1:10531/v1'\nconfigured = true\n",
+        )
+        .expect("legacy route");
+        let profile = ProviderProfileStore::at(path)
+            .load()
+            .expect("normalized profile");
+        assert_eq!(profile.connection, "direct");
+        assert_eq!(profile.provider, "minimax");
+        assert_eq!(profile.model, "MiniMax-M3");
+        assert_eq!(profile.auth, "api-key");
+        assert!(profile.base_url.is_none());
+        assert!(profile.configured);
     }
 
     #[test]

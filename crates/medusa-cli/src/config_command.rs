@@ -25,11 +25,7 @@ pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
 }
 
 pub(crate) fn ensure_first_run() -> MedusaResult<()> {
-    if load_profile()?.configured || !io::stdin().is_terminal() {
-        return Ok(());
-    }
-    println!("Medusa needs a model connection before the first interactive session.\n");
-    configure_interactive()
+    Ok(())
 }
 
 pub(crate) fn configure_interactive() -> MedusaResult<()> {
@@ -507,7 +503,16 @@ fn model_default<'a>(connection: &str, current: &'a str) -> &'a str {
     }
 }
 
+fn eager_model_command() -> bool {
+    env::args_os().skip(1).any(|argument| {
+        matches!(argument.to_str(), Some("run" | "resume"))
+    })
+}
+
 pub(crate) fn ensure_selected_runtime() -> MedusaResult<()> {
+    if !eager_model_command() {
+        return Ok(());
+    }
     let profile = load_profile()?;
     if profile.configured {
         ensure_runtime_for_profile(&profile)?;
@@ -526,7 +531,7 @@ fn ensure_profile_ready(profile: &ProviderProfile) -> MedusaResult<()> {
         })?;
         if env::var_os(variable).is_none() {
             return Err(config_error(format!(
-                "{variable} is not present in the Medusa process environment. Set it before opening the TUI (PowerShell: `$env:{variable} = \"...\"`) and run `medusa config doctor`."
+                "{variable} is not present in the Medusa process environment. Set it before model execution (PowerShell: `$env:{variable} = \"...\"`) and run `medusa config doctor`."
             )));
         }
     }
@@ -549,6 +554,10 @@ fn ensure_runtime_for_profile(profile: &ProviderProfile) -> MedusaResult<()> {
     Ok(())
 }
 
+fn npx_program() -> &'static str {
+    if cfg!(windows) { "npx.cmd" } else { "npx" }
+}
+
 fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
     let address: SocketAddr = "127.0.0.1:10531"
         .parse()
@@ -558,17 +567,19 @@ fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
     }
 
     println!("Starting the local ChatGPT OAuth gateway...");
-    let status = Command::new("npx")
+    let status = Command::new(npx_program())
         .args(["--yes", "openai-oauth@latest", "--detach"])
         .status()
         .map_err(|error| {
             config_error(format!(
-                "could not start openai-oauth with npx: {error}. Install Node.js or start the gateway manually"
+                "could not start openai-oauth with {}: {error}. Install Node.js or start the gateway manually",
+                npx_program()
             ))
         })?;
     if !status.success() {
         return Err(config_error(format!(
-            "openai-oauth exited with status {status}; run `npx openai-oauth@latest login` and retry"
+            "openai-oauth exited with status {status}; run `{} openai-oauth@latest login` and retry",
+            npx_program()
         )));
     }
     if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err() {
@@ -691,22 +702,26 @@ mod tests {
     }
 
     #[test]
-fn doctor_report_redacts_malformed_profile_contents() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let catalog = ProviderProfileCatalog::at(directory.path());
-    let store = catalog.active_store().expect("store");
-    fs::write(store.path(), "token = 'super-secret-value'
-").expect("malformed profile");
-    let report = diagnose_config_catalog(&catalog).expect("doctor report");
-    let encoded = serde_json::to_string(&report).expect("doctor json");
-    assert!(!report.healthy);
-    assert!(!encoded.contains("super-secret-value"));
-}
+    fn doctor_report_redacts_malformed_profile_contents() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let store = catalog.active_store().expect("store");
+        fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
+        let report = diagnose_config_catalog(&catalog).expect("doctor report");
+        let encoded = serde_json::to_string(&report).expect("doctor json");
+        assert!(!report.healthy);
+        assert!(!encoded.contains("super-secret-value"));
+    }
 
     #[test]
     fn current_choice_is_highlighted_and_unknown_values_use_first_option() {
         let choices = [("one", "One"), ("two", "Two"), ("three", "Three")];
         assert_eq!(current_choice_index(&choices, "two"), 1);
         assert_eq!(current_choice_index(&choices, "missing"), 0);
+    }
+
+    #[test]
+    fn platform_npx_program_uses_windows_command_wrapper() {
+        assert_eq!(npx_program(), if cfg!(windows) { "npx.cmd" } else { "npx" });
     }
 }
