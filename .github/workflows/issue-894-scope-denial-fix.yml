@@ -1,0 +1,123 @@
+name: Issue 894 scope denial fix
+
+on:
+  push:
+    branches:
+      - agent/issue-894-agent-scopes
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Apply scope denial fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-agent/src/engine.rs')
+          text = path.read_text()
+
+          old = '''                ResponseBlock::ToolUse { id, name, input } => {
+                    if scoped_tool_names.binary_search(&name).is_err() {
+                        return Err(MedusaError::new(
+                            ErrorCode::PolicyDenied,
+                            ErrorCategory::Policy,
+                            format!("tool {name} is revoked or outside the active agent scope"),
+                        ));
+                    }
+                    if let Some(early) = early_tool_executions.get(&id)
+'''
+          new = '''                ResponseBlock::ToolUse { id, name, input } => {
+                    if let Some(early) = early_tool_executions.get(&id)
+'''
+          if old not in text:
+              raise SystemExit('response scope-denial anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''                    name == ANALYSIS_WORKSPACE_TOOL
+                        || name == "update_plan"
+                        || name == "ask_user_question"
+                        || name == "desktop_commander"
+                        || self
+'''
+          new = '''                    scoped_tool_names.binary_search(name).is_err()
+                        || name == ANALYSIS_WORKSPACE_TOOL
+                        || name == "update_plan"
+                        || name == "ask_user_question"
+                        || name == "desktop_commander"
+                        || self
+'''
+          if old not in text:
+              raise SystemExit('serial dispatch anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''                let execution = if let Some(early) = early_tool_executions.remove(&id) {
+                    if early.name != name || early.input != input {
+'''
+          new = '''                let execution = if scoped_tool_names.binary_search(&name).is_err() {
+                    measured = true;
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
+                    execute_engine_tool_with_policy(
+                        &name,
+                        &input,
+                        self.cancellation.as_ref(),
+                        &self.execution_policy,
+                        |_| {
+                            Err(MedusaError::new(
+                                ErrorCode::PolicyDenied,
+                                ErrorCategory::Policy,
+                                format!(
+                                    "tool {name} is revoked or outside the active agent scope"
+                                ),
+                            ))
+                        },
+                    )?
+                } else if let Some(early) = early_tool_executions.remove(&id) {
+                    if early.name != name || early.input != input {
+'''
+          if old not in text:
+              raise SystemExit('single execution anchor not found')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+      - name: Validate scope denial behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo check -p medusa-agent --all-targets --locked
+          cargo clippy -p medusa-agent --all-targets --all-features --locked -- -D warnings
+          cargo test -p medusa-agent read_only_plan_mode_denies_file_writes_even_if_the_model_requests_one --locked
+          cargo test -p medusa-agent reviewer_execution_policy_denies_repository_mutation --locked
+          cargo test -p medusa-agent agent_scope --locked
+          cargo test -p medusa-agent --lib --all-features --locked
+      - name: Commit validated fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/issue-894-scope-denial-fix.yml
+          git add crates/medusa-agent/src/engine.rs
+          git diff --cached --check
+          git commit -m "Preserve audited denials for scoped tools"
+          git push origin HEAD:${{ github.ref_name }}
