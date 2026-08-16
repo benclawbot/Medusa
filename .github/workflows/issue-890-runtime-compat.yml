@@ -1,0 +1,37 @@
+name: Issue 890 runtime compatibility
+on:
+  push:
+    branches: [codex/issue-890-model-request-policy]
+    paths:
+      - scripts/issue890_runtime_compat.py
+      - .github/workflows/issue-890-runtime-compat.yml
+permissions:
+  contents: write
+jobs:
+  patch-and-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-890-model-request-policy
+          fetch-depth: 0
+      - run: python3 scripts/issue890_runtime_compat.py
+      - run: cargo fmt --all
+      - run: rm scripts/issue890_runtime_compat.py .github/workflows/issue-890-runtime-compat.yml
+      - name: Commit compatibility fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update runtime for request audit events"
+          git push origin HEAD:codex/issue-890-model-request-policy
+      - name: Clippy full workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Effective request integration tests
+        run: cargo test -p medusa-agent effective_request --locked
+      - name: Provider retry/failover tests
+        run: cargo test -p medusa-provider --locked
+      - name: Runtime tests
+        run: cargo test -p medusa-runtime --locked
+      - name: CLI request-audit build
+        run: cargo check -p medusa-cli --locked
