@@ -45,6 +45,8 @@ enum RetryDisposition {
     Permanent,
 }
 
+type ProviderAttemptHook<'a> = &'a mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>;
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RouteRetryPolicy {
     pub max_retries: u8,
@@ -699,7 +701,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
         phase: ProviderExecutionPhase,
         cancel: Option<&AtomicBool>,
         mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
-        mut before_attempt: Option<&mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>>,
+        mut before_attempt: Option<ProviderAttemptHook<'_>>,
     ) -> MedusaResult<ModelResponse> {
         let key = serde_json::to_string(request).map_err(|error| {
             MedusaError::new(
