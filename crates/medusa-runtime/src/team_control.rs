@@ -1,14 +1,13 @@
 //! Shared, typed control plane for production multi-agent observability and steering.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use serde::{Deserialize, Serialize};
 
 const MAX_INSTRUCTION_BYTES: usize = 4 * 1024;
-const MAX_QUEUED_INSTRUCTIONS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +45,8 @@ pub struct TeamWorkerSnapshot {
     pub session_id: Option<String>,
     pub turn: u32,
     pub last_update: String,
+    /// Compatibility projection for callers that still display the retired process-local queue.
+    /// Steering is persisted as durable session actions, so this value is always zero.
     pub queued_instructions: usize,
 }
 
@@ -67,7 +68,6 @@ struct WorkerState {
     session_id: Option<String>,
     turn: u32,
     last_update: String,
-    instructions: VecDeque<String>,
 }
 
 #[derive(Default)]
@@ -113,7 +113,6 @@ impl TeamControlPlane {
                     session_id: None,
                     turn: 0,
                     last_update: "waiting for dispatch".to_owned(),
-                    instructions: VecDeque::new(),
                 });
         }
         bump(&mut state);
@@ -137,15 +136,18 @@ impl TeamControlPlane {
         session_id: Option<&str>,
         message: impl Into<String>,
     ) -> Result<TeamSnapshot, String> {
-        self.update(worker_id, |worker| {
-            if let Some(session_id) = session_id {
-                worker.session_id = Some(session_id.to_owned());
+        let session_id = session_id.map(str::to_owned);
+        let snapshot = self.update(worker_id, |worker| {
+            if let Some(session_id) = &session_id {
+                worker.session_id = Some(session_id.clone());
             }
             if worker.lifecycle != TeamWorkerLifecycle::CancellationRequested {
                 worker.lifecycle = TeamWorkerLifecycle::Running;
                 worker.last_update = message.into();
             }
-        })
+        })?;
+        self.bind_published_session(worker_id, session_id.as_deref(), &snapshot)?;
+        Ok(snapshot)
     }
 
     pub fn progress(
@@ -155,16 +157,19 @@ impl TeamControlPlane {
         turn: u32,
         message: impl Into<String>,
     ) -> Result<TeamSnapshot, String> {
-        self.update(worker_id, |worker| {
-            if let Some(session_id) = session_id {
-                worker.session_id = Some(session_id.to_owned());
+        let session_id = session_id.map(str::to_owned);
+        let snapshot = self.update(worker_id, |worker| {
+            if let Some(session_id) = &session_id {
+                worker.session_id = Some(session_id.clone());
             }
             worker.turn = turn;
             if worker.lifecycle != TeamWorkerLifecycle::CancellationRequested {
                 worker.lifecycle = TeamWorkerLifecycle::Running;
                 worker.last_update = message.into();
             }
-        })
+        })?;
+        self.bind_published_session(worker_id, session_id.as_deref(), &snapshot)?;
+        Ok(snapshot)
     }
 
     pub fn retrying(
@@ -220,6 +225,9 @@ impl TeamControlPlane {
         snapshot(&state)
     }
 
+    /// Persists steering into the canonical worker session before reporting it accepted. There is
+    /// intentionally no independent team queue: the next worker request obtains the instruction
+    /// from its durable session context and #890 records the exact action id that became visible.
     pub fn steer(&self, worker_id: &str, instruction: &str) -> Result<TeamSnapshot, String> {
         let instruction = instruction.trim();
         if instruction.is_empty() {
@@ -230,23 +238,56 @@ impl TeamControlPlane {
                 "steering instruction exceeds the {MAX_INSTRUCTION_BYTES}-byte limit"
             ));
         }
+
+        let (execution_id, session_id, idempotency_key) = {
+            let mut state = self.lock();
+            let execution_id = state
+                .execution_id
+                .clone()
+                .ok_or_else(|| "no coordinated team is active".to_owned())?;
+            let next_sequence = state.sequence.saturating_add(1);
+            let worker = state
+                .workers
+                .get_mut(worker_id)
+                .ok_or_else(|| format!("unknown team worker `{worker_id}`"))?;
+            if worker.lifecycle.is_terminal() {
+                return Err(format!("worker `{worker_id}` is already terminal"));
+            }
+            let session_id = worker.session_id.clone().ok_or_else(|| {
+                format!(
+                    "worker `{worker_id}` has no durable session yet; steering was not accepted"
+                )
+            })?;
+            worker.last_update = "persisting steering instruction".to_owned();
+            state.sequence = next_sequence;
+            (
+                execution_id.clone(),
+                session_id,
+                format!("team-control:{execution_id}:{worker_id}:{next_sequence}"),
+            )
+        };
+
+        let action_id = medusa_agent::team::admit_control_instruction(
+            &execution_id,
+            &session_id,
+            worker_id,
+            instruction,
+            &idempotency_key,
+        )?;
+
         let mut state = self.lock();
-        let worker = state
-            .workers
-            .get_mut(worker_id)
-            .ok_or_else(|| format!("unknown team worker `{worker_id}`"))?;
-        if worker.lifecycle.is_terminal() {
-            return Err(format!("worker `{worker_id}` is already terminal"));
+        if state.execution_id.as_deref() == Some(execution_id.as_str())
+            && let Some(worker) = state.workers.get_mut(worker_id)
+        {
+            worker.last_update = format!("steering action {action_id} accepted durably");
         }
-        if worker.instructions.len() >= MAX_QUEUED_INSTRUCTIONS {
-            return Err(format!(
-                "worker `{worker_id}` already has {MAX_QUEUED_INSTRUCTIONS} queued instructions"
-            ));
-        }
-        worker.instructions.push_back(instruction.to_owned());
-        worker.last_update = "steering instruction queued".to_owned();
-        bump(&mut state);
         Ok(snapshot(&state))
+    }
+
+    /// Temporary compatibility hook for worker loops that still poll the retired process queue.
+    /// Durable session actions are authoritative, so there is never a process-local instruction.
+    pub fn take_instruction(&self, _worker_id: &str) -> Result<Option<String>, String> {
+        Ok(None)
     }
 
     pub fn stop_worker(&self, worker_id: &str) -> Result<TeamSnapshot, String> {
@@ -290,20 +331,6 @@ impl TeamControlPlane {
         state.shutdown_requested || state.cancelled_workers.contains(worker_id)
     }
 
-    pub fn take_instruction(&self, worker_id: &str) -> Result<Option<String>, String> {
-        let mut state = self.lock();
-        let worker = state
-            .workers
-            .get_mut(worker_id)
-            .ok_or_else(|| format!("unknown team worker `{worker_id}`"))?;
-        let instruction = worker.instructions.pop_front();
-        if instruction.is_some() {
-            worker.last_update = "steering instruction accepted".to_owned();
-            bump(&mut state);
-        }
-        Ok(instruction)
-    }
-
     #[must_use]
     pub fn render_lines(&self) -> Vec<String> {
         let snapshot = self.snapshot();
@@ -315,7 +342,7 @@ impl TeamControlPlane {
             .into_iter()
             .map(|worker| {
                 format!(
-                    "{} [{} / {}] {:?}; turn {}; session {}; {}; queued steering {}",
+                    "{} [{} / {}] {:?}; turn {}; session {}; {}",
                     worker.worker_id,
                     worker.role,
                     worker.task_id,
@@ -323,10 +350,29 @@ impl TeamControlPlane {
                     worker.turn,
                     worker.session_id.as_deref().unwrap_or("pending"),
                     worker.last_update,
-                    worker.queued_instructions,
                 )
             })
             .collect()
+    }
+
+    fn bind_published_session(
+        &self,
+        worker_id: &str,
+        session_id: Option<&str>,
+        snapshot: &TeamSnapshot,
+    ) -> Result<(), String> {
+        let Some(session_id) = session_id else {
+            return Ok(());
+        };
+        let execution_id = snapshot
+            .execution_id
+            .as_deref()
+            .ok_or_else(|| "no coordinated team is active".to_owned())?;
+        match medusa_agent::team::bind_control_session(execution_id, worker_id, session_id) {
+            Ok(()) => Ok(()),
+            Err(error) if error.contains("has no durable repository binding") => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     fn update(
@@ -373,7 +419,7 @@ fn snapshot(state: &ControlState) -> TeamSnapshot {
                 session_id: worker.session_id.clone(),
                 turn: worker.turn,
                 last_update: worker.last_update.clone(),
-                queued_instructions: worker.instructions.len(),
+                queued_instructions: 0,
             })
             .collect(),
     }
@@ -381,7 +427,26 @@ fn snapshot(state: &ControlState) -> TeamSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use medusa_agent::{AgentEngine, TeamRole, TeamRuntime};
+    use medusa_config::Config;
+    use medusa_core::MedusaResult;
+    use medusa_protocol::EventPayload;
+    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, Usage};
+
     use super::*;
+
+    struct NoopProvider;
+
+    impl ModelProvider for NoopProvider {
+        fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+            Ok(ModelResponse {
+                response_id: Some("noop".to_owned()),
+                stop_reason: Some("stop".to_owned()),
+                blocks: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+    }
 
     fn control() -> TeamControlPlane {
         let control = TeamControlPlane::default();
@@ -397,30 +462,51 @@ mod tests {
     }
 
     #[test]
-    fn steering_is_bounded_and_consumed_once() {
+    fn steering_is_persisted_and_not_process_queued() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(NoopProvider, Config::default());
+        let session = engine
+            .create_session(directory.path(), "analyze".to_owned())
+            .expect("session");
+        let team = TeamRuntime::create(
+            directory.path().join(".medusa/executions/test/team.json"),
+            "execution-1",
+            vec![
+                ("lead".to_owned(), TeamRole::Lead),
+                ("worker-a".to_owned(), TeamRole::Planner),
+            ],
+        )
+        .expect("team runtime");
+        let worker_context = team.member_context("worker-a").expect("worker context");
         let control = control();
         control
-            .start("worker-a", Some("session-a"), "running")
+            .start("worker-a", Some(session.id.as_str()), "running")
             .unwrap();
         control
             .steer("worker-a", "inspect the failing test")
             .unwrap();
-        assert_eq!(
-            control.take_instruction("worker-a").unwrap().as_deref(),
-            Some("inspect the failing test")
+        assert!(
+            worker_context
+                .prompt_context()
+                .expect("prompt context")
+                .contains("inspect the failing test")
         );
-        assert_eq!(control.take_instruction("worker-a").unwrap(), None);
+
+        let restored = engine
+            .load_session(directory.path(), session.id.as_str())
+            .expect("restore session");
+        assert!(restored.events.iter().any(|event| matches!(
+            &event.payload,
+            EventPayload::SessionActionAccepted { action }
+                if action.source == "team:lead:worker-a"
+                    && action.payload["text"] == serde_json::json!("inspect the failing test")
+        )));
     }
 
     #[test]
-    fn steering_rejects_terminal_workers_and_full_queues() {
-        let active = control();
-        for index in 0..MAX_QUEUED_INSTRUCTIONS {
-            active
-                .steer("worker-a", &format!("instruction {index}"))
-                .unwrap();
-        }
-        assert!(active.steer("worker-a", "one too many").is_err());
+    fn steering_rejects_terminal_or_unpublished_workers() {
+        let pending = control();
+        assert!(pending.steer("worker-a", "not admitted yet").is_err());
 
         let terminal = control();
         terminal.complete("worker-a", "done").unwrap();
@@ -450,13 +536,19 @@ mod tests {
 
     #[test]
     fn progress_cannot_overwrite_a_cancellation_request() {
-        let control = control();
-        control
+        let observational = control();
+        observational
             .start("worker-a", Some("session-a"), "running")
             .unwrap();
+        assert_eq!(
+            observational.snapshot().workers[0].session_id.as_deref(),
+            Some("session-a")
+        );
+
+        let control = control();
         control.stop_worker("worker-a").unwrap();
         control
-            .progress("worker-a", Some("session-a"), 2, "late progress")
+            .progress("worker-a", None, 2, "late progress")
             .unwrap();
         control.retrying("worker-a", "late retry").unwrap();
 

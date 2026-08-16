@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -183,6 +183,16 @@ pub(crate) fn persist_before_provider_call(
         .filter(|event| event.sequence <= preceding_event_sequence)
         .map(|event| event.sequence)
         .collect::<Vec<_>>();
+    let already_linked = session
+        .events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::SessionActionTranscriptLinked { action_id, .. } => {
+                Some(action_id.as_str())
+            }
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     let delivered_action_ids = session
         .events
         .iter()
@@ -193,8 +203,17 @@ pub(crate) fn persist_before_provider_call(
             EventPayload::SessionActionTranscriptLinked { action_id, .. } => {
                 Some(action_id.clone())
             }
+            EventPayload::SessionActionAccepted { action }
+                if action.source.starts_with("team:")
+                    && !already_linked.contains(action.action_id.as_str())
+                    && request.system.contains(&action.action_id) =>
+            {
+                Some(action.action_id.clone())
+            }
             _ => None,
         })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>();
     let (compaction_generation, compaction_source_event_sequences) = session
         .events
@@ -627,7 +646,6 @@ fn persist_immutable(
     match persist_at(&primary, bytes) {
         Ok(()) => Ok(primary),
         Err(primary_error) => {
-            // A concurrent immutable write must never be bypassed by fallback storage.
             if primary.is_file() {
                 return Err(primary_error);
             }
