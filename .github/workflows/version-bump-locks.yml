@@ -103,7 +103,7 @@ jobs:
           rm .github/workflows/version-bump-locks.yml
           mapfile -t changed < <(git status --porcelain | sed 's/^...//')
           printf '%s\n' "${changed[@]}"
-          test "${#changed[@]}" -eq 7
+          test "${#changed[@]}" -eq 8
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock \
