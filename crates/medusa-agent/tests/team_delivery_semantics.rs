@@ -80,7 +80,11 @@ fn team_for_session(
     repo: &std::path::Path,
     team_id: &str,
     session_id: &str,
-) -> (TeamRuntime, medusa_agent::TeamMemberContext, medusa_agent::TeamMemberContext) {
+) -> (
+    TeamRuntime,
+    medusa_agent::TeamMemberContext,
+    medusa_agent::TeamMemberContext,
+) {
     let team = TeamRuntime::create(
         repo.join(format!(".medusa/executions/{team_id}/team.json")),
         team_id,
@@ -199,7 +203,10 @@ fn duplicate_team_instruction_replays_after_revision_drift() {
             )
         })
         .count();
-    assert_eq!(accepted, 1, "idempotent replay must not append a second action");
+    assert_eq!(
+        accepted, 1,
+        "idempotent replay must not append a second action"
+    );
 
     assert!(
         medusa_agent::team::admit_team_instruction(
@@ -241,7 +248,10 @@ fn repeated_prompt_assembly_does_not_acknowledge_or_duplicate_instruction() {
     let after = engine
         .load_session(directory.path(), session.id.as_str())
         .expect("load after prompt assembly");
-    assert_eq!(after.events, before.events, "prompt assembly must be observational");
+    assert_eq!(
+        after.events, before.events,
+        "prompt assembly must be observational"
+    );
     assert!(!after.events.iter().any(|event| matches!(
         event.payload,
         EventPayload::SessionActionTranscriptLinked { .. }
@@ -270,7 +280,9 @@ fn team_instruction_is_model_visible_in_exactly_one_effective_request() {
         .events
         .iter()
         .find_map(|event| match &event.payload {
-            EventPayload::SessionActionAccepted { action } if action.source == "team:lead:worker" => {
+            EventPayload::SessionActionAccepted { action }
+                if action.source == "team:lead:worker" =>
+            {
                 Some(action.idempotency_key.clone())
             }
             _ => None,
@@ -301,12 +313,9 @@ fn team_instruction_is_model_visible_in_exactly_one_effective_request() {
         .into_iter()
         .next()
         .expect("first request manifest");
-    let audit = inspect_effective_model_request(
-        directory.path(),
-        session.id.as_str(),
-        &first_manifest,
-    )
-    .expect("inspect first request");
+    let audit =
+        inspect_effective_model_request(directory.path(), session.id.as_str(), &first_manifest)
+            .expect("inspect first request");
     assert_eq!(
         audit["delivered_action_ids"],
         serde_json::json!([action_id.clone()])
@@ -338,8 +347,11 @@ fn provider_failure_after_manifest_does_not_reinject_team_instruction() {
     let session = bootstrap
         .create_session(directory.path(), "implement".to_owned())
         .expect("create session");
-    let (_team, lead, worker) =
-        team_for_session(directory.path(), "team-provider-failure", session.id.as_str());
+    let (_team, lead, worker) = team_for_session(
+        directory.path(),
+        "team-provider-failure",
+        session.id.as_str(),
+    );
     lead.execute(
         "team_send_message",
         &serde_json::json!({"recipient":"worker","body":"survive provider failure"}),
@@ -352,14 +364,17 @@ fn provider_failure_after_manifest_does_not_reinject_team_instruction() {
         .events
         .iter()
         .find_map(|event| match &event.payload {
-            EventPayload::SessionActionAccepted { action } if action.source == "team:lead:worker" => {
+            EventPayload::SessionActionAccepted { action }
+                if action.source == "team:lead:worker" =>
+            {
                 Some(action.action_id.clone())
             }
             _ => None,
         })
         .expect("team action id");
 
-    let failing = AgentEngine::new(FailingProvider, Config::default()).with_team_context(worker.clone());
+    let failing =
+        AgentEngine::new(FailingProvider, Config::default()).with_team_context(worker.clone());
     let mut first_attempt = failing
         .load_session(directory.path(), session.id.as_str())
         .expect("restart before failing request");
@@ -368,10 +383,12 @@ fn provider_failure_after_manifest_does_not_reinject_team_instruction() {
     let after_failure = bootstrap
         .load_session(directory.path(), session.id.as_str())
         .expect("restart after provider failure");
-    assert!(after_failure.events.iter().any(|event| matches!(
-        event.payload,
-        EventPayload::ModelRequestFailed { .. }
-    )));
+    assert!(
+        after_failure
+            .events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::ModelRequestFailed { .. }))
+    );
     assert_eq!(
         manifest_action_occurrences(directory.path(), &after_failure, &action_id),
         1,
