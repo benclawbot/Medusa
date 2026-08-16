@@ -12,7 +12,7 @@ The product model is **Plan, Execute Safely, Recover**:
 - **Execute Safely.** Read-only teammates scout the work. Git mutation can use a conflict-aware bounded implementation DAG with isolated worktrees; ordinary directories use one isolated content-addressed snapshot implementer. Review, independent verification, authorization, and integration remain separate runtime authorities.
 - **Recover.** Sessions, plans, events, approvals, worker leases, immutable candidates, delegation contracts, agent scopes, effective model-request manifests, transactions, and verification live under `.medusa` as authoritative state. Interruption, cancellation, or crash never gets rewritten as success.
 
-**Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, and effective model-request manifests are shipped. Voice and Telegram implementation foundations are present but their real account/hardware acceptance remains quarantined. Browser model actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled. Activation requires `MEDUSA_BROWSER_ENABLED=true`, an explicit `MEDUSA_BROWSER_PATH`, and an admitted `MEDUSA_BROWSER_VERIFY_URL`. The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
+**Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, effective model-request manifests, evidence-ranked coding context, durable coding trajectory and repair recovery, and certified tool execution are shipped. Voice and Telegram implementation foundations are present but their real account/hardware acceptance remains quarantined. Browser model actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled. Activation requires `MEDUSA_BROWSER_ENABLED=true`, an explicit `MEDUSA_BROWSER_PATH`, and an admitted `MEDUSA_BROWSER_VERIFY_URL`. The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
 
 **Out of scope today:** autonomous nested delegation, unconstrained model-driven agent teams, consensus voting, distributed multi-host mutation transactions, non-Git parallel mutation, and any browser, voice, or remote-frontend claim that lacks its required authenticated live evidence.
 
@@ -197,6 +197,8 @@ medusa
 
 Interactive startup is provider-agnostic. The TUI and desktop app can open without a configured or currently available model. Existing valid provider profiles are loaded automatically; missing or invalid provider configuration is surfaced in-product so it can be changed without blocking the shell from opening. Provider/model readiness is deferred until a model-dependent action needs it. Headless commands such as `run` or `resume`, which immediately require model execution, may fail fast with a provider-specific readiness error.
 
+Model selection is backed by a canonical registry that merges curated model metadata with authenticated provider discovery and a bounded discovery cache. Registry entries carry availability and capability metadata for tool calling, image and audio input, realtime, reasoning, streaming, structured output, and prompt caching. TUI first-run setup and Desktop onboarding provide guided provider/authentication/model flows instead of requiring users to hand-edit provider TOML before the interface can open.
+
 The non-secret provider profile is stored in the user configuration directory:
 
 - Linux and macOS: `${XDG_CONFIG_HOME:-~/.config}/medusa/provider.toml`
@@ -365,6 +367,7 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 - workspace and file discovery;
 - bounded text and symbol search;
 - context retrieval and turn assembly;
+- evidence-ranked repository context rebuilt from current source before model turns, with exact source ranges, caller/reference expansion, related verification impact, protected repository policy, and an explicit omission audit;
 - goals, progress, confidence, continuation, escalation, and failure tracking;
 - changed-symbol/component and affected-file analysis where semantic repository evidence exists;
 - targeted verification selection with broader fallback checks.
@@ -373,6 +376,8 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 
 - durable sessions and objectives;
 - explicit plans and task contracts;
+- durable coding trajectory checkpoints that preserve objective/constraints, plan state, relevant and modified files, verification evidence, failures, disproved hypotheses, and continuation state across resume/provider fallback while invalidating stale repository evidence after drift;
+- structured repair-ledger projection and bounded roadblock recovery that distinguish persistent, transformed, and resolved failures and rank authority-preserving alternative strategies instead of blindly repeating a failed repair;
 - independent read-only planner and risk-review teammates;
 - conflict-aware Git mutation DAG with deterministic waves and at most three children;
 - one isolated directory/snapshot implementer outside Git;
@@ -380,6 +385,7 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 - transactional per-agent scopes with explicit prepare/publish/stop lifecycle and resource ownership;
 - durable worker/team instructions admitted through session delivery semantics rather than a separate model-context mailbox authority;
 - effective model-request manifests persisted before provider calls, including request/provider/scope fingerprints, source-event linkage, delivered session actions, compaction provenance, and tool-schema fingerprints;
+- scheduled timer/heartbeat/file/process/external occurrences dispatch idempotent steer or follow-up actions into the canonical session-action plane with explicit wake and missed-run semantics rather than creating a second prompt queue;
 - durable worker leases, epochs, task evidence, child acceptance, aggregate barriers, and cleanup;
 - dedicated zero-tool parent review, independent verification, authorization, guarded integration, and reconciliation;
 - authoritative primary workspace verification gate.
@@ -392,7 +398,9 @@ Provider selection is explicit and role-aware. `model.role_routes` can pin plann
 
 - guarded workspace file operations;
 - Git-aware change and integration workflows where Git is present;
+- a certified tool-execution pipeline with explicit resolve, pre-execution, guard, approval, dispatch, execute, post-execution, finalize, and publish stages; finalized receipts are journaled before completion is projected;
 - policy-controlled command execution;
+- validated executable skill packages run from isolated copies through containment, enforce bounded output and validation/provenance receipts, and cannot receive repository mutation access;
 - required UI-change browser verification through the internal sidecar; model browser actions are a readiness-gated, explicit-opt-in preview with a certified dispatcher and are not default-enabled;
 - image/file prompt attachments when provider capabilities permit;
 - MCP and extension boundaries;
@@ -401,7 +409,7 @@ Provider selection is explicit and role-aware. `model.role_routes` can pin plann
 
 ### Verification
 
-After mutation, Medusa can inspect typed changed components, select impacted checks, run broader checks when narrow selection would be unsafe, require visible UI evidence for effective interface changes, record evidence/overrides/results, and reject completion when required evidence is absent or failed. Directory artifacts without a declared project-level verification command are reported truthfully rather than pretending a command ran; candidate identity, scope, review, independent verification, integration, and resulting tree identity are still enforced.
+After mutation, Medusa can inspect typed changed components, select impacted checks, run broader checks when narrow selection would be unsafe, require visible UI evidence for effective interface changes, record evidence/overrides/results, and reject completion when required evidence is absent or failed. Mutating sessions derive a verification contract from changed paths; later mutations invalidate overlapping receipts, so required pending, failed, stale, or otherwise unresolved checks cannot be treated as authoritative completion. Directory artifacts without a declared project-level verification command are reported truthfully rather than pretending a command ran; candidate identity, scope, review, independent verification, integration, and resulting tree identity are still enforced.
 
 ### Memory and learning
 
@@ -409,7 +417,7 @@ Medusa supports workspace-scoped Markdown memory, bounded recall with provenance
 
 ### Observability and resilience
 
-Typed runtime events cover usage, progress, activity, team, plan, question, completion, cancellation, failure, and recovery state. Process registry/supervision, checkpoints, replay, time travel, transactions, continuity, deterministic cancellation/resource cleanup, and privacy-safe diagnostics provide the recovery foundation.
+A shared execution-report projection derives concise inspect, finding, plan-change, implementation, verification, roadblock, recovery, and result states from the canonical journal without exposing hidden model reasoning. Read-only live-session observation and side questions consume only durable/projected user-visible state and cannot steer, write to, or cancel the primary run. Typed runtime events cover usage, progress, activity, team, plan, question, completion, cancellation, failure, and recovery state. Process registry/supervision, checkpoints, replay, time travel, transactions, continuity, deterministic cancellation/resource cleanup, and privacy-safe diagnostics provide the recovery foundation.
 
 ## Architecture
 
@@ -506,6 +514,7 @@ Workspace-local state lives under `.medusa`. Durable authority categories includ
 - worker/team session actions and model-visibility linkage;
 - immutable delegation contracts and retry/attempt bindings;
 - transactional agent-scope contracts, generations, lifecycle, revocations, and owned-resource state;
+- coding-trajectory checkpoints, structured repair-ledger entries, roadblock strategy transitions, and repository-drift invalidation state;
 - worker leases, epochs, isolated candidates, Git commit or directory snapshot receipts;
 - checkpoints, replay, time travel, transaction/review/authorization/rollback records;
 - failure/recovery decisions, memory/learning, and frontend continuity.
