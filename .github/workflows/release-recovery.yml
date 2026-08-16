@@ -1,0 +1,74 @@
+name: Recover Failed Release
+
+on:
+  push:
+    branches:
+      - "release-recovery/**"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: recover-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Validate failed run and dispatch recovery
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate failed immutable-tag run and dispatch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_REF: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          prefix="release-recovery/"
+          if [[ "$RECOVERY_REF" != "$prefix"* ]]; then
+            echo "unexpected recovery ref: $RECOVERY_REF" >&2
+            exit 2
+          fi
+          run_id="${RECOVERY_REF#${prefix}}"
+          if [[ ! "$run_id" =~ ^[0-9]+$ ]]; then
+            echo "recovery branch must end with the failed workflow run id" >&2
+            exit 2
+          fi
+
+          api="repos/$REPOSITORY/actions/runs/$run_id"
+          workflow_path=$(gh api "$api" --jq '.path')
+          status=$(gh api "$api" --jq '.status')
+          conclusion=$(gh api "$api" --jq '.conclusion')
+          event=$(gh api "$api" --jq '.event')
+          release_tag=$(gh api "$api" --jq '.head_branch')
+          release_sha=$(gh api "$api" --jq '.head_sha')
+
+          if [[ "$workflow_path" != ".github/workflows/publish-release.yml" ]]; then
+            echo "run $run_id is not Publish Release" >&2
+            exit 2
+          fi
+          if [[ "$status" != "completed" || "$conclusion" != "failure" || "$event" != "push" ]]; then
+            echo "run $run_id is not a completed failed tag-push release" >&2
+            exit 2
+          fi
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "run $run_id does not reference a version tag" >&2
+            exit 2
+          fi
+          if [[ ! "$release_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "run $run_id does not expose a full release SHA" >&2
+            exit 2
+          fi
+          if gh release view "$release_tag" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo "release $release_tag already exists; refusing recovery" >&2
+            exit 2
+          fi
+
+          gh workflow run publish-release.yml \
+            --repo "$REPOSITORY" \
+            --ref main \
+            --field release_tag="$release_tag" \
+            --field release_sha="$release_sha"
+          echo "dispatched recovery for $release_tag at $release_sha from failed run $run_id"
