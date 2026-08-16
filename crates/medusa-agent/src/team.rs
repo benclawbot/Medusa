@@ -661,18 +661,21 @@ impl TeamMemberContext {
             return Err(invalid("team message body cannot be empty"));
         }
         let mut state = self.team.lock().map_err(invalid)?;
-        let sender =
-            state.members.get(&self.member_id).cloned().ok_or_else(|| {
-                invalid(format!("unknown team message sender: {}", self.member_id))
-            })?;
+        let sender = state
+            .members
+            .get(&self.member_id)
+            .cloned()
+            .ok_or_else(|| invalid(format!("unknown team message sender: {}", self.member_id)))?;
         let recipient_member = state
             .members
             .get(recipient)
             .cloned()
             .ok_or_else(|| invalid(format!("unknown team message recipient: {recipient}")))?;
-        let sequence = state.next_sequence;
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let idempotency_key = format!("team:{}:{sequence}", state.team_id);
+        let lead_count = state
+            .members
+            .values()
+            .filter(|member| member.role == TeamRole::Lead)
+            .count();
         let destination_session_id = recipient_member
             .session_id
             .clone()
@@ -682,9 +685,35 @@ impl TeamMemberContext {
                     .ok()
                     .flatten()
             });
-        let authorized_instruction = sender.role == TeamRole::Lead
-            && recipient_member.role != TeamRole::Lead
-            && destination_session_id.is_some();
+        let instruction_candidate =
+            sender.role == TeamRole::Lead && recipient_member.role != TeamRole::Lead;
+        if instruction_candidate && lead_count != 1 {
+            return Err(invalid(
+                "team instruction authority is ambiguous because the durable team does not have exactly one lead",
+            ));
+        }
+        if instruction_candidate
+            && matches!(
+                recipient_member.lifecycle,
+                TeamMemberLifecycle::ShutdownRequested
+                    | TeamMemberLifecycle::Stopped
+                    | TeamMemberLifecycle::Failed
+            )
+        {
+            return Err(invalid(
+                "team instruction destination is terminal or shutting down",
+            ));
+        }
+        if instruction_candidate && destination_session_id.is_none() {
+            return Err(invalid(
+                "team instruction destination has no durable worker session",
+            ));
+        }
+
+        let sequence = state.next_sequence;
+        state.next_sequence = state.next_sequence.saturating_add(1);
+        let idempotency_key = format!("team:{}:{sequence}", state.team_id);
+        let authorized_instruction = instruction_candidate;
         let mut message = DurableTeamMessage {
             sequence,
             idempotency_key: idempotency_key.clone(),
