@@ -68,6 +68,28 @@ jobs:
           if old not in text:
               raise SystemExit('approved tool receipt call anchor not found')
           path.write_text(text.replace(old, new, 1))
+
+          path = Path('crates/medusa-runtime/src/mutating_worker_coordinator.rs')
+          text = path.read_text()
+          old = '\n'.join([
+              '                return execute_attempts(',
+              '                    repo,',
+              '                    plan,',
+          ])
+          new = '\n'.join([
+              '                return execute_attempts(',
+              '                    repo,',
+              '                    config,',
+              '                    plan,',
+          ])
+          if old not in text:
+              raise SystemExit('resumed mutating execute_attempts call anchor not found')
+          text = text.replace(old, new, 1)
+          old = 'fn execute_attempts<F>(\n    repo: &Path,\n    config: &Config,'
+          new = 'fn execute_attempts<F>(\n    _repo: &Path,\n    config: &Config,'
+          if old not in text:
+              raise SystemExit('execute_attempts repo parameter anchor not found')
+          path.write_text(text.replace(old, new, 1))
           PY
           cargo fmt --all
           cargo check -p medusa-agent -p medusa-runtime --all-targets --locked
