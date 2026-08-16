@@ -202,7 +202,7 @@ Interactive startup is provider-agnostic. The TUI and desktop app can open witho
 The non-secret provider profile is stored in the user configuration directory:
 
 - Linux and macOS: `${XDG_CONFIG_HOME:-~/.config}/medusa/provider.toml`
-- Windows: `%APPDATA%\medusa/provider.toml`
+- Windows: `%APPDATA%\medusa\provider.toml`
 
 API keys are read from the environment and are not written to `provider.toml`.
 
