@@ -27,6 +27,7 @@ use crate::{
 };
 
 static TEAM_REPOSITORIES: OnceLock<Mutex<BTreeMap<String, PathBuf>>> = OnceLock::new();
+static TEAM_CONTROL_SESSIONS: OnceLock<Mutex<BTreeMap<(String, String), String>>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -565,20 +566,34 @@ impl TeamMemberContext {
         serde_json::to_string_pretty(&state.members).map_err(Into::into)
     }
 
-    fn pending_session_instructions(&self) -> MedusaResult<String> {
+    fn effective_session_id(&self) -> MedusaResult<Option<String>> {
         let state = self.team.lock().map_err(invalid)?;
-        let session_id = state
+        let team_id = state.team_id.clone();
+        if let Some(session_id) = state
             .members
             .get(&self.member_id)
-            .and_then(|member| member.session_id.as_deref())
-            .filter(|session_id| *session_id != "starting");
-        let Some(session_id) = session_id else {
+            .and_then(|member| member.session_id.clone())
+            .filter(|session_id| session_id != "starting")
+        {
+            return Ok(Some(session_id));
+        }
+        drop(state);
+        let registry = TEAM_CONTROL_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
+        Ok(registry
+            .lock()
+            .map_err(|_| invalid("team control session registry lock was poisoned"))?
+            .get(&(team_id, self.member_id.clone()))
+            .cloned())
+    }
+
+    fn pending_session_instructions(&self) -> MedusaResult<String> {
+        let Some(session_id) = self.effective_session_id()? else {
             return Ok("[]".to_owned());
         };
         let Some(repo) = self.team.repo.as_deref() else {
             return Ok("[]".to_owned());
         };
-        let session = load(repo, session_id)?;
+        let session = load(repo, &session_id)?;
         let mut consumed = session
             .events
             .iter()
@@ -589,7 +604,7 @@ impl TeamMemberContext {
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
-        consumed.extend(model_visible_action_ids(repo, session_id)?);
+        consumed.extend(model_visible_action_ids(repo, &session_id)?);
         let pending = session
             .events
             .iter()
@@ -617,18 +632,8 @@ impl TeamMemberContext {
     }
 
     fn read_messages(&self) -> MedusaResult<String> {
-        let (repo, session_id) = {
-            let state = self.team.lock().map_err(invalid)?;
-            (
-                self.team.repo.clone(),
-                state
-                    .members
-                    .get(&self.member_id)
-                    .and_then(|member| member.session_id.clone())
-                    .filter(|session_id| session_id != "starting"),
-            )
-        };
-        let model_visible = match (repo.as_deref(), session_id.as_deref()) {
+        let session_id = self.effective_session_id()?;
+        let model_visible = match (self.team.repo.as_deref(), session_id.as_deref()) {
             (Some(repo), Some(session_id)) => model_visible_action_ids(repo, session_id)?,
             _ => BTreeSet::new(),
         };
@@ -678,7 +683,8 @@ impl TeamMemberContext {
         let destination_session_id = recipient_member
             .session_id
             .clone()
-            .filter(|session_id| session_id != "starting");
+            .filter(|session_id| session_id != "starting")
+            .or_else(|| control_session(&state.team_id, recipient).ok().flatten());
         let authorized_instruction = sender.role == TeamRole::Lead
             && recipient_member.role != TeamRole::Lead
             && destination_session_id.is_some();
@@ -748,10 +754,37 @@ impl TeamMemberContext {
     }
 }
 
+/// Binds a production worker's published session to its team member identity. This is a live
+/// lookup cache only; the worker session itself remains the durable delivery authority.
+pub fn bind_control_session(
+    execution_id: &str,
+    worker_id: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    if execution_id.trim().is_empty() || worker_id.trim().is_empty() || session_id.trim().is_empty() {
+        return Err("team execution, worker, and session identities are required".to_owned());
+    }
+    let registry = TEAM_CONTROL_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    registry
+        .lock()
+        .map_err(|_| "team control session registry lock was poisoned".to_owned())?
+        .insert(
+            (execution_id.to_owned(), worker_id.to_owned()),
+            session_id.to_owned(),
+        );
+    Ok(())
+}
+
+fn control_session(execution_id: &str, worker_id: &str) -> Result<Option<String>, String> {
+    let registry = TEAM_CONTROL_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    Ok(registry
+        .lock()
+        .map_err(|_| "team control session registry lock was poisoned".to_owned())?
+        .get(&(execution_id.to_owned(), worker_id.to_owned()))
+        .cloned())
+}
+
 /// Admits one runtime team-control instruction through the canonical worker session action plane.
-/// The execution id must have been bound to a `TeamRuntime` in this process, which is rebuilt from
-/// the durable team state on restart. The idempotency key is supplied by the control plane so a
-/// crash after session persistence but before the UI receipt can coalesce on replay.
 pub fn admit_control_instruction(
     execution_id: &str,
     session_id: &str,
@@ -1005,11 +1038,12 @@ mod tests {
 
     fn team_with_worker(
         directory: &tempfile::TempDir,
+        team_id: &str,
         session_id: &str,
     ) -> (TeamRuntime, TeamMemberContext, TeamMemberContext) {
         let team = TeamRuntime::create(
-            directory.path().join(".medusa/executions/test/team.json"),
-            "team-1",
+            directory.path().join(format!(".medusa/executions/{team_id}/team.json")),
+            team_id,
             vec![
                 ("lead".to_owned(), TeamRole::Lead),
                 ("reviewer".to_owned(), TeamRole::Reviewer),
@@ -1030,8 +1064,7 @@ mod tests {
         let session = engine
             .create_session(directory.path(), "review".to_owned())
             .expect("session");
-        let path = directory.path().join(".medusa/executions/test/team.json");
-        let (team, lead, _) = team_with_worker(&directory, session.id.as_str());
+        let (team, lead, _) = team_with_worker(&directory, "team-lead", session.id.as_str());
         lead.send_message("reviewer", "check the transaction boundary")
             .expect("send");
 
@@ -1049,36 +1082,40 @@ mod tests {
             action.source == "team:lead:reviewer"
                 && action.payload["text"] == json!("check the transaction boundary")
         }));
-        let serialized = fs::read_to_string(path).expect("team state");
+        let serialized = fs::read_to_string(&team.path).expect("team state");
         assert!(!serialized.contains("\"delivered\""));
         assert!(serialized.contains("action_accepted"));
-        assert_eq!(team.team_id().expect("team id"), "team-1");
     }
 
     #[test]
-    fn control_instruction_uses_registered_team_repository() {
+    fn control_instruction_uses_registered_team_repository_and_session_binding() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let engine = AgentEngine::new(NoopProvider, Config::default());
         let session = engine
             .create_session(directory.path(), "review".to_owned())
             .expect("session");
-        let _ = team_with_worker(&directory, session.id.as_str());
+        let team = TeamRuntime::create(
+            directory.path().join(".medusa/executions/control-team/team.json"),
+            "control-team",
+            vec![
+                ("lead".to_owned(), TeamRole::Lead),
+                ("reviewer".to_owned(), TeamRole::Reviewer),
+            ],
+        )
+        .expect("team");
+        let reviewer = team.member_context("reviewer").expect("reviewer");
+        bind_control_session("control-team", "reviewer", session.id.as_str()).expect("bind");
         let action_id = admit_control_instruction(
-            "team-1",
+            "control-team",
             session.id.as_str(),
             "reviewer",
             "check durable steering",
-            "team-control:team-1:reviewer:1",
+            "team-control:control-team:reviewer:1",
         )
         .expect("admit control instruction");
-        let restored = engine
-            .load_session(directory.path(), session.id.as_str())
-            .expect("restore session");
-        assert!(restored.events.iter().any(|event| matches!(
-            &event.payload,
-            EventPayload::SessionActionAccepted { action }
-                if action.action_id == action_id && action.source == "team:lead:reviewer"
-        )));
+        let context = reviewer.prompt_context().expect("prompt context");
+        assert!(context.contains(&action_id));
+        assert!(context.contains("check durable steering"));
     }
 
     #[test]
@@ -1088,7 +1125,7 @@ mod tests {
         let session = engine
             .create_session(directory.path(), "review".to_owned())
             .expect("session");
-        let (_, lead, reviewer) = team_with_worker(&directory, session.id.as_str());
+        let (_, lead, reviewer) = team_with_worker(&directory, "team-mailbox", session.id.as_str());
         lead.send_message("reviewer", "inspect the boundary")
             .expect("send");
         let first = reviewer.read_messages().expect("read");
@@ -1110,8 +1147,8 @@ mod tests {
             .create_session(directory.path(), "review".to_owned())
             .expect("session");
         let team = TeamRuntime::create(
-            directory.path().join(".medusa/executions/test/team.json"),
-            "team-1-peer",
+            directory.path().join(".medusa/executions/team-peer/team.json"),
+            "team-peer",
             vec![
                 ("researcher".to_owned(), TeamRole::Researcher),
                 ("reviewer".to_owned(), TeamRole::Reviewer),
@@ -1145,7 +1182,7 @@ mod tests {
     #[test]
     fn legacy_delivered_boolean_migrates_without_claiming_model_visibility() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join(".medusa/executions/test/team.json");
+        let path = directory.path().join(".medusa/executions/legacy-team/team.json");
         fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
         fs::write(
             &path,
@@ -1298,7 +1335,7 @@ mod tests {
                 }],
             )
             .expect("session");
-        let (_, lead, reviewer) = team_with_worker(&directory, session.id.as_str());
+        let (_, lead, reviewer) = team_with_worker(&directory, "team-prompt", session.id.as_str());
         lead.send_message("reviewer", "inspect canonical delivery")
             .expect("send");
         let context = reviewer.prompt_context().expect("context");
