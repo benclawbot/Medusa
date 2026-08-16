@@ -1,17 +1,24 @@
-name: Issue 893 mutating retry diagnostic
+name: Issue 893 final delegation hardening
 
 on:
   push:
     branches:
       - agent/issue-893-delegation-contracts
 
+permissions:
+  contents: write
+
 jobs:
-  diagnose-retry:
+  harden-and-validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-      - name: Expose current hardened retry error
+        with:
+          components: rustfmt,clippy
+      - name: Apply final hardening
         shell: bash
         run: |
           set -euo pipefail
@@ -20,15 +27,27 @@ jobs:
           python3 scripts/issue-893-compile-fix.py
           python3 scripts/issue-893-clippy-fix.py
           python3 scripts/issue-893-session-test-fix.py
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs')
-          text = path.read_text()
-          old = '    assert!(error.contains("out-of-scope"));'
-          new = '    assert!(error.contains("out-of-scope"), "unexpected error: {error}");'
-          if old not in text:
-              raise SystemExit('diagnostic assertion anchor missing')
-          path.write_text(text.replace(old, new, 1))
-          PY
+          python3 scripts/issue-893-retry-fix.py
           cargo fmt --all
-          cargo test -p medusa-runtime mutating_worker_coordinator::tests::out_of_scope_change_is_rejected_without_touching_primary_repo --locked -- --nocapture
+      - name: Validate authority and recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check -p medusa-agent -p medusa-runtime --all-targets --locked
+          cargo clippy -p medusa-agent -p medusa-runtime --all-targets --all-features --locked -- -D warnings
+          cargo test -p medusa-agent delegation --locked
+          cargo test -p medusa-agent worker_execution --locked
+          cargo test -p medusa-runtime delegation_contract --locked
+          cargo test -p medusa-runtime multi_agent_coordinator --locked
+          cargo test -p medusa-runtime mutating_worker_coordinator --locked
+      - name: Commit validated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/issue-893-hardening.yml scripts/issue-893-hardening.py scripts/issue-893-hardening-fix.py scripts/issue-893-compile-fix.py scripts/issue-893-clippy-fix.py scripts/issue-893-session-test-fix.py scripts/issue-893-retry-fix.py
+          git add crates/medusa-agent crates/medusa-runtime
+          git diff --cached --check
+          git commit -m "Harden delegation retry authority"
+          git push origin HEAD:${{ github.ref_name }}
