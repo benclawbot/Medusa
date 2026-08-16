@@ -338,14 +338,19 @@ fn multiple_instructions_preserve_durable_order_across_restart() {
     let second = prompt
         .find("instruction second")
         .expect("second instruction");
-    assert!(first < second, "accepted instruction order must survive restart");
+    assert!(
+        first < second,
+        "accepted instruction order must survive restart"
+    );
 }
 
 #[test]
 fn lead_instruction_rejects_worker_without_durable_session() {
     let directory = tempfile::tempdir().expect("temporary repository");
     let team = TeamRuntime::create(
-        directory.path().join(".medusa/executions/team-unpublished/team.json"),
+        directory
+            .path()
+            .join(".medusa/executions/team-unpublished/team.json"),
         "team-unpublished",
         vec![
             ("lead".to_owned(), TeamRole::Lead),
@@ -399,7 +404,9 @@ fn ambiguous_multiple_leads_cannot_admit_worker_instruction() {
         .create_session(directory.path(), "implement".to_owned())
         .expect("create session");
     let team = TeamRuntime::create(
-        directory.path().join(".medusa/executions/team-ambiguous-lead/team.json"),
+        directory
+            .path()
+            .join(".medusa/executions/team-ambiguous-lead/team.json"),
         "team-ambiguous-lead",
         vec![
             ("lead-a".to_owned(), TeamRole::Lead),
