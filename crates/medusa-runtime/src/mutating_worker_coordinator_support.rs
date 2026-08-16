@@ -160,6 +160,15 @@ pub(super) fn validate_state(
     {
         return Err("durable implementation state does not match the current execution".to_owned());
     }
+    if state.delegation_contract_id.trim().is_empty()
+        || state.delegation_contract_fingerprint.trim().is_empty()
+        || state.delegation_attempt_fingerprint.trim().is_empty()
+    {
+        return Err(
+            "legacy_contract_unknown: durable implementation state has no complete delegation identity"
+                .to_owned(),
+        );
+    }
     if matches!(
         state.status,
         ImplementationStatus::Prepared | ImplementationStatus::Integrated
@@ -196,6 +205,9 @@ pub(super) fn evidence_from_state(
         repository_fingerprint: state.repository_fingerprint.clone(),
         task_id: task_id.to_owned(),
         worker_id: state.worker.id.clone(),
+        delegation_contract_id: state.delegation_contract_id.clone(),
+        delegation_contract_fingerprint: state.delegation_contract_fingerprint.clone(),
+        delegation_attempt_fingerprint: state.delegation_attempt_fingerprint.clone(),
         session_id: state.session_id.clone(),
         turns: state.turns,
         summary: state.summary.clone(),

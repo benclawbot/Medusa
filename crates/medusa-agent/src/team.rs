@@ -88,6 +88,8 @@ pub struct AgentExecutionPolicy {
     allowed_tools: Option<BTreeSet<String>>,
     allow_user_questions: bool,
     allowed_write_paths: Option<Vec<String>>,
+    delegation_contract_id: Option<String>,
+    delegation_contract_fingerprint: Option<String>,
 }
 
 impl AgentExecutionPolicy {
@@ -97,6 +99,8 @@ impl AgentExecutionPolicy {
             allowed_tools: None,
             allow_user_questions: true,
             allowed_write_paths: None,
+            delegation_contract_id: None,
+            delegation_contract_fingerprint: None,
         }
     }
 
@@ -132,7 +136,37 @@ impl AgentExecutionPolicy {
             allowed_tools: Some(allowed),
             allow_user_questions: false,
             allowed_write_paths: None,
+            delegation_contract_id: None,
+            delegation_contract_fingerprint: None,
         }
+    }
+
+    #[must_use]
+    pub fn intersect_allowed_tools(mut self, tools: impl IntoIterator<Item = String>) -> Self {
+        let pinned = tools.into_iter().collect::<BTreeSet<_>>();
+        self.allowed_tools = Some(match self.allowed_tools.take() {
+            Some(current) => current.intersection(&pinned).cloned().collect(),
+            None => pinned,
+        });
+        self
+    }
+
+    #[must_use]
+    pub fn with_delegation_binding(
+        mut self,
+        contract_id: impl Into<String>,
+        fingerprint: impl Into<String>,
+    ) -> Self {
+        self.delegation_contract_id = Some(contract_id.into());
+        self.delegation_contract_fingerprint = Some(fingerprint.into());
+        self
+    }
+
+    #[must_use]
+    pub fn allowed_tool_ids(&self) -> Option<Vec<String>> {
+        self.allowed_tools
+            .as_ref()
+            .map(|tools| tools.iter().cloned().collect())
     }
 
     #[must_use]
@@ -146,7 +180,7 @@ impl AgentExecutionPolicy {
         self
     }
 
-    pub(crate) fn audit_projection(&self) -> Value {
+    pub fn audit_projection(&self) -> Value {
         let mut allowed_write_paths = self.allowed_write_paths.clone();
         if let Some(paths) = &mut allowed_write_paths {
             paths.sort();
@@ -156,6 +190,8 @@ impl AgentExecutionPolicy {
             "allowed_tools": self.allowed_tools.as_ref().map(|tools| tools.iter().cloned().collect::<Vec<_>>()),
             "allow_user_questions": self.allow_user_questions,
             "allowed_write_paths": allowed_write_paths,
+            "delegation_contract_id": self.delegation_contract_id,
+            "delegation_contract_fingerprint": self.delegation_contract_fingerprint,
         })
     }
 

@@ -216,6 +216,7 @@ fn journal_certified_tool_execution(
     name: &str,
     input: &serde_json::Value,
     receipt: serde_json::Value,
+    execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<()> {
     append_event(
         session,
@@ -226,6 +227,7 @@ fn journal_certified_tool_execution(
                 "tool_use_id": tool_use_id,
                 "tool": audited_tool_name(name, input),
                 "receipt": receipt,
+                "execution_authority": execution_policy.audit_projection(),
             }),
         },
     )?;
@@ -486,8 +488,18 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     pub fn create_session(&self, repo: &Path, objective: String) -> MedusaResult<AgentSession> {
-        self.create_session_with_content(
+        self.create_session_with_id(repo, SessionId::new(), objective)
+    }
+
+    pub fn create_session_with_id(
+        &self,
+        repo: &Path,
+        id: SessionId,
+        objective: String,
+    ) -> MedusaResult<AgentSession> {
+        self.create_session_with_content_and_id(
             repo,
+            id,
             objective.clone(),
             vec![MessageBlock::Text { text: objective }],
         )
@@ -499,12 +511,21 @@ impl<P: ModelProvider> AgentEngine<P> {
         objective: String,
         content: Vec<MessageBlock>,
     ) -> MedusaResult<AgentSession> {
+        self.create_session_with_content_and_id(repo, SessionId::new(), objective, content)
+    }
+
+    fn create_session_with_content_and_id(
+        &self,
+        repo: &Path,
+        id: SessionId,
+        objective: String,
+        content: Vec<MessageBlock>,
+    ) -> MedusaResult<AgentSession> {
         let content = content_with_session_goal(content, &objective);
         validate_user_content(&content, &self.provider.capabilities())?;
         bootstrap(repo)?;
         medusa_intelligence::recover_patch_transactions(repo)?;
         let now = OffsetDateTime::now_utc();
-        let id = SessionId::new();
         let world_model = create_for_session(repo, id.as_str(), objective.clone()).ok();
         let mut session = AgentSession {
             id: id.clone(),
@@ -708,6 +729,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     &approval.tool,
                     &approval.input,
                     execution.receipt,
+                    &self.execution_policy,
                 )?;
                 let result = execution.result;
                 append_event(
@@ -1845,7 +1867,14 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             for (id, name, input, result, receipt, timing, post_action) in executed {
                 if let Some(receipt) = receipt {
-                    journal_certified_tool_execution(session, &id, &name, &input, receipt)?;
+                    journal_certified_tool_execution(
+                        session,
+                        &id,
+                        &name,
+                        &input,
+                        receipt,
+                        &self.execution_policy,
+                    )?;
                 }
                 if let Some(PostToolAction::PlanUpdated(plan)) = post_action.as_ref()
                     && result.is_ok()

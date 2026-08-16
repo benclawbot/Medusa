@@ -101,19 +101,23 @@ def main() -> int:
         "fn journal_certified_tool_execution(",
         "EventPayload::WorkerEvidenceRecorded",
         '"kind": "certified_tool_execution"',
+        '"execution_authority": execution_policy.audit_projection()',
         "persist(session)",
-        "journal_certified_tool_execution(session, &id, &name, &input, receipt)?;",
     ]
     for marker in publication_markers:
         if marker not in engine:
             fail(f"durable certified publication contract is missing: {marker}")
-    central_journal = engine.find(
-        "journal_certified_tool_execution(session, &id, &name, &input, receipt)?;"
+    central_journal_match = re.search(
+        r"journal_certified_tool_execution\(\s*session,\s*&id,\s*&name,\s*&input,\s*receipt,\s*&self\.execution_policy,\s*\)\?;",
+        engine,
     )
+    if central_journal_match is None:
+        fail("durable certified publication contract must carry active execution authority")
+    central_journal = central_journal_match.start()
     completion = engine.find("EventPayload::ToolExecutionCompleted", central_journal)
     frontend = engine.find("observer(&AgentUpdate::ToolOutput", central_journal)
     model_projection = engine.find("MessageBlock::ToolResult", central_journal)
-    if central_journal < 0 or min(completion, frontend, model_projection) < 0:
+    if min(completion, frontend, model_projection) < 0:
         fail("could not prove durable receipt publication before projections")
     if not (central_journal < completion < frontend < model_projection):
         fail("receipt must be journaled before completion/frontend/model publication")

@@ -4,6 +4,7 @@ pub mod analysis_host;
 mod approval;
 pub mod branch_summary;
 pub mod compaction_v2;
+pub mod delegation;
 mod engine;
 mod engine_support;
 mod evidence;
@@ -31,6 +32,13 @@ pub use approval::{
 pub use branch_summary::{
     BranchAnchor, BranchSummaryRecord, DeterministicBranchMetadata, capture_restore_abandonment,
     common_ancestor,
+};
+pub use delegation::{
+    DELEGATION_CONTRACT_SCHEMA_VERSION, DELEGATION_ROLE_POLICY_VERSION,
+    DELEGATION_SYSTEM_POLICY_VERSION, DelegatedApprovalPolicy, DelegatedMutationAuthority,
+    DelegationAttemptBinding, DelegationCapabilitySnapshot, DelegationContract,
+    DelegationContractMaterial, DelegationContractStore, bind_session_to_delegation,
+    delegation_execution_policy, fingerprint_json, snapshot_delegated_capabilities,
 };
 pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
 pub use engine_support::{compact_session, update_session_objective};
@@ -84,8 +92,8 @@ pub use verification_dag::{
     VerificationNodeState, VerificationReceipt,
 };
 pub use worker_execution::{
-    LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
-    WorkerProgressSummary,
+    DelegationLeaseBinding, LeasedAssignment, TeamTaskView, WorkerCompletion,
+    WorkerExecutionController, WorkerProgressSummary,
 };
 
 /// Appends one canonical session event and commits the resulting snapshot before returning.
