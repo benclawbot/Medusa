@@ -45,9 +45,6 @@ pub struct TeamWorkerSnapshot {
     pub session_id: Option<String>,
     pub turn: u32,
     pub last_update: String,
-    /// Compatibility projection. Model-affecting steering is now stored in the worker session,
-    /// not in a second process-local queue, so this is always zero.
-    pub queued_instructions: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -325,16 +322,6 @@ impl TeamControlPlane {
         state.shutdown_requested || state.cancelled_workers.contains(worker_id)
     }
 
-    /// Compatibility shim for worker loops written against the former process-local queue. New
-    /// steering is never returned here because it is already present in the worker session.
-    pub fn take_instruction(&self, worker_id: &str) -> Result<Option<String>, String> {
-        let state = self.lock();
-        if !state.workers.contains_key(worker_id) {
-            return Err(format!("unknown team worker `{worker_id}`"));
-        }
-        Ok(None)
-    }
-
     #[must_use]
     pub fn render_lines(&self) -> Vec<String> {
         let snapshot = self.snapshot();
@@ -346,7 +333,7 @@ impl TeamControlPlane {
             .into_iter()
             .map(|worker| {
                 format!(
-                    "{} [{} / {}] {:?}; turn {}; session {}; {}; queued steering {}",
+                    "{} [{} / {}] {:?}; turn {}; session {}; {}",
                     worker.worker_id,
                     worker.role,
                     worker.task_id,
@@ -354,7 +341,6 @@ impl TeamControlPlane {
                     worker.turn,
                     worker.session_id.as_deref().unwrap_or("pending"),
                     worker.last_update,
-                    worker.queued_instructions,
                 )
             })
             .collect()
@@ -424,7 +410,6 @@ fn snapshot(state: &ControlState) -> TeamSnapshot {
                 session_id: worker.session_id.clone(),
                 turn: worker.turn,
                 last_update: worker.last_update.clone(),
-                queued_instructions: 0,
             })
             .collect(),
     }
@@ -487,11 +472,9 @@ mod tests {
         control
             .start("worker-a", Some(session.id.as_str()), "running")
             .unwrap();
-        let snapshot = control
+        control
             .steer("worker-a", "inspect the failing test")
             .unwrap();
-        assert_eq!(snapshot.workers[0].queued_instructions, 0);
-        assert_eq!(control.take_instruction("worker-a").unwrap(), None);
         assert!(
             worker_context
                 .prompt_context()
