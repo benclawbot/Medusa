@@ -45,6 +45,9 @@ pub struct TeamWorkerSnapshot {
     pub session_id: Option<String>,
     pub turn: u32,
     pub last_update: String,
+    /// Compatibility projection for callers that still display the retired process-local queue.
+    /// Steering is persisted as durable session actions, so this value is always zero.
+    pub queued_instructions: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -416,6 +419,7 @@ fn snapshot(state: &ControlState) -> TeamSnapshot {
                 session_id: worker.session_id.clone(),
                 turn: worker.turn,
                 last_update: worker.last_update.clone(),
+                queued_instructions: 0,
             })
             .collect(),
     }
