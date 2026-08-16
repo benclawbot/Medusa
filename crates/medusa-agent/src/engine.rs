@@ -796,16 +796,19 @@ impl<P: ModelProvider> AgentEngine<P> {
             ),
         ]);
         let execution_policy = self.execution_policy.audit_projection();
+        let capabilities = self.provider.capabilities();
         let manifest = effective_request::persist_before_provider_call(
             session,
             &summary_request,
-            ProviderExecutionPhase::Summarization,
-            &self.config.model.provider,
-            &self.config.model.name,
-            &self.provider.capabilities(),
-            &execution_policy,
-            summary_provenance,
-            None,
+            effective_request::RequestManifestInput {
+                phase: ProviderExecutionPhase::Summarization,
+                provider: &self.config.model.provider,
+                model: &self.config.model.name,
+                capabilities: &capabilities,
+                execution_policy: &execution_policy,
+                assembly_provenance: summary_provenance,
+                previous: None,
+            },
         )?;
         append_event(
             session,
@@ -1129,16 +1132,19 @@ impl<P: ModelProvider> AgentEngine<P> {
             temperature_milli: self.config.model.temperature_milli,
         };
         let execution_policy = self.execution_policy.audit_projection();
+        let capabilities = self.provider.capabilities();
         let mut active_manifest = effective_request::persist_before_provider_call(
             session,
             &request,
-            phase,
-            &self.config.model.provider,
-            &self.config.model.name,
-            &self.provider.capabilities(),
-            &execution_policy,
-            assembly_provenance.clone(),
-            None,
+            effective_request::RequestManifestInput {
+                phase,
+                provider: &self.config.model.provider,
+                model: &self.config.model.name,
+                capabilities: &capabilities,
+                execution_policy: &execution_policy,
+                assembly_provenance: assembly_provenance.clone(),
+                previous: None,
+            },
         )?;
         append_observed(
             session,
@@ -1258,16 +1264,19 @@ impl<P: ModelProvider> AgentEngine<P> {
                     request.messages = messages_with_turn_instruction(session, turn_instruction);
                     validate_messages(&request.messages, &self.provider.capabilities())?;
                 }
+                let retry_capabilities = self.provider.capabilities();
                 let retry_manifest = effective_request::persist_before_provider_call(
                     session,
                     &request,
-                    phase,
-                    &self.config.model.provider,
-                    &self.config.model.name,
-                    &self.provider.capabilities(),
-                    &execution_policy,
-                    assembly_provenance.clone(),
-                    Some(&active_manifest),
+                    effective_request::RequestManifestInput {
+                        phase,
+                        provider: &self.config.model.provider,
+                        model: &self.config.model.name,
+                        capabilities: &retry_capabilities,
+                        execution_policy: &execution_policy,
+                        assembly_provenance: assembly_provenance.clone(),
+                        previous: Some(&active_manifest),
+                    },
                 )?;
                 append_observed(
                     session,

@@ -105,17 +105,30 @@ struct ManifestFingerprintMaterial<'a> {
     compaction_source_event_sequences: &'a [u64],
 }
 
+pub(crate) struct RequestManifestInput<'a> {
+    pub phase: ProviderExecutionPhase,
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub capabilities: &'a ProviderCapabilities,
+    pub execution_policy: &'a Value,
+    pub assembly_provenance: BTreeMap<String, String>,
+    pub previous: Option<&'a ManifestRef>,
+}
+
 pub(crate) fn persist_before_provider_call(
     session: &AgentSession,
     request: &ModelRequest,
-    phase: ProviderExecutionPhase,
-    provider: &str,
-    model: &str,
-    capabilities: &ProviderCapabilities,
-    execution_policy: &Value,
-    assembly_provenance: BTreeMap<String, String>,
-    previous: Option<&ManifestRef>,
+    input: RequestManifestInput<'_>,
 ) -> MedusaResult<ManifestRef> {
+    let RequestManifestInput {
+        phase,
+        provider,
+        model,
+        capabilities,
+        execution_policy,
+        assembly_provenance,
+        previous,
+    } = input;
     let preceding_event_sequence = session.events.last().map_or(0, |event| event.sequence);
     let started_event_sequence = preceding_event_sequence.saturating_add(1);
     let attempt_ordinal = previous.map_or(0, |manifest| manifest.attempt_ordinal.saturating_add(1));
