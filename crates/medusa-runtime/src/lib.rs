@@ -36,6 +36,7 @@ pub mod checkpoint_payload;
 pub mod checkpoint_store;
 mod command_router;
 mod coding_trajectory;
+mod delegation_contract;
 pub mod commands;
 mod config_command;
 mod error;

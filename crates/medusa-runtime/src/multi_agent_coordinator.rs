@@ -19,10 +19,12 @@ use std::{
 };
 
 use medusa_agent::{
-    AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
-    TeamRuntime, WorkerExecutionController,
+    AgentEngine, AgentUpdate, DelegatedMutationAuthority, DelegationAttemptBinding,
+    DelegationContract, StepOutcome, TeamMemberContext, TeamRole, TeamRuntime,
+    WorkerExecutionController, bind_session_to_delegation,
 };
 use medusa_config::{Config, Mode};
+use medusa_core::SessionId;
 use medusa_multi_agent_scheduler::{ExecutionLane, Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerState};
@@ -32,6 +34,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+    delegation_contract::{DelegationRequest, policy_for, resolve_delegation},
     production_orchestrator::{
         AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
         validate_subagent_result,
@@ -92,6 +95,9 @@ struct WorkerRequest {
     team_context: TeamMemberContext,
     control: TeamControlPlane,
     events: Sender<RuntimeEvent>,
+    delegation: DelegationContract,
+    attempt: DelegationAttemptBinding,
+    session_id: SessionId,
 }
 
 pub fn run_preflight(
@@ -103,7 +109,7 @@ pub fn run_preflight(
     control: &TeamControlPlane,
     events: &Sender<RuntimeEvent>,
 ) -> Result<CoordinatorEvidence, String> {
-    coordinate_with_control(repo, plan, cancel, control, events, |request| {
+    coordinate_with_control(repo, config, plan, cancel, control, events, |request| {
         execute_production_worker(repo, config, session_api_key.clone(), cancel, request)
     })
 }
@@ -232,6 +238,7 @@ where
 {
     coordinate_with_control(
         repo,
+        &Config::default(),
         plan,
         cancel,
         &TeamControlPlane::default(),
@@ -242,6 +249,7 @@ where
 
 fn coordinate_with_control<F>(
     repo: &Path,
+    config: &Config,
     plan: &ProductionExecutionPlan,
     cancel: &Arc<AtomicBool>,
     control: &TeamControlPlane,
@@ -439,6 +447,35 @@ where
             ],
             contract.required_evidence.clone(),
         )?;
+        let session_id = SessionId::new();
+        let role = team_role_for(contract.role);
+        let resolved = resolve_delegation(
+            &mut controller,
+            DelegationRequest {
+                capability_repo: repo,
+                execution_root: &root,
+                root_execution_id: &execution_id,
+                plan_fingerprint: &plan.fingerprint,
+                context_fingerprint: &packet.fingerprint,
+                objective: &contract.objective,
+                required_evidence: &contract.required_evidence,
+                worker_id: &assignment.worker_id,
+                task_id: &assignment.task_id,
+                lease_epoch: assignment.lease_epoch,
+                session_id: &session_id,
+                config,
+                role,
+                mode: Mode::ReadOnly,
+                max_turns: config.agent.max_turns.clamp(1, WORKER_TURN_LIMIT),
+                max_attempts: 2,
+                max_delegation_depth: contract.delegation.max_depth,
+                repository_identity: &repository_fingerprint,
+                repository_revision: &repository_fingerprint,
+                worktree_identity: None,
+                write_scopes: Vec::new(),
+                mutation_authority: DelegatedMutationAuthority::None,
+            },
+        )?;
         let team_context = team.member_context(&assignment.worker_id)?;
         team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;
         if let Ok(snapshot) = control.start(&assignment.worker_id, None, "worker dispatched") {
@@ -451,6 +488,9 @@ where
             team_context,
             control: control.clone(),
             events: events.clone(),
+            delegation: resolved.contract,
+            attempt: resolved.attempt,
+            session_id,
         });
     }
 
@@ -604,21 +644,28 @@ fn execute_production_worker(
     request: WorkerRequest,
 ) -> Result<WorkerEvidence, String> {
     let mut worker_config = config.clone();
-    worker_config.agent.mode = Mode::ReadOnly;
-    worker_config.agent.max_turns = worker_config.agent.max_turns.clamp(1, WORKER_TURN_LIMIT);
+    worker_config.model = request.delegation.authority.model.clone();
+    worker_config.agent.mode = request.delegation.authority.mode;
+    worker_config.agent.max_turns = config
+        .agent
+        .max_turns
+        .max(1)
+        .min(request.delegation.authority.max_turns);
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let role = team_role_for(request.contract.role);
     let engine =
         AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
-            .with_execution_policy(AgentExecutionPolicy::for_team_role(role))
+            .with_execution_policy(policy_for(&request.delegation, role))
             .with_team_context(request.team_context.clone());
     let objective = format!(
         "Complete delegated read-only task `{}`. Objective: {}. Return a concise evidence-backed report; do not ask the user questions and do not modify repository state.",
         request.contract.task_id, request.contract.objective
     );
     let mut session = engine
-        .create_session(repo, objective)
+        .create_session_with_id(repo, request.session_id, objective)
+        .map_err(|error| error.to_string())?;
+    bind_session_to_delegation(&mut session, &request.delegation, &request.attempt)
         .map_err(|error| error.to_string())?;
     request
         .team_context
@@ -629,7 +676,9 @@ fn execute_production_worker(
         )
         .map_err(|error| error.to_string())?;
     let system_context = format!(
-        "Delegation context fingerprint: {}\nContract: {}",
+        "Delegation contract id: {}\nDelegation contract fingerprint: {}\nDelegation context fingerprint: {}\nContract: {}",
+        request.delegation.contract_id,
+        request.delegation.fingerprint,
         request.packet.fingerprint,
         serde_json::to_string_pretty(&request.packet).map_err(|error| error.to_string())?
     );

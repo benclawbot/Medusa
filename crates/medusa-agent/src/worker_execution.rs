@@ -33,6 +33,14 @@ pub struct LeasedAssignment {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DelegationLeaseBinding {
+    pub contract_id: String,
+    pub contract_fingerprint: String,
+    pub worker_id: String,
+    pub accepted_lease_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkerCompletion {
     pub task_id: String,
     pub worker_id: String,
@@ -58,6 +66,8 @@ struct DurableWorkerExecution {
     leases: BTreeMap<String, WorkerLease>,
     last_epochs: BTreeMap<String, u64>,
     completed_epochs: BTreeMap<String, u64>,
+    #[serde(default)]
+    delegation_contracts: BTreeMap<String, DelegationLeaseBinding>,
     cancelled_tasks: BTreeSet<String>,
     progress: Vec<ProgressEvent>,
     summary: WorkerProgressSummary,
@@ -103,6 +113,7 @@ impl WorkerExecutionController {
             leases: BTreeMap::new(),
             last_epochs: BTreeMap::new(),
             completed_epochs: BTreeMap::new(),
+            delegation_contracts: BTreeMap::new(),
             cancelled_tasks: BTreeSet::new(),
             progress: Vec::new(),
             summary: WorkerProgressSummary {
@@ -430,6 +441,41 @@ impl WorkerExecutionController {
         self.persist()
     }
 
+    pub fn bind_delegation_contract(
+        &mut self,
+        task_id: &str,
+        worker_id: &str,
+        lease_epoch: u64,
+        binding: DelegationLeaseBinding,
+    ) -> Result<(), String> {
+        self.current_lease(task_id, worker_id, lease_epoch)?;
+        if binding.contract_id.trim().is_empty()
+            || binding.contract_fingerprint.trim().is_empty()
+            || binding.worker_id != worker_id
+            || binding.accepted_lease_epoch == 0
+        {
+            return Err("delegation contract binding is invalid".to_owned());
+        }
+        if let Some(existing) = self.state.delegation_contracts.get(task_id) {
+            if existing != &binding {
+                return Err(format!(
+                    "delegation_reconciliation_required: task {task_id} is already bound to {}",
+                    existing.contract_id
+                ));
+            }
+        } else {
+            self.state
+                .delegation_contracts
+                .insert(task_id.to_owned(), binding);
+        }
+        self.persist()
+    }
+
+    #[must_use]
+    pub fn delegation_contract_binding(&self, task_id: &str) -> Option<DelegationLeaseBinding> {
+        self.state.delegation_contracts.get(task_id).cloned()
+    }
+
     pub fn progress(&self) -> &[ProgressEvent] {
         &self.state.progress
     }
@@ -574,6 +620,20 @@ fn validate_state(state: &DurableWorkerExecution) -> Result<(), String> {
         }
         if !state.workers.contains_key(&lease.worker_id) {
             return Err("lease references an unknown worker".into());
+        }
+    }
+    for (task_id, binding) in &state.delegation_contracts {
+        if binding.contract_id.trim().is_empty()
+            || binding.contract_fingerprint.trim().is_empty()
+            || binding.accepted_lease_epoch == 0
+            || !state.workers.contains_key(&binding.worker_id)
+            || !state
+                .schedule
+                .tasks_with_state()
+                .iter()
+                .any(|(task, _)| &task.id == task_id)
+        {
+            return Err("durable delegation contract binding is invalid".to_owned());
         }
     }
     if state

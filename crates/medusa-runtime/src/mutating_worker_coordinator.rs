@@ -11,11 +11,14 @@ use std::{
 };
 
 use medusa_agent::{
-    AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
+    DelegatedMutationAuthority, DelegationAttemptBinding, DelegationContract,
+    bind_session_to_delegation,
+    AgentEngine, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
     TeamRuntime, WorkerExecutionController, authoritative_verification_for_components_at,
     prepare_components_for_verification,
 };
 use medusa_config::{Config, Mode};
+use medusa_core::SessionId;
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_multi_agent_scheduler::speculation::{
     InvalidationReason, PromotionCheck, SpeculationAssumptions, SpeculationHistory,
@@ -29,6 +32,7 @@ use serde_json::json;
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+    delegation_contract::{DelegationRequest, policy_for, resolve_delegation},
     multi_agent_coordinator::{CoordinatorEvidence, WorkerEvidence},
     mutation_transaction::{MutationTransaction, PreparedMutationInput},
     production_orchestrator::{
@@ -168,6 +172,9 @@ struct ImplementationRequest {
     control: TeamControlPlane,
     events: Sender<RuntimeEvent>,
     max_model_turns: u32,
+    delegation: DelegationContract,
+    attempt: DelegationAttemptBinding,
+    session_id: SessionId,
 }
 
 #[derive(Clone, Debug)]
@@ -357,6 +364,7 @@ pub fn run_implementation(
     let (control, events) = reporting;
     coordinate_with_control(
         repo,
+        config,
         plan,
         preflight,
         cancel,
@@ -457,6 +465,7 @@ pub fn run_speculative_implementation(
     let started = std::time::Instant::now();
     let result = coordinate_with_control(
         repo,
+        config,
         plan,
         &preflight,
         cancel,
@@ -530,6 +539,7 @@ where
 {
     coordinate_with_control(
         repo,
+        &Config::default(),
         plan,
         preflight,
         cancel,
@@ -768,6 +778,7 @@ fn discard_speculative_artifacts(repo: &Path, root: &Path) -> Result<(), String>
 #[allow(clippy::too_many_arguments)]
 fn coordinate_with_control<F>(
     repo: &Path,
+    config: &Config,
     plan: &ProductionExecutionPlan,
     preflight: &CoordinatorEvidence,
     cancel: &Arc<AtomicBool>,
@@ -878,6 +889,7 @@ where
                 controller.recover_interrupted()?;
                 return execute_attempts(
                     repo,
+                    config,
                     plan,
                     preflight,
                     cancel,
@@ -939,6 +951,7 @@ where
     };
     execute_attempts(
         repo,
+        config,
         plan,
         preflight,
         cancel,
@@ -960,6 +973,7 @@ where
 #[allow(clippy::too_many_arguments)]
 fn execute_attempts<F>(
     _repo: &Path,
+    config: &Config,
     plan: &ProductionExecutionPlan,
     preflight: &CoordinatorEvidence,
     cancel: &Arc<AtomicBool>,
@@ -1017,6 +1031,41 @@ where
                 )
                 .map_err(|error| error.to_string())?,
         };
+        let session_id = SessionId::new();
+        let delegated_turns = speculative.map_or_else(
+            || u32::from(plan.planning.model_turn_budget.successful_path_total),
+            |context| context.max_model_turns,
+        );
+        let resolved = resolve_delegation(
+            &mut controller,
+            DelegationRequest {
+                capability_repo: &worker.worktree,
+                execution_root: state_path
+                    .parent()
+                    .ok_or_else(|| "implementation state path has no execution root".to_owned())?,
+                root_execution_id: &plan.fingerprint,
+                plan_fingerprint: &plan.fingerprint,
+                context_fingerprint: &packet.fingerprint,
+                objective: &contract.objective,
+                required_evidence: &contract.required_evidence,
+                worker_id: &assignment.worker_id,
+                task_id: &assignment.task_id,
+                lease_epoch: assignment.lease_epoch,
+                session_id: &session_id,
+                config,
+                role: TeamRole::Implementer,
+                mode: Mode::Yolo,
+                max_turns: bounded_implementer_turns(config.agent.max_turns)
+                    .min(delegated_turns.max(1)),
+                max_attempts: MAX_ATTEMPTS,
+                max_delegation_depth: contract.delegation.max_depth,
+                repository_identity: &preflight.repository_fingerprint,
+                repository_revision: &base_head,
+                worktree_identity: Some(format!("{}@{}", worker.branch, base_head)),
+                write_scopes: contract.allowed_write_paths.clone(),
+                mutation_authority: DelegatedMutationAuthority::IsolatedWorktree,
+            },
+        )?;
         let team_context = team.member_context(&assignment.worker_id)?;
         team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;
         if let Ok(snapshot) = control.start(
@@ -1076,10 +1125,10 @@ where
             team_context,
             control: control.clone(),
             events: events.clone(),
-            max_model_turns: speculative.map_or_else(
-                || u32::from(plan.planning.model_turn_budget.successful_path_total),
-                |context| context.max_model_turns,
-            ),
+            max_model_turns: delegated_turns,
+            delegation: resolved.contract,
+            attempt: resolved.attempt,
+            session_id,
         };
         let run = match executor(request) {
             Ok(run) => run,
@@ -1609,13 +1658,14 @@ fn execute_production_implementer(
     request: ImplementationRequest,
 ) -> Result<WorkerRun, String> {
     let mut worker_config = config.clone();
-    worker_config.agent.mode = Mode::Yolo;
-    worker_config.agent.max_turns = bounded_implementer_turns(worker_config.agent.max_turns)
+    worker_config.model = request.delegation.authority.model.clone();
+    worker_config.agent.mode = request.delegation.authority.mode;
+    worker_config.agent.max_turns = bounded_implementer_turns(config.agent.max_turns)
+        .min(request.delegation.authority.max_turns)
         .min(request.max_model_turns.max(1));
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
-    let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
-        .with_allowed_write_paths(request.contract.allowed_write_paths.clone());
+    let policy = policy_for(&request.delegation, TeamRole::Implementer);
     let engine =
         AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
             .with_execution_policy(policy)
@@ -1628,7 +1678,9 @@ fn execute_production_implementer(
         request.max_model_turns,
     );
     let mut session = engine
-        .create_session(&request.worker.worktree, objective)
+        .create_session_with_id(&request.worker.worktree, request.session_id, objective)
+        .map_err(|error| error.to_string())?;
+    bind_session_to_delegation(&mut session, &request.delegation, &request.attempt)
         .map_err(|error| error.to_string())?;
     request
         .team_context
@@ -1639,7 +1691,9 @@ fn execute_production_implementer(
         )
         .map_err(|error| error.to_string())?;
     let system_context = format!(
-        "Authoritative delegation packet fingerprint: {}\n{}",
+        "Delegation contract id: {}\nDelegation contract fingerprint: {}\nAuthoritative delegation packet fingerprint: {}\n{}",
+        request.delegation.contract_id,
+        request.delegation.fingerprint,
         request.packet.fingerprint,
         serde_json::to_string_pretty(&request.packet).map_err(|error| error.to_string())?
     );
