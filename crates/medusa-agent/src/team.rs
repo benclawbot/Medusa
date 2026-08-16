@@ -639,12 +639,10 @@ impl TeamMemberContext {
             return Err(invalid("team message body cannot be empty"));
         }
         let mut state = self.team.lock().map_err(invalid)?;
-        let sender = state.members.get(&self.member_id).cloned().ok_or_else(|| {
-            invalid(format!(
-                "unknown team message sender: {}",
-                self.member_id
-            ))
-        })?;
+        let sender =
+            state.members.get(&self.member_id).cloned().ok_or_else(|| {
+                invalid(format!("unknown team message sender: {}", self.member_id))
+            })?;
         let recipient_member = state
             .members
             .get(recipient)
@@ -779,13 +777,19 @@ pub(crate) fn admit_team_instruction(
     )?;
     persist(&session)?;
     let persisted = load(repo, session_id)?;
-    match persisted.events.iter().rev().find_map(|event| match &event.payload {
-        EventPayload::SessionActionAccepted { action } if action.action_id == action_id => Some(true),
-        EventPayload::SessionActionRejected { action, .. } if action.action_id == action_id => {
-            Some(false)
-        }
-        _ => None,
-    }) {
+    match persisted
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::SessionActionAccepted { action } if action.action_id == action_id => {
+                Some(true)
+            }
+            EventPayload::SessionActionRejected { action, .. } if action.action_id == action_id => {
+                Some(false)
+            }
+            _ => None,
+        }) {
         Some(true) => Ok(action_id),
         Some(false) => Err(invalid(
             "team instruction was rejected because the destination session revision changed",
@@ -830,7 +834,8 @@ fn model_visible_action_ids(repo: &Path, session_id: &str) -> MedusaResult<BTree
                 .ok_or_else(|| invalid("request manifest file name is not valid UTF-8"))?
                 .to_owned();
             let manifest_ref = format!("request-manifest:sha256:{fingerprint}");
-            let inspected = crate::engine::effective_request::inspect(repo, session_id, &manifest_ref)?;
+            let inspected =
+                crate::engine::effective_request::inspect(repo, session_id, &manifest_ref)?;
             for action_id in inspected
                 .get("delivered_action_ids")
                 .and_then(Value::as_array)
