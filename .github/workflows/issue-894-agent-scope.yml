@@ -25,6 +25,7 @@ jobs:
           set -euo pipefail
           python3 scripts/issue-894-agent-scope.py
           python3 scripts/issue-894-request-replay-fix.py
+          python3 scripts/issue-894-preparation-fix.py
       - name: Validate
         shell: bash
         run: |
@@ -42,7 +43,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/issue-894-agent-scope.yml scripts/issue-894-agent-scope.py scripts/issue-894-request-replay-fix.py
+          git rm .github/workflows/issue-894-agent-scope.yml scripts/issue-894-agent-scope.py scripts/issue-894-request-replay-fix.py scripts/issue-894-preparation-fix.py
           git add crates/medusa-agent crates/medusa-runtime
           git diff --cached --check
           git commit -m "Add transactional agent runtime scopes"
