@@ -9,6 +9,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use medusa_capabilities::CapabilityRegistry;
@@ -62,6 +66,12 @@ struct AgentScopeState {
     lifecycle: AgentScopeLifecycle,
     updated_at_unix_ms: i64,
     stop_cause: Option<String>,
+    #[serde(default)]
+    failed_start_cause: Option<String>,
+    #[serde(default)]
+    revoked_tools: Vec<String>,
+    #[serde(default)]
+    owned_resources: Vec<AgentScopeOwnedResource>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,6 +86,76 @@ pub struct AgentScopeStopReceipt {
     pub scope: AgentScopeRef,
     pub cause: String,
     pub stopped_at_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentScopeResourceKind {
+    Cancellation,
+    TeamContext,
+    AnalysisWorkspace,
+    DesktopCommander,
+    Browser,
+    Process,
+    Pty,
+    BackgroundJob,
+    ToolMiddleware,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentScopeOwnedResource {
+    pub id: String,
+    pub kind: AgentScopeResourceKind,
+    pub generation: u64,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentRuntimeHandle {
+    repo: PathBuf,
+    session_id: String,
+    scope: AgentScopeRef,
+    cancellation: Arc<AtomicBool>,
+}
+
+impl AgentRuntimeHandle {
+    #[must_use]
+    pub fn scope(&self) -> &AgentScopeRef {
+        &self.scope
+    }
+
+    pub fn ensure_current(&self) -> MedusaResult<()> {
+        validate_scope_generation(&self.repo, &self.session_id, &self.scope)
+    }
+
+    pub fn revoke_tool(&self, tool: &str) -> MedusaResult<()> {
+        revoke_agent_scope_tool(&self.repo, &self.session_id, &self.scope, tool)
+    }
+
+    pub fn register_resource(
+        &self,
+        id: impl Into<String>,
+        kind: AgentScopeResourceKind,
+    ) -> MedusaResult<()> {
+        register_agent_scope_resource(&self.repo, &self.session_id, &self.scope, id, kind)
+    }
+
+    pub fn release_resource(&self, id: &str) -> MedusaResult<()> {
+        release_agent_scope_resource(&self.repo, &self.session_id, &self.scope, id)
+    }
+
+    pub fn stop(self, cause: impl Into<String>) -> MedusaResult<AgentScopeStopReceipt> {
+        self.cancellation.store(true, Ordering::SeqCst);
+        stop_agent_scope_generation(&self.repo, &self.session_id, &self.scope, cause)
+    }
+}
+
+impl Drop for AgentRuntimeHandle {
+    fn drop(&mut self) {
+        // Fail-safe: dropping live ownership immediately closes new cancellable admission.
+        // Durable terminal publication still requires explicit stop by the runtime owner.
+        self.cancellation.store(true, Ordering::SeqCst);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -175,6 +255,13 @@ pub fn prepare_agent_scope(
                 lifecycle: AgentScopeLifecycle::Prepared,
                 updated_at_unix_ms: unix_ms(),
                 stop_cause: None,
+                failed_start_cause: None,
+                revoked_tools: Vec::new(),
+                owned_resources: initial_resources(
+                    contract.team_id.as_deref(),
+                    contract.member_id.as_deref(),
+                    contract.analysis_workspace,
+                ),
             },
         )?;
     }
@@ -193,6 +280,18 @@ pub fn publish_agent_scope(
     if stored != *contract {
         return Err(scope_error(
             "agent scope contract changed before publication",
+        ));
+    }
+    if repository_identity(repo)? != contract.repository_identity {
+        return Err(reconciliation_error(
+            "repository identity changed during agent-scope setup",
+        ));
+    }
+    if let Some(accepted_revision) = contract.initial_repository_revision.as_ref()
+        && repository_revision(repo).as_ref() != Some(accepted_revision)
+    {
+        return Err(reconciliation_error(
+            "repository revision changed during agent-scope setup",
         ));
     }
     validate_runtime_authority(
@@ -273,6 +372,11 @@ pub fn resume_agent_scope(
         .generation
         .checked_add(1)
         .ok_or_else(|| scope_error("agent scope lifecycle generation overflowed during resume"))?;
+    for resource in &mut state.owned_resources {
+        if resource.active {
+            resource.generation = state.generation;
+        }
+    }
     state.updated_at_unix_ms = unix_ms();
     persist_state(&path, &state)?;
     Ok(scope_ref(&state))
@@ -318,6 +422,14 @@ pub fn stop_agent_scope(
     state.updated_at_unix_ms = unix_ms();
     state.stop_cause = Some(cause.clone());
     persist_state(&path, &state)?;
+    for resource in &mut state.owned_resources {
+        resource.active = false;
+    }
+    if state.owned_resources.iter().any(|resource| resource.active) {
+        return Err(scope_error(
+            "agent scope reached terminal teardown with an owned resource still active",
+        ));
+    }
     state.lifecycle = AgentScopeLifecycle::Stopped;
     state.updated_at_unix_ms = unix_ms();
     persist_state(&path, &state)?;
@@ -326,6 +438,237 @@ pub fn stop_agent_scope(
         cause,
         stopped_at_unix_ms: state.updated_at_unix_ms,
     })
+}
+
+pub fn agent_runtime_handle(
+    repo: &Path,
+    session_id: &str,
+    cancellation: Arc<AtomicBool>,
+) -> MedusaResult<AgentRuntimeHandle> {
+    let scope = load_published_scope_ref(repo, session_id)?;
+    Ok(AgentRuntimeHandle {
+        repo: repo.to_path_buf(),
+        session_id: session_id.to_owned(),
+        scope,
+        cancellation,
+    })
+}
+
+pub fn fail_agent_scope_start(
+    repo: &Path,
+    session_id: &str,
+    cause: impl Into<String>,
+) -> MedusaResult<AgentScopeRef> {
+    let cause = cause.into();
+    let contract = load_contract(repo, session_id)?;
+    let path = state_path(repo, session_id);
+    let mut state = load_state(&path)?;
+    validate_state_binding(&contract, &state)?;
+    if !matches!(
+        state.lifecycle,
+        AgentScopeLifecycle::Prepared
+            | AgentScopeLifecycle::Published
+            | AgentScopeLifecycle::FailedStart
+    ) {
+        return Err(scope_error(format!(
+            "agent scope cannot record failed start from lifecycle {:?}",
+            state.lifecycle
+        )));
+    }
+    for resource in &mut state.owned_resources {
+        resource.active = false;
+    }
+    state.lifecycle = AgentScopeLifecycle::FailedStart;
+    state.failed_start_cause = Some(cause);
+    state.updated_at_unix_ms = unix_ms();
+    persist_state(&path, &state)?;
+    Ok(scope_ref(&state))
+}
+
+pub fn effective_agent_scope_tools(
+    repo: &Path,
+    session_id: &str,
+    current_tools: Vec<String>,
+) -> MedusaResult<Vec<String>> {
+    let contract = load_contract(repo, session_id)?;
+    let state = load_state(&state_path(repo, session_id))?;
+    validate_state_binding(&contract, &state)?;
+    if state.lifecycle != AgentScopeLifecycle::Published {
+        return Err(scope_error(
+            "agent scope is not published for tool projection",
+        ));
+    }
+    let current = canonical_strings(current_tools);
+    if current
+        .iter()
+        .any(|tool| contract.effective_tools.binary_search(tool).is_err())
+    {
+        return Err(reconciliation_error(
+            "runtime tool projection would widen the published agent scope",
+        ));
+    }
+    let revoked = state.revoked_tools.iter().collect::<BTreeSet<_>>();
+    Ok(current
+        .into_iter()
+        .filter(|tool| !revoked.contains(tool))
+        .collect())
+}
+
+pub fn revoke_agent_scope_tool(
+    repo: &Path,
+    session_id: &str,
+    expected: &AgentScopeRef,
+    tool: &str,
+) -> MedusaResult<()> {
+    let contract = load_contract(repo, session_id)?;
+    if contract
+        .effective_tools
+        .binary_search(&tool.to_owned())
+        .is_err()
+    {
+        return Err(scope_error(format!(
+            "tool {tool} was never admitted to this agent scope"
+        )));
+    }
+    let path = state_path(repo, session_id);
+    let mut state = load_state(&path)?;
+    validate_state_binding(&contract, &state)?;
+    validate_expected_generation(expected, &state)?;
+    if state.lifecycle != AgentScopeLifecycle::Published {
+        return Err(scope_error(
+            "agent scope is not live for capability revocation",
+        ));
+    }
+    state.revoked_tools.push(tool.to_owned());
+    state.revoked_tools = canonical_strings(state.revoked_tools);
+    state.updated_at_unix_ms = unix_ms();
+    persist_state(&path, &state)
+}
+
+pub fn register_agent_scope_resource(
+    repo: &Path,
+    session_id: &str,
+    expected: &AgentScopeRef,
+    id: impl Into<String>,
+    kind: AgentScopeResourceKind,
+) -> MedusaResult<()> {
+    let contract = load_contract(repo, session_id)?;
+    let path = state_path(repo, session_id);
+    let mut state = load_state(&path)?;
+    validate_state_binding(&contract, &state)?;
+    validate_expected_generation(expected, &state)?;
+    if state.lifecycle != AgentScopeLifecycle::Published {
+        return Err(scope_error(
+            "agent scope is not live for resource registration",
+        ));
+    }
+    let id = id.into();
+    if let Some(resource) = state
+        .owned_resources
+        .iter_mut()
+        .find(|resource| resource.id == id)
+    {
+        resource.active = true;
+        resource.generation = state.generation;
+        resource.kind = kind;
+    } else {
+        state.owned_resources.push(AgentScopeOwnedResource {
+            id,
+            kind,
+            generation: state.generation,
+            active: true,
+        });
+    }
+    state.updated_at_unix_ms = unix_ms();
+    persist_state(&path, &state)
+}
+
+pub fn release_agent_scope_resource(
+    repo: &Path,
+    session_id: &str,
+    expected: &AgentScopeRef,
+    id: &str,
+) -> MedusaResult<()> {
+    let contract = load_contract(repo, session_id)?;
+    let path = state_path(repo, session_id);
+    let mut state = load_state(&path)?;
+    validate_state_binding(&contract, &state)?;
+    validate_expected_generation(expected, &state)?;
+    let resource = state
+        .owned_resources
+        .iter_mut()
+        .find(|resource| resource.id == id)
+        .ok_or_else(|| scope_error(format!("agent scope does not own resource {id}")))?;
+    resource.active = false;
+    state.updated_at_unix_ms = unix_ms();
+    persist_state(&path, &state)
+}
+
+pub fn validate_scope_generation(
+    repo: &Path,
+    session_id: &str,
+    expected: &AgentScopeRef,
+) -> MedusaResult<()> {
+    let contract = load_contract(repo, session_id)?;
+    let state = load_state(&state_path(repo, session_id))?;
+    validate_state_binding(&contract, &state)?;
+    validate_expected_generation(expected, &state)
+}
+
+pub fn stop_agent_scope_generation(
+    repo: &Path,
+    session_id: &str,
+    expected: &AgentScopeRef,
+    cause: impl Into<String>,
+) -> MedusaResult<AgentScopeStopReceipt> {
+    validate_scope_generation(repo, session_id, expected)?;
+    stop_agent_scope(repo, session_id, cause)
+}
+
+fn validate_expected_generation(
+    expected: &AgentScopeRef,
+    state: &AgentScopeState,
+) -> MedusaResult<()> {
+    if expected.scope_id != state.scope_id
+        || expected.scope_fingerprint != state.scope_fingerprint
+        || expected.generation != state.generation
+    {
+        return Err(scope_error(format!(
+            "stale_agent_scope_generation: expected generation {}, current generation {}",
+            expected.generation, state.generation
+        )));
+    }
+    Ok(())
+}
+
+fn initial_resources(
+    team_id: Option<&str>,
+    member_id: Option<&str>,
+    analysis_workspace: bool,
+) -> Vec<AgentScopeOwnedResource> {
+    let mut resources = vec![AgentScopeOwnedResource {
+        id: "cancellation".to_owned(),
+        kind: AgentScopeResourceKind::Cancellation,
+        generation: 1,
+        active: true,
+    }];
+    if let (Some(team_id), Some(member_id)) = (team_id, member_id) {
+        resources.push(AgentScopeOwnedResource {
+            id: format!("team:{team_id}:{member_id}"),
+            kind: AgentScopeResourceKind::TeamContext,
+            generation: 1,
+            active: true,
+        });
+    }
+    if analysis_workspace {
+        resources.push(AgentScopeOwnedResource {
+            id: "analysis-workspace".to_owned(),
+            kind: AgentScopeResourceKind::AnalysisWorkspace,
+            generation: 1,
+            active: true,
+        });
+    }
+    resources
 }
 
 fn validate_runtime_authority(
@@ -704,6 +1047,178 @@ mod tests {
         assert_eq!(first.scope, second.scope);
         assert_eq!(second.cause, "done");
         assert!(load_published_scope_ref(repo.path(), session.as_str()).is_err());
+    }
+
+    #[test]
+    fn failed_start_is_terminal_for_publication_and_revokes_resources() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let session = SessionId::new();
+        let provider = json!({"provider":"test","model":"test"});
+        let execution = policy(Some(&["fs_read"]), None, false);
+        let contract = prepare_agent_scope(
+            repo.path(),
+            &session,
+            AgentScopePreparation {
+                mode: Mode::ReadOnly,
+                provider_profile: provider,
+                execution_policy: execution,
+                effective_tools: vec!["fs_read".into()],
+                team_id: Some("team".into()),
+                member_id: Some("worker".into()),
+                analysis_workspace: true,
+            },
+        )
+        .expect("prepare");
+        fail_agent_scope_start(repo.path(), session.as_str(), "setup failed").expect("fail start");
+        assert!(
+            publish_agent_scope(
+                repo.path(),
+                &contract,
+                json!({"provider":"test","model":"test"}),
+                policy(Some(&["fs_read"]), None, false),
+                vec!["fs_read".into()],
+            )
+            .is_err()
+        );
+        let state = load_state(&state_path(repo.path(), session.as_str())).expect("state");
+        assert_eq!(state.lifecycle, AgentScopeLifecycle::FailedStart);
+        assert!(
+            state
+                .owned_resources
+                .iter()
+                .all(|resource| !resource.active)
+        );
+    }
+
+    #[test]
+    fn revocation_removes_tool_from_next_projection() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let session = SessionId::new();
+        let provider = json!({"provider":"test","model":"test"});
+        let execution = policy(Some(&["fs_read", "shell_run"]), None, false);
+        let contract = prepare_agent_scope(
+            repo.path(),
+            &session,
+            AgentScopePreparation {
+                mode: Mode::ReadOnly,
+                provider_profile: provider.clone(),
+                execution_policy: execution.clone(),
+                effective_tools: vec!["fs_read".into(), "shell_run".into()],
+                team_id: None,
+                member_id: None,
+                analysis_workspace: false,
+            },
+        )
+        .expect("prepare");
+        let scope = publish_agent_scope(
+            repo.path(),
+            &contract,
+            provider,
+            execution,
+            vec!["fs_read".into(), "shell_run".into()],
+        )
+        .expect("publish");
+        revoke_agent_scope_tool(repo.path(), session.as_str(), &scope, "shell_run")
+            .expect("revoke");
+        assert_eq!(
+            effective_agent_scope_tools(
+                repo.path(),
+                session.as_str(),
+                vec!["fs_read".into(), "shell_run".into()],
+            )
+            .expect("projection"),
+            vec!["fs_read"]
+        );
+    }
+
+    #[test]
+    fn stale_generation_cannot_revoke_or_stop_resumed_scope() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let session = SessionId::new();
+        let provider = json!({"provider":"test","model":"test"});
+        let execution = policy(Some(&["fs_read"]), None, false);
+        let contract = prepare_agent_scope(
+            repo.path(),
+            &session,
+            AgentScopePreparation {
+                mode: Mode::ReadOnly,
+                provider_profile: provider.clone(),
+                execution_policy: execution.clone(),
+                effective_tools: vec!["fs_read".into()],
+                team_id: None,
+                member_id: None,
+                analysis_workspace: false,
+            },
+        )
+        .expect("prepare");
+        let stale = publish_agent_scope(
+            repo.path(),
+            &contract,
+            provider.clone(),
+            execution.clone(),
+            vec!["fs_read".into()],
+        )
+        .expect("publish");
+        let current = resume_agent_scope(
+            repo.path(),
+            session.as_str(),
+            provider,
+            execution,
+            vec!["fs_read".into()],
+        )
+        .expect("resume");
+        assert!(revoke_agent_scope_tool(repo.path(), session.as_str(), &stale, "fs_read").is_err());
+        assert!(
+            stop_agent_scope_generation(repo.path(), session.as_str(), &stale, "stale").is_err()
+        );
+        stop_agent_scope_generation(repo.path(), session.as_str(), &current, "current")
+            .expect("stop");
+    }
+
+    #[test]
+    fn stop_revokes_every_owned_resource() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let session = SessionId::new();
+        let provider = json!({"provider":"test","model":"test"});
+        let execution = policy(Some(&["fs_read"]), None, false);
+        let contract = prepare_agent_scope(
+            repo.path(),
+            &session,
+            AgentScopePreparation {
+                mode: Mode::ReadOnly,
+                provider_profile: provider.clone(),
+                execution_policy: execution.clone(),
+                effective_tools: vec!["fs_read".into()],
+                team_id: None,
+                member_id: None,
+                analysis_workspace: false,
+            },
+        )
+        .expect("prepare");
+        let scope = publish_agent_scope(
+            repo.path(),
+            &contract,
+            provider,
+            execution,
+            vec!["fs_read".into()],
+        )
+        .expect("publish");
+        register_agent_scope_resource(
+            repo.path(),
+            session.as_str(),
+            &scope,
+            "browser-1",
+            AgentScopeResourceKind::Browser,
+        )
+        .expect("register");
+        stop_agent_scope_generation(repo.path(), session.as_str(), &scope, "done").expect("stop");
+        let state = load_state(&state_path(repo.path(), session.as_str())).expect("state");
+        assert!(
+            state
+                .owned_resources
+                .iter()
+                .all(|resource| !resource.active)
+        );
     }
 
     #[test]

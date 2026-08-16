@@ -1703,6 +1703,7 @@ fn execute_production_implementer(
         .map_err(|error| error.to_string())?;
     bind_session_to_delegation(&mut session, &request.delegation, &request.attempt)
         .map_err(|error| error.to_string())?;
+    let result = (|| -> Result<WorkerRun, String> {
     request
         .team_context
         .clone()
@@ -1805,6 +1806,23 @@ fn execute_production_implementer(
         turns: session.turn,
         summary,
     })
+    })();
+    let stop_cause = if result.is_ok() {
+        "implementer worker completed"
+    } else {
+        "implementer worker stopped after execution failure"
+    };
+    let stop = engine
+        .stop_session_scope(&session, stop_cause)
+        .map_err(|error| error.to_string());
+    match (result, stop) {
+        (Ok(run), Ok(_)) => Ok(run),
+        (Err(error), Ok(_)) => Err(error),
+        (Ok(_), Err(stop_error)) => Err(format!("implementer scope teardown failed: {stop_error}")),
+        (Err(error), Err(stop_error)) => Err(format!(
+            "{error}; implementer scope teardown also failed: {stop_error}"
+        )),
+    }
 }
 
 #[cfg(test)]

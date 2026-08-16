@@ -694,6 +694,7 @@ fn execute_production_worker(
         .map_err(|error| error.to_string())?;
     bind_session_to_delegation(&mut session, &request.delegation, &request.attempt)
         .map_err(|error| error.to_string())?;
+    let result = (|| -> Result<WorkerEvidence, String> {
     request
         .team_context
         .clone()
@@ -789,6 +790,23 @@ fn execute_production_worker(
         turns: session.turn,
         summary,
     })
+    })();
+    let stop_cause = if result.is_ok() {
+        "read-only worker completed"
+    } else {
+        "read-only worker stopped after execution failure"
+    };
+    let stop = engine
+        .stop_session_scope(&session, stop_cause)
+        .map_err(|error| error.to_string());
+    match (result, stop) {
+        (Ok(evidence), Ok(_)) => Ok(evidence),
+        (Err(error), Ok(_)) => Err(error),
+        (Ok(_), Err(stop_error)) => Err(format!("worker scope teardown failed: {stop_error}")),
+        (Err(error), Err(stop_error)) => Err(format!(
+            "{error}; worker scope teardown also failed: {stop_error}"
+        )),
+    }
 }
 
 fn preflight_contracts(plan: &ProductionExecutionPlan) -> Vec<AgentContract> {
