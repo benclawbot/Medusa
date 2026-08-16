@@ -142,8 +142,11 @@ fn pending_team_instruction_survives_compaction_with_same_identity() {
     let session = engine
         .create_session(directory.path(), "implement".to_owned())
         .expect("create session");
-    let (_team, lead, worker) =
-        team_for_session(directory.path(), "team-compact-pending", session.id.as_str());
+    let (_team, lead, worker) = team_for_session(
+        directory.path(),
+        "team-compact-pending",
+        session.id.as_str(),
+    );
     lead.execute(
         "team_send_message",
         &json!({"recipient":"worker","body":"preserve through compaction"}),
@@ -182,8 +185,11 @@ fn model_visible_team_instruction_stays_consumed_after_compaction() {
     let session = bootstrap
         .create_session(directory.path(), "implement".to_owned())
         .expect("create session");
-    let (_team, lead, worker) =
-        team_for_session(directory.path(), "team-compact-visible", session.id.as_str());
+    let (_team, lead, worker) = team_for_session(
+        directory.path(),
+        "team-compact-visible",
+        session.id.as_str(),
+    );
     lead.execute(
         "team_send_message",
         &json!({"recipient":"worker","body":"consume once before compaction"}),
@@ -205,12 +211,9 @@ fn model_visible_team_instruction_stays_consumed_after_compaction() {
     );
 
     let manifest_ref = first_manifest_ref(&running);
-    let audit = inspect_effective_model_request(
-        directory.path(),
-        session.id.as_str(),
-        &manifest_ref,
-    )
-    .expect("inspect effective request");
+    let audit =
+        inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest_ref)
+            .expect("inspect effective request");
     assert_eq!(audit["delivered_action_ids"], json!([action_id.clone()]));
     assert!(
         !worker
