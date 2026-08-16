@@ -816,23 +816,14 @@ pub fn admit_team_instruction(
 ) -> MedusaResult<String> {
     let mut session = load(repo, session_id)?;
     let action_id = deterministic_action_id(session_id, idempotency_key);
-    let action = SessionAction {
-        action_id: action_id.clone(),
-        idempotency_key: idempotency_key.to_owned(),
-        source: format!("team:{sender}:{recipient}"),
-        target_session_id: session_id.to_owned(),
-        expected_session_revision: session.events.last().map_or(0, |event| event.sequence),
-        kind: SessionActionKind::Steer,
-        delivery_policy: SessionActionDeliveryPolicy::NextSafeTurnBoundary,
-        wake_policy: SessionActionWakePolicy::OnBoundary,
-        payload: json!({
-            "text": body,
-            "team": {
-                "sender": sender,
-                "recipient": recipient,
-            }
-        }),
-    };
+    let source = format!("team:{sender}:{recipient}");
+    let payload = json!({
+        "text": body,
+        "team": {
+            "sender": sender,
+            "recipient": recipient,
+        }
+    });
     if let Some(existing) = session
         .events
         .iter()
@@ -845,13 +836,31 @@ pub fn admit_team_instruction(
             _ => None,
         })
     {
-        if existing == &action {
+        let same_instruction = existing.action_id == action_id
+            && existing.source == source
+            && existing.target_session_id == session_id
+            && existing.kind == SessionActionKind::Steer
+            && existing.delivery_policy == SessionActionDeliveryPolicy::NextSafeTurnBoundary
+            && existing.wake_policy == SessionActionWakePolicy::OnBoundary
+            && existing.payload == payload;
+        if same_instruction {
             return Ok(existing.action_id.clone());
         }
         return Err(invalid(
             "team instruction idempotency key was reused for a different session action",
         ));
     }
+    let action = SessionAction {
+        action_id: action_id.clone(),
+        idempotency_key: idempotency_key.to_owned(),
+        source,
+        target_session_id: session_id.to_owned(),
+        expected_session_revision: session.events.last().map_or(0, |event| event.sequence),
+        kind: SessionActionKind::Steer,
+        delivery_policy: SessionActionDeliveryPolicy::NextSafeTurnBoundary,
+        wake_policy: SessionActionWakePolicy::OnBoundary,
+        payload,
+    };
     append_event(
         &mut session,
         Actor::Worker(sender.to_owned()),
