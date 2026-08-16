@@ -26,9 +26,11 @@ use crate::{
     session::{load, persist},
 };
 
+type TeamControlSessionKey = (String, String, PathBuf);
+type TeamControlSessionRegistry = BTreeMap<TeamControlSessionKey, String>;
+
 static TEAM_REPOSITORIES: OnceLock<Mutex<BTreeMap<String, BTreeSet<PathBuf>>>> = OnceLock::new();
-static TEAM_CONTROL_SESSIONS: OnceLock<Mutex<BTreeMap<(String, String, PathBuf), String>>> =
-    OnceLock::new();
+static TEAM_CONTROL_SESSIONS: OnceLock<Mutex<TeamControlSessionRegistry>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -790,13 +792,12 @@ fn control_session(
             ))
             .cloned());
     }
-    let mut matches =
-        registry
-            .iter()
-            .filter_map(|((candidate_execution, candidate_worker, _), session_id)| {
-                (candidate_execution == execution_id && candidate_worker == worker_id)
-                    .then(|| session_id.clone())
-            });
+    let mut matches = registry
+        .iter()
+        .filter(|((candidate_execution, candidate_worker, _), _)| {
+            candidate_execution == execution_id && candidate_worker == worker_id
+        })
+        .map(|(_, session_id)| session_id.clone());
     let first = matches.next();
     if matches.next().is_some() {
         return Err(format!(
