@@ -783,15 +783,20 @@ fn control_session(
         .map_err(|_| "team control session registry lock was poisoned".to_owned())?;
     if let Some(repo) = repo {
         return Ok(registry
-            .get(&(execution_id.to_owned(), worker_id.to_owned(), repo.to_path_buf()))
+            .get(&(
+                execution_id.to_owned(),
+                worker_id.to_owned(),
+                repo.to_path_buf(),
+            ))
             .cloned());
     }
-    let mut matches = registry
-        .iter()
-        .filter_map(|((candidate_execution, candidate_worker, _), session_id)| {
-            (candidate_execution == execution_id && candidate_worker == worker_id)
-                .then(|| session_id.clone())
-        });
+    let mut matches =
+        registry
+            .iter()
+            .filter_map(|((candidate_execution, candidate_worker, _), session_id)| {
+                (candidate_execution == execution_id && candidate_worker == worker_id)
+                    .then(|| session_id.clone())
+            });
     let first = matches.next();
     if matches.next().is_some() {
         return Err(format!(
