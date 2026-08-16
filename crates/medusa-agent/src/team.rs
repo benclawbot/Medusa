@@ -26,8 +26,9 @@ use crate::{
     session::{load, persist},
 };
 
-static TEAM_REPOSITORIES: OnceLock<Mutex<BTreeMap<String, PathBuf>>> = OnceLock::new();
-static TEAM_CONTROL_SESSIONS: OnceLock<Mutex<BTreeMap<(String, String), String>>> = OnceLock::new();
+static TEAM_REPOSITORIES: OnceLock<Mutex<BTreeMap<String, BTreeSet<PathBuf>>>> = OnceLock::new();
+static TEAM_CONTROL_SESSIONS: OnceLock<Mutex<BTreeMap<(String, String, PathBuf), String>>> =
+    OnceLock::new();
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -457,17 +458,12 @@ impl TeamRuntime {
         };
         let team_id = self.lock()?.team_id.clone();
         let registry = TEAM_REPOSITORIES.get_or_init(|| Mutex::new(BTreeMap::new()));
-        let mut registry = registry
+        registry
             .lock()
-            .map_err(|_| "team repository registry lock was poisoned".to_owned())?;
-        if let Some(existing) = registry.get(&team_id)
-            && existing != repo
-        {
-            return Err(format!(
-                "team `{team_id}` is already bound to a different repository"
-            ));
-        }
-        registry.insert(team_id, repo.clone());
+            .map_err(|_| "team repository registry lock was poisoned".to_owned())?
+            .entry(team_id)
+            .or_default()
+            .insert(repo.clone());
         Ok(())
     }
 
@@ -578,12 +574,7 @@ impl TeamMemberContext {
             return Ok(Some(session_id));
         }
         drop(state);
-        let registry = TEAM_CONTROL_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
-        Ok(registry
-            .lock()
-            .map_err(|_| invalid("team control session registry lock was poisoned"))?
-            .get(&(team_id, self.member_id.clone()))
-            .cloned())
+        control_session(&team_id, &self.member_id, self.team.repo.as_deref()).map_err(invalid)
     }
 
     fn pending_session_instructions(&self) -> MedusaResult<String> {
@@ -684,7 +675,11 @@ impl TeamMemberContext {
             .session_id
             .clone()
             .filter(|session_id| session_id != "starting")
-            .or_else(|| control_session(&state.team_id, recipient).ok().flatten());
+            .or_else(|| {
+                control_session(&state.team_id, recipient, self.team.repo.as_deref())
+                    .ok()
+                    .flatten()
+            });
         let authorized_instruction = sender.role == TeamRole::Lead
             && recipient_member.role != TeamRole::Lead
             && destination_session_id.is_some();
@@ -765,24 +760,71 @@ pub fn bind_control_session(
     {
         return Err("team execution, worker, and session identities are required".to_owned());
     }
+    let repo = repository_for_session(execution_id, session_id)?;
     let registry = TEAM_CONTROL_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
     registry
         .lock()
         .map_err(|_| "team control session registry lock was poisoned".to_owned())?
         .insert(
-            (execution_id.to_owned(), worker_id.to_owned()),
+            (execution_id.to_owned(), worker_id.to_owned(), repo),
             session_id.to_owned(),
         );
     Ok(())
 }
 
-fn control_session(execution_id: &str, worker_id: &str) -> Result<Option<String>, String> {
+fn control_session(
+    execution_id: &str,
+    worker_id: &str,
+    repo: Option<&Path>,
+) -> Result<Option<String>, String> {
     let registry = TEAM_CONTROL_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    Ok(registry
+    let registry = registry
         .lock()
-        .map_err(|_| "team control session registry lock was poisoned".to_owned())?
-        .get(&(execution_id.to_owned(), worker_id.to_owned()))
-        .cloned())
+        .map_err(|_| "team control session registry lock was poisoned".to_owned())?;
+    if let Some(repo) = repo {
+        return Ok(registry
+            .get(&(execution_id.to_owned(), worker_id.to_owned(), repo.to_path_buf()))
+            .cloned());
+    }
+    let mut matches = registry
+        .iter()
+        .filter_map(|((candidate_execution, candidate_worker, _), session_id)| {
+            (candidate_execution == execution_id && candidate_worker == worker_id)
+                .then(|| session_id.clone())
+        });
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err(format!(
+            "team execution `{execution_id}` has ambiguous worker session bindings for `{worker_id}`"
+        ));
+    }
+    Ok(first)
+}
+
+fn repository_for_session(execution_id: &str, session_id: &str) -> Result<PathBuf, String> {
+    let registry = TEAM_REPOSITORIES.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let candidates = registry
+        .lock()
+        .map_err(|_| "team repository registry lock was poisoned".to_owned())?
+        .get(execution_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!("team execution `{execution_id}` has no durable repository binding")
+        })?;
+    let mut matches = candidates
+        .into_iter()
+        .filter(|repo| load(repo, session_id).is_ok());
+    let first = matches.next().ok_or_else(|| {
+        format!(
+            "team execution `{execution_id}` has no durable repository containing session `{session_id}`"
+        )
+    })?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "team execution `{execution_id}` has ambiguous repository bindings for session `{session_id}`"
+        ));
+    }
+    Ok(first)
 }
 
 /// Admits one runtime team-control instruction through the canonical worker session action plane.
@@ -793,15 +835,7 @@ pub fn admit_control_instruction(
     body: &str,
     idempotency_key: &str,
 ) -> Result<String, String> {
-    let registry = TEAM_REPOSITORIES.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let repo = registry
-        .lock()
-        .map_err(|_| "team repository registry lock was poisoned".to_owned())?
-        .get(execution_id)
-        .cloned()
-        .ok_or_else(|| {
-            format!("team execution `{execution_id}` has no durable repository binding")
-        })?;
+    let repo = repository_for_session(execution_id, session_id)?;
     admit_team_instruction(&repo, session_id, "lead", recipient, body, idempotency_key)
         .map_err(|error| error.to_string())
 }
