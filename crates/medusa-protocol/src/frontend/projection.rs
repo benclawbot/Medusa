@@ -200,6 +200,14 @@ pub fn project_event(
             Vec::new(),
             None,
         )),
+        EventPayload::ModelRequestFailed { .. } => FrontendEvent::Activity(activity(
+            event,
+            PresentationActivityKind::Assistant,
+            PresentationLifecycle::Failed,
+            "Model request failed".to_owned(),
+            Vec::new(),
+            None,
+        )),
         EventPayload::ModelResponseReceived { usage, .. } => {
             let input_tokens = integer(usage, &["input_tokens", "inputTokens"]);
             let output_tokens = integer(usage, &["output_tokens", "outputTokens"]);
