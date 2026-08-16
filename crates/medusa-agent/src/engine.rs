@@ -821,7 +821,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         let request_started = std::time::Instant::now();
         let audit_repo = session.repo.clone();
         let audit_session_id = session.id.to_string();
-        let mut before_provider_attempt = |attempt| {
+        let mut before_provider_attempt = |attempt: &medusa_provider::ProviderAttemptDescriptor| {
             effective_request::persist_provider_attempt(
                 &audit_repo,
                 &audit_session_id,
@@ -1160,7 +1160,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         let audit_session_id = session.id.to_string();
         macro_rules! complete_request {
             ($request:expr, $manifest:expr) => {{
-                let mut before_provider_attempt = |attempt| {
+                let mut before_provider_attempt = |attempt: &medusa_provider::ProviderAttemptDescriptor| {
                     effective_request::persist_provider_attempt(
                         &audit_repo,
                         &audit_session_id,
