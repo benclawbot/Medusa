@@ -205,7 +205,8 @@ pub(crate) fn persist_before_provider_call(
             }
             EventPayload::SessionActionAccepted { action }
                 if action.source.starts_with("team:")
-                    && !already_linked.contains(action.action_id.as_str()) =>
+                    && !already_linked.contains(action.action_id.as_str())
+                    && request.system.contains(&action.action_id) =>
             {
                 Some(action.action_id.clone())
             }
