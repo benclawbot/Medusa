@@ -1,0 +1,35 @@
+name: Issue 890 acceptance regressions
+on:
+  push:
+    branches: [codex/issue-890-model-request-policy]
+    paths:
+      - scripts/issue890_acceptance_tests.py
+      - .github/workflows/issue-890-acceptance-tests.yml
+permissions:
+  contents: write
+jobs:
+  test-and-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-890-model-request-policy
+          fetch-depth: 0
+      - run: python3 scripts/issue890_acceptance_tests.py
+      - run: cargo fmt --all
+      - run: rm scripts/issue890_acceptance_tests.py .github/workflows/issue-890-acceptance-tests.yml
+      - name: Commit acceptance tests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add effective request acceptance regressions"
+          git push origin HEAD:codex/issue-890-model-request-policy
+      - name: Effective request integration tests
+        run: cargo test -p medusa-agent --test effective_request_manifest --locked -- --nocapture
+      - name: Clippy full workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Provider tests
+        run: cargo test -p medusa-provider --locked
+      - name: Runtime tests
+        run: cargo test -p medusa-runtime --locked
