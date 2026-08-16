@@ -90,6 +90,14 @@ jobs:
           if old not in text:
               raise SystemExit('execute_attempts repo parameter anchor not found')
           path.write_text(text.replace(old, new, 1))
+
+          path = Path('crates/medusa-runtime/src/delegation_contract.rs')
+          text = path.read_text()
+          old = '            delegation_depth: 1,'
+          new = '            delegation_depth: 0,'
+          if old not in text:
+              raise SystemExit('delegation depth anchor not found')
+          path.write_text(text.replace(old, new, 1))
           PY
           cargo fmt --all
           cargo check -p medusa-agent -p medusa-runtime --all-targets --locked
