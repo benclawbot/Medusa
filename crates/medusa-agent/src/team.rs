@@ -131,7 +131,8 @@ pub struct AgentExecutionPolicy {
 }
 
 impl AgentExecutionPolicy {
-    #[must_use]\n    pub fn unrestricted() -> Self {
+    #[must_use]
+    pub fn unrestricted() -> Self {
         Self {
             allowed_tools: None,
             allow_user_questions: true,
