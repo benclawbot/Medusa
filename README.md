@@ -14,6 +14,8 @@ The product model is **Plan, Execute Safely, Recover**:
 
 **Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, and effective model-request manifests are shipped. Voice and Telegram implementation foundations are present but their real account/hardware acceptance remains quarantined. Browser model actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled. Activation requires `MEDUSA_BROWSER_ENABLED=true`, an explicit `MEDUSA_BROWSER_PATH`, and an admitted `MEDUSA_BROWSER_VERIFY_URL`. The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
 
+Recent `main` work also ships continuous verification with exact-state reuse and drift invalidation, durable coding trajectory and structured repair recovery, evidence-ranked repository context, typed executable skill packages, a certified tool-execution lifecycle, governed continual refinement, read-only live-session observation, scheduled durable actions, and shared semantic execution reporting.
+
 **Out of scope today:** autonomous nested delegation, unconstrained model-driven agent teams, consensus voting, distributed multi-host mutation transactions, non-Git parallel mutation, and any browser, voice, or remote-frontend claim that lacks its required authenticated live evidence.
 
 ---
@@ -130,11 +132,11 @@ medusa --fresh
 
 `--repo` is retained as the CLI flag for compatibility; the selected path is a **workspace root** and does not need to contain `.git`.
 
-The TUI presents the shared runtime event stream as a conversation and activity timeline. It supports plans, questions, approvals, queued follow-ups, cancellation, session resume, settings, usage metrics, clipboard/file/image attachments, recovery views, team activity, and realtime voice controls.
+The TUI presents the shared runtime event stream as a conversation and activity timeline. It supports plans, questions, approvals, queued follow-ups, cancellation, session resume, settings, usage metrics, clipboard/file/image attachments, recovery views, team activity, and realtime voice controls. First-run provider setup and `/settings` use the shared provider/model catalog and revision-aware configuration authority, including staged review/apply, diagnostics, deterministic repair where possible, and rollback/history rather than a separate terminal-only configuration store.
 
 ### Desktop application
 
-The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and desktop-native voice controls.
+The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and desktop-native voice controls. Guided first-run onboarding, model discovery/selection, provider defaults, and image-input capability detection consume the same canonical provider/model metadata used by the runtime instead of maintaining independent frontend truth.
 
 ### Telegram
 
@@ -341,7 +343,7 @@ medusa --set agent.max_turns=100
 medusa --set verification.browser_on_ui_change=false
 ```
 
-Configuration commands include `medusa config init`, `show`, `edit`, `get`, `set`, `unset`, `validate`, `doctor`, `reset`, and named profile management. See [Configuration](docs/CONFIGURATION.md) for the canonical schema and migration notes.
+Configuration commands include `medusa config init`, `show`, `edit`, `get`, `set`, `unset`, `validate`, `doctor`, `reset`, and named profile management. Interactive TUI and Desktop configuration consume the same provider catalog/model registry and revisioned profile authority; staged edits can be reviewed before apply and known-good configuration history can be rolled back without exposing credentials. See [Configuration](docs/CONFIGURATION.md) for the canonical schema and migration notes.
 
 ## Capabilities and strengths
 
@@ -364,6 +366,10 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 
 - workspace and file discovery;
 - bounded text and symbol search;
+- evidence-ranked repository snapshots rebuilt from current repository state for coding turns, including exact symbol/caller/reference ranges, protected policy context, omission reasons, and stable content fingerprints;
+- durable coding trajectory across compaction/resume, preserving objective, constraints, relevant/modified paths, decisions, verification requirements, failures, blockers, external evidence, and repository identity while invalidating stale assumptions on drift;
+- structured repair ledgers that aggregate and deduplicate diagnostics, retain exact expansion references, link common-root/cascade failures, and track repair attempts and resolution state across verification generations;
+- bounded adaptive roadblock recovery that classifies non-progress, suppresses equivalent failed strategies, ranks materially different admissible alternatives, and escalates explicitly when bounded strategy transitions are exhausted;
 - context retrieval and turn assembly;
 - goals, progress, confidence, continuation, escalation, and failure tracking;
 - changed-symbol/component and affected-file analysis where semantic repository evidence exists;
@@ -380,6 +386,8 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 - transactional per-agent scopes with explicit prepare/publish/stop lifecycle and resource ownership;
 - durable worker/team instructions admitted through session delivery semantics rather than a separate model-context mailbox authority;
 - effective model-request manifests persisted before provider calls, including request/provider/scope fingerprints, source-event linkage, delivered session actions, compaction provenance, and tool-schema fingerprints;
+- bounded speculative implementation for eligible resolved-scope work, where isolated preparation may overlap upstream review but promotion still fails closed on exact assumptions, repository/scope/policy/dependency evidence, cancellation, and recovery state;
+- shared semantic execution reporting that derives progress, completion, verification, blockers, recovery, implementation scope, and final results from canonical journal evidence for consistent frontend projections;
 - durable worker leases, epochs, task evidence, child acceptance, aggregate barriers, and cleanup;
 - dedicated zero-tool parent review, independent verification, authorization, guarded integration, and reconciliation;
 - authoritative primary workspace verification gate.
@@ -388,11 +396,16 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 
 Provider selection is explicit and role-aware. `model.role_routes` can pin planner, implementer, reviewer, repair, summarization, or formatting phases to configured primary/fallback profiles without silently replacing a user-pinned route. Cross-model context uses the provider-neutral `ReasoningHandoffV1` contract for bounded visible decisions/evidence/verification state; provider-native continuation state remains separately bound to its exact provider/protocol/route/model/session and fails closed when incompatible.
 
+When no user pin overrides route choice, the provider manager can use durable route telemetry for latency, throughput, retry recovery, error categories, downstream verified success, and externally supplied monetary cost. Bounded hedging is eligibility- and budget-gated, publishes only one authoritative winner, and preserves ordinary retry/failover when a hedge is inadmissible or unsuccessful.
+
 ### Tools and integrations
 
 - guarded workspace file operations;
 - Git-aware change and integration workflows where Git is present;
 - policy-controlled command execution;
+- a certified typed tool-execution lifecycle with fixed stages, monotonic guard denials, explicit approval state, cancellation normalization, deterministic input fingerprints, and immutable resolved-handler identity across production dispatch paths;
+- typed executable skill packages with declared capabilities, repository/network scope, side effects, artifacts, typed JSON I/O, resource budgets, digest-bound validation receipts, contained execution, and fail-closed stale/missing validation;
+- a contained per-session analysis workspace for bounded persistent analytical state and fixed-reducer execution without granting repository mutation, credentials, ambient network, or independent provider authority;
 - required UI-change browser verification through the internal sidecar; model browser actions are a readiness-gated, explicit-opt-in preview with a certified dispatcher and are not default-enabled;
 - image/file prompt attachments when provider capabilities permit;
 - MCP and extension boundaries;
@@ -401,15 +414,21 @@ Provider selection is explicit and role-aware. `model.role_routes` can pin plann
 
 ### Verification
 
-After mutation, Medusa can inspect typed changed components, select impacted checks, run broader checks when narrow selection would be unsafe, require visible UI evidence for effective interface changes, record evidence/overrides/results, and reject completion when required evidence is absent or failed. Directory artifacts without a declared project-level verification command are reported truthfully rather than pretending a command ran; candidate identity, scope, review, independent verification, integration, and resulting tree identity are still enforced.
+After mutation, Medusa can inspect typed changed components, select impacted checks, run broader checks when narrow selection would be unsafe, require visible UI evidence for effective interface changes, record evidence/overrides/results, and reject completion when required evidence is absent or failed. A durable verification-completion contract binds required evidence to exact repository state, invalidates scoped evidence after mutation, preserves explicit unavailable/waived/superseded dispositions, and blocks `Completed` until required evidence is fresh.
+
+Authoritative verification executes dependency-aware DAG waves, persists restart-safe checkpoints, reuses prior receipts and warm resources only when complete input/provenance identity still matches, cancels obsolete process trees on repository drift, and retries against refreshed state rather than accepting stale results. The same-model coding harness benchmark corpus protects correctness, verification, resilience, context/recovery quality, and promotion decisions from harness regressions. Directory artifacts without a declared project-level verification command are reported truthfully rather than pretending a command ran; candidate identity, scope, review, independent verification, integration, and resulting tree identity are still enforced.
 
 ### Memory and learning
 
 Medusa supports workspace-scoped Markdown memory, bounded recall with provenance, memory consolidation/writeback, verified-session learning/probationary lessons, failure history/negative outcomes, and a rule that optimistic or unverified completion cannot become accepted positive experience.
 
+Continual refinement is evidence-gated: typed proposals preserve provenance, deterministic evaluation and explicit approval precede activation, security/authority roots stay outside refinable content, activation history is append-only, and exact rollback is retained. User corrections and accepted runtime signals feed a privacy-filtered typed provenance graph and evaluated correction loop rather than self-activating directly. Effectiveness monitoring attributes outcomes only to actually selected refinements, keeps confounded evidence explicit, decays confidence on drift, and can route harmful refinements to rollback; capability, policy, harness, evaluator, and other protected-boundary changes still go through ordinary engineering review.
+
 ### Observability and resilience
 
-Typed runtime events cover usage, progress, activity, team, plan, question, completion, cancellation, failure, and recovery state. Process registry/supervision, checkpoints, replay, time travel, transactions, continuity, deterministic cancellation/resource cleanup, and privacy-safe diagnostics provide the recovery foundation.
+Typed runtime events cover usage, progress, activity, team, plan, question, completion, cancellation, failure, and recovery state. Shared execution reporting collapses low-level activity into deterministic semantic updates across Headless, TUI, Desktop, Telegram, and future frontends. Read-only live-session observation reconstructs bounded stage/plan/tool/file/verification/blocker state from the durable journal, and side questions over that snapshot cannot steer, mutate, approve, or cancel the primary run.
+
+Scheduled timer/heartbeat/file/process/external-signal wakeups enter the same durable session-action authority with idempotent occurrence provenance and explicit busy-session semantics instead of creating a scheduler-owned prompt queue. Process registry/supervision, generation-bound process identity, checkpoints, replay, time travel, transactions, continuity, deterministic cancellation/resource cleanup, operational health/support bundles, repository-wide lifecycle/privacy certification, and resilience fault campaigns provide the recovery foundation.
 
 ## Architecture
 
@@ -506,6 +525,10 @@ Workspace-local state lives under `.medusa`. Durable authority categories includ
 - worker/team session actions and model-visibility linkage;
 - immutable delegation contracts and retry/attempt bindings;
 - transactional agent-scope contracts, generations, lifecycle, revocations, and owned-resource state;
+- coding trajectory checkpoints, structured repair ledgers, Compaction Manifest V2 records, and advisory fingerprint-bound abandoned-branch summaries;
+- verification DAG checkpoints, exact-state reusable verification receipts, warm-resource descriptors, and repository-drift invalidation evidence;
+- continual-refinement proposals/activation history, correction-loop episodes, privacy-filtered provenance/effectiveness evidence, and rollback state;
+- scheduled trigger occurrence/dispatch provenance admitted into durable session actions;
 - worker leases, epochs, isolated candidates, Git commit or directory snapshot receipts;
 - checkpoints, replay, time travel, transaction/review/authorization/rollback records;
 - failure/recovery decisions, memory/learning, and frontend continuity.
@@ -535,7 +558,7 @@ Platform support does not imply identical containment, audio, browser, credentia
 
 ## Roadmap
 
-Repository implementation work that the previous README listed as future roadmap items has landed on `main`, including long-context/compaction work, analysis workspace and branch-summary support, skills/refinement/observer/scheduled-action work, resilience/privacy/operational hardening, self-improvement integration, continuous verification/resource warming, bounded speculative implementation, and durable-journal/runtime hot-path work.
+Repository implementation work that the previous README listed as future roadmap items has landed on `main`, including long-context/compaction work, analysis workspace and branch-summary support, skills/refinement/observer/scheduled-action work, resilience/privacy/operational hardening, self-improvement integration, continuous verification/resource warming, bounded speculative implementation, coding trajectory/repair recovery, certified tool execution, durable worker instruction/request authority, transactional agent scopes, immutable delegation retries, and durable-journal/runtime hot-path work.
 
 The remaining manual/live acceptance tracked for shipped-but-quarantined remote/voice functionality is:
 
@@ -555,6 +578,13 @@ GitHub issues are the source of truth for newly opened work; the README does not
 - [Provider support](docs/PROVIDER-SUPPORT.md)
 - [Capability claims](docs/CAPABILITY-CLAIMS.json)
 - [Capability evidence](docs/CAPABILITY-EVIDENCE.md)
+- [Session action plane](docs/architecture/session-action-plane.md)
+- [Durable journal policy](docs/durable-journal-policy.md)
+- [Repository indexing](docs/repository-indexing.md)
+- [Tool execution pipeline](docs/TOOL-EXECUTION-PIPELINE.md)
+- [Refinement authority migration](docs/refinement-authority-migration.md)
+- [Resilience certification](docs/resilience-certification.md)
+- [Data lifecycle certification](docs/data-lifecycle-certification.md)
 - [Benchmarks](docs/BENCHMARKS.md)
 - [Observability](docs/OBSERVABILITY.md)
 - [Security hardening](docs/SECURITY-HARDENING.md)
