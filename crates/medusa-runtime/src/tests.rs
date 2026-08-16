@@ -136,6 +136,11 @@ fn provider_usage_forwards_legacy_and_normalized_telemetry() {
         &AgentUpdate::Event(EventPayload::ModelRequestStarted {
             provider: "minimax".to_owned(),
             model: "MiniMax-M3".to_owned(),
+            request_id: None,
+            request_fingerprint: None,
+            manifest_ref: None,
+            attempt_ordinal: 0,
+            parent_request_id: None,
         }),
         &sender,
         &mut state,
@@ -143,6 +148,8 @@ fn provider_usage_forwards_legacy_and_normalized_telemetry() {
     forward_update(
         &AgentUpdate::Event(EventPayload::ModelResponseReceived {
             response_id: Some("legacy-response".to_owned()),
+            request_id: None,
+            request_fingerprint: None,
             usage: json!({
                 "input_tokens": 120,
                 "output_tokens": 30,
@@ -171,6 +178,8 @@ fn provider_usage_forwards_legacy_and_normalized_telemetry() {
     forward_update(
         &AgentUpdate::Event(EventPayload::ModelResponseReceived {
             response_id: Some("normalized-response".to_owned()),
+            request_id: None,
+            request_fingerprint: None,
             usage: json!({
                 "turn": 2,
                 "input_tokens": 10,
