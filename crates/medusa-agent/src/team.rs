@@ -345,7 +345,7 @@ impl TeamRuntime {
                 next_sequence: 1,
             })),
         };
-        validate_state(&runtime.lock()?)?;
+        validate_state(&*runtime.lock()?)?;
         runtime.persist()?;
         Ok(runtime)
     }
