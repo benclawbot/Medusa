@@ -342,6 +342,94 @@ fn multiple_instructions_preserve_durable_order_across_restart() {
 }
 
 #[test]
+fn lead_instruction_rejects_worker_without_durable_session() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let team = TeamRuntime::create(
+        directory.path().join(".medusa/executions/team-unpublished/team.json"),
+        "team-unpublished",
+        vec![
+            ("lead".to_owned(), TeamRole::Lead),
+            ("worker".to_owned(), TeamRole::Implementer),
+        ],
+    )
+    .expect("team runtime");
+    let lead = team.member_context("lead").expect("lead context");
+    let error = lead
+        .execute(
+            "team_send_message",
+            &serde_json::json!({"recipient":"worker","body":"do not downgrade this"}),
+        )
+        .expect_err("unpublished worker must reject instruction");
+    assert!(error.to_string().contains("no durable worker session"));
+}
+
+#[test]
+fn lead_instruction_rejects_terminal_worker_without_session_mutation() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let engine = AgentEngine::new(NoopProvider, Config::default());
+    let session = engine
+        .create_session(directory.path(), "implement".to_owned())
+        .expect("create session");
+    let (team, lead, _worker) =
+        team_for_session(directory.path(), "team-terminal", session.id.as_str());
+    team.finish_member("worker", true).expect("fail worker");
+
+    let error = lead
+        .execute(
+            "team_send_message",
+            &serde_json::json!({"recipient":"worker","body":"too late"}),
+        )
+        .expect_err("terminal worker must reject instruction");
+    assert!(error.to_string().contains("terminal or shutting down"));
+
+    let restored = engine
+        .load_session(directory.path(), session.id.as_str())
+        .expect("restore worker session");
+    assert!(!restored.events.iter().any(|event| matches!(
+        event.payload,
+        EventPayload::SessionActionAccepted { .. }
+    )));
+}
+
+#[test]
+fn ambiguous_multiple_leads_cannot_admit_worker_instruction() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let engine = AgentEngine::new(NoopProvider, Config::default());
+    let session = engine
+        .create_session(directory.path(), "implement".to_owned())
+        .expect("create session");
+    let team = TeamRuntime::create(
+        directory.path().join(".medusa/executions/team-ambiguous-lead/team.json"),
+        "team-ambiguous-lead",
+        vec![
+            ("lead-a".to_owned(), TeamRole::Lead),
+            ("lead-b".to_owned(), TeamRole::Lead),
+            ("worker".to_owned(), TeamRole::Implementer),
+        ],
+    )
+    .expect("team runtime");
+    team.start_member("worker", "task-1", session.id.as_str())
+        .expect("start worker");
+    let error = team
+        .member_context("lead-a")
+        .expect("lead context")
+        .execute(
+            "team_send_message",
+            &serde_json::json!({"recipient":"worker","body":"ambiguous parent"}),
+        )
+        .expect_err("ambiguous lead authority must reject instruction");
+    assert!(error.to_string().contains("does not have exactly one lead"));
+
+    let restored = engine
+        .load_session(directory.path(), session.id.as_str())
+        .expect("restore worker session");
+    assert!(!restored.events.iter().any(|event| matches!(
+        event.payload,
+        EventPayload::SessionActionAccepted { .. }
+    )));
+}
+
+#[test]
 fn team_instruction_is_model_visible_in_exactly_one_effective_request() {
     let directory = tempfile::tempdir().expect("temporary repository");
     let bootstrap = AgentEngine::new(NoopProvider, Config::default());
