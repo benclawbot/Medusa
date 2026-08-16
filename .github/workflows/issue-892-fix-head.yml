@@ -1,0 +1,51 @@
+name: Issue 892 fix head
+
+on:
+  push:
+    branches:
+      - codex/issue-892-worker-message-delivery
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/issue-892-worker-message-delivery
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Fix test shadowing and format
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-runtime/src/team_control.rs')
+          text = path.read_text()
+          old = '''        let control = control();
+        control
+            .start("worker-a", Some("session-a"), "running")
+            .unwrap_err();
+        let control = control();
+        control.stop_worker("worker-a").unwrap();'''
+          new = '''        let unpublished = control();
+        unpublished
+            .start("worker-a", Some("session-a"), "running")
+            .unwrap_err();
+        let control = control();
+        control.stop_worker("worker-a").unwrap();'''
+          if old not in text:
+              raise SystemExit('expected team_control test block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          rm .github/workflows/issue-892-fix-head.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/team_control.rs crates/medusa-agent/src/team.rs .github/workflows/issue-892-fix-head.yml
+          git diff --cached --check
+          git commit -m 'Fix durable steering validation regressions'
+          git push origin HEAD:codex/issue-892-worker-message-delivery
