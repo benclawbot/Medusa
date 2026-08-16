@@ -281,6 +281,12 @@ impl TeamControlPlane {
         Ok(snapshot(&state))
     }
 
+    /// Temporary compatibility hook for worker loops that still poll the retired process queue.
+    /// Durable session actions are authoritative, so there is never a process-local instruction.
+    pub fn take_instruction(&self, _worker_id: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
     pub fn stop_worker(&self, worker_id: &str) -> Result<TeamSnapshot, String> {
         let mut state = self.lock();
         let worker = state
