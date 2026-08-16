@@ -1,20 +1,30 @@
 //! Shared team coordination tools for independent agent sessions.
 //!
-//! The durable scheduler and lease controller remain authoritative for task state. This
-//! module owns only team membership, lifecycle, and mailbox state, and exposes that state
-//! to role-bound `AgentEngine` instances through deterministic tools.
+//! The durable scheduler and lease controller remain authoritative for task state. Team state is
+//! a coordination projection only: instructions that can affect worker reasoning are admitted to
+//! the destination `AgentSession` as canonical `SessionAction`s.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_protocol::{
+    Actor, EventPayload, SessionAction, SessionActionDeliveryPolicy, SessionActionKind,
+    SessionActionWakePolicy,
+};
 use medusa_provider::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+use crate::{
+    evidence::append_event,
+    session::{load, persist},
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,13 +64,35 @@ pub struct TeamMember {
     pub session_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TeamMessageDeliveryState {
+    #[default]
+    Queued,
+    ActionAccepted,
+    CoordinationOnly,
+    Acknowledged,
+    LegacyQueued,
+    LegacyAcknowledged,
+    Rejected,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TeamMessage {
     pub sequence: u64,
+    #[serde(default)]
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<String>,
     pub from: String,
     pub to: String,
     pub body: String,
-    pub delivered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_session_id: Option<String>,
+    #[serde(default)]
+    pub delivery_state: TeamMessageDeliveryState,
+    #[serde(default, rename = "delivered", skip_serializing)]
+    legacy_delivered: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -74,6 +106,7 @@ struct DurableTeamState {
 #[derive(Clone)]
 pub struct TeamRuntime {
     path: PathBuf,
+    repo: Option<PathBuf>,
     state: Arc<Mutex<DurableTeamState>>,
 }
 
@@ -252,6 +285,7 @@ impl Default for TeamRuntime {
     fn default() -> Self {
         Self {
             path: PathBuf::new(),
+            repo: None,
             state: Arc::new(Mutex::new(DurableTeamState {
                 team_id: String::new(),
                 members: BTreeMap::new(),
@@ -290,6 +324,7 @@ impl TeamRuntime {
             );
         }
         let runtime = Self {
+            repo: repository_from_team_path(&path),
             path,
             state: Arc::new(Mutex::new(DurableTeamState {
                 team_id,
@@ -298,21 +333,27 @@ impl TeamRuntime {
                 next_sequence: 1,
             })),
         };
-        validate_state(&*runtime.lock()?)?;
+        validate_state(&runtime.lock()?)?;
         runtime.persist()?;
         Ok(runtime)
     }
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, String> {
         let path = path.into();
-        let state: DurableTeamState =
+        let mut state: DurableTeamState =
             serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
                 .map_err(|error| error.to_string())?;
+        let migrated = migrate_legacy_messages(&mut state);
         validate_state(&state)?;
-        Ok(Self {
+        let runtime = Self {
+            repo: repository_from_team_path(&path),
             path,
             state: Arc::new(Mutex::new(state)),
-        })
+        };
+        if migrated {
+            runtime.persist()?;
+        }
+        Ok(runtime)
     }
 
     pub fn member_context(&self, member_id: &str) -> Result<TeamMemberContext, String> {
@@ -434,12 +475,12 @@ impl TeamMemberContext {
             ),
             tool(
                 "team_read_messages",
-                "Read messages delivered to this teammate. Messages are marked delivered.",
+                "Read observational team coordination messages and delivery receipts. Reading cannot make an instruction model-visible.",
                 json!({"type":"object","properties":{},"additionalProperties":false}),
             ),
             tool(
                 "team_send_message",
-                "Send a concise evidence-backed message to another teammate or to `lead`.",
+                "Send concise evidence or, when authorized by durable lead-to-worker lineage, admit an instruction into the worker session action plane.",
                 json!({
                     "type":"object",
                     "properties":{
@@ -476,10 +517,10 @@ impl TeamMemberContext {
 
     pub fn prompt_context(&self) -> MedusaResult<String> {
         let members = self.list_members()?;
-        let messages = self.peek_messages()?;
+        let instructions = self.pending_session_instructions()?;
         Ok(format!(
-            "You are teammate `{}`. Team coordination is authoritative through the team tools.\n{}\nUnread messages:\n{}",
-            self.member_id, members, messages
+            "You are teammate `{}`. Team membership below is coordination context only. Any instruction that can affect reasoning is authoritative only through a durable session action. Reading the team mailbox cannot acknowledge model visibility.\n{}\nDurable worker-session instructions pending for this request:\n{}",
+            self.member_id, members, instructions
         ))
     }
 
@@ -488,29 +529,71 @@ impl TeamMemberContext {
         serde_json::to_string_pretty(&state.members).map_err(Into::into)
     }
 
-    fn peek_messages(&self) -> MedusaResult<String> {
+    fn pending_session_instructions(&self) -> MedusaResult<String> {
         let state = self.team.lock().map_err(invalid)?;
-        let messages = state
-            .messages
+        let session_id = state
+            .members
+            .get(&self.member_id)
+            .and_then(|member| member.session_id.as_deref())
+            .filter(|session_id| *session_id != "starting");
+        let Some(session_id) = session_id else {
+            return Ok("[]".to_owned());
+        };
+        let Some(repo) = self.team.repo.as_deref() else {
+            return Ok("[]".to_owned());
+        };
+        let session = load(repo, session_id)?;
+        let linked = session
+            .events
             .iter()
-            .filter(|message| message.to == self.member_id && !message.delivered)
-            .cloned()
+            .filter_map(|event| match &event.payload {
+                EventPayload::SessionActionTranscriptLinked { action_id, .. } => {
+                    Some(action_id.as_str())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let pending = session
+            .events
+            .iter()
+            .filter_map(|event| match &event.payload {
+                EventPayload::SessionActionAccepted { action }
+                    if action.source.starts_with("team:")
+                        && !linked.contains(action.action_id.as_str()) =>
+                {
+                    action.payload.get("text").and_then(Value::as_str).map(|text| {
+                        json!({
+                            "action_id": action.action_id,
+                            "source": action.source,
+                            "text": text,
+                        })
+                    })
+                }
+                _ => None,
+            })
             .collect::<Vec<_>>();
-        serde_json::to_string_pretty(&messages).map_err(Into::into)
+        serde_json::to_string_pretty(&pending).map_err(Into::into)
     }
 
     fn read_messages(&self) -> MedusaResult<String> {
         let mut state = self.team.lock().map_err(invalid)?;
-        let mut delivered = Vec::new();
+        let mut visible = Vec::new();
         for message in &mut state.messages {
-            if message.to == self.member_id && !message.delivered {
-                message.delivered = true;
-                delivered.push(message.clone());
+            if message.to != self.member_id {
+                continue;
+            }
+            visible.push(message.clone());
+            if matches!(
+                message.delivery_state,
+                TeamMessageDeliveryState::CoordinationOnly
+                    | TeamMessageDeliveryState::LegacyQueued
+            ) {
+                message.delivery_state = TeamMessageDeliveryState::Acknowledged;
             }
         }
         drop(state);
         self.team.persist().map_err(invalid)?;
-        serde_json::to_string_pretty(&delivered).map_err(Into::into)
+        serde_json::to_string_pretty(&visible).map_err(Into::into)
     }
 
     fn send_message(&self, recipient: &str, body: &str) -> MedusaResult<String> {
@@ -518,24 +601,176 @@ impl TeamMemberContext {
             return Err(invalid("team message body cannot be empty"));
         }
         let mut state = self.team.lock().map_err(invalid)?;
-        if !state.members.contains_key(recipient) {
-            return Err(invalid(format!(
-                "unknown team message recipient: {recipient}"
-            )));
-        }
+        let sender = state
+            .members
+            .get(&self.member_id)
+            .cloned()
+            .ok_or_else(|| invalid(format!("unknown team message sender: {}", self.member_id)))?;
+        let recipient_member = state
+            .members
+            .get(recipient)
+            .cloned()
+            .ok_or_else(|| invalid(format!("unknown team message recipient: {recipient}")))?;
         let sequence = state.next_sequence;
         state.next_sequence = state.next_sequence.saturating_add(1);
-        state.messages.push(TeamMessage {
+        let idempotency_key = format!("team:{}:{sequence}", state.team_id);
+        let destination_session_id = recipient_member
+            .session_id
+            .clone()
+            .filter(|session_id| session_id != "starting");
+        let authorized_instruction = sender.role == TeamRole::Lead
+            && recipient_member.role != TeamRole::Lead
+            && destination_session_id.is_some();
+        let mut message = TeamMessage {
             sequence,
+            idempotency_key: idempotency_key.clone(),
+            action_id: None,
             from: self.member_id.clone(),
             to: recipient.to_owned(),
             body: body.to_owned(),
-            delivered: false,
-        });
+            destination_session_id: destination_session_id.clone(),
+            delivery_state: if authorized_instruction {
+                TeamMessageDeliveryState::Queued
+            } else {
+                TeamMessageDeliveryState::CoordinationOnly
+            },
+            legacy_delivered: None,
+        };
         drop(state);
-        self.team.persist().map_err(invalid)?;
-        Ok(format!("message {sequence} delivered to {recipient}"))
+
+        if authorized_instruction {
+            let repo = self.team.repo.as_deref().ok_or_else(|| {
+                invalid("team instruction cannot resolve the repository session authority")
+            })?;
+            let session_id = destination_session_id.as_deref().ok_or_else(|| {
+                invalid("team instruction destination has no durable worker session")
+            })?;
+            match admit_team_instruction(
+                repo,
+                session_id,
+                &self.member_id,
+                recipient,
+                body,
+                &idempotency_key,
+            ) {
+                Ok(action_id) => {
+                    message.action_id = Some(action_id.clone());
+                    message.delivery_state = TeamMessageDeliveryState::ActionAccepted;
+                }
+                Err(error) => {
+                    message.delivery_state = TeamMessageDeliveryState::Rejected;
+                    self.store_message(message)?;
+                    return Err(error);
+                }
+            }
+        }
+        let sequence = message.sequence;
+        let state_name = message.delivery_state;
+        self.store_message(message)?;
+        Ok(format!(
+            "message {sequence} accepted for {recipient} with state {state_name:?}"
+        ))
     }
+
+    fn store_message(&self, message: TeamMessage) -> MedusaResult<()> {
+        let mut state = self.team.lock().map_err(invalid)?;
+        if state
+            .messages
+            .iter()
+            .any(|existing| existing.sequence == message.sequence)
+        {
+            return Ok(());
+        }
+        state.messages.push(message);
+        drop(state);
+        self.team.persist().map_err(invalid)
+    }
+}
+
+fn admit_team_instruction(
+    repo: &Path,
+    session_id: &str,
+    sender: &str,
+    recipient: &str,
+    body: &str,
+    idempotency_key: &str,
+) -> MedusaResult<String> {
+    let mut session = load(repo, session_id)?;
+    let action_id = deterministic_action_id(session_id, idempotency_key);
+    let action = SessionAction {
+        action_id: action_id.clone(),
+        idempotency_key: idempotency_key.to_owned(),
+        source: format!("team:{sender}:{recipient}"),
+        target_session_id: session_id.to_owned(),
+        expected_session_revision: session.events.last().map_or(0, |event| event.sequence),
+        kind: SessionActionKind::Steer,
+        delivery_policy: SessionActionDeliveryPolicy::NextSafeTurnBoundary,
+        wake_policy: SessionActionWakePolicy::OnBoundary,
+        payload: json!({
+            "text": body,
+            "team": {
+                "sender": sender,
+                "recipient": recipient,
+            }
+        }),
+    };
+    if let Some(existing) = session.events.iter().find_map(|event| match &event.payload {
+        EventPayload::SessionActionAccepted { action }
+            if action.idempotency_key == idempotency_key => Some(action),
+        _ => None,
+    }) {
+        if existing == &action {
+            return Ok(existing.action_id.clone());
+        }
+        return Err(invalid(
+            "team instruction idempotency key was reused for a different session action",
+        ));
+    }
+    append_event(
+        &mut session,
+        Actor::Worker(sender.to_owned()),
+        EventPayload::SessionActionAccepted { action },
+    )?;
+    persist(&session)?;
+    Ok(action_id)
+}
+
+fn deterministic_action_id(session_id: &str, idempotency_key: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(session_id.as_bytes());
+    digest.update([0]);
+    digest.update(idempotency_key.as_bytes());
+    format!("action-{:x}", digest.finalize())
+}
+
+fn migrate_legacy_messages(state: &mut DurableTeamState) -> bool {
+    let mut changed = false;
+    for message in &mut state.messages {
+        if let Some(delivered) = message.legacy_delivered.take() {
+            message.delivery_state = if delivered {
+                TeamMessageDeliveryState::LegacyAcknowledged
+            } else {
+                TeamMessageDeliveryState::LegacyQueued
+            };
+            changed = true;
+        }
+        if message.idempotency_key.is_empty() {
+            message.idempotency_key = format!("legacy:{}:{}", state.team_id, message.sequence);
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn repository_from_team_path(path: &Path) -> Option<PathBuf> {
+    let mut current = path.parent();
+    while let Some(directory) = current {
+        if directory.file_name().is_some_and(|name| name == ".medusa") {
+            return directory.parent().map(Path::to_path_buf);
+        }
+        current = directory.parent();
+    }
+    None
 }
 
 fn validate_state(state: &DurableTeamState) -> Result<(), String> {
@@ -550,6 +785,7 @@ fn validate_state(state: &DurableTeamState) -> Result<(), String> {
     let mut previous = 0;
     for message in &state.messages {
         if message.sequence <= previous
+            || message.idempotency_key.trim().is_empty()
             || message.body.trim().is_empty()
             || !state.members.contains_key(&message.from)
             || !state.members.contains_key(&message.to)
@@ -590,37 +826,33 @@ fn invalid(message: impl Into<String>) -> MedusaError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use medusa_provider::{MessageBlock, ModelProvider, ModelResponse, ModelRequest, Usage};
 
-    #[test]
-    fn direct_messages_are_delivered_once() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let team = TeamRuntime::create(
-            directory.path().join("team.json"),
-            "team-1",
-            vec![
-                ("lead".to_owned(), TeamRole::Lead),
-                ("reviewer".to_owned(), TeamRole::Reviewer),
-            ],
-        )
-        .expect("team");
-        let lead = team.member_context("lead").expect("lead");
-        let reviewer = team.member_context("reviewer").expect("reviewer");
-        lead.send_message("reviewer", "check the transaction boundary")
-            .expect("send");
-        assert!(
-            reviewer
-                .read_messages()
-                .expect("read")
-                .contains("transaction boundary")
-        );
-        assert_eq!(reviewer.read_messages().expect("second read"), "[]");
+    use super::*;
+    use crate::AgentEngine;
+    use medusa_config::Config;
+
+    struct NoopProvider;
+
+    impl ModelProvider for NoopProvider {
+        fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+            Ok(ModelResponse {
+                response_id: Some("noop".to_owned()),
+                stop_reason: Some("stop".to_owned()),
+                blocks: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
     }
 
     #[test]
-    fn messages_and_member_state_survive_restart() {
+    fn lead_instruction_is_admitted_to_destination_session() {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().join("team.json");
+        let engine = AgentEngine::new(NoopProvider, Config::default());
+        let session = engine
+            .create_session(directory.path(), "review".to_owned())
+            .expect("session");
+        let path = directory.path().join(".medusa/executions/test/team.json");
         let team = TeamRuntime::create(
             &path,
             "team-1",
@@ -630,31 +862,136 @@ mod tests {
             ],
         )
         .expect("team");
-        team.start_member("reviewer", "review-1", "session-1")
+        team.start_member("reviewer", "review-1", session.id.as_str())
+            .expect("start reviewer");
+        let lead = team.member_context("lead").expect("lead");
+        lead.send_message("reviewer", "check the transaction boundary")
+            .expect("send");
+
+        let restored = engine
+            .load_session(directory.path(), session.id.as_str())
+            .expect("restore session");
+        let accepted = restored.events.iter().find_map(|event| match &event.payload {
+            EventPayload::SessionActionAccepted { action } => Some(action),
+            _ => None,
+        });
+        assert!(accepted.is_some_and(|action| {
+            action.source == "team:lead:reviewer"
+                && action.payload["text"] == json!("check the transaction boundary")
+        }));
+        let serialized = fs::read_to_string(path).expect("team state");
+        assert!(!serialized.contains("\"delivered\""));
+        assert!(serialized.contains("action_accepted"));
+    }
+
+    #[test]
+    fn mailbox_read_cannot_claim_model_visibility() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(NoopProvider, Config::default());
+        let session = engine
+            .create_session(directory.path(), "review".to_owned())
+            .expect("session");
+        let team = TeamRuntime::create(
+            directory.path().join(".medusa/executions/test/team.json"),
+            "team-1",
+            vec![
+                ("lead".to_owned(), TeamRole::Lead),
+                ("reviewer".to_owned(), TeamRole::Reviewer),
+            ],
+        )
+        .expect("team");
+        team.start_member("reviewer", "review-1", session.id.as_str())
             .expect("start reviewer");
         team.member_context("lead")
             .expect("lead")
-            .send_message("reviewer", "review the coordinator boundary")
+            .send_message("reviewer", "inspect the boundary")
             .expect("send");
+        let reviewer = team.member_context("reviewer").expect("reviewer");
+        let first = reviewer.read_messages().expect("read");
+        assert!(first.contains("action_accepted"));
+        let restored = engine
+            .load_session(directory.path(), session.id.as_str())
+            .expect("restore session");
+        assert!(!restored.events.iter().any(|event| matches!(
+            event.payload,
+            EventPayload::SessionActionTranscriptLinked { .. }
+        )));
+    }
 
-        let restored = TeamRuntime::load(path).expect("restore team");
-        assert_eq!(restored.team_id().expect("team id"), "team-1");
-        let reviewer = restored
-            .snapshot()
-            .expect("members")
-            .into_iter()
-            .find(|member| member.id == "reviewer")
-            .expect("reviewer");
-        assert_eq!(reviewer.lifecycle, TeamMemberLifecycle::Running);
-        assert_eq!(reviewer.current_task.as_deref(), Some("review-1"));
+    #[test]
+    fn peer_message_is_observational_and_not_session_input() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(NoopProvider, Config::default());
+        let session = engine
+            .create_session(directory.path(), "review".to_owned())
+            .expect("session");
+        let team = TeamRuntime::create(
+            directory.path().join(".medusa/executions/test/team.json"),
+            "team-1",
+            vec![
+                ("researcher".to_owned(), TeamRole::Researcher),
+                ("reviewer".to_owned(), TeamRole::Reviewer),
+            ],
+        )
+        .expect("team");
+        team.start_member("reviewer", "review-1", session.id.as_str())
+            .expect("start reviewer");
+        team.member_context("researcher")
+            .expect("researcher")
+            .send_message("reviewer", "FYI only")
+            .expect("send");
         assert!(
-            restored
-                .member_context("reviewer")
-                .expect("reviewer context")
+            team.member_context("reviewer")
+                .expect("reviewer")
                 .read_messages()
-                .expect("messages")
-                .contains("coordinator boundary")
+                .expect("read")
+                .contains("coordination_only")
         );
+        let restored = engine
+            .load_session(directory.path(), session.id.as_str())
+            .expect("restore session");
+        assert!(!restored.events.iter().any(|event| matches!(
+            event.payload,
+            EventPayload::SessionActionAccepted { .. }
+        )));
+    }
+
+    #[test]
+    fn legacy_delivered_boolean_migrates_without_claiming_model_visibility() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join(".medusa/executions/test/team.json");
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "team_id": "team-1",
+                "members": {
+                    "lead": {"id":"lead","role":"lead","lifecycle":"running","current_task":null,"session_id":null},
+                    "reviewer": {"id":"reviewer","role":"reviewer","lifecycle":"idle","current_task":null,"session_id":null}
+                },
+                "messages": [{
+                    "sequence": 1,
+                    "from": "lead",
+                    "to": "reviewer",
+                    "body": "legacy",
+                    "delivered": true
+                }],
+                "next_sequence": 2
+            }))
+            .expect("json"),
+        )
+        .expect("legacy state");
+        let team = TeamRuntime::load(&path).expect("load");
+        assert!(
+            team.member_context("reviewer")
+                .expect("reviewer")
+                .read_messages()
+                .expect("read")
+                .contains("legacy_acknowledged")
+        );
+        let migrated = fs::read_to_string(path).expect("migrated state");
+        assert!(!migrated.contains("\"delivered\""));
+        assert!(migrated.contains("legacy_acknowledged"));
     }
 
     #[test]
@@ -760,5 +1097,42 @@ mod tests {
                 .denial_reason("fs_write", &json!({"path":"tests/file.rs","content":""}))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn pending_session_instruction_is_visible_in_team_prompt_context() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(NoopProvider, Config::default());
+        let session = engine
+            .create_session_with_content(
+                directory.path(),
+                "review".to_owned(),
+                vec![MessageBlock::Text {
+                    text: "review".to_owned(),
+                }],
+            )
+            .expect("session");
+        let team = TeamRuntime::create(
+            directory.path().join(".medusa/executions/test/team.json"),
+            "team-1",
+            vec![
+                ("lead".to_owned(), TeamRole::Lead),
+                ("reviewer".to_owned(), TeamRole::Reviewer),
+            ],
+        )
+        .expect("team");
+        team.start_member("reviewer", "review-1", session.id.as_str())
+            .expect("start reviewer");
+        team.member_context("lead")
+            .expect("lead")
+            .send_message("reviewer", "inspect canonical delivery")
+            .expect("send");
+        let context = team
+            .member_context("reviewer")
+            .expect("reviewer")
+            .prompt_context()
+            .expect("context");
+        assert!(context.contains("inspect canonical delivery"));
+        assert!(context.contains("action_id"));
     }
 }
