@@ -661,11 +661,10 @@ impl TeamMemberContext {
             return Err(invalid("team message body cannot be empty"));
         }
         let mut state = self.team.lock().map_err(invalid)?;
-        let sender = state
-            .members
-            .get(&self.member_id)
-            .cloned()
-            .ok_or_else(|| invalid(format!("unknown team message sender: {}", self.member_id)))?;
+        let sender =
+            state.members.get(&self.member_id).cloned().ok_or_else(|| {
+                invalid(format!("unknown team message sender: {}", self.member_id))
+            })?;
         let recipient_member = state
             .members
             .get(recipient)
