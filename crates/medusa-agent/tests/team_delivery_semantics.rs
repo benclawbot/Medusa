@@ -20,6 +20,18 @@ impl ModelProvider for NoopProvider {
     }
 }
 
+struct FailingProvider;
+
+impl ModelProvider for FailingProvider {
+    fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        Err(medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::DependencyUnavailable,
+            medusa_core::ErrorCategory::Execution,
+            "intentional provider failure",
+        ))
+    }
+}
+
 struct ScriptedProvider {
     responses: Arc<Mutex<VecDeque<ModelResponse>>>,
 }
@@ -96,6 +108,39 @@ fn accepted_action_id(session: &medusa_agent::AgentSession, key: &str) -> String
             _ => None,
         })
         .expect("accepted team action")
+}
+
+fn manifest_references(session: &medusa_agent::AgentSession) -> Vec<String> {
+    session
+        .events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted {
+                manifest_ref: Some(reference),
+                ..
+            } => Some(reference.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn manifest_action_occurrences(
+    repo: &std::path::Path,
+    session: &medusa_agent::AgentSession,
+    action_id: &str,
+) -> usize {
+    manifest_references(session)
+        .iter()
+        .map(|reference| {
+            inspect_effective_model_request(repo, session.id.as_str(), reference)
+                .expect("inspect request")
+        })
+        .filter(|audit| {
+            audit["delivered_action_ids"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|id| id == &serde_json::json!(action_id)))
+        })
+        .count()
 }
 
 #[test]
@@ -252,16 +297,9 @@ fn team_instruction_is_model_visible_in_exactly_one_effective_request() {
         engine.step(&mut running).expect("first model step"),
         StepOutcome::Continue
     );
-    let first_manifest = running
-        .events
-        .iter()
-        .find_map(|event| match &event.payload {
-            EventPayload::ModelRequestStarted {
-                manifest_ref: Some(reference),
-                ..
-            } => Some(reference.clone()),
-            _ => None,
-        })
+    let first_manifest = manifest_references(&running)
+        .into_iter()
+        .next()
         .expect("first request manifest");
     let audit = inspect_effective_model_request(
         directory.path(),
@@ -285,29 +323,78 @@ fn team_instruction_is_model_visible_in_exactly_one_effective_request() {
         engine.step(&mut running).expect("second model step"),
         StepOutcome::TurnComplete
     );
-    let manifests = running
+    assert!(manifest_references(&running).len() >= 2);
+    assert_eq!(
+        manifest_action_occurrences(directory.path(), &running, &action_id),
+        1,
+        "one team action must bind to one effective request"
+    );
+}
+
+#[test]
+fn provider_failure_after_manifest_does_not_reinject_team_instruction() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let bootstrap = AgentEngine::new(NoopProvider, Config::default());
+    let session = bootstrap
+        .create_session(directory.path(), "implement".to_owned())
+        .expect("create session");
+    let (_team, lead, worker) =
+        team_for_session(directory.path(), "team-provider-failure", session.id.as_str());
+    lead.execute(
+        "team_send_message",
+        &serde_json::json!({"recipient":"worker","body":"survive provider failure"}),
+    )
+    .expect("send instruction");
+    let admitted = bootstrap
+        .load_session(directory.path(), session.id.as_str())
+        .expect("load admitted session");
+    let action_id = admitted
         .events
         .iter()
-        .filter_map(|event| match &event.payload {
-            EventPayload::ModelRequestStarted {
-                manifest_ref: Some(reference),
-                ..
-            } => Some(reference.clone()),
+        .find_map(|event| match &event.payload {
+            EventPayload::SessionActionAccepted { action } if action.source == "team:lead:worker" => {
+                Some(action.action_id.clone())
+            }
             _ => None,
         })
-        .collect::<Vec<_>>();
-    assert!(manifests.len() >= 2);
-    let occurrences = manifests
-        .iter()
-        .map(|reference| {
-            inspect_effective_model_request(directory.path(), session.id.as_str(), reference)
-                .expect("inspect request")
-        })
-        .filter(|audit| {
-            audit["delivered_action_ids"]
-                .as_array()
-                .is_some_and(|ids| ids.iter().any(|id| id == &serde_json::json!(action_id)))
-        })
-        .count();
-    assert_eq!(occurrences, 1, "one team action must bind to one effective request");
+        .expect("team action id");
+
+    let failing = AgentEngine::new(FailingProvider, Config::default()).with_team_context(worker.clone());
+    let mut first_attempt = failing
+        .load_session(directory.path(), session.id.as_str())
+        .expect("restart before failing request");
+    assert!(failing.step(&mut first_attempt).is_err());
+
+    let after_failure = bootstrap
+        .load_session(directory.path(), session.id.as_str())
+        .expect("restart after provider failure");
+    assert!(after_failure.events.iter().any(|event| matches!(
+        event.payload,
+        EventPayload::ModelRequestFailed { .. }
+    )));
+    assert_eq!(
+        manifest_action_occurrences(directory.path(), &after_failure, &action_id),
+        1,
+        "failed provider call retains the manifest that made the action model-visible"
+    );
+    assert!(
+        !worker
+            .prompt_context()
+            .expect("prompt context after failure")
+            .contains("survive provider failure")
+    );
+
+    let retry = AgentEngine::new(NoopProvider, Config::default()).with_team_context(worker);
+    let mut retried = retry
+        .load_session(directory.path(), session.id.as_str())
+        .expect("cold restart for retry");
+    assert_eq!(
+        retry.step(&mut retried).expect("retry model step"),
+        StepOutcome::TurnComplete
+    );
+    assert_eq!(
+        manifest_action_occurrences(directory.path(), &retried, &action_id),
+        1,
+        "retry must not inject the already model-visible action again"
+    );
 }
