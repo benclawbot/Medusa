@@ -1,0 +1,34 @@
+name: Issue 890 request failure provenance fix
+
+on:
+  push:
+    branches:
+      - codex/issue-890-model-request-policy
+    paths:
+      - scripts/issue890_provenance_fix.py
+      - .github/workflows/issue-890-provenance-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-check:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/issue-890-model-request-policy
+          fetch-depth: 0
+      - run: python3 scripts/issue890_provenance_fix.py
+      - run: cargo fmt --all
+      - run: rm scripts/issue890_provenance_fix.py .github/workflows/issue-890-provenance-fix.yml
+      - name: Commit fixed source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Classify request failures in provenance"
+          git push origin HEAD:codex/issue-890-model-request-policy
+      - name: Clippy full workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
