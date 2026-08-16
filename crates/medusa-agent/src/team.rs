@@ -644,12 +644,11 @@ impl TeamMemberContext {
                 message.delivery_state = TeamMessageDeliveryState::ModelVisible;
             }
             visible.push(message.clone());
-            if matches!(
-                message.delivery_state,
-                TeamMessageDeliveryState::CoordinationOnly | TeamMessageDeliveryState::LegacyQueued
-            ) {
-                message.delivery_state = TeamMessageDeliveryState::Acknowledged;
-            }
+            message.delivery_state = match message.delivery_state {
+                TeamMessageDeliveryState::CoordinationOnly => TeamMessageDeliveryState::Acknowledged,
+                TeamMessageDeliveryState::LegacyQueued => TeamMessageDeliveryState::LegacyAcknowledged,
+                state => state,
+            };
         }
         drop(state);
         self.team.persist().map_err(invalid)?;
