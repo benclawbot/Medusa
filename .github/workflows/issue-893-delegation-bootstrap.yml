@@ -32,17 +32,13 @@ jobs:
           start = source.index(marker) + len(marker)
           end = source.index("\n          PY\n          python3 /tmp/issue893.py", start)
           script = textwrap.dedent(source[start:end])
-          old = '''if text.count(needle) != 1:
-              raise SystemExit(f"expected one normal coordinate call, got {text.count(needle)}")
-          text = text.replace(
-'''
-          new = '''if text.count(needle) < 1:
-              raise SystemExit("missing normal coordinate call")
-          text = text.replace(
-'''
-          if old not in script:
+          first = 'if text.count(needle) != 1:'
+          second = 'raise SystemExit(f"expected one normal coordinate call, got {text.count(needle)}")'
+          if first not in script or second not in script:
               raise SystemExit('normal coordinate assertion anchor not found')
-          Path('/tmp/issue893.py').write_text(script.replace(old, new, 1))
+          script = script.replace(first, 'if text.count(needle) < 1:', 1)
+          script = script.replace(second, 'raise SystemExit("missing normal coordinate call")', 1)
+          Path('/tmp/issue893.py').write_text(script)
           PY
           python3 /tmp/issue893.py
           cargo fmt --all
@@ -57,7 +53,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/issue-893-delegation-bootstrap.yml .github/workflows/issue-893-bootstrap-repair.yml
+          git rm .github/workflows/issue-893-delegation-bootstrap.yml
           git add crates/medusa-agent crates/medusa-runtime
           git diff --cached --check
           git commit -m "Persist immutable worker delegation contracts"
