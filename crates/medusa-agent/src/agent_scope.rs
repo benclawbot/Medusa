@@ -336,12 +336,12 @@ pub fn validate_agent_scope(
             state.lifecycle
         )));
     }
-    validate_runtime_authority(
+    validate_runtime_profile_and_policy(
         &contract,
         current_provider_profile,
         current_execution_policy,
-        current_effective_tools,
     )?;
+    let _ = effective_agent_scope_tools(repo, session_id, current_effective_tools)?;
     Ok(scope_ref(&state))
 }
 
@@ -353,12 +353,12 @@ pub fn resume_agent_scope(
     current_effective_tools: Vec<String>,
 ) -> MedusaResult<AgentScopeRef> {
     let contract = load_contract(repo, session_id)?;
-    validate_runtime_authority(
+    validate_runtime_profile_and_policy(
         &contract,
         current_provider_profile,
         current_execution_policy,
-        current_effective_tools,
     )?;
+    let current_tools = canonical_strings(current_effective_tools);
     let path = state_path(repo, session_id);
     let mut state = load_state(&path)?;
     validate_state_binding(&contract, &state)?;
@@ -368,6 +368,14 @@ pub fn resume_agent_scope(
             state.lifecycle
         )));
     }
+    state.revoked_tools.extend(
+        contract
+            .effective_tools
+            .iter()
+            .filter(|tool| current_tools.binary_search(tool).is_err())
+            .cloned(),
+    );
+    state.revoked_tools = canonical_strings(state.revoked_tools);
     state.generation = state
         .generation
         .checked_add(1)
@@ -499,17 +507,10 @@ pub fn effective_agent_scope_tools(
         ));
     }
     let current = canonical_strings(current_tools);
-    if current
-        .iter()
-        .any(|tool| contract.effective_tools.binary_search(tool).is_err())
-    {
-        return Err(reconciliation_error(
-            "runtime tool projection would widen the published agent scope",
-        ));
-    }
     let revoked = state.revoked_tools.iter().collect::<BTreeSet<_>>();
     Ok(current
         .into_iter()
+        .filter(|tool| contract.effective_tools.binary_search(tool).is_ok())
         .filter(|tool| !revoked.contains(tool))
         .collect())
 }
@@ -671,11 +672,10 @@ fn initial_resources(
     resources
 }
 
-fn validate_runtime_authority(
+fn validate_runtime_profile_and_policy(
     contract: &AgentScopeContract,
     current_provider_profile: Value,
     current_execution_policy: Value,
-    current_effective_tools: Vec<String>,
 ) -> MedusaResult<()> {
     let current_provider_profile = canonicalize_value(current_provider_profile);
     if current_provider_profile != contract.provider_profile {
@@ -689,6 +689,20 @@ fn validate_runtime_authority(
             "execution policy would widen the published agent scope",
         ));
     }
+    Ok(())
+}
+
+fn validate_runtime_authority(
+    contract: &AgentScopeContract,
+    current_provider_profile: Value,
+    current_execution_policy: Value,
+    current_effective_tools: Vec<String>,
+) -> MedusaResult<()> {
+    validate_runtime_profile_and_policy(
+        contract,
+        current_provider_profile,
+        current_execution_policy,
+    )?;
     let current_tools = canonical_strings(current_effective_tools);
     if current_tools
         .iter()
@@ -1260,5 +1274,60 @@ mod tests {
         assert_eq!(first.scope_id, resumed.scope_id);
         assert_eq!(first.scope_fingerprint, resumed.scope_fingerprint);
         assert_eq!(resumed.generation, first.generation + 1);
+    }
+
+    #[test]
+    fn resume_intersects_runtime_tools_and_persists_offline_revocation() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let session = SessionId::new();
+        let provider = json!({"provider":"test","model":"test"});
+        let execution = policy(Some(&["fs_read", "shell_run"]), None, false);
+        let contract = prepare_agent_scope(
+            repo.path(),
+            &session,
+            AgentScopePreparation {
+                mode: Mode::ReadOnly,
+                provider_profile: provider.clone(),
+                execution_policy: execution.clone(),
+                effective_tools: vec!["fs_read".into(), "shell_run".into()],
+                team_id: None,
+                member_id: None,
+                analysis_workspace: false,
+            },
+        )
+        .expect("prepare");
+        publish_agent_scope(
+            repo.path(),
+            &contract,
+            provider.clone(),
+            execution.clone(),
+            vec!["fs_read".into(), "shell_run".into()],
+        )
+        .expect("publish");
+
+        resume_agent_scope(
+            repo.path(),
+            session.as_str(),
+            provider,
+            execution,
+            vec!["fs_read".into(), "team_send_message".into()],
+        )
+        .expect("resume with narrowed certified scope");
+
+        assert_eq!(
+            effective_agent_scope_tools(
+                repo.path(),
+                session.as_str(),
+                vec![
+                    "fs_read".into(),
+                    "shell_run".into(),
+                    "team_send_message".into(),
+                ],
+            )
+            .expect("projection"),
+            vec!["fs_read"]
+        );
+        let state = load_state(&state_path(repo.path(), session.as_str())).expect("state");
+        assert_eq!(state.revoked_tools, vec!["shell_run"]);
     }
 }
