@@ -3,6 +3,18 @@ name: Product Acceptance
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'crates/medusa-agent/**'
+      - 'crates/medusa-cli/**'
+      - 'crates/medusa-runtime/**'
+      - 'crates/medusa-workers/**'
+      - 'crates/medusa-execution-checkpoint/**'
+      - 'crates/medusa-process-containment/**'
+      - 'scripts/product-acceptance-smoke.py'
+      - '.github/workflows/product-acceptance.yml'
   workflow_dispatch:
 
 permissions:
