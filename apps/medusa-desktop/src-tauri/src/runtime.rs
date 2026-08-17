@@ -10,6 +10,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::ImageReader;
+use medusa_config::{Config, provider_catalog_entry};
 use medusa_daemon::{
     DaemonClient, DaemonLaunch, DaemonLifecycleState, DaemonSupervisor, FrontendArtifactKind,
     FrontendArtifactUpload, FrontendCommandAcknowledgement, FrontendControlResult,
@@ -18,6 +19,7 @@ use medusa_daemon::{
 use medusa_protocol::frontend::{
     FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
 };
+use medusa_provider::discover_models;
 use medusa_runtime::{
     attachment::{
         MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_PROMPT,
@@ -37,6 +39,7 @@ use crate::{
         DesktopAttachment, DesktopCommandSuggestion, DesktopModelConfiguration, DesktopPromptDraft,
         DesktopRuntimeEvent, DesktopSubmitDisposition, RuntimeStartResponse,
     },
+    provider_auth::browser_oauth_credentials_present,
 };
 
 const DESKTOP_CLIENT_ID: &str = "desktop-primary";
@@ -566,6 +569,59 @@ pub fn runtime_poll(
     })
 }
 
+fn verify_provider_route(
+    prepared_profile: &crate::config::PreparedProviderProfile,
+    provider: &str,
+    model: &str,
+    api_key: Option<&str>,
+) -> Result<(), String> {
+    let entry = provider_catalog_entry(provider)
+        .ok_or_else(|| format!("unknown provider `{provider}`"))?;
+    if entry.browser_oauth && !browser_oauth_credentials_present(provider) {
+        return Err(format!(
+            "{} is not authenticated. Sign in with ChatGPT before applying this provider.",
+            entry.display_name
+        ));
+    }
+    if !entry.discover_models {
+        return Ok(());
+    }
+
+    let config = Config::load_layers_with_provider_profile(
+        prepared_profile.profile(),
+        None,
+        None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .map_err(|error| error.to_string())?;
+    let discovered = discover_models(&config, api_key).map_err(|error| {
+        format!(
+            "{} route verification failed at {}: {error:?}",
+            entry.display_name,
+            prepared_profile
+                .profile()
+                .base_url
+                .as_deref()
+                .or(entry.base_url)
+                .unwrap_or("the provider endpoint")
+        )
+    })?;
+    if !discovered.iter().any(|candidate| candidate.id == model) {
+        let available = discovered
+            .iter()
+            .map(|candidate| candidate.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "model `{model}` is not available from {}. Available models: {}",
+            entry.display_name,
+            if available.is_empty() { "none" } else { &available }
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn runtime_configure_model(
     runtime_id: String,
@@ -593,6 +649,9 @@ pub fn runtime_configure_model(
         Some(api_key) => Some(api_key.clone()),
         None => credentials.load(&provider)?,
     };
+
+    verify_provider_route(&prepared_profile, &provider, &model, api_key.as_deref())?;
+
     registry.with_entry(&runtime_id, |entry| {
         entry.sync_credential(&provider, api_key.clone())?;
         entry.dispatch(FrontendCommand::ConfigureModel {
