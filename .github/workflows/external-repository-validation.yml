@@ -6,7 +6,6 @@ on:
       - 'validation/external-repositories/**'
       - 'scripts/external-validation.py'
       - 'docs/EXTERNAL-REPOSITORY-VALIDATION.md'
-      - '.github/workflows/external-repository-validation.yml'
   workflow_dispatch:
 
 permissions:
