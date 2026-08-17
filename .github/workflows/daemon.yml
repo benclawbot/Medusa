@@ -3,6 +3,12 @@ name: Daemon
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/medusa-daemon/**'
+      - 'crates/medusa-tui/**'
+      - 'crates/medusa-runtime/**'
   workflow_dispatch:
 
 permissions:
