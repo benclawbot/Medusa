@@ -3,6 +3,10 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -16,6 +20,8 @@ use crate::{
 
 const JOURNAL_SCHEMA: u32 = 1;
 const JOURNAL_ROOT: &str = ".medusa/patch-transactions";
+static REPOSITORY_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+static REPLACEMENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A byte-range replacement guarded by expected original content.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -162,6 +168,11 @@ impl PatchTransaction {
         if self.edits.is_empty() {
             return Err(invalid("transaction contains no edits"));
         }
+        let repository_lock = repository_lock(repo);
+        let _repository_guard = repository_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         let mut grouped: BTreeMap<PathBuf, Vec<TextEdit>> = BTreeMap::new();
         for edit in self.edits {
             grouped.entry(edit.path.clone()).or_default().push(edit);
@@ -258,6 +269,13 @@ impl PatchTransaction {
                 .iter()
                 .find(|entry| &entry.path == relative)
                 .ok_or_else(|| invalid("journal entry disappeared during apply"))?;
+            let current = fs::read(destination)?;
+            if hash(&current) != entry.before_hash {
+                return Err(invalid(format!(
+                    "patch target changed before commit: {}",
+                    relative.display()
+                )));
+            }
             replace_file(&directory.join(&entry.staged), destination)?;
             journal.applied_paths.insert(relative.clone());
             persist_journal(&directory, &journal)?;
@@ -345,6 +363,19 @@ fn transaction_id(grouped: &BTreeMap<PathBuf, Vec<TextEdit>>) -> MedusaResult<St
     Ok(format!("{timestamp:032x}-{}", &hash(&payload)[..16]))
 }
 
+fn repository_lock(repo: &Path) -> Arc<Mutex<()>> {
+    let key = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let locks = REPOSITORY_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut locks = locks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(
+        locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
+}
+
 fn journal_directory(repo: &Path, transaction_id: &str) -> PathBuf {
     repo.join(JOURNAL_ROOT).join(transaction_id)
 }
@@ -399,7 +430,11 @@ fn write_synced(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
 fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
     let bytes = fs::read(source)?;
     let permissions = fs::metadata(source)?.permissions();
-    let temporary = destination.with_extension("medusa-transaction-replace");
+    let nonce = REPLACEMENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = destination.with_extension(format!(
+        "medusa-transaction-replace-{}-{nonce}",
+        std::process::id()
+    ));
     write_synced(&temporary, &bytes)?;
     fs::set_permissions(&temporary, permissions)?;
     fs::rename(&temporary, destination)?;
@@ -419,6 +454,8 @@ fn sync_directory(path: &Path) -> MedusaResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Barrier, thread};
+
     use super::*;
 
     fn replace(repo: &Path, expected: &str, replacement: &str) {
@@ -433,6 +470,20 @@ mod tests {
             })
             .expect("edit");
         transaction.commit(repo).expect("apply");
+    }
+
+    fn transaction(expected: &str, replacement: &str) -> PatchTransaction {
+        let mut transaction = PatchTransaction::new();
+        transaction
+            .add_edit(TextEdit {
+                path: "file.rs".into(),
+                start_byte: 0,
+                end_byte: expected.len(),
+                expected: expected.into(),
+                replacement: replacement.into(),
+            })
+            .expect("edit");
+        transaction
     }
 
     #[test]
@@ -500,5 +551,30 @@ mod tests {
             fs::read_to_string(directory.path().join("file.rs")).expect("file"),
             "bbb\n"
         );
+    }
+
+    #[test]
+    fn overlapping_concurrent_transactions_never_silently_overwrite() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("file.rs"), "aaa").expect("file");
+        let repo = Arc::new(directory.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(3));
+
+        let handles = ["bbb", "ccc"].map(|replacement| {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                let transaction = transaction("aaa", replacement);
+                barrier.wait();
+                transaction.commit(&repo)
+            })
+        });
+        barrier.wait();
+
+        let results = handles.map(|handle| handle.join().expect("worker"));
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+        let final_content = fs::read_to_string(directory.path().join("file.rs")).expect("file");
+        assert!(matches!(final_content.as_str(), "bbb" | "ccc"));
     }
 }
