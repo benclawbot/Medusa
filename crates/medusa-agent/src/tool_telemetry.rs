@@ -91,10 +91,7 @@ impl ToolExecutionTrace {
         let mut sanitized = self.clone();
         sanitized.program = redact_text(&sanitized.program);
         sanitized.args = redact_args(&sanitized.args);
-        sanitized.expansion_handle = sanitized
-            .expansion_handle
-            .as_deref()
-            .map(redact_text);
+        sanitized.expansion_handle = sanitized.expansion_handle.as_deref().map(redact_text);
         sanitized
     }
 }
