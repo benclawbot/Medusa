@@ -213,7 +213,7 @@ it("presents API keys as persistent OS-managed credentials", async () => {
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
 
-  expect(screen.getByText("Saved securely in your operating system credential manager")).toBeInTheDocument();
+  expect(screen.getByText("Credentials are retained in the appropriate local credential store")).toBeInTheDocument();
   expect(screen.getByLabelText("API key")).toHaveAttribute("placeholder", "Leave blank to use the saved key");
   expect(screen.queryByText(/session-only/i)).not.toBeInTheDocument();
 });
