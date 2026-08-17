@@ -7,6 +7,7 @@ use thiserror::Error;
 use ulid::Ulid;
 
 pub mod learning_policy;
+pub mod repository_mutation;
 
 macro_rules! typed_id {
     ($name:ident, $prefix:literal) => {
