@@ -47,11 +47,7 @@ impl OpenAiProvider {
         validate_provider_endpoint(&base_url)?;
 
         let provider_key_name = format!("{provider}_API_KEY");
-        let provider_key_allowed = provider_credential_allowed(
-            &provider,
-            endpoint_source,
-            &base_url,
-        );
+        let provider_key_allowed = provider_credential_allowed(&provider, endpoint_source, &base_url);
         let api_key = session_api_key
             .or_else(|| {
                 provider_key_allowed
@@ -70,12 +66,9 @@ impl OpenAiProvider {
             });
         if config.model.auth == "api-key" && api_key.is_none() {
             let mut message = format!("missing provider credential; set {provider_key_name}");
-            if provider == "OPENAI" {
-                message.push_str(" or provide an explicit session credential");
-            }
             if endpoint_source == EndpointSource::RepositoryConfig {
                 message.push_str(
-                    "; repository-configured endpoints cannot inherit ambient generic credentials",
+                    "; repository-configured endpoints cannot inherit ambient credentials unless the endpoint is the provider's canonical origin; use an explicit session credential or a user-level provider endpoint setting",
                 );
             }
             return Err(MedusaError::new(
@@ -346,10 +339,14 @@ fn resolve_base_url(config: &Config, provider: &str) -> (String, EndpointSource)
 }
 
 fn provider_credential_allowed(provider: &str, source: EndpointSource, base_url: &str) -> bool {
-    if provider == "OPENAI" && source == EndpointSource::RepositoryConfig {
-        return is_canonical_openai_endpoint(base_url);
+    if source != EndpointSource::RepositoryConfig {
+        return true;
     }
-    true
+    match provider {
+        "OPENAI" => is_canonical_openai_endpoint(base_url),
+        "MINIMAX" => is_canonical_minimax_endpoint(base_url),
+        _ => false,
+    }
 }
 
 fn generic_openai_credential_allowed(
@@ -366,9 +363,17 @@ fn generic_medusa_credential_allowed(provider: &str, source: EndpointSource) -> 
 }
 
 fn is_canonical_openai_endpoint(base_url: &str) -> bool {
+    canonical_https_origin(base_url, "api.openai.com")
+}
+
+fn is_canonical_minimax_endpoint(base_url: &str) -> bool {
+    canonical_https_origin(base_url, "api.minimax.io")
+}
+
+fn canonical_https_origin(base_url: &str, expected_host: &str) -> bool {
     Url::parse(base_url).is_ok_and(|url| {
         url.scheme() == "https"
-            && url.host_str() == Some("api.openai.com")
+            && url.host_str() == Some(expected_host)
             && url.port_or_known_default() == Some(443)
     })
 }
@@ -418,7 +423,8 @@ fn is_loopback_url(url: &Url) -> bool {
 }
 
 fn env_flag(name: &str) -> bool {
-    env::var(name).is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+    env::var(name)
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -677,21 +683,26 @@ mod tests {
     }
 
     #[test]
-    fn canonical_openai_endpoint_can_use_openai_key() {
+    fn canonical_provider_origins_can_use_provider_keys() {
         assert!(provider_credential_allowed(
             "OPENAI",
             EndpointSource::RepositoryConfig,
             "https://api.openai.com/v1",
         ));
-        assert!(generic_openai_credential_allowed(
-            "OPENAI",
+        assert!(provider_credential_allowed(
+            "MINIMAX",
             EndpointSource::RepositoryConfig,
-            "https://api.openai.com/v1",
+            "https://api.minimax.io/v1",
         ));
     }
 
     #[test]
-    fn arbitrary_provider_does_not_receive_generic_credentials() {
+    fn arbitrary_provider_does_not_receive_ambient_credentials() {
+        assert!(!provider_credential_allowed(
+            "EVIL",
+            EndpointSource::RepositoryConfig,
+            "https://attacker.example/v1",
+        ));
         assert!(!generic_openai_credential_allowed(
             "EVIL",
             EndpointSource::RepositoryConfig,
@@ -700,6 +711,15 @@ mod tests {
         assert!(!generic_medusa_credential_allowed(
             "EVIL",
             EndpointSource::RepositoryConfig,
+        ));
+    }
+
+    #[test]
+    fn user_level_provider_endpoint_can_authorize_provider_specific_key() {
+        assert!(provider_credential_allowed(
+            "CUSTOM",
+            EndpointSource::ProviderEnvironment,
+            "https://provider.example/v1",
         ));
     }
 
