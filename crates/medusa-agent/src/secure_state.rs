@@ -13,7 +13,16 @@ pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn create_new_file(path: &Path) -> io::Result<fs::File> {
-    open_secure_file(path, true)
+    match open_secure_file(path, true) {
+        Ok(file) => Ok(file),
+        Err(error)
+            if error.kind() == io::ErrorKind::AlreadyExists
+                && path.extension().is_some_and(|extension| extension == "tmp") =>
+        {
+            open_secure_file(path, false)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) fn create_file(path: &Path) -> io::Result<fs::File> {
@@ -118,19 +127,24 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn replaceable_secure_file_recovers_a_stale_temp_file() {
+    fn legacy_fixed_temp_file_is_recovered_but_unique_files_remain_exclusive() {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let path = temporary.path().join("state.tmp");
-        fs::write(&path, b"stale").expect("stale temp");
-        let mut file = create_file(&path).expect("replace stale temp");
+        let fixed = temporary.path().join("state.tmp");
+        fs::write(&fixed, b"stale").expect("stale temp");
+        let mut file = create_new_file(&fixed).expect("replace stale fixed temp");
         use std::io::Write as _;
         file.write_all(b"fresh").expect("fresh content");
         drop(file);
-        assert_eq!(fs::read(&path).expect("temp content"), b"fresh");
+        assert_eq!(fs::read(&fixed).expect("temp content"), b"fresh");
         assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            fs::metadata(&fixed).unwrap().permissions().mode() & 0o777,
             FILE_MODE
         );
+
+        let unique = temporary.path().join("state.tmp.1");
+        fs::write(&unique, b"existing").expect("existing unique temp");
+        let error = create_new_file(&unique).expect_err("unique temp collision must fail");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     }
 
     #[cfg(unix)]
