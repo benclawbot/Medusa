@@ -1,7 +1,11 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -14,6 +18,9 @@ use crate::policy::safe_path;
 mod mutation_provenance;
 pub use mutation_provenance::{MutationContext, MutationKind, ScopeValidation};
 use mutation_provenance::{build_record, load as load_provenance, persist as persist_provenance};
+
+static REPOSITORY_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkerMutationProposal {
@@ -119,6 +126,11 @@ fn apply_atomic_inner(
         ));
     }
 
+    let repository_lock = repository_lock(repo);
+    let _repository_guard = repository_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let repository_before = if context.is_some() {
         Some(repository_fingerprint(repo)?)
     } else {
@@ -158,7 +170,7 @@ fn apply_atomic_inner(
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let temporary = target.with_extension(format!("medusa-txn-{index}.tmp"));
+        let temporary = unique_staging_path(target, index);
         if let Err(error) = fs::write(&temporary, mutation.content.as_bytes()) {
             cleanup_staged(&staged);
             return Err(error.into());
@@ -174,6 +186,18 @@ fn apply_atomic_inner(
     }
 
     for (index, (target, temporary)) in staged.iter().enumerate() {
+        if !matches_backup(target, &backups[index])? {
+            let rollback = rollback(&backups[..index]);
+            cleanup_staged(&staged[index..]);
+            return Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Execution,
+                format!(
+                    "transaction target changed before commit: {}; rollback={rollback}",
+                    target.display()
+                ),
+            ));
+        }
         if let Err(error) = fs::rename(temporary, target) {
             let rollback = rollback(&backups[..index]);
             cleanup_staged(&staged[index..]);
@@ -476,6 +500,10 @@ fn apply_delete_with_context(
     expected_current: &[u8],
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
+    let repository_lock = repository_lock(repo);
+    let _repository_guard = repository_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = safe_path(repo, relative)?;
     let metadata = fs::metadata(&path)?;
     let current = fs::read(&path)?;
@@ -577,6 +605,34 @@ fn repository_fingerprint(repo: &Path) -> MedusaResult<String> {
     Ok(hex::encode(Sha256::digest(&output.stdout)))
 }
 
+fn repository_lock(repo: &Path) -> Arc<Mutex<()>> {
+    let key = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let locks = REPOSITORY_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut locks = locks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    Arc::clone(
+        locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
+}
+
+fn unique_staging_path(target: &Path, index: usize) -> PathBuf {
+    let nonce = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
+    target.with_extension(format!(
+        "medusa-txn-{}-{nonce}-{index}.tmp",
+        std::process::id()
+    ))
+}
+
+fn matches_backup(target: &Path, backup: &Backup) -> MedusaResult<bool> {
+    match &backup.content {
+        Some(expected) => Ok(target.exists() && fs::read(target)? == *expected),
+        None => Ok(!target.exists()),
+    }
+}
+
 fn provenance_boundary_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InternalInvariant,
@@ -618,6 +674,8 @@ fn cleanup_staged(staged: &[(PathBuf, PathBuf)]) {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Barrier, thread};
+
     use super::*;
 
     fn context(sequence: u64) -> MutationContext {
@@ -895,5 +953,42 @@ mod tests {
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o750
         );
+    }
+
+    #[test]
+    fn staging_paths_are_unique() {
+        let target = Path::new("src/lib.rs");
+        assert_ne!(unique_staging_path(target, 0), unique_staging_path(target, 0));
+    }
+
+    #[test]
+    fn repository_lock_serializes_overlapping_transactions() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let repo = Arc::new(directory.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(3));
+        let handles = ["first", "second"].map(|content| {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                apply_atomic(
+                    &repo,
+                    &[FileMutation {
+                        path: "same.txt".into(),
+                        content: content.into(),
+                    }],
+                )
+            })
+        });
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("worker").expect("transaction");
+        }
+        let final_content = fs::read_to_string(directory.path().join("same.txt")).unwrap();
+        assert!(matches!(final_content.as_str(), "first" | "second"));
+        assert!(fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains("medusa-txn")));
     }
 }
