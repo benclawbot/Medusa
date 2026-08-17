@@ -583,7 +583,10 @@ fn verify_provider_route(
             entry.display_name
         ));
     }
-    if !entry.discover_models {
+    let has_route = prepared_profile.profile().base_url.is_some()
+        || entry.base_url.is_some()
+        || matches!(entry.id, "openai" | "anthropic" | "minimax");
+    if !entry.discover_models && !has_route {
         return Ok(());
     }
 
