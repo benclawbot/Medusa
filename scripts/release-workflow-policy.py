@@ -3,8 +3,8 @@
 
 The normal Medusa release path is immutable and tag-driven. This guard rejects
 one-shot/version-pinned release writers, repository marker triggers, tag-ref
-mutation, release deletion/recreation, and broad authority in the automatic
-publisher.
+mutation, release deletion/recreation, broad authority in the automatic
+publisher, and unsafe release-signing trust-domain composition.
 """
 
 from __future__ import annotations
@@ -40,6 +40,12 @@ MARKER_REFERENCE = re.compile(
     r"(?i)\.github/[A-Za-z0-9._/-]*release[A-Za-z0-9._/-]*(?:trigger|bootstrap|replace)|"
     r"\.github/[A-Za-z0-9._/-]*(?:trigger|bootstrap|replace)[A-Za-z0-9._/-]*release"
 )
+PRIMARY_SIGNING_SECRET = "MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM"
+RECOVERY_SIGNING_SECRET = "MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM"
+PRIMARY_SIGNING_WORKFLOW = "sign-release-manifest.yml"
+RECOVERY_SIGNING_WORKFLOW = "sign-release-manifest-recovery.yml"
+PRIMARY_SIGNING_ENVIRONMENT = "release-signing-primary"
+RECOVERY_SIGNING_ENVIRONMENT = "release-signing-recovery"
 
 
 def release_like(path: Path, text: str) -> bool:
@@ -47,9 +53,8 @@ def release_like(path: Path, text: str) -> bool:
     return "release" in name or "gh release" in text.lower() or "refs/tags" in text.lower()
 
 
-def job_order_and_write_jobs(text: str) -> tuple[list[str], list[str]]:
-    jobs: list[str] = []
-    write_jobs: list[str] = []
+def job_blocks(text: str) -> dict[str, str]:
+    blocks: dict[str, list[str]] = {}
     current_job: str | None = None
     in_jobs = False
 
@@ -63,15 +68,59 @@ def job_order_and_write_jobs(text: str) -> tuple[list[str], list[str]]:
         match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", raw)
         if match:
             current_job = match.group(1)
-            jobs.append(current_job)
+            blocks[current_job] = [raw]
             continue
         if re.match(r"^\S", raw):
-            in_jobs = False
-            current_job = None
-            continue
-        if current_job and re.match(r"^\s{6}contents:\s*write\s*(?:#.*)?$", raw):
-            write_jobs.append(current_job)
+            break
+        if current_job is not None:
+            blocks[current_job].append(raw)
+    return {name: "\n".join(lines) for name, lines in blocks.items()}
+
+
+def job_order_and_write_jobs(text: str) -> tuple[list[str], list[str]]:
+    jobs = list(job_blocks(text))
+    write_jobs: list[str] = []
+    for name, block in job_blocks(text).items():
+        if re.search(r"(?m)^\s{6}contents:\s*write\s*(?:#.*)?$", block):
+            write_jobs.append(name)
     return jobs, write_jobs
+
+
+def signing_violations(path: Path, text: str) -> list[str]:
+    violations: list[str] = []
+    has_primary = PRIMARY_SIGNING_SECRET in text
+    has_recovery = RECOVERY_SIGNING_SECRET in text
+
+    if has_primary and has_recovery:
+        violations.append("primary and recovery signing authorities must use separate workflows")
+    if has_primary and path.name != PRIMARY_SIGNING_WORKFLOW:
+        violations.append("primary release signing key appears outside the primary signing workflow")
+    if has_recovery and path.name != RECOVERY_SIGNING_WORKFLOW:
+        violations.append("recovery release signing key appears outside the recovery signing workflow")
+
+    for job, block in job_blocks(text).items():
+        job_primary = PRIMARY_SIGNING_SECRET in block
+        job_recovery = RECOVERY_SIGNING_SECRET in block
+        if not (job_primary or job_recovery):
+            continue
+        if job_primary and job_recovery:
+            violations.append(f"secret-bearing job {job} exposes both signing authorities")
+        if "actions/checkout@" in block:
+            violations.append(f"secret-bearing release signer {job} checks out repository code")
+        if re.search(r"(?<![A-Za-z0-9_.-])scripts/", block):
+            violations.append(f"secret-bearing release signer {job} executes repository scripts")
+
+        expected_environment = (
+            PRIMARY_SIGNING_ENVIRONMENT if job_primary else RECOVERY_SIGNING_ENVIRONMENT
+        )
+        if not re.search(
+            rf"(?m)^\s{{4}}environment:\s*{re.escape(expected_environment)}\s*(?:#.*)?$",
+            block,
+        ):
+            violations.append(
+                f"secret-bearing release signer {job} must use environment {expected_environment}"
+            )
+    return violations
 
 
 def workflow_violations(path: Path, text: str) -> list[str]:
@@ -100,6 +149,8 @@ def workflow_violations(path: Path, text: str) -> list[str]:
         if pattern.search(text):
             violations.append("workflow can delete/recreate a published release")
             break
+
+    violations.extend(signing_violations(path, text))
 
     if path.as_posix().endswith(".github/workflows/publish-release.yml"):
         trigger_block = text.split("permissions:", 1)[0]
@@ -161,6 +212,13 @@ def assert_rejected(name: str, text: str, expected: str) -> None:
         raise AssertionError(f"fixture {name!r} was not rejected for {expected!r}: {found}")
 
 
+def assert_accepted(name: str, text: str) -> None:
+    path = Path(".github/workflows") / name
+    found = workflow_violations(path, text)
+    if found:
+        raise AssertionError(f"safe fixture {name!r} was rejected: {found}")
+
+
 def self_test() -> None:
     safe = """name: Publish Release
 on:
@@ -215,6 +273,65 @@ jobs:
         """name: Publish Release\non:\n  push:\n    tags:\n      - \"v*\"\npermissions:\n  contents: write\njobs:\n  publish:\n    permissions:\n      contents: write\n""",
         "default to contents: read",
     )
+
+    both_keys = f"""name: Unsafe Signer
+jobs:
+  sign:
+    environment: {PRIMARY_SIGNING_ENVIRONMENT}
+    env:
+      {PRIMARY_SIGNING_SECRET}: ${{{{ secrets.{PRIMARY_SIGNING_SECRET} }}}}
+      {RECOVERY_SIGNING_SECRET}: ${{{{ secrets.{RECOVERY_SIGNING_SECRET} }}}}
+    steps: []
+"""
+    assert_rejected(PRIMARY_SIGNING_WORKFLOW, both_keys, "separate workflows")
+    assert_rejected(PRIMARY_SIGNING_WORKFLOW, both_keys, "both signing authorities")
+
+    primary_checkout = f"""name: Unsafe Primary Signer
+jobs:
+  sign-primary:
+    environment: {PRIMARY_SIGNING_ENVIRONMENT}
+    env:
+      {PRIMARY_SIGNING_SECRET}: ${{{{ secrets.{PRIMARY_SIGNING_SECRET} }}}}
+    steps:
+      - uses: actions/checkout@deadbeef
+"""
+    assert_rejected(PRIMARY_SIGNING_WORKFLOW, primary_checkout, "checks out repository code")
+
+    recovery_script = f"""name: Unsafe Recovery Signer
+jobs:
+  sign-recovery:
+    environment: {RECOVERY_SIGNING_ENVIRONMENT}
+    env:
+      {RECOVERY_SIGNING_SECRET}: ${{{{ secrets.{RECOVERY_SIGNING_SECRET} }}}}
+    steps:
+      - run: python3 scripts/release-evidence.py sign-manifest
+"""
+    assert_rejected(RECOVERY_SIGNING_WORKFLOW, recovery_script, "executes repository scripts")
+
+    wrong_environment = f"""name: Unsafe Primary Environment
+jobs:
+  sign-primary:
+    environment: release-signing
+    env:
+      {PRIMARY_SIGNING_SECRET}: ${{{{ secrets.{PRIMARY_SIGNING_SECRET} }}}}
+    steps: []
+"""
+    assert_rejected(PRIMARY_SIGNING_WORKFLOW, wrong_environment, PRIMARY_SIGNING_ENVIRONMENT)
+
+    safe_primary = f"""name: Safe Primary Signer
+jobs:
+  prepare:
+    steps:
+      - uses: actions/checkout@deadbeef
+      - run: python3 scripts/release-evidence.py manifest
+  sign-primary:
+    environment: {PRIMARY_SIGNING_ENVIRONMENT}
+    env:
+      {PRIMARY_SIGNING_SECRET}: ${{{{ secrets.{PRIMARY_SIGNING_SECRET} }}}}
+    steps:
+      - run: openssl pkeyutl -sign
+"""
+    assert_accepted(PRIMARY_SIGNING_WORKFLOW, safe_primary)
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
