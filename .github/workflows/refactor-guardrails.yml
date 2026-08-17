@@ -20,26 +20,6 @@ on:
       - 'release/keys/**'
       - 'docs/**'
       - '.github/workflows/**'
-  push:
-    branches: [main]
-    paths:
-      - 'Cargo.toml'
-      - 'crates/**'
-      - 'apps/**'
-      - 'README.md'
-      - 'scripts/check-workflow-hygiene.sh'
-      - 'scripts/test-workflow-hygiene.sh'
-      - 'scripts/check-capability-evidence.py'
-      - 'scripts/test-capability-evidence.py'
-      - 'scripts/check-documentation.py'
-      - 'scripts/test-documentation.py'
-      - 'scripts/check-release-keyring.py'
-      - 'scripts/test-release-keyring.py'
-      - 'scripts/prepare-tauri-linux-tools.py'
-      - 'scripts/test-prepare-tauri-linux-tools.py'
-      - 'release/keys/**'
-      - 'docs/**'
-      - '.github/workflows/**'
 
 permissions:
   contents: read
