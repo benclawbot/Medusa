@@ -16,6 +16,21 @@ on:
       - '.github/workflows/reliability-benchmarks.yml'
   push:
     branches: [main]
+    paths:
+      - 'benchmarks/**'
+      - 'scripts/reliability-benchmark.py'
+      - 'scripts/test-reliability-benchmark.py'
+      - 'scripts/orchestration-benchmark.py'
+      - 'scripts/test-orchestration-benchmark.py'
+      - 'scripts/coding-harness-benchmark.py'
+      - 'scripts/test-coding-harness-benchmark.py'
+      - 'scripts/compare-coding-harness-benchmarks.py'
+      - 'scripts/test-compare-coding-harness-benchmarks.py'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.github/workflows/reliability-benchmarks.yml'
   workflow_dispatch:
 
 permissions:
@@ -25,6 +40,7 @@ jobs:
   scoring-contract:
     name: Benchmark scoring contract
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -41,6 +57,7 @@ jobs:
     name: Same-model coding harness baseline
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
@@ -73,6 +90,7 @@ jobs:
     name: Deterministic runtime benchmark
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
@@ -86,9 +104,13 @@ jobs:
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
+      - name: Build product acceptance runner once
+        run: cargo build --locked -p medusa-cli --bin medusa-product-acceptance
       - name: Run release-blocking reliability benchmark
         env:
           MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
+          MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance
+          MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '300'
         run: python3 scripts/reliability-benchmark.py
       - name: Run end-to-end orchestration benchmark
         env:
