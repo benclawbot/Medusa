@@ -1,0 +1,209 @@
+name: Sign Release Manifest Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to sign with the recovery authority
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sign-release-manifest-recovery-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare immutable unsigned release authority
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Validate redundant release authority
+        run: |
+          python3 scripts/test-release-keyring.py
+          python3 scripts/check-release-keyring.py
+      - name: Resolve immutable release
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
+          RELEASE_SHA=$(git rev-parse "$RELEASE_TAG^{commit}")
+          test "$RELEASE_SHA" = "$(git rev-parse HEAD)"
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
+      - name: Download CI-produced release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets
+          rm -f \
+            release-assets/medusa-release-manifest.json \
+            release-assets/medusa-release-manifest.sig.json \
+            release-assets/SHA256SUMS
+      - name: Generate unsigned canonical manifest
+        shell: bash
+        env:
+          RELEASE_SEQUENCE: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release-evidence.py manifest \
+            --root . \
+            --assets release-assets \
+            --output release-assets/medusa-release-manifest.json \
+            --checksums release-assets/SHA256SUMS \
+            --version "$RELEASE_VERSION" \
+            --revision "$RELEASE_SHA" \
+            --sequence "$RELEASE_SEQUENCE" \
+            --rollout-percentage 100 \
+            --minimum-updater-version "1.0.0"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-release-authority-${{ steps.release.outputs.sha }}
+          path: |
+            release-assets/medusa-release-manifest.json
+            release-assets/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  sign-recovery:
+    name: Verify and sign with recovery release authority
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: release-signing-recovery
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+      MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM: ${{ secrets.MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-release-authority-${{ needs.prepare.outputs.sha }}
+          path: release-authority
+      - name: Independently verify immutable signing input
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=release-authority/medusa-release-manifest.json
+          checksums=release-authority/SHA256SUMS
+          test -s "$manifest"
+          test -s "$checksums"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          version="${RELEASE_TAG#v}"
+          jq -e --arg sha "$RELEASE_SHA" --arg version "$version" '
+            .schema == "medusa-release-manifest-v2" and
+            .version == $version and
+            .source.repository == "benclawbot/Medusa" and
+            .source.revision == $sha and
+            .rollout.channel == "stable" and
+            (.rollout.sequence | type == "number" and . > 0)
+          ' "$manifest" >/dev/null
+
+          rm -rf verified-assets
+          mkdir verified-assets
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir verified-assets
+          rm -f \
+            verified-assets/medusa-release-manifest.json \
+            verified-assets/medusa-release-manifest.sig.json \
+            verified-assets/SHA256SUMS
+
+          find verified-assets -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$RUNNER_TEMP/actual-assets"
+          jq -r '.evidence[].name' "$manifest" | LC_ALL=C sort > "$RUNNER_TEMP/manifest-assets"
+          diff -u "$RUNNER_TEMP/actual-assets" "$RUNNER_TEMP/manifest-assets"
+
+          : > "$RUNNER_TEMP/expected-checksums"
+          while IFS=$'\t' read -r name bytes digest; do
+            test "$name" = "$(basename "$name")"
+            file="verified-assets/$name"
+            test -f "$file"
+            test "$(wc -c < "$file" | tr -d ' ')" = "$bytes"
+            actual=$(sha256sum "$file" | awk '{print $1}')
+            test "$actual" = "$digest"
+            printf '%s  %s\n' "$digest" "$name" >> "$RUNNER_TEMP/expected-checksums"
+          done < <(jq -r '.evidence[] | [.name, (.bytes|tostring), .sha256] | @tsv' "$manifest")
+          LC_ALL=C sort -o "$RUNNER_TEMP/expected-checksums" "$RUNNER_TEMP/expected-checksums"
+          LC_ALL=C sort "$checksums" > "$RUNNER_TEMP/provided-checksums"
+          diff -u "$RUNNER_TEMP/expected-checksums" "$RUNNER_TEMP/provided-checksums"
+      - name: Sign with isolated recovery key
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM"
+          manifest=release-authority/medusa-release-manifest.json
+          signature=release-authority/medusa-release-manifest.sig.json
+          private_key="$RUNNER_TEMP/medusa-recovery-ed25519.pem"
+          public_key="$RUNNER_TEMP/medusa-recovery-ed25519-public.pem"
+          raw_signature="$RUNNER_TEMP/medusa-recovery-signature.bin"
+          trap 'rm -f "$private_key" "$public_key" "$raw_signature"' EXIT
+          umask 077
+          printf '%s\n' "$MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM" > "$private_key"
+          cat > "$public_key" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MCowBQYDK2VwAyEAt7PNZJQ4ieU82JGR2gY7qUjVyhXJURtVqydxunEjDAI=
+          -----END PUBLIC KEY-----
+          PEM
+          openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$manifest" -out "$raw_signature"
+          test "$(wc -c < "$raw_signature" | tr -d ' ')" = 64
+          manifest_sha=$(sha256sum "$manifest" | awk '{print $1}')
+          signature_hex=$(xxd -p -c 256 "$raw_signature")
+          jq -cn \
+            --arg schema medusa-release-signature-v1 \
+            --arg key_id medusa-release-2026-08-recovery \
+            --arg algorithm Ed25519 \
+            --arg manifest_sha256 "$manifest_sha" \
+            --arg signature "$signature_hex" \
+            '{schema:$schema,key_id:$key_id,algorithm:$algorithm,manifest_sha256:$manifest_sha256,signature:$signature}' \
+            > "$signature"
+          openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -in "$manifest" -sigfile "$raw_signature"
+      - name: Attest the signed recovery authority
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: |
+            release-authority/medusa-release-manifest.json
+            release-authority/medusa-release-manifest.sig.json
+            release-authority/SHA256SUMS
+      - name: Publish the signed recovery authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            release-authority/medusa-release-manifest.json \
+            release-authority/medusa-release-manifest.sig.json \
+            release-authority/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          grep -Fx 'medusa-release-manifest.json' <<<"$assets"
+          grep -Fx 'medusa-release-manifest.sig.json' <<<"$assets"
+          grep -Fx 'SHA256SUMS' <<<"$assets"
