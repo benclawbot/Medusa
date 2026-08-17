@@ -33,7 +33,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ApprovalCard } from "./ApprovalCard";
 import { DesktopOnboarding } from "./DesktopOnboarding";
 import "./approval-card.css";
-import { loadProviderCatalog, profileModelCapabilityState, type ProviderCatalogEntry } from "./providerCatalog";
+import {
+  loadProviderCatalog,
+  profileModelCapabilityState,
+  startBrowserOauth,
+  type ProviderCatalogEntry,
+} from "./providerCatalog";
 import {
   cancelRuntime,
   commandSuggestions,
@@ -193,6 +198,17 @@ async function configureStartedRuntime(
   }
 }
 
+function finishActivities(
+  current: RuntimeActivity[],
+  kind: "done" | "error",
+  detail: string,
+): RuntimeActivity[] {
+  return current.map((item) => {
+    if (item.kind === "done" || item.kind === "error") return item;
+    return { ...item, kind, details: [...item.details, detail] };
+  });
+}
+
 export function App() {
   const [runtimeId, setRuntimeId] = useState<string>();
   const [repo, setRepo] = useState("");
@@ -222,6 +238,10 @@ export function App() {
   const [effort, setEffort] = useState<Effort>("medium");
   const [sharedConfiguration, setSharedConfiguration] = useState<SharedConfiguration>();
   const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [authenticating, setAuthenticating] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [oauthAuthenticatedProvider, setOauthAuthenticatedProvider] = useState<string>();
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -240,6 +260,13 @@ export function App() {
     setProvider(configuration.provider);
     setModel(configuration.model);
     setEffort(configuration.effort);
+    setBaseUrl(configuration.baseUrl ?? catalog.find((entry) => entry.profileProvider === configuration.provider)?.baseUrl ?? "");
+    if (
+      configuration.credentialConfigured
+      && catalog.find((entry) => entry.profileProvider === configuration.provider)?.browserOauth
+    ) {
+      setOauthAuthenticatedProvider(configuration.provider);
+    }
     return configuration;
   }, []);
 
@@ -322,6 +349,7 @@ export function App() {
         break;
       case "completed":
         setBusy(false);
+        setActivities((current) => finishActivities(current, "done", "Turn completed."));
         setMessages((current) => [
           ...current,
           { id: nextMessageId(), role: "system", text: `Session ${event.sessionId} completed.` },
@@ -329,9 +357,11 @@ export function App() {
         break;
       case "turnFinished":
         setBusy(false);
+        setActivities((current) => finishActivities(current, "done", "Turn finished."));
         break;
       case "cancelled":
         setBusy(false);
+        setActivities((current) => finishActivities(current, "error", "Stopped because the turn was cancelled."));
         setMessages((current) => [
           ...current,
           { id: nextMessageId(), role: "system", text: "The active turn was cancelled." },
@@ -339,6 +369,7 @@ export function App() {
         break;
       case "failed":
         setBusy(false);
+        setActivities((current) => finishActivities(current, "error", `Stopped because the runtime failed: ${event.message}`));
         setError(event.message);
         setMessages((current) => [
           ...current,
@@ -497,7 +528,6 @@ export function App() {
     ]);
   };
 
-
   const addImages = async (files: File[]) => {
     if (!files.length) return;
     try {
@@ -607,6 +637,52 @@ export function App() {
     }
   };
 
+  const selectProvider = async (value: string) => {
+    const nextProvider = providerCatalog.find((entry) => entry.profileProvider === value);
+    setProvider(value);
+    setApiKey("");
+    setError(undefined);
+    setBaseUrl(nextProvider?.baseUrl ?? "");
+    setModel(nextProvider?.defaultModel ?? "");
+    if (!nextProvider) return;
+
+    setLoadingModels(true);
+    try {
+      const refreshed = await loadProviderCatalog(true, value);
+      setProviderCatalog(refreshed);
+      const refreshedProvider = refreshed.find((entry) => entry.profileProvider === value);
+      if (refreshedProvider) {
+        setModel(refreshedProvider.modelOptions[0] ?? refreshedProvider.defaultModel);
+      }
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const authenticateSelectedProvider = async () => {
+    if (!provider) return;
+    setAuthenticating(true);
+    setError(undefined);
+    try {
+      await startBrowserOauth(provider);
+      setOauthAuthenticatedProvider(provider);
+      const refreshed = await loadProviderCatalog(true, provider);
+      setProviderCatalog(refreshed);
+      const refreshedProvider = refreshed.find((entry) => entry.profileProvider === provider);
+      if (refreshedProvider) {
+        setModel((current) => refreshedProvider.modelOptions.includes(current)
+          ? current
+          : refreshedProvider.modelOptions[0] ?? refreshedProvider.defaultModel);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAuthenticating(false);
+    }
+  };
+
   const applyModel = async () => {
     if (!runtimeId) return;
     try {
@@ -616,6 +692,9 @@ export function App() {
         effort,
         expectedRevision: sharedConfiguration?.revision ?? 0,
         apiKey: apiKey.trim() || undefined,
+        baseUrl: providerCatalog.find((entry) => entry.profileProvider === provider)?.customValues
+          ? baseUrl.trim() || undefined
+          : undefined,
       });
       await refreshConfiguration();
       setApiKey("");
@@ -663,7 +742,13 @@ export function App() {
     () => providerCatalog.find((entry) => entry.profileProvider === provider),
     [providerCatalog, provider],
   );
-  const credentiallessProvider = selectedProvider?.authMethods.every((method) => method === "none") ?? false;
+  const oauthProvider = selectedProvider?.browserOauth ?? false;
+  const oauthAuthenticated = oauthProvider && (
+    oauthAuthenticatedProvider === provider
+    || (sharedConfiguration?.provider === provider && sharedConfiguration.credentialConfigured)
+  );
+  const credentiallessProvider = !oauthProvider
+    && (selectedProvider?.authMethods.every((method) => method === "none") ?? false);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.input + usage.output;
   const openDesktopTool = (selector: string) => {
@@ -744,8 +829,8 @@ export function App() {
               <Info size={16} /> Session details
             </button>
             <div className="runtime-state" role="status">
-              <span className={`status-dot ${busy ? "busy" : runtimeId ? "ready" : "offline"}`} />
-              {busy ? `Working · turn ${turn}` : runtimeId ? "Ready" : "Starting"}
+              <span className={`status-dot ${busy ? "busy" : error ? "offline" : runtimeId ? "ready" : "offline"}`} />
+              {busy ? `Working · turn ${turn}` : error ? "Needs attention" : runtimeId ? "Ready" : "Starting"}
             </div>
           </div>
         </header>
@@ -926,20 +1011,23 @@ export function App() {
 
         {activePanel === "settings" && (
           <div className="standalone-panel settings-form">
-            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Saved securely in your operating system credential manager</p><small>Shared profile: {sharedConfiguration?.activeProfile ?? "loading"} · revision {sharedConfiguration?.revision ?? "…"}</small></div></div>
-            <label>Provider<select value={provider} onChange={(event) => {
-              const nextProvider = providerCatalog.find((entry) => entry.profileProvider === event.target.value);
-              setProvider(event.target.value);
-              if (nextProvider) {
-                setModel(nextProvider.defaultModel);
-                setApiKey("");
-              }
-            }}>{providerCatalog.map((entry) => <option key={entry.id} value={entry.profileProvider} disabled={Boolean(entry.disabledReason)}>{entry.displayName}{entry.currentCustom ? " (current custom)" : ""}</option>)}</select></label>
+            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Credentials are retained in the appropriate local credential store</p><small>Shared profile: {sharedConfiguration?.activeProfile ?? "loading"} · revision {sharedConfiguration?.revision ?? "…"}</small></div></div>
+            <label>Provider<select value={provider} onChange={(event) => void selectProvider(event.target.value)}>{providerCatalog.map((entry) => <option key={entry.id} value={entry.profileProvider} disabled={Boolean(entry.disabledReason)}>{entry.displayName}{entry.currentCustom ? " (current custom)" : ""}</option>)}</select></label>
             {selectedProvider && <small>{selectedProvider.disabledReason ?? selectedProvider.description}</small>}
-            <label>Model<select value={model} onChange={(event) => setModel(event.target.value)}>{(selectedProvider?.modelOptions ?? (model ? [model] : [])).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+            {loadingModels && <small role="status">Refreshing available models…</small>}
+            <label>Model<select value={model} disabled={loadingModels} onChange={(event) => setModel(event.target.value)}>{(selectedProvider?.modelOptions ?? (model ? [model] : [])).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
             <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-            <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={credentiallessProvider ? "This route does not require an API key" : "Leave blank to use the saved key"} disabled={credentiallessProvider} /></label>
-            <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !sharedConfiguration || !provider.trim() || !model.trim() || Boolean(selectedProvider?.disabledReason)}>Apply configuration</button>
+            {oauthProvider ? (
+              <div>
+                <button className="secondary-action" disabled={authenticating} onClick={() => void authenticateSelectedProvider()}>{authenticating ? "Opening ChatGPT sign-in…" : oauthAuthenticated ? "Re-authenticate with ChatGPT" : "Sign in with ChatGPT"}</button>
+                <small>{oauthAuthenticated ? "ChatGPT OAuth credential found. Apply configuration to verify the route and selected model." : "Authenticate your ChatGPT subscription in the browser before applying this provider."}</small>
+              </div>
+            ) : (
+              <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={credentiallessProvider ? "This route does not require an API key" : "Leave blank to use the saved key"} disabled={credentiallessProvider} /></label>
+            )}
+            {selectedProvider?.customValues && <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" /></label>}
+            {selectedProvider && <small>Route: {selectedProvider.customValues ? baseUrl || "not set" : selectedProvider.baseUrl ?? "provider default"}. Medusa verifies the endpoint and selected model before applying.</small>}
+            <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !sharedConfiguration || !provider.trim() || !model.trim() || loadingModels || authenticating || (oauthProvider && !oauthAuthenticated) || Boolean(selectedProvider?.disabledReason)}>Apply configuration</button>
           </div>
         )}
       </section>
