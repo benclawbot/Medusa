@@ -78,7 +78,17 @@ jobs:
       - name: Validate committed dependency authority
         run: cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked --format-version 1
       - name: Check desktop formatting
-        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check 2>&1 | tee desktop-fmt.log
+      - name: Upload desktop formatting diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-fmt-${{ runner.os }}
+          path: desktop-fmt.log
+          if-no-files-found: error
       - name: Lint desktop adapter
         shell: bash
         run: |
