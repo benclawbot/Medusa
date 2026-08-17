@@ -282,6 +282,9 @@ fn skip_ascii_whitespace(value: &str, mut cursor: usize) -> usize {
 }
 
 fn value_end(value: &str, start: usize, quote: Option<u8>) -> usize {
+    if value[start..].starts_with(REDACTED) {
+        return start + REDACTED.len();
+    }
     for (offset, character) in value[start..].char_indices() {
         let byte = character as u32;
         if quote.is_some_and(|quote| byte == u32::from(quote))
@@ -333,6 +336,12 @@ mod tests {
         for secret in ["cli-secret", "inline-secret", "url-secret"] {
             assert!(!joined.contains(secret));
         }
+    }
+
+    #[test]
+    fn redaction_is_idempotent() {
+        let once = redact_text("command=curl --token cli-secret Authorization: Bearer header-secret");
+        assert_eq!(redact_text(&once), once);
     }
 
     #[test]
