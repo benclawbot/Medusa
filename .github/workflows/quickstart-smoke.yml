@@ -5,7 +5,6 @@ on:
     paths:
       - "crates/medusa-cli/**"
       - "docs/quickstart.md"
-      - ".github/workflows/quickstart-smoke.yml"
 
 permissions:
   contents: read
