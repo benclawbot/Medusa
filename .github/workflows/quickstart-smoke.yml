@@ -6,8 +6,6 @@ on:
       - "crates/medusa-cli/**"
       - "docs/quickstart.md"
       - ".github/workflows/quickstart-smoke.yml"
-  push:
-    branches: [main]
 
 permissions:
   contents: read
