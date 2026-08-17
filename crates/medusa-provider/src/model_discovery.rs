@@ -49,15 +49,16 @@ struct ProviderModel {
 /// The caller may provide a session-only credential (for example from the Desktop credential
 /// store). When it is absent, this falls back to the same provider credential environment used by
 /// normal configuration. Credentials are never returned or cached by this API.
+///
+/// Discovery is also attempted for compatible/local routes that expose an explicit base URL. This
+/// lets desktop setup verify the actual endpoint instead of treating a syntactically valid profile
+/// as a working provider connection.
 pub fn discover_models(
     config: &Config,
     session_api_key: Option<&str>,
 ) -> Result<Vec<DiscoveredModel>, ModelDiscoveryError> {
     let provider = config.model.provider.as_str();
     let catalog = provider_catalog_entry(provider).ok_or(ModelDiscoveryError::Unsupported)?;
-    if !catalog.discover_models && !matches!(catalog.id, "openai" | "anthropic" | "minimax") {
-        return Err(ModelDiscoveryError::Unsupported);
-    }
 
     let base_url = config
         .model

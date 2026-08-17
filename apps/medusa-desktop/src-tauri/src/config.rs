@@ -8,7 +8,10 @@ use medusa_config::{
 };
 use serde::Serialize;
 
-use crate::credentials::{CredentialStore, SystemCredentialStore};
+use crate::{
+    credentials::{CredentialStore, SystemCredentialStore},
+    provider_auth::browser_oauth_credentials_present,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +79,10 @@ pub(crate) struct PreparedProviderProfile {
 impl PreparedProviderProfile {
     pub(crate) fn previous_profile(&self) -> &ProviderProfile {
         self.update.profile()
+    }
+
+    pub(crate) fn profile(&self) -> &ProviderProfile {
+        &self.profile
     }
 
     pub(crate) fn is_changed(&self) -> bool {
@@ -251,9 +258,13 @@ fn shared_configuration(
     let environment_credential = credential_environment(&profile.provider)
         .and_then(std::env::var_os)
         .is_some_and(|value| !value.is_empty());
-    let credential_configured = profile.auth == "none"
-        || environment_credential
-        || load_credential(&profile.provider)?.is_some();
+    let credential_configured = if profile.provider == "openai-oauth" {
+        browser_oauth_credentials_present(&profile.provider)
+    } else {
+        profile.auth == "none"
+            || environment_credential
+            || load_credential(&profile.provider)?.is_some()
+    };
     Ok(DesktopSharedConfiguration {
         revision,
         active_profile,

@@ -56,10 +56,10 @@ it("uses browser OAuth then refreshes authenticated models", async () => {
   render(<DesktopOnboarding configuration={configuration} providers={[oauthProvider]} onApply={vi.fn()} />);
 
   expect(screen.getByRole("heading", { name: "Authenticate" })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Sign in with browser" }));
+  fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
 
   await waitFor(() => expect(startBrowserOauth).toHaveBeenCalledWith("openai-oauth"));
-  expect(loadProviderCatalog).toHaveBeenCalledWith(true);
+  expect(loadProviderCatalog).toHaveBeenCalledWith(true, "openai-oauth");
   expect(await screen.findByRole("heading", { name: "Choose a model" })).toBeInTheDocument();
 });
 
@@ -67,13 +67,21 @@ it("keeps authentication recoverable when browser OAuth fails or is cancelled", 
   vi.mocked(startBrowserOauth).mockRejectedValue(new Error("Browser sign-in cancelled"));
   render(<DesktopOnboarding configuration={configuration} providers={[oauthProvider]} onApply={vi.fn()} />);
 
-  fireEvent.click(screen.getByRole("button", { name: "Sign in with browser" }));
+  fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent("Browser sign-in cancelled");
   expect(screen.getByRole("heading", { name: "Authenticate" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Sign in with browser" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
 });
 
+it("does not treat an OAuth route as authenticated merely because it has no API key", async () => {
+  const catalogOAuthProvider = { ...oauthProvider, authMethods: ["none"], defaultAuth: "none" };
+  const catalogConfiguration = { ...configuration, auth: "none" };
+  render(<DesktopOnboarding configuration={catalogConfiguration} providers={[catalogOAuthProvider]} onApply={vi.fn()} />);
+
+  expect(screen.getByRole("heading", { name: "Authenticate" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
+});
 
 it("stages a custom endpoint only on the advanced custom route", async () => {
   const customProvider: ProviderCatalogEntry = {

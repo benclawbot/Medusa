@@ -17,6 +17,10 @@ export function providerForProfile(
   return providers.find((entry) => entry.profileProvider === profileProvider);
 }
 
+function providerRequiresCredential(provider: ProviderCatalogEntry): boolean {
+  return provider.browserOauth || provider.authMethods.some((method) => method !== "none");
+}
+
 export function configurationIsUsable(
   configuration: SharedConfiguration | undefined,
   providers: ProviderCatalogEntry[],
@@ -24,8 +28,7 @@ export function configurationIsUsable(
   if (!configuration?.configured || !configuration.provider.trim() || !configuration.model.trim()) return false;
   const provider = providerForProfile(providers, configuration.provider);
   if (!provider || provider.disabledReason) return false;
-  const authRequired = provider.authMethods.some((method) => method !== "none");
-  if (authRequired && !configuration.credentialConfigured && configuration.auth !== "oauth") return false;
+  if (providerRequiresCredential(provider) && !configuration.credentialConfigured) return false;
   return true;
 }
 
@@ -36,12 +39,7 @@ export function initialOnboardingStep(
   if (!configuration?.provider.trim()) return "provider";
   const provider = providerForProfile(providers, configuration.provider);
   if (!provider || provider.disabledReason) return "provider";
-  const authRequired = provider.authMethods.some((method) => method !== "none");
-  if (
-    authRequired
-    && !configuration.credentialConfigured
-    && (configuration.auth !== "oauth" || !configuration.configured)
-  ) {
+  if (providerRequiresCredential(provider) && !configuration.credentialConfigured) {
     return "authentication";
   }
   if (!configuration.model.trim()) return "model";

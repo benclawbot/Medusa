@@ -63,14 +63,20 @@ export interface ProviderCatalogEntry {
   currentCustom: boolean;
 }
 
-export async function loadModelRegistry(refresh = false): Promise<ModelRegistry> {
-  return invoke<ModelRegistry>("desktop_model_registry", { refresh });
+export async function loadModelRegistry(
+  refresh = false,
+  provider?: string,
+): Promise<ModelRegistry> {
+  return invoke<ModelRegistry>("desktop_model_registry", { refresh, provider });
 }
 
-export async function loadProviderCatalog(refresh = false): Promise<ProviderCatalogEntry[]> {
+export async function loadProviderCatalog(
+  refresh = false,
+  selectedProvider?: string,
+): Promise<ProviderCatalogEntry[]> {
   const providers = await invoke<ProviderCatalogEntry[]>("desktop_provider_catalog");
   try {
-    const registry = await loadModelRegistry(refresh);
+    const registry = await loadModelRegistry(refresh, selectedProvider);
     return providers.map((provider) =>
       provider.id === registry.provider_id || provider.profileProvider === registry.provider_id
         ? {

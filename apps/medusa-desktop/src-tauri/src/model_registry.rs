@@ -5,7 +5,8 @@ use std::{
 };
 
 use medusa_config::{
-    Config, ModelDiscoveryCache, ModelRegistry, ProviderProfileCatalog, model_registry_for_profile,
+    Config, ModelDiscoveryCache, ModelRegistry, ProviderProfile, ProviderProfileCatalog,
+    apply_provider_defaults, model_registry_for_profile, provider_catalog_entry,
     provider_catalog_entry_for_profile,
 };
 use medusa_provider::discover_models;
@@ -14,11 +15,43 @@ use crate::credentials::{CredentialStore, SystemCredentialStore};
 
 static DISCOVERY_CACHE: OnceLock<Mutex<BTreeMap<String, ModelDiscoveryCache>>> = OnceLock::new();
 
-#[tauri::command]
-pub fn desktop_model_registry(refresh: Option<bool>) -> Result<ModelRegistry, String> {
+fn profile_for_discovery(requested_provider: Option<&str>) -> Result<ProviderProfile, String> {
     let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;
     let snapshot = catalog.snapshot().map_err(|error| error.to_string())?;
-    let profile = snapshot.profile;
+    let current = snapshot.profile;
+    let Some(provider) = requested_provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(current);
+    };
+
+    if provider == current.provider
+        || provider_catalog_entry_for_profile(&current).is_some_and(|entry| entry.id == provider)
+    {
+        return Ok(current);
+    }
+
+    let entry = provider_catalog_entry(provider)
+        .ok_or_else(|| format!("unknown provider `{provider}` for model discovery"))?;
+    if let Some(reason) = entry.disabled_reason {
+        return Err(format!(
+            "provider {} is unavailable: {reason}",
+            entry.display_name
+        ));
+    }
+    let mut profile = ProviderProfile::default();
+    apply_provider_defaults(entry, &mut profile);
+    profile.configured = true;
+    Ok(profile)
+}
+
+#[tauri::command]
+pub fn desktop_model_registry(
+    refresh: Option<bool>,
+    provider: Option<String>,
+) -> Result<ModelRegistry, String> {
+    let profile = profile_for_discovery(provider.as_deref())?;
     let provider_id = provider_catalog_entry_for_profile(&profile)
         .map_or(profile.provider.as_str(), |entry| entry.id)
         .to_owned();
