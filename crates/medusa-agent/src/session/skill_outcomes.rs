@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -7,7 +8,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use super::AgentSession;
+use super::{AgentSession, secure_state};
 use crate::tools::skills::automatically_loaded_names;
 use medusa_failure::FailureDecision;
 
@@ -127,7 +128,7 @@ pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<O
     }
 
     let root = session.repo.join(OUTCOME_ROOT);
-    fs::create_dir_all(&root)?;
+    secure_state::create_dir_all(&root)?;
     let destination = root.join(format!("{}.json", session.id));
     if !destination.is_file() {
         let recorded_at = OffsetDateTime::now_utc()
@@ -170,7 +171,7 @@ pub(crate) fn record_loaded_skills(session: &AgentSession) -> MedusaResult<()> {
         .join(SESSION_SKILLS_ROOT)
         .join(format!("{}.json", session.id));
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        secure_state::create_dir_all(parent)?;
     }
     atomic_json(&path, &loaded)
 }
@@ -211,7 +212,7 @@ pub(crate) fn record_terminal_skill_outcome(
         return Ok(None);
     }
     let root = session.repo.join(OUTCOME_ROOT);
-    fs::create_dir_all(&root)?;
+    secure_state::create_dir_all(&root)?;
     let destination = root.join(format!("{}.json", session.id));
     let recorded_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -317,7 +318,7 @@ fn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {
     };
     let destination = repo.join(METRICS_PATH);
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+        secure_state::create_dir_all(parent)?;
     }
     atomic_json(&destination, &summary)?;
     write_review_recommendations(repo, recommendations)?;
@@ -332,7 +333,7 @@ fn write_review_recommendations(
     recommendations.sort_by(|left, right| left.skill.cmp(&right.skill));
     let destination = repo.join(REVIEW_PATH);
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+        secure_state::create_dir_all(parent)?;
     }
     atomic_json(
         &destination,
@@ -413,10 +414,22 @@ fn average_milli(total: u64, samples: u64) -> u64 {
 }
 
 fn atomic_json(path: &Path, value: &impl Serialize) -> MedusaResult<()> {
+    if let Some(parent) = path.parent() {
+        secure_state::create_dir_all(parent)?;
+    }
     let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
-    fs::rename(temporary, path)?;
-    Ok(())
+    let result = (|| {
+        let mut file = secure_state::create_new_file(&temporary)?;
+        file.write_all(&serde_json::to_vec_pretty(value)?)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        secure_state::repair(path, false)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]
