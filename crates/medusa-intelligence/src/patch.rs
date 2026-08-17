@@ -3,14 +3,11 @@ use std::{
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex, OnceLock,
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{repository_mutation, MedusaResult};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -20,7 +17,6 @@ use crate::{
 
 const JOURNAL_SCHEMA: u32 = 1;
 const JOURNAL_ROOT: &str = ".medusa/patch-transactions";
-static REPOSITORY_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 static REPLACEMENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A byte-range replacement guarded by expected original content.
@@ -168,10 +164,7 @@ impl PatchTransaction {
         if self.edits.is_empty() {
             return Err(invalid("transaction contains no edits"));
         }
-        let repository_lock = repository_lock(repo);
-        let _repository_guard = repository_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _repository_guard = repository_mutation::lock(repo);
 
         let mut grouped: BTreeMap<PathBuf, Vec<TextEdit>> = BTreeMap::new();
         for edit in self.edits {
@@ -363,19 +356,6 @@ fn transaction_id(grouped: &BTreeMap<PathBuf, Vec<TextEdit>>) -> MedusaResult<St
     Ok(format!("{timestamp:032x}-{}", &hash(&payload)[..16]))
 }
 
-fn repository_lock(repo: &Path) -> Arc<Mutex<()>> {
-    let key = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
-    let locks = REPOSITORY_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut locks = locks
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    Arc::clone(
-        locks
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(()))),
-    )
-}
-
 fn journal_directory(repo: &Path, transaction_id: &str) -> PathBuf {
     repo.join(JOURNAL_ROOT).join(transaction_id)
 }
@@ -454,7 +434,10 @@ fn sync_directory(path: &Path) -> MedusaResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Barrier, thread};
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use super::*;
 
