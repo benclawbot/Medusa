@@ -86,7 +86,11 @@ fn redact_assignment(input: &str, name: &str) -> String {
             continue;
         }
         let mut cursor = start + name.len();
-        if lower.as_bytes().get(cursor).is_some_and(|byte| matches!(*byte, b'\'' | b'"')) {
+        if lower
+            .as_bytes()
+            .get(cursor)
+            .is_some_and(|byte| matches!(*byte, b'\'' | b'"'))
+        {
             cursor += 1;
         }
         cursor = skip_ascii_whitespace(&lower, cursor);
@@ -297,7 +301,8 @@ mod tests {
 
     #[test]
     fn redacts_assignments_headers_and_common_token_prefixes() {
-        let input = "api_key=alpha Authorization: Bearer bearer-secret password=bravo sk-charlie ghp_delta";
+        let input =
+            "api_key=alpha Authorization: Bearer bearer-secret password=bravo sk-charlie ghp_delta";
         let redacted = redact_text(input);
         for secret in ["alpha", "bearer-secret", "bravo", "sk-charlie", "ghp_delta"] {
             assert!(!redacted.contains(secret));
