@@ -28,6 +28,8 @@ jobs:
       - name: Validate committed dependency authority
         run: cargo metadata --locked --format-version 1
       - name: Recording-provider multimodal contract
+        env:
+          MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
         run: cargo test -p medusa-provider --test multimodal_contract --locked
       - name: Shared attachment and TUI controls
         run: cargo test -p medusa-tui clipboard::tests --locked
