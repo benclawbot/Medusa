@@ -13,7 +13,6 @@ on:
       - 'scripts/compare-coding-harness-benchmarks.py'
       - 'scripts/test-compare-coding-harness-benchmarks.py'
       - 'docs/BENCHMARKS.md'
-      - '.github/workflows/reliability-benchmarks.yml'
   workflow_dispatch:
 
 permissions:
