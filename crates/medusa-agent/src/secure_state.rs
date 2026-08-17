@@ -13,20 +13,27 @@ pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn create_new_file(path: &Path) -> io::Result<fs::File> {
+    open_secure_file(path, true)
+}
+
+pub(crate) fn create_file(path: &Path) -> io::Result<fs::File> {
+    open_secure_file(path, false)
+}
+
+fn open_secure_file(path: &Path, create_new: bool) -> io::Result<fs::File> {
     if let Some(parent) = path.parent() {
         create_dir_all(parent)?;
     }
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    if create_new {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
     #[cfg(unix)]
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(FILE_MODE)
-        .open(path)?;
-    #[cfg(not(unix))]
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    options.mode(FILE_MODE);
+    let file = options.open(path)?;
     secure_file(path)?;
     Ok(file)
 }
@@ -105,6 +112,23 @@ mod tests {
         );
         assert_eq!(
             fs::metadata(&file_path).unwrap().permissions().mode() & 0o777,
+            FILE_MODE
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaceable_secure_file_recovers_a_stale_temp_file() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let path = temporary.path().join("state.tmp");
+        fs::write(&path, b"stale").expect("stale temp");
+        let mut file = create_file(&path).expect("replace stale temp");
+        use std::io::Write as _;
+        file.write_all(b"fresh").expect("fresh content");
+        drop(file);
+        assert_eq!(fs::read(&path).expect("temp content"), b"fresh");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             FILE_MODE
         );
     }
