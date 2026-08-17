@@ -63,51 +63,55 @@ jobs:
           python3 scripts/test-unsafe-boundary.py
           python3 scripts/check-unsafe-boundary.py
           cargo check -p medusa-process-containment --all-targets --locked
-      - name: Clippy
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
-      - name: Upload Clippy diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: clippy-diagnostics
-          path: clippy.log
-          if-no-files-found: ignore
-      - name: Production panic audit
-        id: production_panic_audit
+      - name: Production lint
+        id: production_lint
         shell: bash
         run: |
           set -o pipefail
           python3 scripts/test-production-panic-exemptions.py
           python3 scripts/check-production-panic-exemptions.py
           cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
+            -D warnings \
             -D clippy::unwrap_used \
             -D clippy::expect_used \
             -D clippy::panic \
-            2>&1 | tee production-panic-audit.log
-      - name: Upload production panic diagnostics
-        if: failure() && steps.production_panic_audit.outcome == 'failure'
+            2>&1 | tee production-lint.log
+      - name: Upload production lint diagnostics
+        if: failure() && steps.production_lint.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: production-panic-audit-diagnostics
-          path: production-panic-audit.log
+          name: production-lint-diagnostics
+          path: production-lint.log
           if-no-files-found: error
-      - name: Fast workspace unit tests
-        id: workspace_tests
+      - name: Resolve changed Rust packages
+        id: changed_rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-changed-rust-packages.py
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          cargo_args="$(python3 scripts/changed-rust-packages.py --base FETCH_HEAD --format cargo-args)"
+          echo "cargo_args=$cargo_args" >> "$GITHUB_OUTPUT"
+          if [[ -n "$cargo_args" ]]; then
+            echo "Testing changed Rust packages: $cargo_args"
+          else
+            echo "No Rust package source changes detected; package unit tests are not needed."
+          fi
+      - name: Changed-package unit tests
+        id: changed_package_tests
+        if: steps.changed_rust.outputs.cargo_args != ''
         shell: bash
         env:
           MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
         run: |
           set -o pipefail
-          cargo test --workspace --all-features --locked --lib -- --nocapture 2>&1 | tee workspace-tests.log
-      - name: Upload workspace test diagnostics
-        if: failure() && steps.workspace_tests.outcome == 'failure'
+          cargo test ${{ steps.changed_rust.outputs.cargo_args }} --all-features --locked --lib -- --nocapture 2>&1 | tee changed-package-tests.log
+      - name: Upload changed-package test diagnostics
+        if: failure() && steps.changed_package_tests.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: workspace-test-diagnostics
-          path: workspace-tests.log
+          name: changed-package-test-diagnostics
+          path: changed-package-tests.log
           if-no-files-found: error
       - name: Assert authoritative validation preserved Cargo.lock
         run: git diff --exit-code -- Cargo.lock
