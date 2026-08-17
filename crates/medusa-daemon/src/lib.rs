@@ -7,6 +7,7 @@ pub mod frontend_control;
 mod lifecycle;
 pub mod live_session;
 mod paths;
+#[path = "process_bounded.rs"]
 mod process;
 mod protocol;
 mod scheduler;
