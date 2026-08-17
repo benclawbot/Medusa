@@ -13,6 +13,10 @@ from typing import Any
 
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 ACTIVE_ROLES = {"primary", "recovery"}
+SIGNING_WORKFLOWS = {
+    "primary": ".github/workflows/sign-release-manifest.yml",
+    "recovery": ".github/workflows/sign-release-manifest-recovery.yml",
+}
 
 
 class KeyringError(RuntimeError):
@@ -86,13 +90,26 @@ def validate_keyring(root: Path, payload: dict[str, Any]) -> None:
 
 
 def validate_references(root: Path, payload: dict[str, Any]) -> None:
-    workflow = (root / ".github/workflows/sign-release-manifest.yml").read_text(encoding="utf-8")
+    workflows = {
+        role: (root / relative).read_text(encoding="utf-8")
+        for role, relative in SIGNING_WORKFLOWS.items()
+    }
     rust = (root / "crates/medusa-update/src/manifest.rs").read_text(encoding="utf-8")
     active = [key for key in payload["keys"] if key["status"] == "active"]
     for key in active:
-        for value in (key["key_id"], key["public_key_file"], key["private_key_secret"]):
-            require(value in workflow, f"signing workflow does not reference {value}")
+        role = key["role"]
+        workflow = workflows[role]
+        for value in (key["key_id"], key["private_key_secret"]):
+            require(value in workflow, f"{role} signing workflow does not reference {value}")
+
+        raw_public_key = bytes.fromhex(key["public_key_hex"])
+        spki_base64 = base64.b64encode(ED25519_SPKI_PREFIX + raw_public_key).decode("ascii")
+        require(
+            spki_base64 in workflow,
+            f"{role} signing workflow does not embed the public key from {key['public_key_file']}",
+        )
         require(key["key_id"] in rust, f"updater trust store does not reference {key['key_id']}")
+
     for relative in ("docs/RELEASE-SIGNING.md", "docs/architecture/PREBUILT-UPDATES.md", "docs/RELEASE.md"):
         text = (root / relative).read_text(encoding="utf-8")
         require("release/keys/keyring.json" in text, f"{relative} must link to the keyring authority")
