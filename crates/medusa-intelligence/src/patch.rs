@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use medusa_core::{repository_mutation, MedusaResult};
+use medusa_core::{MedusaResult, repository_mutation};
 use serde::{Deserialize, Serialize};
 
 use crate::{
