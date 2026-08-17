@@ -124,9 +124,10 @@ pub(crate) async fn async_response_error(response: reqwest::Response) -> MedusaE
 pub(crate) fn blocking_response_json<T: DeserializeOwned>(
     response: reqwest::blocking::Response,
 ) -> MedusaResult<T> {
-    let body = read_blocking_bounded(response, PROVIDER_SUCCESS_BODY_LIMIT_BYTES).map_err(|error| {
-        provider_response_error(format!("could not read provider response body: {error}"))
-    })?;
+    let body =
+        read_blocking_bounded(response, PROVIDER_SUCCESS_BODY_LIMIT_BYTES).map_err(|error| {
+            provider_response_error(format!("could not read provider response body: {error}"))
+        })?;
     parse_bounded_json(body)
 }
 
@@ -230,9 +231,7 @@ fn classify_status_with_body(
     };
     let excerpt = String::from_utf8_lossy(&body.bytes);
     let truncation = if body.truncated {
-        format!(
-            " [provider error body truncated at {PROVIDER_ERROR_BODY_LIMIT_BYTES} bytes]"
-        )
+        format!(" [provider error body truncated at {PROVIDER_ERROR_BODY_LIMIT_BYTES} bytes]")
     } else {
         String::new()
     };
