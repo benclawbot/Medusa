@@ -8,7 +8,8 @@ const FILE_MODE: u32 = 0o600;
 
 pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
-    secure_directory(path)
+    secure_directory(path)?;
+    secure_medusa_ancestor(path)
 }
 
 pub(crate) fn create_new_file(path: &Path) -> io::Result<fs::File> {
@@ -32,10 +33,20 @@ pub(crate) fn create_new_file(path: &Path) -> io::Result<fs::File> {
 
 pub(crate) fn repair(path: &Path, directory: bool) -> io::Result<()> {
     if directory {
-        secure_directory(path)
+        secure_directory(path)?;
+        secure_medusa_ancestor(path)
     } else {
         secure_file(path)
     }
+}
+
+fn secure_medusa_ancestor(path: &Path) -> io::Result<()> {
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.file_name().is_some_and(|name| name == ".medusa") {
+            return secure_directory(ancestor);
+        }
+    }
+    Ok(())
 }
 
 fn secure_directory(path: &Path) -> io::Result<()> {
@@ -95,6 +106,20 @@ mod tests {
         assert_eq!(
             fs::metadata(&file_path).unwrap().permissions().mode() & 0o777,
             FILE_MODE
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn securing_a_child_also_protects_the_medusa_root() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let root = temporary.path().join(".medusa");
+        let child = root.join("sessions");
+        create_dir_all(&child).expect("secure child");
+
+        assert_eq!(
+            fs::metadata(root).unwrap().permissions().mode() & 0o777,
+            DIRECTORY_MODE
         );
     }
 
