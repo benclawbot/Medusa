@@ -65,7 +65,7 @@ try {
     Write-Host "Installed $version"
     Write-Host 'Launching Medusa...'
     Write-Host ''
-    & $target
+    Start-Process -FilePath $target -NoNewWindow -Wait
 }
 finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
