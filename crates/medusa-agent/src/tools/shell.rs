@@ -76,8 +76,9 @@ fn run_validated(
     cancellation: Option<&AtomicBool>,
 ) -> MedusaResult<String> {
     let mode = output_mode_label(output_mode);
-    let command_summary = format!("{} {}", program, args.join(" "));
-    let input_summary = format!("{command_summary}\0output_mode={mode}");
+    let persisted_args = tool_telemetry::redact_args(args);
+    let command_summary = format!("{} {}", program, persisted_args.join(" "));
+    let cache_input_summary = format!("{} {}\0output_mode={mode}", program, args.join(" "));
     let mut recommendation = tool_orchestration::recommend("shell_run", &command_summary);
     let profile_decision = repository_profile::decision(repo, "shell_run");
     recommendation.score = recommendation
@@ -89,8 +90,9 @@ fn run_validated(
     let input = json!({"program": program, "args": args, "output_mode": mode});
     let call_digest = execution_budget.before_call("shell_run", &input)?;
     let (cached, mut cache_evidence) =
-        tool_orchestration::cache_lookup(repo, "shell_run", &input_summary)?;
+        tool_orchestration::cache_lookup(repo, "shell_run", &cache_input_summary)?;
     if let Some(cached) = cached {
+        let cached = tool_telemetry::redact_text(&cached);
         execution_budget.record_output(&cached)?;
         let verification = execution_budget.verification_for("shell_run", &call_digest, true);
         let orchestration_evidence =
@@ -113,11 +115,13 @@ fn run_validated(
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let persisted_stdout = tool_telemetry::redact_text(&String::from_utf8_lossy(&output.stdout));
+    let persisted_stderr = tool_telemetry::redact_text(&String::from_utf8_lossy(&output.stderr));
     let adapted = adapt_command(
         program,
-        args,
-        &output.stdout,
-        &output.stderr,
+        &persisted_args,
+        persisted_stdout.as_bytes(),
+        persisted_stderr.as_bytes(),
         output.status.success(),
         output_mode,
     );
@@ -146,11 +150,11 @@ fn run_validated(
     )
     .err();
 
-    let mut evidence = adapted.to_string();
+    let mut evidence = tool_telemetry::redact_text(&adapted.to_string());
     execution_budget.record_output(&evidence)?;
     if output.status.success() {
         cache_evidence =
-            tool_orchestration::cache_store(repo, "shell_run", &input_summary, &evidence)?;
+            tool_orchestration::cache_store(repo, "shell_run", &cache_input_summary, &evidence)?;
     }
     let verification =
         execution_budget.verification_for("shell_run", &call_digest, output.status.success());
@@ -195,7 +199,8 @@ fn run_validated(
 }
 
 fn persist_expansion(repo: &Path, raw: &str) -> MedusaResult<std::path::PathBuf> {
-    let digest = Sha256::digest(format!("shell_run\0{raw}").as_bytes());
+    let redacted = tool_telemetry::redact_text(raw);
+    let digest = Sha256::digest(format!("shell_run\0{redacted}").as_bytes());
     let relative = Path::new(".medusa")
         .join("output-expansions")
         .join(format!("{}.txt", hex::encode(&digest[..8])));
@@ -204,7 +209,7 @@ fn persist_expansion(repo: &Path, raw: &str) -> MedusaResult<std::path::PathBuf>
         fs::create_dir_all(parent)?;
     }
     if !absolute.exists() {
-        fs::write(&absolute, raw)?;
+        fs::write(&absolute, redacted)?;
     }
     Ok(relative)
 }
@@ -232,6 +237,27 @@ mod tests {
             fs::read_to_string(directory.path().join(first)).expect("read expansion"),
             "command=cargo test\nstdout:\nok\nstderr:\n"
         );
+    }
+
+    #[test]
+    fn expansion_redacts_command_stdout_and_stderr_secrets() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let relative = persist_expansion(
+            directory.path(),
+            "command=curl --token cli-secret https://user:db-secret@example.test/?sig=url-secret\nstdout:\nAuthorization: Bearer stdout-secret\nstderr:\npassword=stderr-secret\n",
+        )
+        .expect("persist redacted expansion");
+        let body = fs::read_to_string(directory.path().join(relative)).expect("read expansion");
+        for secret in [
+            "cli-secret",
+            "db-secret",
+            "url-secret",
+            "stdout-secret",
+            "stderr-secret",
+        ] {
+            assert!(!body.contains(secret));
+        }
+        assert!(body.contains("[REDACTED]"));
     }
 
     #[test]
