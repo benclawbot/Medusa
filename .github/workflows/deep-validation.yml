@@ -28,6 +28,18 @@ jobs:
           add-job-id-key: "false"
       - name: Validate committed dependency authority
         run: cargo metadata --locked --format-version 1 >/dev/null
+      - name: Full all-target Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Production panic audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-production-panic-exemptions.py
+          python3 scripts/check-production-panic-exemptions.py
+          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic
       - name: Full workspace tests
         env:
           MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
