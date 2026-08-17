@@ -340,7 +340,8 @@ mod tests {
 
     #[test]
     fn redaction_is_idempotent() {
-        let once = redact_text("command=curl --token cli-secret Authorization: Bearer header-secret");
+        let once =
+            redact_text("command=curl --token cli-secret Authorization: Bearer header-secret");
         assert_eq!(redact_text(&once), once);
     }
 
