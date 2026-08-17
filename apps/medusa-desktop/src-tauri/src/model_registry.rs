@@ -19,7 +19,10 @@ fn profile_for_discovery(requested_provider: Option<&str>) -> Result<ProviderPro
     let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;
     let snapshot = catalog.snapshot().map_err(|error| error.to_string())?;
     let current = snapshot.profile;
-    let Some(provider) = requested_provider.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(provider) = requested_provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return Ok(current);
     };
 
@@ -32,7 +35,10 @@ fn profile_for_discovery(requested_provider: Option<&str>) -> Result<ProviderPro
     let entry = provider_catalog_entry(provider)
         .ok_or_else(|| format!("unknown provider `{provider}` for model discovery"))?;
     if let Some(reason) = entry.disabled_reason {
-        return Err(format!("provider {} is unavailable: {reason}", entry.display_name));
+        return Err(format!(
+            "provider {} is unavailable: {reason}",
+            entry.display_name
+        ));
     }
     let mut profile = ProviderProfile::default();
     apply_provider_defaults(entry, &mut profile);
