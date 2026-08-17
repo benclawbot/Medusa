@@ -94,6 +94,8 @@ jobs:
       - name: Full workspace tests
         id: workspace_tests
         shell: bash
+        env:
+          MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
         run: |
           set -o pipefail
           cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee workspace-tests.log
@@ -135,7 +137,7 @@ jobs:
           set -o pipefail
           cargo machete 2>&1 | tee cargo-machete.log
       - name: Upload cargo-machete diagnostics
-        if: failure() && steps.cargo_machete.outcome == 'failure'
+        if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cargo-machete-diagnostics
