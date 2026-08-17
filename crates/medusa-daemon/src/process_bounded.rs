@@ -118,7 +118,12 @@ struct ProcessControl {
 }
 
 impl ProcessControl {
-    fn run(&self, program: &str, args: &[String], current_dir: &Path) -> MedusaResult<ProcessResult> {
+    fn run(
+        &self,
+        program: &str,
+        args: &[String],
+        current_dir: &Path,
+    ) -> MedusaResult<ProcessResult> {
         let mut command = Command::new(program);
         command
             .args(args)
@@ -203,7 +208,9 @@ impl ProcessControl {
             let status = {
                 let mut child = lock_child(&self.child)?;
                 let Some(process) = child.as_mut() else {
-                    return Err(process_error("daemon child process disappeared before wait"));
+                    return Err(process_error(
+                        "daemon child process disappeared before wait",
+                    ));
                 };
                 try_wait_preserving_unix_group_identity(process)?
             };
@@ -287,7 +294,10 @@ impl ProcessControl {
     }
 }
 
-fn spawn_capture<R>(reader: R, stream: &'static str) -> MedusaResult<thread::JoinHandle<std::io::Result<Vec<u8>>>>
+fn spawn_capture<R>(
+    reader: R,
+    stream: &'static str,
+) -> MedusaResult<thread::JoinHandle<std::io::Result<Vec<u8>>>>
 where
     R: Read + Send + 'static,
 {
@@ -314,9 +324,7 @@ fn join_capture(
 }
 
 fn read_bounded<R: Read>(mut reader: R, stream: &str) -> std::io::Result<Vec<u8>> {
-    let marker = format!(
-        "\n[medusa: {stream} truncated at {MAX_STREAM_OUTPUT_BYTES} bytes]\n"
-    );
+    let marker = format!("\n[medusa: {stream} truncated at {MAX_STREAM_OUTPUT_BYTES} bytes]\n");
     debug_assert!(marker.len() < MAX_STREAM_OUTPUT_BYTES);
     let retained_limit = MAX_STREAM_OUTPUT_BYTES - marker.len();
     let mut output = Vec::with_capacity(MAX_STREAM_OUTPUT_BYTES);
@@ -402,7 +410,9 @@ fn configure_process_group(command: &mut Command) {
 }
 
 #[cfg(target_os = "linux")]
-fn try_wait_preserving_unix_group_identity(process: &mut Child) -> MedusaResult<Option<ExitStatus>> {
+fn try_wait_preserving_unix_group_identity(
+    process: &mut Child,
+) -> MedusaResult<Option<ExitStatus>> {
     let pid = process.id();
     match linux_process_state(pid) {
         Some(state) if !matches!(state, 'Z' | 'X' | 'x') => Ok(None),
@@ -423,12 +433,17 @@ fn linux_process_state(pid: u32) -> Option<char> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn try_wait_preserving_unix_group_identity(process: &mut Child) -> MedusaResult<Option<ExitStatus>> {
+fn try_wait_preserving_unix_group_identity(
+    process: &mut Child,
+) -> MedusaResult<Option<ExitStatus>> {
     Ok(process.try_wait()?)
 }
 
 #[cfg(unix)]
-fn terminate_process_tree(process: &mut Child, ownership: &ProcessOwnershipReceipt) -> MedusaResult<()> {
+fn terminate_process_tree(
+    process: &mut Child,
+    ownership: &ProcessOwnershipReceipt,
+) -> MedusaResult<()> {
     let pid = process.id();
     if !process_group_alive(pid) {
         let _ = process.try_wait()?;
@@ -458,7 +473,10 @@ fn terminate_process_tree(process: &mut Child, ownership: &ProcessOwnershipRecei
 }
 
 #[cfg(unix)]
-fn require_current_ownership(ownership: &ProcessOwnershipReceipt, action: &str) -> MedusaResult<()> {
+fn require_current_ownership(
+    ownership: &ProcessOwnershipReceipt,
+    action: &str,
+) -> MedusaResult<()> {
     let verification = ownership.verify();
     if verification.permits_destructive_action() {
         Ok(())
@@ -627,7 +645,10 @@ mod bounded_output_tests {
             .run(
                 "noisy",
                 "sh",
-                &["-c".to_owned(), "yes x | head -c 3145728; yes y | head -c 3145728 >&2".to_owned()],
+                &[
+                    "-c".to_owned(),
+                    "yes x | head -c 3145728; yes y | head -c 3145728 >&2".to_owned(),
+                ],
                 directory.path(),
                 directory.path(),
             )
@@ -658,7 +679,11 @@ mod bounded_output_tests {
         });
         thread::sleep(Duration::from_millis(100));
         assert!(registry.cancel("infinite").expect("cancel"));
-        let result = worker.join().expect("worker join").expect("run").expect("result");
+        let result = worker
+            .join()
+            .expect("worker join")
+            .expect("run")
+            .expect("result");
         assert!(result.cancelled);
         assert!(result.stdout.len() <= MAX_STREAM_OUTPUT_BYTES);
         assert!(String::from_utf8_lossy(&result.stdout).contains("stdout truncated"));
