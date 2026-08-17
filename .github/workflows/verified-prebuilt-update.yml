@@ -3,6 +3,12 @@ name: Verified Prebuilt Update
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/medusa-update/**'
+      - 'crates/medusa-cli/**'
+      - 'scripts/release-evidence.py'
   release:
     types: [published, prereleased]
   workflow_dispatch:
