@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 
 use crate::{
     MessageBlock, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities, ResponseBlock,
-    Usage, async_response_error, blocking_response_error, provider_error, run_cancellable_request,
-    shared_async_http_client, shared_blocking_http_client,
+    Usage, async_response_error, async_response_json, blocking_response_error,
+    blocking_response_json, provider_error, run_cancellable_request, shared_async_http_client,
+    shared_blocking_http_client,
 };
 
 /// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.
@@ -137,7 +138,7 @@ impl MiniMaxProvider {
             .send()
             .map_err(provider_error)?;
         if response.status().is_success() {
-            let wire: WireResponse = response.json().map_err(provider_error)?;
+            let wire: WireResponse = blocking_response_json(response)?;
             return Ok(wire.into_model_response());
         }
         Err(blocking_response_error(response))
@@ -156,7 +157,7 @@ impl MiniMaxProvider {
             .await
             .map_err(provider_error)?;
         if response.status().is_success() {
-            let wire: WireResponse = response.json().await.map_err(provider_error)?;
+            let wire: WireResponse = async_response_json(response).await?;
             return Ok(wire.into_model_response());
         }
         Err(async_response_error(response).await)
