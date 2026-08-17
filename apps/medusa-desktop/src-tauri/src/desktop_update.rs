@@ -64,7 +64,10 @@ fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()>
 
     #[cfg(windows)]
     {
-        fs::write(&helper, windows_update_script(parent_pid, &executable, target_sha))?;
+        fs::write(
+            &helper,
+            windows_update_script(parent_pid, &executable, target_sha),
+        )?;
         hidden_command("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(&helper)
@@ -74,7 +77,10 @@ fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()>
 
     #[cfg(not(windows))]
     {
-        fs::write(&helper, unix_update_script(parent_pid, &executable, target_sha))?;
+        fs::write(
+            &helper,
+            unix_update_script(parent_pid, &executable, target_sha),
+        )?;
         hidden_command("sh")
             .arg(&helper)
             .spawn()
@@ -267,11 +273,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn unix_helper_builds_preflight_revision_then_replaces_and_restarts() {
-        let script = unix_update_script(
-            4242,
-            Path::new("/opt/Medusa/medusa-desktop"),
-            TARGET_SHA,
-        );
+        let script = unix_update_script(4242, Path::new("/opt/Medusa/medusa-desktop"), TARGET_SHA);
         assert!(script.contains(&format!("fetch --depth 1 origin '{TARGET_SHA}'")));
         assert!(script.contains(&format!("checkout --detach -q '{TARGET_SHA}'")));
         assert!(script.contains("rev-parse HEAD"));
