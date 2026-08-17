@@ -423,7 +423,10 @@ fn record_nonfatal(
     if let Ok(bytes) = serde_json::to_vec_pretty(&diagnostics) {
         let temporary = path.with_extension("json.tmp");
         if let Ok(mut file) = secure_state::create_new_file(&temporary) {
-            if file.write_all(&bytes).is_ok() && file.sync_all().is_ok() && fs::rename(&temporary, &path).is_ok() {
+            if file.write_all(&bytes).is_ok()
+                && file.sync_all().is_ok()
+                && fs::rename(&temporary, &path).is_ok()
+            {
                 let _ = secure_state::repair(&path, false);
             } else {
                 let _ = fs::remove_file(&temporary);
