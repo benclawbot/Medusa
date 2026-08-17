@@ -41,9 +41,13 @@ pub(crate) fn inputs(program: &str) -> io::Result<UnixSandboxInputs> {
         }
     }
 
+    // System runtime roots are deliberately kept at their original absolute paths.
+    // Canonicalizing /lib or /lib64 can turn them into /usr/... and remove the
+    // loader path encoded in ELF binaries from the empty-root Linux namespace.
     for root in system_runtime_roots() {
-        if let Ok(root) = Path::new(root).canonicalize() {
-            read_only_roots.insert(root);
+        let root = Path::new(root);
+        if root.exists() {
+            read_only_roots.insert(root.to_path_buf());
         }
     }
     for root in [&cargo_home, &rustup_home].into_iter().flatten() {
@@ -282,6 +286,22 @@ mod tests {
                 .iter()
                 .all(|path| path != Path::new("/"))
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_loader_alias_roots_are_preserved_without_canonicalization() {
+        let inputs = inputs("true").expect("sandbox inputs");
+        for loader_root in ["/lib", "/lib64"] {
+            let loader_root = Path::new(loader_root);
+            if loader_root.exists() {
+                assert!(
+                    inputs.read_only_roots.contains(&loader_root.to_path_buf()),
+                    "Linux loader root {} must remain visible at its original path",
+                    loader_root.display()
+                );
+            }
+        }
     }
 
     #[test]
