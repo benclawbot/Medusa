@@ -3,7 +3,9 @@ use std::{fs, io, path::Path};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+#[cfg(unix)]
 const DIRECTORY_MODE: u32 = 0o700;
+#[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
 
 pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
