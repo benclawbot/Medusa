@@ -11,6 +11,11 @@ use time::OffsetDateTime;
 
 use crate::output_envelope::{AdaptedOutput, OutputMode};
 
+#[path = "tool_redaction.rs"]
+mod redaction;
+
+pub(crate) use redaction::{redact_args, redact_text};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum CommandFamily {
@@ -66,8 +71,8 @@ impl ToolExecutionTrace {
             timestamp_unix_ms: OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
             tool: "shell_run".to_owned(),
             command_family: classify_command(program, args),
-            program: program.to_owned(),
-            args: args.to_vec(),
+            program: redact_text(program),
+            args: redact_args(args),
             output_mode: adapted.mode,
             success,
             latency_ms: latency.as_millis().try_into().unwrap_or(u64::MAX),
@@ -80,6 +85,17 @@ impl ToolExecutionTrace {
             expansion_handle: adapted.expansion_handle.clone(),
             verification_state: verification_state(program, args, success),
         }
+    }
+
+    fn sanitized_for_persistence(&self) -> Self {
+        let mut sanitized = self.clone();
+        sanitized.program = redact_text(&sanitized.program);
+        sanitized.args = redact_args(&sanitized.args);
+        sanitized.expansion_handle = sanitized
+            .expansion_handle
+            .as_deref()
+            .map(redact_text);
+        sanitized
     }
 }
 
@@ -95,7 +111,7 @@ pub(crate) fn append_trace(repo: &Path, trace: &ToolExecutionTrace) -> MedusaRes
         .create(true)
         .append(true)
         .open(&absolute)?;
-    serde_json::to_writer(&mut file, trace)?;
+    serde_json::to_writer(&mut file, &trace.sanitized_for_persistence())?;
     file.write_all(b"\n")?;
     file.flush()?;
     Ok(relative)
@@ -197,5 +213,27 @@ mod tests {
             restored.expansion_handle.as_deref(),
             Some("shell_run:fixture")
         );
+    }
+
+    #[test]
+    fn persisted_trace_redacts_secret_arguments_before_serialization() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let trace = ToolExecutionTrace::for_shell(
+            "curl",
+            &[
+                "--token".to_owned(),
+                "telemetry-secret".to_owned(),
+                "https://example.test/?X-Amz-Signature=signed-secret".to_owned(),
+            ],
+            true,
+            Duration::from_millis(1),
+            100,
+            &adapted(),
+        );
+        let relative = append_trace(directory.path(), &trace).expect("append trace");
+        let body = fs::read_to_string(directory.path().join(relative)).expect("read trace");
+        assert!(!body.contains("telemetry-secret"));
+        assert!(!body.contains("signed-secret"));
+        assert!(body.contains("[REDACTED]"));
     }
 }
