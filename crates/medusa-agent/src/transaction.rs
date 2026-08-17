@@ -2,9 +2,10 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, repository_mutation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -14,6 +15,8 @@ use crate::policy::safe_path;
 mod mutation_provenance;
 pub use mutation_provenance::{MutationContext, MutationKind, ScopeValidation};
 use mutation_provenance::{build_record, load as load_provenance, persist as persist_provenance};
+
+static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkerMutationProposal {
@@ -92,7 +95,7 @@ pub fn preview(
 /// `apply_atomic_with_context`. Legacy callers remain safe, but their writes are explicitly
 /// unavailable for provenance-authorized selective revert.
 pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<TransactionOutcome> {
-    apply_atomic_inner(repo, mutations, None)
+    apply_atomic_inner(repo, mutations, None, true)
 }
 
 /// Applies every repository mutation through the rollback-capable boundary and atomically records
@@ -103,13 +106,14 @@ pub fn apply_atomic_with_context(
     mutations: &[FileMutation],
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
-    apply_atomic_inner(repo, mutations, Some(context))
+    apply_atomic_inner(repo, mutations, Some(context), true)
 }
 
 fn apply_atomic_inner(
     repo: &Path,
     mutations: &[FileMutation],
     context: Option<&MutationContext>,
+    acquire_repository_lock: bool,
 ) -> MedusaResult<TransactionOutcome> {
     if mutations.is_empty() {
         return Err(MedusaError::new(
@@ -118,6 +122,8 @@ fn apply_atomic_inner(
             "transaction must contain at least one file mutation",
         ));
     }
+
+    let _repository_guard = acquire_repository_lock.then(|| repository_mutation::lock(repo));
 
     let repository_before = if context.is_some() {
         Some(repository_fingerprint(repo)?)
@@ -158,7 +164,7 @@ fn apply_atomic_inner(
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        let temporary = target.with_extension(format!("medusa-txn-{index}.tmp"));
+        let temporary = unique_staging_path(target, index);
         if let Err(error) = fs::write(&temporary, mutation.content.as_bytes()) {
             cleanup_staged(&staged);
             return Err(error.into());
@@ -174,6 +180,18 @@ fn apply_atomic_inner(
     }
 
     for (index, (target, temporary)) in staged.iter().enumerate() {
+        if !matches_backup(target, &backups[index])? {
+            let rollback = rollback(&backups[..index]);
+            cleanup_staged(&staged[index..]);
+            return Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Execution,
+                format!(
+                    "transaction target changed before commit: {}; rollback={rollback}",
+                    target.display()
+                ),
+            ));
+        }
         if let Err(error) = fs::rename(temporary, target) {
             let rollback = rollback(&backups[..index]);
             cleanup_staged(&staged[index..]);
@@ -395,6 +413,7 @@ pub fn apply_selective_revert(
     mutation_id: &str,
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
+    let _repository_guard = repository_mutation::lock(repo);
     let preview = preview_selective_revert(repo, mutation_id)?;
     let journal = load_provenance(repo)?;
     let record = journal
@@ -424,13 +443,14 @@ pub fn apply_selective_revert(
         let content = String::from_utf8(restore.to_vec()).map_err(|_| {
             provenance_boundary_error("selective revert of non-UTF-8 content is unavailable")
         })?;
-        return apply_atomic_with_context(
+        return apply_atomic_inner(
             repo,
             &[FileMutation {
                 path: preview.path,
                 content,
             }],
-            context,
+            Some(context),
+            false,
         );
     }
 
@@ -460,13 +480,14 @@ pub fn apply_selective_revert(
     let content = String::from_utf8(reverted).map_err(|_| {
         provenance_boundary_error("selective revert of non-UTF-8 content is unavailable")
     })?;
-    apply_atomic_with_context(
+    apply_atomic_inner(
         repo,
         &[FileMutation {
             path: preview.path,
             content,
         }],
-        context,
+        Some(context),
+        false,
     )
 }
 
@@ -577,6 +598,21 @@ fn repository_fingerprint(repo: &Path) -> MedusaResult<String> {
     Ok(hex::encode(Sha256::digest(&output.stdout)))
 }
 
+fn unique_staging_path(target: &Path, index: usize) -> PathBuf {
+    let nonce = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
+    target.with_extension(format!(
+        "medusa-txn-{}-{nonce}-{index}.tmp",
+        std::process::id()
+    ))
+}
+
+fn matches_backup(target: &Path, backup: &Backup) -> MedusaResult<bool> {
+    match &backup.content {
+        Some(expected) => Ok(target.exists() && fs::read(target)? == *expected),
+        None => Ok(!target.exists()),
+    }
+}
+
 fn provenance_boundary_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InternalInvariant,
@@ -618,6 +654,11 @@ fn cleanup_staged(staged: &[(PathBuf, PathBuf)]) {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
+
     use super::*;
 
     fn context(sequence: u64) -> MutationContext {
@@ -894,6 +935,48 @@ mod tests {
         assert_eq!(
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o750
+        );
+    }
+
+    #[test]
+    fn staging_paths_are_unique() {
+        let target = Path::new("src/lib.rs");
+        assert_ne!(
+            unique_staging_path(target, 0),
+            unique_staging_path(target, 0)
+        );
+    }
+
+    #[test]
+    fn repository_lock_serializes_overlapping_transactions() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let repo = Arc::new(directory.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(3));
+        let handles = ["first", "second"].map(|content| {
+            let repo = Arc::clone(&repo);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                apply_atomic(
+                    &repo,
+                    &[FileMutation {
+                        path: "same.txt".into(),
+                        content: content.into(),
+                    }],
+                )
+            })
+        });
+        barrier.wait();
+        for handle in handles {
+            handle.join().expect("worker").expect("transaction");
+        }
+        let final_content = fs::read_to_string(directory.path().join("same.txt")).unwrap();
+        assert!(matches!(final_content.as_str(), "first" | "second"));
+        assert!(
+            fs::read_dir(directory.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().contains("medusa-txn"))
         );
     }
 }
