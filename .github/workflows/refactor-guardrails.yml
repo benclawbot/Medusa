@@ -19,7 +19,6 @@ on:
       - 'scripts/test-prepare-tauri-linux-tools.py'
       - 'release/keys/**'
       - 'docs/**'
-      - '.github/workflows/**'
 
 permissions:
   contents: read
