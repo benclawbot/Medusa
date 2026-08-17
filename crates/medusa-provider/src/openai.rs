@@ -1,8 +1,8 @@
-use std::{env, sync::atomic::AtomicBool};
+use std::{env, net::IpAddr, sync::atomic::AtomicBool};
 
 use medusa_config::{Config, model_capabilities};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::{Client as AsyncClient, blocking::Client as BlockingClient};
+use reqwest::{Client as AsyncClient, Url, blocking::Client as BlockingClient};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -12,6 +12,15 @@ use crate::{
     openai_transport, provider_error, provider_response_error, run_cancellable_request,
     shared_async_http_client, shared_blocking_http_client,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EndpointSource {
+    RepositoryConfig,
+    ProviderEnvironment,
+    OpenAiEnvironment,
+    MedusaEnvironment,
+    Default,
+}
 
 #[derive(Clone)]
 pub struct OpenAiProvider {
@@ -34,33 +43,42 @@ impl OpenAiProvider {
             .trim()
             .to_ascii_uppercase()
             .replace('-', "_");
+        let (base_url, endpoint_source) = resolve_base_url(config, &provider);
+        validate_provider_endpoint(&base_url)?;
+
+        let provider_key_name = format!("{provider}_API_KEY");
+        let provider_key_allowed =
+            provider_credential_allowed(&provider, endpoint_source, &base_url);
         let api_key = session_api_key
-            .or_else(|| env::var(format!("{provider}_API_KEY")).ok())
-            .or_else(|| env::var("OPENAI_API_KEY").ok())
-            .or_else(|| env::var("MEDUSA_API_KEY").ok());
+            .or_else(|| {
+                provider_key_allowed
+                    .then(|| env::var(&provider_key_name).ok())
+                    .flatten()
+            })
+            .or_else(|| {
+                generic_openai_credential_allowed(&provider, endpoint_source, &base_url)
+                    .then(|| env::var("OPENAI_API_KEY").ok())
+                    .flatten()
+            })
+            .or_else(|| {
+                generic_medusa_credential_allowed(&provider, endpoint_source)
+                    .then(|| env::var("MEDUSA_API_KEY").ok())
+                    .flatten()
+            });
         if config.model.auth == "api-key" && api_key.is_none() {
+            let mut message = format!("missing provider credential; set {provider_key_name}");
+            if endpoint_source == EndpointSource::RepositoryConfig {
+                message.push_str(
+                    "; repository-configured endpoints cannot inherit ambient credentials unless the endpoint is the provider's canonical origin; use an explicit session credential or a user-level provider endpoint setting",
+                );
+            }
             return Err(MedusaError::new(
                 ErrorCode::DependencyUnavailable,
                 ErrorCategory::Environment,
-                format!(
-                    "missing provider credential; set {provider}_API_KEY, OPENAI_API_KEY, or MEDUSA_API_KEY"
-                ),
+                message,
             ));
         }
-        let base_url = config
-            .model
-            .base_url
-            .clone()
-            .or_else(|| env::var(format!("{provider}_BASE_URL")).ok())
-            .or_else(|| env::var("OPENAI_BASE_URL").ok())
-            .or_else(|| env::var("MEDUSA_BASE_URL").ok())
-            .unwrap_or_else(|| {
-                if config.model.provider.eq_ignore_ascii_case("minimax") {
-                    "https://api.minimax.io/v1".to_owned()
-                } else {
-                    "https://api.openai.com/v1".to_owned()
-                }
-            });
+
         let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);
         let image_input = registry_capabilities.image_input;
         Ok(Self {
@@ -294,6 +312,120 @@ impl ModelProvider for OpenAiProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         self.capabilities.clone()
     }
+}
+
+fn resolve_base_url(config: &Config, provider: &str) -> (String, EndpointSource) {
+    if let Some(base_url) = config.model.base_url.clone() {
+        return (base_url, EndpointSource::RepositoryConfig);
+    }
+    if let Ok(base_url) = env::var(format!("{provider}_BASE_URL")) {
+        return (base_url, EndpointSource::ProviderEnvironment);
+    }
+    if provider == "OPENAI" {
+        if let Ok(base_url) = env::var("OPENAI_BASE_URL") {
+            return (base_url, EndpointSource::OpenAiEnvironment);
+        }
+    }
+    if provider == "MEDUSA" {
+        if let Ok(base_url) = env::var("MEDUSA_BASE_URL") {
+            return (base_url, EndpointSource::MedusaEnvironment);
+        }
+    }
+    let base_url = if provider == "MINIMAX" {
+        "https://api.minimax.io/v1"
+    } else {
+        "https://api.openai.com/v1"
+    };
+    (base_url.to_owned(), EndpointSource::Default)
+}
+
+fn provider_credential_allowed(provider: &str, source: EndpointSource, base_url: &str) -> bool {
+    if source != EndpointSource::RepositoryConfig {
+        return true;
+    }
+    match provider {
+        "OPENAI" => is_canonical_openai_endpoint(base_url),
+        "MINIMAX" => is_canonical_minimax_endpoint(base_url),
+        _ => false,
+    }
+}
+
+fn generic_openai_credential_allowed(
+    provider: &str,
+    source: EndpointSource,
+    base_url: &str,
+) -> bool {
+    provider == "OPENAI"
+        && (source != EndpointSource::RepositoryConfig || is_canonical_openai_endpoint(base_url))
+}
+
+fn generic_medusa_credential_allowed(provider: &str, source: EndpointSource) -> bool {
+    provider == "MEDUSA" && source != EndpointSource::RepositoryConfig
+}
+
+fn is_canonical_openai_endpoint(base_url: &str) -> bool {
+    canonical_https_origin(base_url, "api.openai.com")
+}
+
+fn is_canonical_minimax_endpoint(base_url: &str) -> bool {
+    canonical_https_origin(base_url, "api.minimax.io")
+}
+
+fn canonical_https_origin(base_url: &str, expected_host: &str) -> bool {
+    Url::parse(base_url).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str() == Some(expected_host)
+            && url.port_or_known_default() == Some(443)
+    })
+}
+
+fn validate_provider_endpoint(base_url: &str) -> MedusaResult<()> {
+    let allow_insecure_loopback = env_flag("MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP");
+    validate_provider_endpoint_with_policy(base_url, allow_insecure_loopback)
+}
+
+fn validate_provider_endpoint_with_policy(
+    base_url: &str,
+    allow_insecure_loopback: bool,
+) -> MedusaResult<()> {
+    let url = Url::parse(base_url).map_err(|error| {
+        MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Validation,
+            format!("invalid provider base_url: {error}"),
+        )
+    })?;
+    if url.username() != "" || url.password().is_some() {
+        return Err(MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Validation,
+            "provider base_url must not contain embedded credentials",
+        ));
+    }
+    if url.scheme() == "https" {
+        return Ok(());
+    }
+    if url.scheme() == "http" && is_loopback_url(&url) && allow_insecure_loopback {
+        return Ok(());
+    }
+    Err(MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Validation,
+        "provider base_url must use HTTPS; loopback HTTP requires MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP=1",
+    ))
+}
+
+fn is_loopback_url(url: &Url) -> bool {
+    match url.host_str() {
+        Some("localhost") => true,
+        Some(host) => host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -535,5 +667,82 @@ mod tests {
             )
             .expect_err("reject unresolved reference");
         assert!(error.to_string().contains("attachment-1"));
+    }
+
+    #[test]
+    fn repository_openai_override_cannot_inherit_openai_key() {
+        assert!(!provider_credential_allowed(
+            "OPENAI",
+            EndpointSource::RepositoryConfig,
+            "https://attacker.example/v1",
+        ));
+        assert!(!generic_openai_credential_allowed(
+            "OPENAI",
+            EndpointSource::RepositoryConfig,
+            "https://attacker.example/v1",
+        ));
+    }
+
+    #[test]
+    fn canonical_provider_origins_can_use_provider_keys() {
+        assert!(provider_credential_allowed(
+            "OPENAI",
+            EndpointSource::RepositoryConfig,
+            "https://api.openai.com/v1",
+        ));
+        assert!(provider_credential_allowed(
+            "MINIMAX",
+            EndpointSource::RepositoryConfig,
+            "https://api.minimax.io/v1",
+        ));
+    }
+
+    #[test]
+    fn arbitrary_provider_does_not_receive_ambient_credentials() {
+        assert!(!provider_credential_allowed(
+            "EVIL",
+            EndpointSource::RepositoryConfig,
+            "https://attacker.example/v1",
+        ));
+        assert!(!generic_openai_credential_allowed(
+            "EVIL",
+            EndpointSource::RepositoryConfig,
+            "https://attacker.example/v1",
+        ));
+        assert!(!generic_medusa_credential_allowed(
+            "EVIL",
+            EndpointSource::RepositoryConfig,
+        ));
+    }
+
+    #[test]
+    fn user_level_provider_endpoint_can_authorize_provider_specific_key() {
+        assert!(provider_credential_allowed(
+            "CUSTOM",
+            EndpointSource::ProviderEnvironment,
+            "https://provider.example/v1",
+        ));
+    }
+
+    #[test]
+    fn remote_http_is_rejected() {
+        let error = validate_provider_endpoint_with_policy("http://example.com/v1", true)
+            .expect_err("remote HTTP must fail");
+        assert!(error.to_string().contains("HTTPS"));
+    }
+
+    #[test]
+    fn loopback_http_requires_explicit_opt_in() {
+        assert!(validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err());
+        validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", true)
+            .expect("explicit loopback development opt-in");
+    }
+
+    #[test]
+    fn embedded_endpoint_credentials_are_rejected() {
+        let error =
+            validate_provider_endpoint_with_policy("https://user:password@example.com/v1", false)
+                .expect_err("embedded credentials must fail");
+        assert!(error.to_string().contains("embedded credentials"));
     }
 }
