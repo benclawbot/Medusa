@@ -201,6 +201,7 @@ fn retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
         .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
+#[cfg(test)]
 pub(crate) fn classify_status(
     status: StatusCode,
     body: String,
