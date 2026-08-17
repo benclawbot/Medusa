@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
 from pathlib import Path
 
@@ -11,6 +12,7 @@ SCRIPT = Path(__file__).with_name("check-workflow-action-pins.py")
 SPEC = importlib.util.spec_from_file_location("workflow_action_pins", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 POLICY = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = POLICY
 SPEC.loader.exec_module(POLICY)
 
 PIN = "11d5960a326750d5838078e36cf38b85af677262"
