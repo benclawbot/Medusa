@@ -27,9 +27,9 @@ pub fn desktop_update_status() -> Result<DesktopUpdateStatus, String> {
     status().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-pub fn desktop_update_from_main(app: tauri::AppHandle) -> Result<(), String> {
-    schedule_update(&app).map_err(|error| error.to_string())?;
+#[tauri::command(rename_all = "camelCase")]
+pub fn desktop_update_from_main(app: tauri::AppHandle, target_sha: String) -> Result<(), String> {
+    schedule_update(&app, &target_sha).map_err(|error| error.to_string())?;
     app.exit(0);
     Ok(())
 }
@@ -47,7 +47,8 @@ fn status() -> MedusaResult<DesktopUpdateStatus> {
     })
 }
 
-fn schedule_update(app: &tauri::AppHandle) -> MedusaResult<()> {
+fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()> {
+    let target_sha = validate_target_sha(target_sha)?;
     let missing = missing_dependencies();
     if !missing.is_empty() {
         return Err(MedusaError::new(
@@ -63,7 +64,10 @@ fn schedule_update(app: &tauri::AppHandle) -> MedusaResult<()> {
 
     #[cfg(windows)]
     {
-        fs::write(&helper, windows_update_script(parent_pid, &executable))?;
+        fs::write(
+            &helper,
+            windows_update_script(parent_pid, &executable, target_sha),
+        )?;
         hidden_command("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(&helper)
@@ -73,7 +77,10 @@ fn schedule_update(app: &tauri::AppHandle) -> MedusaResult<()> {
 
     #[cfg(not(windows))]
     {
-        fs::write(&helper, unix_update_script(parent_pid, &executable))?;
+        fs::write(
+            &helper,
+            unix_update_script(parent_pid, &executable, target_sha),
+        )?;
         hidden_command("sh")
             .arg(&helper)
             .spawn()
@@ -82,6 +89,17 @@ fn schedule_update(app: &tauri::AppHandle) -> MedusaResult<()> {
 
     let _ = app;
     Ok(())
+}
+
+fn validate_target_sha(target_sha: &str) -> MedusaResult<&str> {
+    if target_sha.len() == 40 && target_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(target_sha);
+    }
+    Err(MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        "desktop update target must be a full 40-character Git commit SHA",
+    ))
 }
 
 fn missing_dependencies() -> Vec<String> {
@@ -147,14 +165,22 @@ fn update_helper_path() -> MedusaResult<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn unix_update_script(parent_pid: u32, executable: &Path) -> String {
+fn unix_update_script(parent_pid: u32, executable: &Path, target_sha: &str) -> String {
     let executable = shell_quote(executable);
     format!(
         r#"#!/bin/sh
 set -eu
 work="${{TMPDIR:-/tmp}}/medusa-desktop-main-{parent_pid}"
 rm -rf "$work"
-git clone --depth 1 --branch {BRANCH} '{REPOSITORY_URL}' "$work"
+git init -q "$work"
+git -C "$work" remote add origin '{REPOSITORY_URL}'
+git -C "$work" fetch --depth 1 origin '{target_sha}'
+git -C "$work" checkout --detach -q '{target_sha}'
+actual_sha="$(git -C "$work" rev-parse HEAD)"
+if [ "$actual_sha" != '{target_sha}' ]; then
+  echo "desktop update revision mismatch: expected {target_sha}, got $actual_sha" >&2
+  exit 1
+fi
 cd "$work/apps/medusa-desktop"
 npm ci
 npm run build
@@ -171,7 +197,7 @@ exec {executable}
 }
 
 #[cfg(any(windows, test))]
-fn windows_update_script(parent_pid: u32, executable: &Path) -> String {
+fn windows_update_script(parent_pid: u32, executable: &Path, target_sha: &str) -> String {
     let executable = powershell_quote(executable);
     format!(
         r#"$ErrorActionPreference = 'Stop'
@@ -191,7 +217,14 @@ if (-not $npm) {{
 }}
 $work = Join-Path $env:TEMP 'medusa-desktop-main-{parent_pid}'
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-git clone --depth 1 --branch {BRANCH} '{REPOSITORY_URL}' $work
+git init -q $work
+git -C $work remote add origin '{REPOSITORY_URL}'
+git -C $work fetch --depth 1 origin '{target_sha}'
+git -C $work checkout --detach -q '{target_sha}'
+$actualSha = (git -C $work rev-parse HEAD).Trim()
+if ($actualSha -ne '{target_sha}') {{
+    throw "desktop update revision mismatch: expected {target_sha}, got $actualSha"
+}}
 Set-Location (Join-Path $work 'apps/medusa-desktop')
 & $npmPath ci
 & $npmPath run build
@@ -227,11 +260,25 @@ fn command_error(error: impl std::fmt::Display) -> MedusaError {
 mod tests {
     use super::*;
 
+    const TARGET_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn update_target_requires_full_commit_sha() {
+        assert_eq!(validate_target_sha(TARGET_SHA).unwrap(), TARGET_SHA);
+        assert!(validate_target_sha("main").is_err());
+        assert!(validate_target_sha("0123456789abcdef0123456789abcdef0123456z").is_err());
+        assert!(validate_target_sha("01234567;rm -rf /").is_err());
+    }
+
     #[cfg(not(windows))]
     #[test]
-    fn unix_helper_builds_main_then_replaces_and_restarts() {
-        let script = unix_update_script(4242, Path::new("/opt/Medusa/medusa-desktop"));
-        assert!(script.contains("git clone --depth 1 --branch main"));
+    fn unix_helper_builds_preflight_revision_then_replaces_and_restarts() {
+        let script = unix_update_script(4242, Path::new("/opt/Medusa/medusa-desktop"), TARGET_SHA);
+        assert!(script.contains(&format!("fetch --depth 1 origin '{TARGET_SHA}'")));
+        assert!(script.contains(&format!("checkout --detach -q '{TARGET_SHA}'")));
+        assert!(script.contains("rev-parse HEAD"));
+        assert!(script.contains(&format!("!= '{TARGET_SHA}'")));
+        assert!(!script.contains("--branch main"));
         assert!(script.contains("npm ci"));
         assert!(script.contains("cargo build --release"));
         assert!(script.contains("while kill -0 4242"));
@@ -240,17 +287,22 @@ mod tests {
     }
 
     #[test]
-    fn windows_helper_refreshes_path_and_uses_npm_cmd() {
+    fn windows_helper_builds_preflight_revision_even_if_main_moves() {
         let script = windows_update_script(
             4242,
             Path::new(r"C:\Program Files\Medusa\medusa-desktop.exe"),
+            TARGET_SHA,
         );
         assert!(script.contains("GetEnvironmentVariable('Path', 'Machine')"));
         assert!(script.contains("Get-Command npm.cmd"));
         assert!(script.contains(r"nodejs\npm.cmd"));
         assert!(script.contains("& $npmPath ci"));
         assert!(script.contains("& $npmPath run build"));
-        assert!(script.contains("git clone --depth 1 --branch main"));
+        assert!(script.contains(&format!("fetch --depth 1 origin '{TARGET_SHA}'")));
+        assert!(script.contains(&format!("checkout --detach -q '{TARGET_SHA}'")));
+        assert!(script.contains("rev-parse HEAD"));
+        assert!(script.contains(&format!("-ne '{TARGET_SHA}'")));
+        assert!(!script.contains("--branch main"));
         assert!(script.contains("cargo build --release"));
         assert!(script.contains("Get-Process -Id 4242"));
         assert!(script.contains("Copy-Item"));

@@ -39,10 +39,11 @@ export function DesktopUpdateControl() {
   };
 
   const update = async () => {
+    if (!status) return;
     setUpdating(true);
     setError(undefined);
     try {
-      await invoke("desktop_update_from_main");
+      await invoke("desktop_update_from_main", { targetSha: status.latestMainSha });
     } catch (cause) {
       setUpdating(false);
       setError(String(cause));
@@ -57,14 +58,14 @@ export function DesktopUpdateControl() {
         <span className="desktop-update-icon"><Download size={17} /></span>
         <div>
           <h3>Desktop updates</h3>
-          <p>Build and install the latest Medusa Desktop directly from <code>main</code>.</p>
+          <p>Build and install the checked Medusa Desktop revision directly from <code>main</code>.</p>
         </div>
       </div>
 
       {status && (
         <div className="desktop-update-status">
           <span><CheckCircle2 size={14} /> Installed v{status.currentVersion}</span>
-          <span>Latest main: <code>{status.latestMainSha.slice(0, 8)}</code></span>
+          <span>Checked main: <code>{status.latestMainSha.slice(0, 8)}</code></span>
         </div>
       )}
 
@@ -86,7 +87,7 @@ export function DesktopUpdateControl() {
           {updating ? "Preparing restart…" : "Update and restart"}
         </button>
       </div>
-      <small>The app closes, builds the latest main branch, replaces this executable, and reopens automatically.</small>
+      <small>The app closes, builds the checked commit, replaces this executable, and reopens automatically.</small>
     </section>,
     target,
   );
