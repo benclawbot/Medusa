@@ -1,14 +1,13 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex, OnceLock,
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{
+    repository_mutation, ErrorCategory, ErrorCode, MedusaError, MedusaResult,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -19,7 +18,6 @@ mod mutation_provenance;
 pub use mutation_provenance::{MutationContext, MutationKind, ScopeValidation};
 use mutation_provenance::{build_record, load as load_provenance, persist as persist_provenance};
 
-static REPOSITORY_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -126,10 +124,7 @@ fn apply_atomic_inner(
         ));
     }
 
-    let repository_lock = repository_lock(repo);
-    let _repository_guard = repository_lock
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _repository_guard = repository_mutation::lock(repo);
 
     let repository_before = if context.is_some() {
         Some(repository_fingerprint(repo)?)
@@ -500,10 +495,7 @@ fn apply_delete_with_context(
     expected_current: &[u8],
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
-    let repository_lock = repository_lock(repo);
-    let _repository_guard = repository_lock
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _repository_guard = repository_mutation::lock(repo);
     let path = safe_path(repo, relative)?;
     let metadata = fs::metadata(&path)?;
     let current = fs::read(&path)?;
@@ -605,19 +597,6 @@ fn repository_fingerprint(repo: &Path) -> MedusaResult<String> {
     Ok(hex::encode(Sha256::digest(&output.stdout)))
 }
 
-fn repository_lock(repo: &Path) -> Arc<Mutex<()>> {
-    let key = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
-    let locks = REPOSITORY_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut locks = locks
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    Arc::clone(
-        locks
-            .entry(key)
-            .or_insert_with(|| Arc::new(Mutex::new(()))),
-    )
-}
-
 fn unique_staging_path(target: &Path, index: usize) -> PathBuf {
     let nonce = STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
     target.with_extension(format!(
@@ -674,7 +653,10 @@ fn cleanup_staged(staged: &[(PathBuf, PathBuf)]) {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Barrier, thread};
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use super::*;
 
