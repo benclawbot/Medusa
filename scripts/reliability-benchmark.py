@@ -16,10 +16,37 @@ def load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def run_acceptance(output: Path) -> dict[str, Any]:
-    subprocess.run(
-        ["cargo", "product-acceptance", "--output", str(output)],
-        check=False,
+def acceptance_command(output: Path) -> list[str]:
+    configured = os.environ.get("MEDUSA_PRODUCT_ACCEPTANCE_BIN")
+    if configured:
+        return [configured, "--output", str(output)]
+    candidate = Path("target/debug/medusa-product-acceptance")
+    if candidate.exists():
+        return [str(candidate), "--output", str(output)]
+    return ["cargo", "product-acceptance", "--output", str(output)]
+
+
+def run_acceptance(output: Path, run_number: int, total_runs: int) -> dict[str, Any]:
+    timeout_seconds = int(os.environ.get("MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS", "300"))
+    command = acceptance_command(output)
+    print(
+        f"[reliability] acceptance run {run_number}/{total_runs} "
+        f"(timeout={timeout_seconds}s): {' '.join(command)}",
+        flush=True,
+    )
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(command, check=False, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f"product acceptance run {run_number}/{total_runs} timed out after "
+            f"{timeout_seconds}s"
+        ) from error
+    elapsed = time.monotonic() - started
+    print(
+        f"[reliability] acceptance run {run_number}/{total_runs} "
+        f"finished with exit={completed.returncode} in {elapsed:.1f}s",
+        flush=True,
     )
     summary = output / "summary.json"
     if not summary.exists():
@@ -42,7 +69,6 @@ def score(suite: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
             per_run.append({"passed": passed, "duration_ms": duration_ms})
         results.append({"id": case["id"], "metric": case["metric"], "runs": per_run})
 
-    total = len(results) * len(runs)
     verified = [item for item in results if item["metric"] == "verified_completion"]
     resumes = [item for item in results if item["metric"] == "successful_resume"]
     rollbacks = [item for item in results if item["metric"] == "successful_rollback"]
@@ -125,8 +151,9 @@ def main() -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     runs = [load(path) for path in args.summary] if args.summary else []
     if not runs:
-        for index in range(int(suite["runs"])):
-            runs.append(run_acceptance(args.output / f"run-{index + 1}"))
+        total_runs = int(suite["runs"])
+        for index in range(total_runs):
+            runs.append(run_acceptance(args.output / f"run-{index + 1}", index + 1, total_runs))
     report = score(suite, runs)
     (args.output / "reliability-benchmark.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
