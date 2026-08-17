@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeSet,
-    env,
-    io,
+    env, io,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -73,11 +72,7 @@ pub(crate) fn inputs(program: &str) -> io::Result<UnixSandboxInputs> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn linux_command(
-    root: &Path,
-    program: &str,
-    args: &[String],
-) -> io::Result<Command> {
+pub(crate) fn linux_command(root: &Path, program: &str, args: &[String]) -> io::Result<Command> {
     let inputs = inputs(program)?;
     let mut command = Command::new("bwrap");
     command.args([
@@ -103,10 +98,7 @@ pub(crate) fn linux_command(
     ]);
 
     for read_only in &inputs.read_only_roots {
-        command
-            .arg("--ro-bind")
-            .arg(read_only)
-            .arg(read_only);
+        command.arg("--ro-bind").arg(read_only).arg(read_only);
     }
     command
         .arg("--bind")
@@ -121,14 +113,10 @@ pub(crate) fn linux_command(
         .args(["--setenv", "TMPDIR", "/tmp"])
         .args(["--setenv", "PYTHONDONTWRITEBYTECODE", "1"]);
     if let Some(cargo_home) = &inputs.cargo_home {
-        command
-            .args(["--setenv", "CARGO_HOME"])
-            .arg(cargo_home);
+        command.args(["--setenv", "CARGO_HOME"]).arg(cargo_home);
     }
     if let Some(rustup_home) = &inputs.rustup_home {
-        command
-            .args(["--setenv", "RUSTUP_HOME"])
-            .arg(rustup_home);
+        command.args(["--setenv", "RUSTUP_HOME"]).arg(rustup_home);
     }
     command.arg("--").arg(&inputs.executable).args(args);
     Ok(command)
@@ -173,10 +161,7 @@ fn macos_profile(root: &Path, read_only_roots: &[PathBuf]) -> String {
     );
     profile.push_str(&format!("  (subpath \"{}\")\n", profile_path(root)));
     for read_only in read_only_roots {
-        profile.push_str(&format!(
-            "  (subpath \"{}\")\n",
-            profile_path(read_only)
-        ));
+        profile.push_str(&format!("  (subpath \"{}\")\n", profile_path(read_only)));
     }
     profile.push_str(")\n");
     profile.push_str(&format!(
@@ -233,7 +218,10 @@ fn runtime_home(variable: &str, fallback: &str, home: Option<&Path>) -> Option<P
     env::var_os(variable)
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
-        .or_else(|| home.map(|home| home.join(fallback)).filter(|path| path.is_dir()))
+        .or_else(|| {
+            home.map(|home| home.join(fallback))
+                .filter(|path| path.is_dir())
+        })
 }
 
 fn collapse_roots(roots: BTreeSet<PathBuf>) -> Vec<PathBuf> {
@@ -291,8 +279,8 @@ mod tests {
             "true"
         })
         .expect("true must be available for sandbox tests");
-        let inputs = inputs(executable.to_str().expect("UTF-8 executable path"))
-            .expect("sandbox inputs");
+        let inputs =
+            inputs(executable.to_str().expect("UTF-8 executable path")).expect("sandbox inputs");
         assert!(
             inputs
                 .read_only_roots
@@ -304,11 +292,12 @@ mod tests {
     #[test]
     fn parent_home_is_not_copied_into_child_environment() {
         let executable = resolve_program("true").expect("true must be available");
-        let inputs = inputs(executable.to_str().expect("UTF-8 executable path"))
-            .expect("sandbox inputs");
+        let inputs =
+            inputs(executable.to_str().expect("UTF-8 executable path")).expect("sandbox inputs");
         let home = env::var_os("HOME").map(PathBuf::from);
         assert!(
-            home.as_ref().is_none_or(|home| !inputs.read_only_roots.contains(home)),
+            home.as_ref()
+                .is_none_or(|home| !inputs.read_only_roots.contains(home)),
             "the ambient HOME must not become a blanket read root"
         );
     }
