@@ -6,6 +6,8 @@ use medusa_config::{
 use reqwest::{StatusCode, blocking::Client};
 use serde::Deserialize;
 
+use crate::blocking_response_json;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelDiscoveryError {
     NotAuthorized,
@@ -97,8 +99,7 @@ pub fn discover_models(
     if !response.status().is_success() {
         return Err(classify_status(response.status()));
     }
-    let body = response
-        .json::<ModelsResponse>()
+    let body = blocking_response_json::<ModelsResponse>(response)
         .map_err(|_| ModelDiscoveryError::InvalidResponse)?;
     let mut models = body
         .data
