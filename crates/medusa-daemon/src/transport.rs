@@ -138,6 +138,7 @@ mod platform {
 
     const CAPABILITY_BYTES: usize = 32;
     const CAPABILITY_HEX_LENGTH: usize = CAPABILITY_BYTES * 2;
+    const CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
     const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(5);
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
@@ -279,7 +280,8 @@ mod platform {
         ensure_secure_descriptor(endpoint)?;
         let descriptor = read_descriptor(endpoint).map_err(socket_error)?;
         let address = validated_address(&descriptor).map_err(socket_error)?;
-        let mut stream = TcpStream::connect(address).map_err(socket_error)?;
+        let mut stream =
+            TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).map_err(socket_error)?;
         stream
             .set_write_timeout(Some(AUTHENTICATION_TIMEOUT))
             .map_err(socket_error)?;

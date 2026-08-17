@@ -65,7 +65,15 @@ try {
     Write-Host "Installed $version"
     Write-Host 'Launching Medusa...'
     Write-Host ''
-    & $target
+    try {
+        while ([Console]::KeyAvailable) {
+            [void][Console]::ReadKey($true)
+        }
+    }
+    catch {
+        # Some hosts do not expose a readable console input buffer; launch normally there.
+    }
+    Start-Process -FilePath $target -NoNewWindow -Wait
 }
 finally {
     Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
