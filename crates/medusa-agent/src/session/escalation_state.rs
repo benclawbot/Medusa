@@ -1,9 +1,11 @@
-use std::{fs, path::Path};
+use std::{fs, io::Write, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_escalation::{EscalationMode, EscalationReason};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+
+use super::secure_state;
 
 /// Durable lifecycle state for one external reasoning escalation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -190,6 +192,10 @@ pub fn load_escalation_journal(
     if !path.is_file() {
         return Ok(EscalationJournal::new(session_id.as_str()));
     }
+    if let Some(parent) = path.parent() {
+        secure_state::repair(parent, true)?;
+    }
+    secure_state::repair(&path, false)?;
     let journal: EscalationJournal = serde_json::from_slice(&fs::read(path)?)?;
     journal.validate().map_err(persistence_error)?;
     if journal.session_id != session_id.as_str() {
@@ -213,11 +219,14 @@ pub fn persist_escalation_journal(
     }
     let path = journal_path(repo, session_id);
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        secure_state::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(journal)?)?;
-    fs::rename(temporary, path)?;
+    let mut file = secure_state::create_new_file(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(journal)?)?;
+    file.sync_all()?;
+    fs::rename(&temporary, &path)?;
+    secure_state::repair(&path, false)?;
     Ok(())
 }
 
