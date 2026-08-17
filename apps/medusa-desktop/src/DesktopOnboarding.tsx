@@ -33,7 +33,9 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   const models = recommendedModels(selectedProvider);
   const credentialless = selectedProvider?.authMethods.every((method) => method === "none") ?? false;
   const oauth = selectedProvider?.browserOauth ?? false;
-  const credentialReady = credentialless || configuration.credentialConfigured || oauthConnected;
+  const credentialReady = oauth
+    ? oauthConnected
+    : credentialless || configuration.credentialConfigured;
 
   const chooseProvider = (value: string) => {
     const next = catalog.find((entry) => entry.profileProvider === value);
@@ -52,11 +54,14 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
     setAuthError(undefined);
     try {
       await startBrowserOauth(provider);
-      const refreshed = await loadProviderCatalog(true);
+      const refreshed = await loadProviderCatalog(true, provider);
       setCatalog(refreshed);
       const refreshedProvider = refreshed.find((entry) => entry.profileProvider === provider);
-      if (refreshedProvider && !refreshedProvider.modelOptions.includes(model)) {
-        setModel(refreshedProvider.defaultModel);
+      if (refreshedProvider) {
+        const nextModels = recommendedModels(refreshedProvider);
+        if (!nextModels.includes(model)) {
+          setModel(nextModels[0] ?? refreshedProvider.defaultModel);
+        }
       }
       setOauthConnected(true);
       setStep("model");
@@ -110,7 +115,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
         {step === "authentication" && (
           <>
             <h2>Authenticate</h2>
-            <p>{oauth ? "Sign in in your browser. Medusa will refresh the models available to the authenticated account when sign-in completes." : "Enter an API key for this shared Medusa profile."}</p>
+            <p>{oauth ? "Sign in in your browser. Medusa will retain the local OAuth credential and refresh the models available to the authenticated account when sign-in completes." : "Enter an API key for this shared Medusa profile."}</p>
             {!oauth && !credentialless && (
               <label>API key
                 <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="API key" />
@@ -121,7 +126,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
             <div>
               <button className="secondary-action" disabled={authenticating} onClick={() => setStep("provider")}>Back</button>
               {oauth && !oauthConnected ? (
-                <button className="primary-action" disabled={authenticating} onClick={() => void authenticateWithBrowser()}>{authenticating ? "Opening browser…" : "Sign in with browser"}</button>
+                <button className="primary-action" disabled={authenticating} onClick={() => void authenticateWithBrowser()}>{authenticating ? "Opening browser…" : "Sign in with ChatGPT"}</button>
               ) : (
                 <button className="primary-action" disabled={!credentialReady && !apiKey.trim()} onClick={() => setStep("model")}>Continue</button>
               )}
@@ -174,6 +179,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
           <>
             <h2>Verify and start</h2>
             <p>{selectedProvider?.displayName} · {model} · {effort} effort</p>
+            <small>Medusa will test the selected provider route and model before marking the session ready.</small>
             {!!error && <div className="error-banner" role="alert">{error}</div>}
             <div>
               <button className="secondary-action" disabled={saving} onClick={() => setStep("preferences")}>Back</button>
