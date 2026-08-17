@@ -287,6 +287,7 @@ impl PatchTransaction {
 
 /// Recovers every non-terminal structured patch transaction to its exact pre-apply state.
 pub fn recover_patch_transactions(repo: &Path) -> MedusaResult<Vec<String>> {
+    let _repository_guard = repository_mutation::lock(repo);
     let mut recovered = Vec::new();
     let mut directories = journal_directories(repo)?;
     directories.reverse();
@@ -303,6 +304,7 @@ pub fn recover_patch_transactions(repo: &Path) -> MedusaResult<Vec<String>> {
 
 /// Promotes applied transactions after verification, or restores them when verification fails.
 pub fn finalize_patch_transactions(repo: &Path, verified: bool) -> MedusaResult<Vec<String>> {
+    let _repository_guard = repository_mutation::lock(repo);
     let mut directories = journal_directories(repo)?;
     if !verified {
         directories.reverse();
