@@ -347,9 +347,9 @@ mod tests {
             let mut remaining = body_bytes;
             while remaining > 0 {
                 let write = remaining.min(chunk.len());
-                stream
-                    .write_all(&chunk[..write])
-                    .expect("write response body");
+                if stream.write_all(&chunk[..write]).is_err() {
+                    break;
+                }
                 remaining -= write;
             }
         });
