@@ -72,6 +72,18 @@ jobs:
               """pub(super) fn system_lines(message: &str, width: u16) -> Vec<StyledLine> {\n    let color = if message.starts_with(\"error:\") {\n        Color::Red\n    } else if message.starts_with(\"evidence:\") {\n        Color::Blue\n    } else if message.starts_with(\"step:\") {\n        Color::Yellow\n    } else if message.contains(\"cancelled\") {\n        Color::DarkYellow\n    } else {\n        Color::Green\n    };\n    let marker = \"● \";\n    let marker_width = marker.chars().count();\n    let content_width = usize::from(width).saturating_sub(marker_width).max(1);\n    let mut rows = Vec::new();\n    for source_line in message.split('\\n') {\n        if source_line.is_empty() {\n            rows.push(String::new());\n            continue;\n        }\n        let chars = source_line.chars().collect::<Vec<_>>();\n        rows.extend(\n            chars\n                .chunks(content_width)\n                .map(|chunk| chunk.iter().collect::<String>()),\n        );\n    }\n    if rows.is_empty() {\n        rows.push(String::new());\n    }\n    rows.into_iter()\n        .enumerate()\n        .map(|(index, row)| {\n            StyledLine::with_marker(\n                if index == 0 { marker } else { \"  \" },\n                color,\n                row,\n                color,\n            )\n        })\n        .collect()\n}\n""",
           )
 
+          # Existing submit regression is the configured-provider case.
+          replace_exact(
+              "crates/medusa-tui/src/app/tests.rs",
+              """    .expect(\"create app\");\n    app.persist_draft().expect(\"save draft\");\n    let action = app\n""",
+              """    .expect(\"create app\");\n    app.credential_configured = true;\n    app.persist_draft().expect(\"save draft\");\n    let action = app\n""",
+          )
+
+          # Add an explicit regression for first-message configuration gating and draft retention.
+          anchor = """#[test]\nfn slash_menu_selection_accepts_enter_as_well_as_tab() {\n"""
+          test = """#[test]\nfn unconfigured_model_keeps_first_message_and_opens_configuration() {\n    let repository = tempdir().expect(\"temporary repository\");\n    let mut app = AppState::new(\n        repository.path().to_path_buf(),\n        \"session_unconfigured\",\n        \"keep this prompt\",\n        Arc::new(FakeClipboard(ClipboardContent::Empty)),\n    )\n    .expect(\"create app\");\n\n    let action = app\n        .handle_event(Event::Key(crossterm::event::KeyEvent::new(\n            KeyCode::Enter,\n            KeyModifiers::NONE,\n        )))\n        .expect(\"gate unconfigured prompt\");\n\n    assert_eq!(action, AppAction::Redraw);\n    assert_eq!(app.composer.draft.text, \"keep this prompt\");\n    assert!(app.model_modal().is_some());\n    assert!(app.status.contains(\"configuration required\"));\n}\n\n#[test]\nfn slash_menu_selection_accepts_enter_as_well_as_tab() {\n"""
+          replace_exact("crates/medusa-tui/src/app/tests.rs", anchor, test)
+
           # Make prebuilt release installation the normal user path; source compilation stays a dev option.
           readme = Path("README.md")
           text = readme.read_text()
@@ -99,6 +111,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/agent-fix-install-first-run.yml
-          git add crates/medusa-tui/src/app.rs crates/medusa-tui/src/session.rs crates/medusa-tui/src/render/support.rs README.md install.sh install.ps1
+          git add crates/medusa-tui/src/app.rs crates/medusa-tui/src/app/tests.rs crates/medusa-tui/src/session.rs crates/medusa-tui/src/render/support.rs README.md install.sh install.ps1
           git commit -m "fix: harden install and first-run messaging UX [skip ci]"
           git push origin HEAD:agent/fix-install-first-run
