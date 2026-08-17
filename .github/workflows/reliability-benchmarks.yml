@@ -14,23 +14,6 @@ on:
       - 'scripts/test-compare-coding-harness-benchmarks.py'
       - 'docs/BENCHMARKS.md'
       - '.github/workflows/reliability-benchmarks.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'benchmarks/**'
-      - 'scripts/reliability-benchmark.py'
-      - 'scripts/test-reliability-benchmark.py'
-      - 'scripts/orchestration-benchmark.py'
-      - 'scripts/test-orchestration-benchmark.py'
-      - 'scripts/coding-harness-benchmark.py'
-      - 'scripts/test-coding-harness-benchmark.py'
-      - 'scripts/compare-coding-harness-benchmarks.py'
-      - 'scripts/test-compare-coding-harness-benchmarks.py'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/**'
-      - '.github/workflows/reliability-benchmarks.yml'
   workflow_dispatch:
 
 permissions:
