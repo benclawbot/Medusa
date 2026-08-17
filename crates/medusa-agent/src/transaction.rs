@@ -5,9 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_core::{
-    repository_mutation, ErrorCategory, ErrorCode, MedusaError, MedusaResult,
-};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, repository_mutation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -97,7 +95,7 @@ pub fn preview(
 /// `apply_atomic_with_context`. Legacy callers remain safe, but their writes are explicitly
 /// unavailable for provenance-authorized selective revert.
 pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<TransactionOutcome> {
-    apply_atomic_inner(repo, mutations, None)
+    apply_atomic_inner(repo, mutations, None, true)
 }
 
 /// Applies every repository mutation through the rollback-capable boundary and atomically records
@@ -108,13 +106,14 @@ pub fn apply_atomic_with_context(
     mutations: &[FileMutation],
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
-    apply_atomic_inner(repo, mutations, Some(context))
+    apply_atomic_inner(repo, mutations, Some(context), true)
 }
 
 fn apply_atomic_inner(
     repo: &Path,
     mutations: &[FileMutation],
     context: Option<&MutationContext>,
+    acquire_repository_lock: bool,
 ) -> MedusaResult<TransactionOutcome> {
     if mutations.is_empty() {
         return Err(MedusaError::new(
@@ -124,7 +123,7 @@ fn apply_atomic_inner(
         ));
     }
 
-    let _repository_guard = repository_mutation::lock(repo);
+    let _repository_guard = acquire_repository_lock.then(|| repository_mutation::lock(repo));
 
     let repository_before = if context.is_some() {
         Some(repository_fingerprint(repo)?)
@@ -414,6 +413,7 @@ pub fn apply_selective_revert(
     mutation_id: &str,
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
+    let _repository_guard = repository_mutation::lock(repo);
     let preview = preview_selective_revert(repo, mutation_id)?;
     let journal = load_provenance(repo)?;
     let record = journal
@@ -436,20 +436,20 @@ pub fn apply_selective_revert(
                 "selective revert scope changed during authorization",
             ));
         }
-        let restore =
-            record.scope.retained_preimage.as_deref().ok_or_else(|| {
-                provenance_boundary_error("selective revert preimage is unavailable")
-            })?;
+        let restore = record.scope.retained_preimage.as_deref().ok_or_else(|| {
+            provenance_boundary_error("selective revert preimage is unavailable")
+        })?;
         let content = String::from_utf8(restore.to_vec()).map_err(|_| {
             provenance_boundary_error("selective revert of non-UTF-8 content is unavailable")
         })?;
-        return apply_atomic_with_context(
+        return apply_atomic_inner(
             repo,
             &[FileMutation {
                 path: preview.path,
                 content,
             }],
-            context,
+            Some(context),
+            false,
         );
     }
 
@@ -458,10 +458,9 @@ pub fn apply_selective_revert(
         .start_byte
         .checked_add(preview.remove_len)
         .ok_or_else(|| provenance_boundary_error("selective revert scope overflow"))?;
-    let expected =
-        record.scope.retained_postimage.as_deref().ok_or_else(|| {
-            provenance_boundary_error("selective revert postimage is unavailable")
-        })?;
+    let expected = record.scope.retained_postimage.as_deref().ok_or_else(|| {
+        provenance_boundary_error("selective revert postimage is unavailable")
+    })?;
     if current.get(preview.start_byte..end) != Some(expected) {
         return Err(provenance_boundary_error(
             "selective revert scope changed during authorization",
@@ -479,13 +478,14 @@ pub fn apply_selective_revert(
     let content = String::from_utf8(reverted).map_err(|_| {
         provenance_boundary_error("selective revert of non-UTF-8 content is unavailable")
     })?;
-    apply_atomic_with_context(
+    apply_atomic_inner(
         repo,
         &[FileMutation {
             path: preview.path,
             content,
         }],
-        context,
+        Some(context),
+        false,
     )
 }
 
@@ -495,7 +495,6 @@ fn apply_delete_with_context(
     expected_current: &[u8],
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
-    let _repository_guard = repository_mutation::lock(repo);
     let path = safe_path(repo, relative)?;
     let metadata = fs::metadata(&path)?;
     let current = fs::read(&path)?;
@@ -940,7 +939,10 @@ mod tests {
     #[test]
     fn staging_paths_are_unique() {
         let target = Path::new("src/lib.rs");
-        assert_ne!(unique_staging_path(target, 0), unique_staging_path(target, 0));
+        assert_ne!(
+            unique_staging_path(target, 0),
+            unique_staging_path(target, 0)
+        );
     }
 
     #[test]
@@ -968,9 +970,11 @@ mod tests {
         }
         let final_content = fs::read_to_string(directory.path().join("same.txt")).unwrap();
         assert!(matches!(final_content.as_str(), "first" | "second"));
-        assert!(fs::read_dir(directory.path())
-            .unwrap()
-            .filter_map(Result::ok)
-            .all(|entry| !entry.file_name().to_string_lossy().contains("medusa-txn")));
+        assert!(
+            fs::read_dir(directory.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().contains("medusa-txn"))
+        );
     }
 }
