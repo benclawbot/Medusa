@@ -153,12 +153,8 @@ fn run_validated(
     let mut evidence = tool_telemetry::redact_text(&adapted.to_string());
     execution_budget.record_output(&evidence)?;
     if output.status.success() {
-        cache_evidence = tool_orchestration::cache_store(
-            repo,
-            "shell_run",
-            &cache_input_summary,
-            &evidence,
-        )?;
+        cache_evidence =
+            tool_orchestration::cache_store(repo, "shell_run", &cache_input_summary, &evidence)?;
     }
     let verification =
         execution_budget.verification_for("shell_run", &call_digest, output.status.success());
