@@ -733,20 +733,16 @@ mod tests {
 
     #[test]
     fn loopback_http_requires_explicit_opt_in() {
-        assert!(
-            validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err()
-        );
+        assert!(validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err());
         validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", true)
             .expect("explicit loopback development opt-in");
     }
 
     #[test]
     fn embedded_endpoint_credentials_are_rejected() {
-        let error = validate_provider_endpoint_with_policy(
-            "https://user:password@example.com/v1",
-            false,
-        )
-        .expect_err("embedded credentials must fail");
+        let error =
+            validate_provider_endpoint_with_policy("https://user:password@example.com/v1", false)
+                .expect_err("embedded credentials must fail");
         assert!(error.to_string().contains("embedded credentials"));
     }
 }
