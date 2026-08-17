@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 static REPOSITORY_LOCKS: OnceLock<Mutex<BTreeMap<PathBuf, &'static Mutex<()>>>> = OnceLock::new();
@@ -39,20 +39,27 @@ pub fn lock(repo: &Path) -> RepositoryMutationGuard {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{
+        sync::mpsc,
+        thread,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     use super::*;
 
     #[test]
     fn aliases_to_same_repository_serialize() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let alias = directory.path().join("nested").join("..");
-        fs::create_dir_all(directory.path().join("nested")).expect("nested");
-        let first = lock(directory.path());
-        let path = alias;
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("medusa-core-lock-{nonce}"));
+        fs::create_dir_all(directory.join("nested")).expect("fixture");
+        let alias = directory.join("nested").join("..");
+        let first = lock(&directory);
         let (sender, receiver) = mpsc::channel();
         let worker = thread::spawn(move || {
-            let _second = lock(&path);
+            let _second = lock(&alias);
             sender.send(()).expect("send");
         });
         assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
@@ -61,5 +68,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("second lock");
         worker.join().expect("worker");
+        fs::remove_dir_all(directory).expect("cleanup");
     }
 }
