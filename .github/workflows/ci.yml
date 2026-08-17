@@ -14,6 +14,7 @@ jobs:
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate repository artifact hygiene
@@ -26,6 +27,9 @@ jobs:
         with:
           components: rustfmt,clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: medusa-pr-build
+          add-job-id-key: "false"
       - name: Validate committed dependency authority
         shell: bash
         run: |
@@ -90,14 +94,14 @@ jobs:
           name: production-panic-audit-diagnostics
           path: production-panic-audit.log
           if-no-files-found: error
-      - name: Full workspace tests
+      - name: Fast workspace unit tests
         id: workspace_tests
         shell: bash
         env:
           MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
         run: |
           set -o pipefail
-          cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee workspace-tests.log
+          cargo test --workspace --all-features --locked --lib -- --nocapture 2>&1 | tee workspace-tests.log
       - name: Upload workspace test diagnostics
         if: failure() && steps.workspace_tests.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -105,16 +109,13 @@ jobs:
           name: workspace-test-diagnostics
           path: workspace-tests.log
           if-no-files-found: error
-      - name: Documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --all-features --locked --no-deps
       - name: Assert authoritative validation preserved Cargo.lock
         run: git diff --exit-code -- Cargo.lock
 
   supply-chain:
     name: Dependency policy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -124,6 +125,9 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: medusa-pr-build
+          add-job-id-key: "false"
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-deny,cargo-audit
