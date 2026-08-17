@@ -64,10 +64,7 @@ fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()>
 
     #[cfg(windows)]
     {
-        fs::write(
-            &helper,
-            windows_update_script(parent_pid, &executable, target_sha),
-        )?;
+        fs::write(&helper, windows_update_script(parent_pid, &executable, target_sha))?;
         hidden_command("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(&helper)
@@ -77,10 +74,7 @@ fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()>
 
     #[cfg(not(windows))]
     {
-        fs::write(
-            &helper,
-            unix_update_script(parent_pid, &executable, target_sha),
-        )?;
+        fs::write(&helper, unix_update_script(parent_pid, &executable, target_sha))?;
         hidden_command("sh")
             .arg(&helper)
             .spawn()
