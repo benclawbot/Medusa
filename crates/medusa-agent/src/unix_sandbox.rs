@@ -42,7 +42,7 @@ pub(crate) fn inputs(program: &str) -> io::Result<UnixSandboxInputs> {
     }
 
     for root in system_runtime_roots() {
-        if let Ok(root) = root.canonicalize() {
+        if let Ok(root) = Path::new(root).canonicalize() {
             read_only_roots.insert(root);
         }
     }
@@ -236,33 +236,33 @@ fn collapse_roots(roots: BTreeSet<PathBuf>) -> Vec<PathBuf> {
     collapsed
 }
 
-fn system_runtime_roots() -> &'static [&'static Path] {
+fn system_runtime_roots() -> &'static [&'static str] {
     #[cfg(target_os = "linux")]
     {
         &[
-            Path::new("/usr"),
-            Path::new("/lib"),
-            Path::new("/lib64"),
-            Path::new("/etc/alternatives"),
-            Path::new("/etc/ld.so.cache"),
-            Path::new("/etc/localtime"),
-            Path::new("/etc/ssl"),
+            "/usr",
+            "/lib",
+            "/lib64",
+            "/etc/alternatives",
+            "/etc/ld.so.cache",
+            "/etc/localtime",
+            "/etc/ssl",
         ]
     }
     #[cfg(target_os = "macos")]
     {
         &[
-            Path::new("/System"),
-            Path::new("/usr"),
-            Path::new("/bin"),
-            Path::new("/sbin"),
-            Path::new("/Library/Apple"),
-            Path::new("/Library/Developer"),
-            Path::new("/Applications/Xcode.app"),
-            Path::new("/opt/homebrew"),
-            Path::new("/usr/local"),
-            Path::new("/private/etc/ssl"),
-            Path::new("/private/etc/paths.d"),
+            "/System",
+            "/usr",
+            "/bin",
+            "/sbin",
+            "/Library/Apple",
+            "/Library/Developer",
+            "/Applications/Xcode.app",
+            "/opt/homebrew",
+            "/usr/local",
+            "/private/etc/ssl",
+            "/private/etc/paths.d",
         ]
     }
 }
@@ -273,12 +273,7 @@ mod tests {
 
     #[test]
     fn read_roots_never_grant_the_entire_filesystem() {
-        let executable = resolve_program(if cfg!(target_os = "macos") {
-            "true"
-        } else {
-            "true"
-        })
-        .expect("true must be available for sandbox tests");
+        let executable = resolve_program("true").expect("true must be available for sandbox tests");
         let inputs =
             inputs(executable.to_str().expect("UTF-8 executable path")).expect("sandbox inputs");
         assert!(
