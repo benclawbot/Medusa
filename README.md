@@ -160,19 +160,26 @@ The OpenAI Realtime transport is capability-gated. Live evidence requires the ac
 - Node.js 22 for ChatGPT OAuth, required UI-change browser verification, desktop development, or desktop packaging
 - **Git only when needed:** source installation/cloning and Git-backed mutation require Git; packaged Medusa can perform ordinary-directory and ephemeral workspace work without a Git repository
 
-### Install the CLI from `main`
+### Install the CLI
 
-This source-install command itself uses Git:
+The normal install path downloads the current prebuilt release, so it does not compile the Rust workspace. The installer shows only download progress and launches Medusa in the same terminal when installation completes.
+
+Linux/macOS:
 
 ```bash
-cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli
+curl -fsSL https://raw.githubusercontent.com/benclawbot/Medusa/main/install.sh | sh
 ```
 
-Confirm installation:
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/benclawbot/Medusa/main/install.ps1 | iex
+```
+
+For development or source-only installation, use Cargo explicitly:
 
 ```bash
-medusa --version
-medusa doctor
+cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli --quiet
 ```
 
 ### Install from a local checkout

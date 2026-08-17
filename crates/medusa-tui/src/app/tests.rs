@@ -82,6 +82,7 @@ fn submit_clears_durable_draft_after_capturing_prompt() {
         clipboard,
     )
     .expect("create app");
+    app.credential_configured = true;
     app.persist_draft().expect("save draft");
     let action = app
         .handle_event(Event::Key(crossterm::event::KeyEvent::new(
@@ -96,6 +97,30 @@ fn submit_clears_durable_draft_after_capturing_prompt() {
             .expect("load draft")
             .is_none()
     );
+}
+
+#[test]
+fn unconfigured_model_keeps_first_message_and_opens_configuration() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "session_unconfigured",
+        "keep this prompt",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+
+    let action = app
+        .handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .expect("gate unconfigured prompt");
+
+    assert_eq!(action, AppAction::Redraw);
+    assert_eq!(app.composer.draft.text, "keep this prompt");
+    assert!(app.model_modal().is_some());
+    assert!(app.status.contains("configuration required"));
 }
 
 #[test]

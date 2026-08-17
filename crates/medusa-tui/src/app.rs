@@ -357,7 +357,22 @@ impl AppState {
                     return self.complete_command();
                 }
                 let submitted = self.composer.draft.clone();
-                if submitted.attachments.is_empty() && submitted.text.trim() == "/" {
+                let submitted_text = submitted.text.trim();
+                let is_command = submitted.attachments.is_empty() && submitted_text.starts_with('/');
+                if !self.credential_configured && !is_command {
+                    self.model_modal = Some(ModelModal::new(
+                        self.model_label.as_deref(),
+                        self.effort_label.as_deref(),
+                        self.credential_configured,
+                    ));
+                    self.status = "model configuration required before sending".to_owned();
+                    self.transcript.push(TranscriptEntry::System(
+                        "Configure a model/provider before sending this message. Your draft has been kept."
+                            .to_owned(),
+                    ));
+                    return Ok(AppAction::Redraw);
+                }
+                if submitted.attachments.is_empty() && submitted_text == "/" {
                     self.status = "choose a command".to_owned();
                     return Ok(AppAction::Redraw);
                 }
@@ -557,6 +572,10 @@ impl AppState {
         {
             self.transcript.pop();
         }
+        self.restore_failed_submission(draft)
+    }
+
+    pub fn restore_failed_submission(&mut self, draft: PromptDraft) -> io::Result<()> {
         let cursor = draft.text.len();
         self.composer = ComposerState { draft, cursor };
         self.persist_draft()
