@@ -126,7 +126,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
             }
             TranscriptEntry::System(message) => {
                 previous_activity_group = None;
-                lines.push(system_line(message));
+                lines.extend(system_lines(message, width));
             }
         }
     }
@@ -636,18 +636,48 @@ fn print_selected_text(
     )
 }
 
-pub(super) fn system_line(message: &str) -> StyledLine {
-    if message.starts_with("error:") {
-        StyledLine::new(format!("● {message}"), Color::Red)
+pub(super) fn system_lines(message: &str, width: u16) -> Vec<StyledLine> {
+    let color = if message.starts_with("error:") {
+        Color::Red
     } else if message.starts_with("evidence:") {
-        StyledLine::new(format!("● {message}"), Color::Blue)
+        Color::Blue
     } else if message.starts_with("step:") {
-        StyledLine::new(format!("● {message}"), Color::Yellow)
+        Color::Yellow
     } else if message.contains("cancelled") {
-        StyledLine::new(format!("● {message}"), Color::DarkYellow)
+        Color::DarkYellow
     } else {
-        StyledLine::new(format!("● {message}"), Color::Green)
+        Color::Green
+    };
+    let marker = "● ";
+    let marker_width = marker.chars().count();
+    let content_width = usize::from(width).saturating_sub(marker_width).max(1);
+    let mut rows = Vec::new();
+    for source_line in message.split('\n') {
+        if source_line.is_empty() {
+            rows.push(String::new());
+            continue;
+        }
+        let chars = source_line.chars().collect::<Vec<_>>();
+        rows.extend(
+            chars
+                .chunks(content_width)
+                .map(|chunk| chunk.iter().collect::<String>()),
+        );
     }
+    if rows.is_empty() {
+        rows.push(String::new());
+    }
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            StyledLine::with_marker(
+                if index == 0 { marker } else { "  " },
+                color,
+                row,
+                color,
+            )
+        })
+        .collect()
 }
 
 const MAX_PRESENTED_ACTIVITY_DETAILS: usize = 6;

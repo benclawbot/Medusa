@@ -130,9 +130,7 @@ pub(super) fn run_loop(
         draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
         if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
-            if app.dismiss_welcome_for_event(&terminal_event) {
-                continue;
-            }
+            app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
             if let Some(action) =
                 session_control_action(&terminal_event, modal_open, &mut last_ctrl_c)
@@ -190,9 +188,7 @@ pub(super) fn run_loop(
         }
         if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
-            if app.dismiss_welcome_for_event(&terminal_event) {
-                continue;
-            }
+            app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
             if let Some(action) =
                 session_control_action(&terminal_event, modal_open, &mut last_ctrl_c)
@@ -552,14 +548,31 @@ pub(super) fn drain_runtime_events(
                 app.finish_run();
             }
             RuntimeEvent::Failed(error) => {
+                let retry_draft = if app.composer.draft.text.is_empty()
+                    && app.composer.draft.attachments.is_empty()
+                {
+                    app.transcript.iter().rev().find_map(|entry| match entry {
+                        TranscriptEntry::User(draft) => Some(draft.clone()),
+                        _ => None,
+                    })
+                } else {
+                    None
+                };
                 app.record_activity(TranscriptActivity {
                     id: None,
                     kind: TranscriptActivityKind::Error,
                     title: "Task failed".to_owned(),
                     details: vec![error],
                 });
-                app.status = "agent failed".to_owned();
+                app.status = if retry_draft.is_some() {
+                    "agent failed; draft restored".to_owned()
+                } else {
+                    "agent failed".to_owned()
+                };
                 app.finish_run();
+                if let Some(draft) = retry_draft {
+                    app.restore_failed_submission(draft)?;
+                }
             }
         }
     }
