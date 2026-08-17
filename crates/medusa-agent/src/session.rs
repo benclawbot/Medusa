@@ -27,6 +27,8 @@ pub(crate) mod journal;
 mod lessons;
 mod manual_escalation;
 mod recall;
+#[path = "secure_state.rs"]
+mod secure_state;
 mod skill_drafts;
 mod skill_outcomes;
 mod skill_probation;
@@ -193,8 +195,8 @@ pub struct AgentSession {
 
 /// Creates the on-disk Medusa runtime layout.
 pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
-    if fs::create_dir_all(repo.join(".medusa/sessions")).is_err() {
-        fs::create_dir_all(fallback_session_root(repo))?;
+    if secure_state::create_dir_all(&repo.join(".medusa/sessions")).is_err() {
+        secure_state::create_dir_all(&fallback_session_root(repo))?;
     }
     for (stage, operation, path) in [
         (
@@ -208,7 +210,7 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
             repo.join(".medusa/escalations"),
         ),
     ] {
-        if let Err(error) = fs::create_dir_all(&path) {
+        if let Err(error) = secure_state::create_dir_all(&path) {
             record_nonfatal(repo, None, stage, operation, &error.to_string());
         }
     }
@@ -230,6 +232,10 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
         fallback_session_path(repo, &id)
     };
     let snapshot = if path.is_file() {
+        if let Some(parent) = path.parent() {
+            secure_state::repair(parent, true)?;
+        }
+        secure_state::repair(&path, false)?;
         let session: AgentSession = serde_json::from_slice(&fs::read(&path)?)?;
         verify_chain(&session.events)?;
         Some(session)
@@ -292,17 +298,15 @@ fn persist_compatibility_snapshot(session: &AgentSession) -> MedusaResult<()> {
 
 fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+        secure_state::create_dir_all(parent)?;
     }
     let temporary = unique_snapshot_temporary(path);
     let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut file = secure_state::create_new_file(&temporary)?;
         file.write_all(&serde_json::to_vec_pretty(session)?)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
+        secure_state::repair(path, false)?;
         sync_parent(path);
         Ok(())
     })();
@@ -364,7 +368,14 @@ fn repository_key(repo: &Path) -> String {
 }
 
 pub fn load_nonfatal_diagnostics(repo: &Path) -> Vec<NonFatalDiagnostic> {
-    fs::read(diagnostic_path(repo))
+    let path = diagnostic_path(repo);
+    if path.is_file() {
+        if let Some(parent) = path.parent() {
+            let _ = secure_state::repair(parent, true);
+        }
+        let _ = secure_state::repair(&path, false);
+    }
+    fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
@@ -407,12 +418,19 @@ fn record_nonfatal(
     }
     let path = diagnostic_path(repo);
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        let _ = secure_state::create_dir_all(parent);
     }
     if let Ok(bytes) = serde_json::to_vec_pretty(&diagnostics) {
         let temporary = path.with_extension("json.tmp");
-        if fs::write(&temporary, bytes).is_ok() {
-            let _ = fs::rename(temporary, path);
+        if let Ok(mut file) = secure_state::create_new_file(&temporary) {
+            if file.write_all(&bytes).is_ok()
+                && file.sync_all().is_ok()
+                && fs::rename(&temporary, &path).is_ok()
+            {
+                let _ = secure_state::repair(&path, false);
+            } else {
+                let _ = fs::remove_file(&temporary);
+            }
         }
     }
 }
