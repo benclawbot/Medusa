@@ -22,7 +22,10 @@ pub(crate) fn create_new_file(path: &Path) -> io::Result<fs::File> {
         .mode(FILE_MODE)
         .open(path)?;
     #[cfg(not(unix))]
-    let file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
     secure_file(path)?;
     Ok(file)
 }
@@ -72,15 +75,27 @@ mod tests {
         let file_path = directory.join("session.json");
         drop(create_new_file(&file_path).expect("secure file"));
 
-        assert_eq!(fs::metadata(&directory).unwrap().permissions().mode() & 0o777, DIRECTORY_MODE);
-        assert_eq!(fs::metadata(&file_path).unwrap().permissions().mode() & 0o777, FILE_MODE);
+        assert_eq!(
+            fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            DIRECTORY_MODE
+        );
+        assert_eq!(
+            fs::metadata(&file_path).unwrap().permissions().mode() & 0o777,
+            FILE_MODE
+        );
 
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
         fs::set_permissions(&file_path, fs::Permissions::from_mode(0o644)).unwrap();
         repair(&directory, true).expect("repair directory");
         repair(&file_path, false).expect("repair file");
-        assert_eq!(fs::metadata(&directory).unwrap().permissions().mode() & 0o777, DIRECTORY_MODE);
-        assert_eq!(fs::metadata(&file_path).unwrap().permissions().mode() & 0o777, FILE_MODE);
+        assert_eq!(
+            fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            DIRECTORY_MODE
+        );
+        assert_eq!(
+            fs::metadata(&file_path).unwrap().permissions().mode() & 0o777,
+            FILE_MODE
+        );
     }
 
     #[cfg(windows)]
