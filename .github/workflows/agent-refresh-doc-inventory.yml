@@ -1,0 +1,35 @@
+name: Agent refresh documentation inventory
+
+on:
+  push:
+    branches:
+      - agent/refresh-doc-inventory
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/refresh-doc-inventory
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Refresh inventory
+        run: python3 scripts/check-documentation.py --write
+      - name: Verify inventory
+        run: python3 scripts/check-documentation.py
+      - name: Commit generated inventory
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/documentation-inventory.json
+          git commit -m "chore: refresh documentation inventory [skip ci]"
+      - name: Remove temporary workflow and push
+        run: |
+          git rm .github/workflows/agent-refresh-doc-inventory.yml
+          git commit --amend --no-edit
+          git push origin HEAD:agent/refresh-doc-inventory
