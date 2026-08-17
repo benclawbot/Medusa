@@ -25,6 +25,10 @@ mod analysis_process_tracker;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use analysis_process_tracker::AnalysisProcessTracker;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "unix_sandbox.rs"]
+mod unix_sandbox;
+
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 #[cfg(windows)]
@@ -230,44 +234,7 @@ pub(crate) fn sandboxed_command_cancellable(
     #[cfg(target_os = "linux")]
     {
         let root = repo.canonicalize()?;
-        let mut command = Command::new("bwrap");
-        command.args([
-            "--die-with-parent",
-            "--new-session",
-            // Enter a subordinate user namespace before creating the network namespace. This
-            // gives bubblewrap only the namespace-local capabilities required to configure
-            // loopback while retaining the fail-closed no-network boundary on restricted CI
-            // hosts and unprivileged installations.
-            "--unshare-user",
-            "--uid",
-            "0",
-            "--gid",
-            "0",
-            "--unshare-net",
-            "--ro-bind",
-            "/",
-            "/",
-        ]);
-        // A tmpfs mounted over /tmp would hide a repository or analysis workspace whose
-        // canonical root itself lives below /tmp (as TempDir-backed production tests do).
-        // In that case the readonly root mount already makes ambient /tmp non-writable;
-        // only the explicitly rebound workspace remains writable. For roots elsewhere,
-        // retain the isolated writable tmpfs used by ordinary contained tools.
-        if !root.starts_with("/tmp") {
-            command.args(["--tmpfs", "/tmp"]);
-        }
-        command
-            .arg("--bind")
-            .arg(&root)
-            .arg(&root)
-            .arg("--chdir")
-            .arg(&root)
-            .args(["--clearenv", "--setenv", "PATH"])
-            .arg(std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()))
-            .args(["--setenv", "PYTHONDONTWRITEBYTECODE", "1"])
-            .arg("--")
-            .arg(program)
-            .args(args);
+        let mut command = unix_sandbox::linux_command(&root, program, args)?;
         output_with_timeout(
             &mut command,
             "Linux bubblewrap sandbox",
@@ -280,27 +247,12 @@ pub(crate) fn sandboxed_command_cancellable(
     #[cfg(target_os = "macos")]
     {
         let root = repo.canonicalize()?;
-        let profile = format!(
-            "(version 1)\n(deny default)\n(allow process-exec* process-fork)\n\
-             (allow file-read* (subpath \"/\"))\n\
-             (allow file-write* (subpath \"{}\") (subpath \"/tmp\") (subpath \"/private/tmp\"))\n\
-             (deny network*)\n",
-            sandbox_profile_string(&root)
-        );
         let profile_path = std::env::temp_dir().join(format!(
             "medusa-sandbox-{}-{}.sb",
             std::process::id(),
             time::OffsetDateTime::now_utc().unix_timestamp_nanos()
         ));
-        fs::write(&profile_path, profile)?;
-        let mut command = Command::new("sandbox-exec");
-        command
-            .arg("-f")
-            .arg(&profile_path)
-            .arg(program)
-            .args(args)
-            .current_dir(&root)
-            .env("PYTHONDONTWRITEBYTECODE", "1");
+        let mut command = unix_sandbox::macos_command(&root, program, args, &profile_path)?;
         let result = output_with_timeout(
             &mut command,
             "macOS sandbox-exec sandbox",
@@ -323,13 +275,6 @@ pub(crate) fn sandboxed_command_cancellable(
             "no containment backend is available for this platform",
         ))
     }
-}
-
-#[cfg(target_os = "macos")]
-fn sandbox_profile_string(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
