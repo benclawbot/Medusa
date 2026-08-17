@@ -222,7 +222,7 @@ pub fn persist_escalation_journal(
         secure_state::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("json.tmp");
-    let mut file = secure_state::create_new_file(&temporary)?;
+    let mut file = secure_state::create_file(&temporary)?;
     file.write_all(&serde_json::to_vec_pretty(journal)?)?;
     file.sync_all()?;
     fs::rename(&temporary, &path)?;
