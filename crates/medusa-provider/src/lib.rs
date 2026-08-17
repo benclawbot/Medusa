@@ -56,9 +56,9 @@ pub use verification_bridge::{
 };
 
 pub(crate) use http::{
-    async_response_error, blocking_response_error, cancelled_provider_error, provider_error,
-    provider_response_error, run_cancellable_request, shared_async_http_client,
-    shared_blocking_http_client,
+    async_response_error, async_response_json, blocking_response_error, blocking_response_json,
+    cancelled_provider_error, provider_error, provider_response_error, run_cancellable_request,
+    shared_async_http_client, shared_blocking_http_client,
 };
 
 #[cfg(test)]
