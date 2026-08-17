@@ -47,7 +47,8 @@ impl OpenAiProvider {
         validate_provider_endpoint(&base_url)?;
 
         let provider_key_name = format!("{provider}_API_KEY");
-        let provider_key_allowed = provider_credential_allowed(&provider, endpoint_source, &base_url);
+        let provider_key_allowed =
+            provider_credential_allowed(&provider, endpoint_source, &base_url);
         let api_key = session_api_key
             .or_else(|| {
                 provider_key_allowed
