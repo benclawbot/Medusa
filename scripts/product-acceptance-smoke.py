@@ -3,7 +3,7 @@
 
 The smoke contract exercises production tests directly. It intentionally does not
 replace the authoritative cross-platform `cargo product-acceptance` evidence run,
-which remains required on main and for manual release validation.
+which remains required for explicit full-evidence validation.
 """
 
 from __future__ import annotations
@@ -83,10 +83,9 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
 
 def run(output_dir: Path) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
-    target_dir = output_dir / "target"
-    target_dir.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
-    environment["CARGO_TARGET_DIR"] = str(target_dir.resolve())
+    target_dir = Path(environment.get("CARGO_TARGET_DIR", "target")).resolve()
+    environment["CARGO_TARGET_DIR"] = str(target_dir)
     environment["MEDUSA_PRODUCT_ACCEPTANCE"] = "1"
 
     results: list[dict[str, Any]] = []
