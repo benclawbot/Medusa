@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Fixture tests for repository artifact hygiene policy."""
+"""Fixture tests for repository artifact hygiene and repository policy."""
 
 from __future__ import annotations
 
 import importlib.util
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -38,6 +40,10 @@ def main() -> int:
     assert_admitted("benchmark-evidence.json")
     assert_admitted("docs/trigger-semantics.md")
     assert_admitted(".github/workflows/trigger-release.yml")
+
+    # Keep workflow supply-chain policy inside the repository-wide CI policy gate.
+    workflow_pin_tests = Path(__file__).with_name("test-workflow-action-pins.py")
+    subprocess.run([sys.executable, str(workflow_pin_tests)], check=True)
 
     print("repository artifact hygiene fixtures passed")
     return 0
