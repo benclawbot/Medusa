@@ -48,6 +48,65 @@ jobs:
             exit 2
           fi
           echo "::add-mask::$MINIMAX_API_KEY"
+      - name: Apply diagnostic workaround for issue 952
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/medusa-runtime/src/attachment/session.rs")
+          text = path.read_text(encoding="utf-8")
+          old = '''    pub fn acknowledge_cursor(
+              &mut self,
+              cursor: u64,
+              occurred_at_unix_ms: i64,
+              event_id: impl Into<String>,
+          ) -> Result<(), RuntimeError> {
+              let outcome = continuity_store(&self.repo, &self.session.id.to_string())
+                  .acknowledge_cursor(CursorAckRequest {
+                      client_id: self.client_id.clone(),
+                      expected_revision: self.continuity.revision,
+                      cursor,
+                      occurred_at_unix_ms,
+                      event_id: event_id.into(),
+                  })
+                  .map_err(RuntimeError::agent)?;
+              self.continuity = outcome.session().clone();
+              Ok(())
+          }
+          '''
+          new = '''    pub fn acknowledge_cursor(
+              &mut self,
+              cursor: u64,
+              occurred_at_unix_ms: i64,
+              event_id: impl Into<String>,
+          ) -> Result<(), RuntimeError> {
+              let store = continuity_store(&self.repo, &self.session.id.to_string());
+              let event_id = event_id.into();
+              let request = |expected_revision| CursorAckRequest {
+                  client_id: self.client_id.clone(),
+                  expected_revision,
+                  cursor,
+                  occurred_at_unix_ms,
+                  event_id: event_id.clone(),
+              };
+              let outcome = match store.acknowledge_cursor(request(self.continuity.revision)) {
+                  Ok(outcome) => outcome,
+                  Err(ContinuityError::StaleRevision { .. }) => {
+                      let refreshed = store.load().map_err(RuntimeError::agent)?;
+                      validate_continuity_identity(&refreshed, &self.session.id.to_string())?;
+                      store
+                          .acknowledge_cursor(request(refreshed.revision))
+                          .map_err(RuntimeError::agent)?
+                  }
+                  Err(error) => return Err(RuntimeError::agent(error)),
+              };
+              self.continuity = outcome.session().clone();
+              Ok(())
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("#952 diagnostic patch target changed")
+          path.write_text(text.replace(old, new), encoding="utf-8")
       - name: Build the packaged Medusa entry point
         run: cargo build --release --locked --bin medusa
       - name: Submit and render one MiniMax-M2.7 answer through the real TUI
