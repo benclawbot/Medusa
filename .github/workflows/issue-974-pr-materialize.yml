@@ -31,6 +31,7 @@ jobs:
         run: |
           cargo fmt --all
           git diff --check
+          cargo check -p medusa-tui
           cargo test -p medusa-config --locked
           cargo test -p medusa-tui --locked
           cargo check -p medusa-runtime -p medusa-tui --locked
