@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 20
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      MEDUSA_LIVE_MODEL: ${{ github.event.inputs.model || '' }}
+      MEDUSA_LIVE_MODEL: ${{ github.event_name == 'pull_request' && 'MiniMax-M2.7' || github.event.inputs.model || '' }}
       LIVE_TUI_TIMEOUT_SECONDS: '600'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
