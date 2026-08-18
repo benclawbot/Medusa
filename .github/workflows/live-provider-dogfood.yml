@@ -67,7 +67,7 @@ jobs:
             os: windows-2022
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      MEDUSA_LIVE_MODEL: ${{ github.event.inputs.model || '' }}
+      MEDUSA_LIVE_MODEL: "MiniMax-M2.7"
       LIVE_E2E_TIMEOUT_SECONDS: "1500"
       LIVE_E2E_HEARTBEAT_SECONDS: "60"
     steps:
