@@ -5,12 +5,10 @@ on:
     paths:
       - "crates/medusa-runtime/**"
       - "crates/medusa-workers/**"
-      - "crates/medusa-agent/**"
       - "crates/medusa-cli/**"
       - "crates/medusa-tui/**"
       - "crates/medusa-daemon/**"
       - "apps/medusa-desktop/**"
-      - "scripts/materialize-967.py"
       - "scripts/check-workspace-surfaces.py"
       - "docs/WORKSPACES.md"
       - "docs/ARCHITECTURE.md"
@@ -22,39 +20,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: workspace-backend-certification-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  materialize-967:
-    name: Materialize issue 967 fix
-    if: github.head_ref == 'fix/967-verification-runtime-state'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-      - name: Patch verification authority
-        run: python scripts/materialize-967.py
-      - name: Format and test agent verification
-        run: |
-          cargo fmt --all
-          cargo test -p medusa-agent --locked
-      - name: Push clean product commit
-        run: |
-          git config user.name "benclawbot"
-          git config user.email "benclawbot@gmail.com"
-          git rm .github/workflows/fix-967-materialize.yml scripts/materialize-967.py
-          git checkout origin/main -- .github/workflows/workspace-backend-certification.yml
-          git add crates/medusa-agent/src/verification_authority.rs .github/workflows/workspace-backend-certification.yml
-          git commit -m "fix(agent): ignore Medusa runtime state in verification guard"
-          git push origin HEAD:${{ github.head_ref }}
-
   directory-workspace:
     name: Directory workspace (${{ matrix.os }})
     strategy:
