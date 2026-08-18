@@ -33,22 +33,35 @@ jobs:
           p = Path('crates/medusa-tui/src/runtime.rs')
           text = p.read_text()
           old = '''        let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
-            provider: provider.clone(),
+            provider: Some(provider.clone()),
             model,
         })?;'''
           new = '''        let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
-            provider: provider.clone(),
+            provider: Some(provider.clone()),
             model: model.clone(),
         })?;'''
           if old not in text:
               raise SystemExit('configure model ownership snippet missing')
           p.write_text(text.replace(old, new, 1))
+
+          lock = Path('Cargo.lock')
+          lock_text = lock.read_text()
+          old = ''' "medusa-recovery-coordinator",
+ "medusa-runtime",
+ "serde",'''
+          new = ''' "medusa-recovery-coordinator",
+ "medusa-runtime",
+ "reqwest",
+ "serde",'''
+          if old not in lock_text:
+              raise SystemExit('medusa-tui lock dependency snippet missing')
+          lock.write_text(lock_text.replace(old, new, 1))
           PY
       - name: Validate
         run: |
           cargo fmt --all
           git diff --check
-          cargo check -p medusa-tui
+          cargo check -p medusa-tui --locked
           cargo test -p medusa-config --locked
           cargo test -p medusa-tui --locked
           cargo check -p medusa-runtime -p medusa-tui --locked
