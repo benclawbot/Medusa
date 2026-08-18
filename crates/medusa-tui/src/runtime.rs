@@ -45,6 +45,14 @@ const TUI_CLIENT_PREFIX: &str = "tui-primary";
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(50);
 static COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+pub(crate) fn discover_openai_oauth_models() -> Vec<String> {
+    medusa_runtime::discover_openai_oauth_models().unwrap_or_default()
+}
+
+pub(crate) fn ensure_openai_oauth_connected() -> Result<Vec<String>, String> {
+    medusa_runtime::ensure_openai_oauth_connected()
+}
+
 #[derive(Debug)]
 pub enum RuntimeEvent {
     Started,
@@ -475,12 +483,40 @@ impl DaemonRuntimeState {
     }
 
     fn configure_model(&mut self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
-        self.sync_credential(&configuration.provider, configuration.api_key)?;
-        let provider = configuration.provider;
-        let model = configuration.model;
+        let ModelConfiguration {
+            provider,
+            model,
+            effort,
+            api_key,
+        } = configuration;
+        if provider != "openai-oauth" {
+            self.sync_credential(&provider, api_key)?;
+        }
+        if provider == "openai-oauth" {
+            let available = ensure_openai_oauth_connected().map_err(invalid_runtime)?;
+            if !available.iter().any(|candidate| candidate == &model) {
+                return Err(invalid_runtime(format!(
+                    "model `{model}` is not available to the authenticated ChatGPT OAuth account"
+                )));
+            }
+        }
+
+        let capabilities = medusa_config::model_capabilities(&provider, &model);
+        let effort_label = effort.label();
+        if effort != Effort::Auto
+            && !capabilities
+                .reasoning_effort_levels
+                .iter()
+                .any(|candidate| candidate == effort_label)
+        {
+            return Err(invalid_runtime(format!(
+                "reasoning effort `{effort_label}` is not supported by {provider}/{model}"
+            )));
+        }
+
         let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
             provider: Some(provider.clone()),
-            model,
+            model: model.clone(),
         })?;
         if !matches!(
             acknowledgement.result,
@@ -490,8 +526,23 @@ impl DaemonRuntimeState {
                 "daemon returned an unexpected model result",
             ));
         }
+
+        if effort != Effort::Auto {
+            let acknowledgement = self.dispatch(FrontendCommand::RunCommand {
+                input: format!("/config set reasoning {effort_label}"),
+            })?;
+            if !matches!(
+                acknowledgement.result,
+                FrontendControlResult::CommandAccepted { .. }
+            ) {
+                return Err(invalid_runtime(
+                    "daemon rejected provider reasoning configuration",
+                ));
+            }
+        }
+
         let acknowledgement = self.dispatch(FrontendCommand::SetEffort {
-            effort: configuration.effort.label().to_owned(),
+            effort: effort_label.to_owned(),
         })?;
         if !matches!(
             acknowledgement.result,
