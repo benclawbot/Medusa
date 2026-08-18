@@ -2,7 +2,7 @@ name: Issue 974 trusted materializer
 
 on:
   pull_request_target:
-    types: [synchronize, labeled]
+    types: [synchronize, labeled, reopened]
 
 permissions:
   contents: write
