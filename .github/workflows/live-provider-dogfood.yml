@@ -2,14 +2,24 @@ name: Live provider dogfood
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: Optional known MiniMax model override for a targeted diagnostic run
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: "17 3 * * 1"
   pull_request:
     paths:
       - "scripts/live-coding-e2e.py"
+      - "scripts/run-live-coding-e2e.py"
+      - "scripts/live-model-selection.py"
       - "scripts/live-coding-e2e.sh"
       - "scripts/live-dogfood-report.py"
+      - "scripts/run-live-dogfood-report.py"
       - "scripts/test-live-dogfood.py"
+      - "scripts/test-live-model-selection.py"
       - "scripts/check-provider-support.py"
       - "docs/provider-support.json"
       - "docs/PROVIDER-SUPPORT.md"
@@ -34,9 +44,10 @@ jobs:
           python-version: "3.13"
       - name: Compile and test the evidence contract
         run: |
-          python -m py_compile scripts/live-coding-e2e.py scripts/live-dogfood-report.py scripts/test-live-dogfood.py scripts/check-provider-support.py
+          python -m py_compile scripts/live-coding-e2e.py scripts/run-live-coding-e2e.py scripts/live-model-selection.py scripts/live-dogfood-report.py scripts/run-live-dogfood-report.py scripts/test-live-dogfood.py scripts/test-live-model-selection.py scripts/check-provider-support.py
           python scripts/check-provider-support.py
           python scripts/test-live-dogfood.py
+          python scripts/test-live-model-selection.py
 
   live-provider:
     name: Live installed binary (${{ matrix.platform }})
@@ -56,6 +67,7 @@ jobs:
             os: windows-2022
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      MEDUSA_LIVE_MODEL: ${{ github.event.inputs.model || '' }}
       LIVE_E2E_TIMEOUT_SECONDS: "1500"
       LIVE_E2E_HEARTBEAT_SECONDS: "60"
     steps:
@@ -79,7 +91,7 @@ jobs:
       - name: Require and mask the live credential
         run: python -c "import os,sys; key=os.environ.get('MINIMAX_API_KEY',''); print('::add-mask::'+key) if key else sys.exit('MINIMAX_API_KEY is required')"
       - name: Run bounded live product dogfood
-        run: python scripts/live-coding-e2e.py --output live-e2e-artifacts
+        run: python scripts/run-live-coding-e2e.py --output live-e2e-artifacts
       - name: Upload sanitized platform evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -105,7 +117,7 @@ jobs:
           path: live-provider-evidence
       - name: Validate and publish one cross-platform report
         run: |
-          python scripts/live-dogfood-report.py \
+          python scripts/run-live-dogfood-report.py \
             --input live-provider-evidence \
             --json live-provider-report/report.json \
             --markdown live-provider-report/report.md
