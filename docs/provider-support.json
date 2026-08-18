@@ -25,8 +25,8 @@
       "dogfood": {
         "status": "primary",
         "model": "MiniMax-M3",
-        "protocol": "anthropic",
-        "base_url": "https://api.minimax.io/anthropic",
+        "protocol": "openai",
+        "base_url": "https://api.minimax.io/v1",
         "auth": "api-key"
       },
       "realtime_voice": "unavailable"
