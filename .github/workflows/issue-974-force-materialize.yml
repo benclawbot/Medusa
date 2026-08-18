@@ -1,8 +1,8 @@
 name: Issue 974 force materialize
 
 on:
-  pull_request_target:
-    types: [synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: write
@@ -10,14 +10,14 @@ permissions:
 jobs:
   materialize:
     if: >-
-      github.event.pull_request.number == 975 &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'agent/974-provider-aware-tui'
+      github.event.issue.number == 975 &&
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == '/materialize-974-force'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: agent/974-provider-aware-tui
           fetch-depth: 0
       - name: Apply trusted source patch
         shell: bash
