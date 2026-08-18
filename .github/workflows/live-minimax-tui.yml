@@ -4,6 +4,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
+    inputs:
+      model:
+        description: Optional known MiniMax model override for a targeted diagnostic run
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +32,7 @@ jobs:
     timeout-minutes: 20
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      MEDUSA_LIVE_MODEL: ${{ github.event.inputs.model || '' }}
       LIVE_TUI_TIMEOUT_SECONDS: '600'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -55,7 +62,7 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
         run: |
-          python3 scripts/live-tui-minimax-e2e.py \
+          python3 scripts/run-live-tui-minimax-e2e.py \
             --binary target/release/medusa \
             --work-root "${RUNNER_TEMP}/live-tui-minimax-work" \
             --output-dir live-tui-minimax-evidence
