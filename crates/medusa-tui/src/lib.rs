@@ -289,7 +289,7 @@ mod tests {
         assert!(
             frame
                 .iter()
-                .any(|line| line.text.contains("Effort    high"))
+                .any(|line| line.text.contains("Effort    auto"))
         );
         assert!(frame.iter().any(|line| line.text == "Apply configuration"));
     }

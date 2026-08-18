@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, path::Path};
 use medusa_config::{
     Config, ConfigDoctorCheck, ConfigDoctorReport, ConfigurationApplyTiming,
     ConfigurationChangeOrigin, ProviderProfile, ProviderProfileCatalog, StagedProviderProfile,
-    apply_provider_defaults, diagnose_config_catalog, provider_catalog_entry,
+    apply_provider_defaults, diagnose_config_catalog, model_capabilities, provider_catalog_entry,
     provider_ids_with_current, provider_model_options, repair_config_check,
 };
 
@@ -384,12 +384,17 @@ impl ModelModal {
             .get(provider_index)
             .map(String::as_str)
             .unwrap_or("minimax");
-        let models = provider_model_options(selected_provider, current_model, &[]);
+        let discovered = if selected_provider == "openai-oauth" {
+            crate::runtime::discover_openai_oauth_models()
+        } else {
+            Vec::new()
+        };
+        let models = provider_model_options(selected_provider, current_model, &discovered);
         let model_index = models
             .iter()
             .position(|candidate| candidate == current_model)
             .unwrap_or(0);
-        Self {
+        let mut modal = Self {
             provider_options,
             provider_selection: SelectionState::new(provider_index),
             model_selection: SelectionState::new(model_index),
@@ -399,7 +404,9 @@ impl ModelModal {
             api_key: String::new(),
             has_existing_key,
             settings: None,
-        }
+        };
+        modal.normalize_effort();
+        modal
     }
 
     pub(super) fn new_settings(
@@ -502,7 +509,68 @@ impl ModelModal {
     }
 
     #[must_use]
+    pub fn requires_api_key(&self) -> bool {
+        provider_catalog_entry(self.provider())
+            .is_some_and(|entry| entry.auth_methods.contains(&"api-key"))
+    }
+
+    fn effort_options(&self) -> Vec<Effort> {
+        let capabilities = model_capabilities(self.provider(), &self.selected_model());
+        let mut options = Vec::new();
+        for level in capabilities.reasoning_effort_levels {
+            match level.as_str() {
+                "low" => options.push(Effort::Low),
+                "medium" => options.push(Effort::Medium),
+                "high" => options.push(Effort::High),
+                _ => {}
+            }
+        }
+        if options.is_empty() {
+            vec![Effort::Auto]
+        } else {
+            options
+        }
+    }
+
+    fn normalize_effort(&mut self) {
+        let options = self.effort_options();
+        if !options.contains(&self.effort) {
+            self.effort = options.first().copied().unwrap_or(Effort::Auto);
+        }
+    }
+
+    fn refresh_selected_provider(&mut self, connect_oauth: bool) {
+        let provider = self.provider().to_owned();
+        let current = self.selected_model();
+        let discovered = if provider == "openai-oauth" {
+            if connect_oauth {
+                crate::runtime::ensure_openai_oauth_connected().unwrap_or_default()
+            } else {
+                crate::runtime::discover_openai_oauth_models()
+            }
+        } else {
+            Vec::new()
+        };
+        self.model_options = provider_model_options(&provider, &current, &discovered);
+        let selected = self
+            .model_options
+            .iter()
+            .position(|candidate| candidate == &current)
+            .unwrap_or(0);
+        self.model_selection
+            .set_selected(selected, self.model_options.len());
+        self.normalize_effort();
+    }
+
+    #[must_use]
     pub fn api_key_mask(&self) -> String {
+        if !self.requires_api_key() {
+            return if self.provider() == "openai-oauth" {
+                "not required (ChatGPT OAuth)".to_owned()
+            } else {
+                "not required".to_owned()
+            };
+        }
         if self.api_key.is_empty() {
             if self.has_existing_key {
                 "configured".to_owned()
@@ -520,15 +588,20 @@ impl ModelModal {
             provider: self.provider().to_owned(),
             model: self.selected_model(),
             effort: self.effort,
-            api_key: (!self.api_key.is_empty()).then(|| self.api_key.clone()),
+            api_key: (self.requires_api_key() && !self.api_key.is_empty())
+                .then(|| self.api_key.clone()),
         }
     }
 
     pub(super) fn cycle_focus(&mut self) {
         self.focus = match self.focus {
-            ModelModalFocus::Provider => ModelModalFocus::Model,
+            ModelModalFocus::Provider => {
+                self.refresh_selected_provider(true);
+                ModelModalFocus::Model
+            }
             ModelModalFocus::Model => ModelModalFocus::Effort,
-            ModelModalFocus::Effort => ModelModalFocus::ApiKey,
+            ModelModalFocus::Effort if self.requires_api_key() => ModelModalFocus::ApiKey,
+            ModelModalFocus::Effort => ModelModalFocus::Apply,
             ModelModalFocus::ApiKey => ModelModalFocus::Apply,
             ModelModalFocus::Apply => ModelModalFocus::Provider,
         };
@@ -540,12 +613,15 @@ impl ModelModal {
             ModelModalFocus::Model => ModelModalFocus::Provider,
             ModelModalFocus::Effort => ModelModalFocus::Model,
             ModelModalFocus::ApiKey => ModelModalFocus::Effort,
-            ModelModalFocus::Apply => ModelModalFocus::ApiKey,
+            ModelModalFocus::Apply if self.requires_api_key() => ModelModalFocus::ApiKey,
+            ModelModalFocus::Apply => ModelModalFocus::Effort,
         };
     }
 
     pub(super) fn focus_api_key(&mut self) {
-        self.focus = ModelModalFocus::ApiKey;
+        if self.requires_api_key() {
+            self.focus = ModelModalFocus::ApiKey;
+        }
     }
 
     pub(super) fn move_selection(&mut self, delta: isize) {
@@ -553,35 +629,36 @@ impl ModelModal {
             ModelModalFocus::Provider => {
                 self.provider_selection
                     .move_by(self.provider_options.len(), delta);
-                let provider = self.provider().to_owned();
-                self.model_options = provider_model_options(&provider, "", &[]);
-                self.model_selection
-                    .set_selected(0, self.model_options.len());
+                self.refresh_selected_provider(false);
             }
             ModelModalFocus::Model => {
                 self.model_selection
                     .move_by(self.model_options.len(), delta);
+                self.normalize_effort();
             }
             ModelModalFocus::Effort => {
-                const EFFORTS: [Effort; 4] =
-                    [Effort::Low, Effort::Medium, Effort::High, Effort::Auto];
-                let index = EFFORTS
+                let efforts = self.effort_options();
+                let index = efforts
                     .iter()
                     .position(|candidate| *candidate == self.effort)
-                    .unwrap_or(2);
-                self.effort = EFFORTS[cycle_index(index, EFFORTS.len(), delta)];
+                    .unwrap_or(0);
+                self.effort = efforts[cycle_index(index, efforts.len(), delta)];
             }
             ModelModalFocus::ApiKey | ModelModalFocus::Apply => {}
         }
     }
 
     pub(super) fn insert_key_text(&mut self, text: &str) {
-        self.api_key
-            .extend(text.chars().filter(|character| !character.is_whitespace()));
+        if self.requires_api_key() {
+            self.api_key
+                .extend(text.chars().filter(|character| !character.is_whitespace()));
+        }
     }
 
     pub(super) fn delete_key_character(&mut self) {
-        self.api_key.pop();
+        if self.requires_api_key() {
+            self.api_key.pop();
+        }
     }
 
     #[must_use]
@@ -1373,5 +1450,26 @@ mod settings_tests {
         .expect("effective config");
         assert_eq!(effective.model.provider, "anthropic");
         assert_eq!(effective.model.name, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn oauth_never_requires_or_emits_an_api_key() {
+        let mut modal = ModelModal::new(Some("openai-oauth / gpt-5"), Some("effort:high"), true);
+        assert!(!modal.requires_api_key());
+        modal.api_key = "should-never-leak".to_owned();
+        assert!(modal.configuration().api_key.is_none());
+        assert!(modal.api_key_mask().contains("not required"));
+    }
+
+    #[test]
+    fn reasoning_effort_options_are_derived_from_model_capabilities() {
+        let modal = ModelModal::new(Some("openai-oauth / gpt-5"), Some("effort:high"), false);
+        assert_eq!(
+            modal.effort_options(),
+            vec![Effort::Low, Effort::Medium, Effort::High]
+        );
+
+        let modal = ModelModal::new(Some("minimax / MiniMax-M3"), Some("effort:high"), false);
+        assert_eq!(modal.effort_options(), vec![Effort::Auto]);
     }
 }

@@ -1,6 +1,7 @@
 extern crate medusa_git_workers as git_workers;
 extern crate self as medusa_workers;
 
+mod openai_oauth;
 mod workspace_worker_manager;
 
 // Preserve the existing runtime mutation API while routing WorkerManager through the
@@ -8,6 +9,7 @@ mod workspace_worker_manager;
 // ordinary directories use the content-addressed snapshot backend. These types are public so
 // embedders can use the same workspace-aware mutation authority as the built-in user surfaces.
 pub use crate::git_workers::{IntegrationReceipt, Worker, WorkerState};
+pub use crate::openai_oauth::{discover_openai_oauth_models, ensure_openai_oauth_connected};
 pub use crate::workspace_worker_manager::{
     WorkspaceMutationBackend, WorkspaceWorkerManager as WorkerManager,
 };
