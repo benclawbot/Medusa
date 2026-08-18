@@ -1,5 +1,5 @@
 use medusa_multi_agent_scheduler::{
-    plan_typed, ExecutionStrategy, PlannerInput, PlanningIntent, TaskKind,
+    ExecutionStrategy, PlannerInput, PlanningIntent, TaskKind, plan_typed,
 };
 
 #[test]
@@ -23,7 +23,9 @@ fn protected_files_do_not_downgrade_an_explicit_repair_to_read_only() {
     assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedMutation);
     assert!(planned.task(TaskKind::Implementation).is_some());
     assert_eq!(planned.requested_outcomes, vec![objective.to_owned()]);
-    planned.validate().expect("restored objective must remain fingerprint-valid");
+    planned
+        .validate()
+        .expect("restored objective must remain fingerprint-valid");
 }
 
 #[test]
