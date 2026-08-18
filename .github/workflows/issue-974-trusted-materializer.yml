@@ -27,9 +27,7 @@ jobs:
           workflow = Path('.github/workflows/issue-974-materialize.yml').read_text().splitlines()
           start = next(i for i, line in enumerate(workflow) if "python3 - <<'PY'" in line) + 1
           end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == 'PY')
-          body = workflow[start:end]
-          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
-          source = '\n'.join(line[indent:] for line in body) + '\n'
+          source = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end]) + '\n'
           exec(compile(source, 'issue-974-materializer.py', 'exec'), {})
           PY
           rm -f .github/workflows/issue-974-materialize.yml
