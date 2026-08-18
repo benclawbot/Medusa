@@ -55,26 +55,13 @@ jobs:
 
           path = Path("crates/medusa-runtime/src/attachment/session.rs")
           text = path.read_text(encoding="utf-8")
-          old = '''    pub fn acknowledge_cursor(
-              &mut self,
-              cursor: u64,
-              occurred_at_unix_ms: i64,
-              event_id: impl Into<String>,
-          ) -> Result<(), RuntimeError> {
-              let outcome = continuity_store(&self.repo, &self.session.id.to_string())
-                  .acknowledge_cursor(CursorAckRequest {
-                      client_id: self.client_id.clone(),
-                      expected_revision: self.continuity.revision,
-                      cursor,
-                      occurred_at_unix_ms,
-                      event_id: event_id.into(),
-                  })
-                  .map_err(RuntimeError::agent)?;
-              self.continuity = outcome.session().clone();
-              Ok(())
-          }
-          '''
-          new = '''    pub fn acknowledge_cursor(
+          start_marker = "    pub fn acknowledge_cursor(\n"
+          end_marker = "    /// Hands mutable ownership to an already attached client.\n"
+          start = text.find(start_marker)
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit("#952 diagnostic patch target changed")
+          replacement = '''    pub fn acknowledge_cursor(
               &mut self,
               cursor: u64,
               occurred_at_unix_ms: i64,
@@ -103,10 +90,9 @@ jobs:
               self.continuity = outcome.session().clone();
               Ok(())
           }
-          '''
-          if text.count(old) != 1:
-              raise SystemExit("#952 diagnostic patch target changed")
-          path.write_text(text.replace(old, new), encoding="utf-8")
+
+'''
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
       - name: Build the packaged Medusa entry point
         run: cargo build --release --locked --bin medusa
       - name: Submit and render one MiniMax-M2.7 answer through the real TUI
