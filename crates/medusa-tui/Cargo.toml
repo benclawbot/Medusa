@@ -26,7 +26,6 @@ medusa-daemon = { path = "../medusa-daemon" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time = { version = "0.3", features = ["formatting", "parsing"] }
