@@ -27,7 +27,7 @@ jobs:
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
       MEDUSA_LIVE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
-      MEDUSA_MODEL: MiniMax-M3
+      MEDUSA_MODEL: MiniMax-M2.7
       MEDUSA_PROVIDER: minimax
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -40,7 +40,7 @@ jobs:
             exit 2
           fi
           echo "::add-mask::$MINIMAX_API_KEY"
-      - name: Exercise the production correction loop against MiniMax
+      - name: Exercise the production correction loop against MiniMax-M2.7
         env:
           MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT: ${{ runner.temp }}/live-self-improvement-report.json
         run: >-
@@ -60,7 +60,7 @@ jobs:
           report = json.loads(source.read_text(encoding="utf-8"))
           assert report["schema_version"] == 1
           assert report["provider"] == "minimax"
-          assert report["model"] == "MiniMax-M3"
+          assert report["model"] == "MiniMax-M2.7"
           assert report["live_request_count"] == 3
           assert report["production_loop"] == {
               "correction_candidate_evaluated": True,
