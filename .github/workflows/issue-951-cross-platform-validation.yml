@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - validation/951-minimax-m2-7-cross-platform
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   live:
+    if: github.event_name == 'push' || github.head_ref == 'validation/951-minimax-m2-7-cross-platform'
     name: MiniMax-M2.7 installed binary (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
