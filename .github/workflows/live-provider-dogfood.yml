@@ -71,6 +71,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
       - name: Validate committed exact-build dependency authority
         run: cargo metadata --locked --format-version 1
+      - name: Apply diagnostic workaround for issue 950
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/medusa-multi-agent-scheduler/src/lib.rs")
+          text = path.read_text(encoding="utf-8")
+          old = "    let mutation_requested = !explicitly_read_only && contains_mutation_verb(&words);\n"
+          new = "    let mutation_requested = contains_mutation_verb(&words);\n"
+          if text.count(old) != 1:
+              raise SystemExit("#950 diagnostic patch target changed")
+          path.write_text(text.replace(old, new), encoding="utf-8")
       - name: Install Linux containment backend
         if: runner.os == 'Linux'
         run: |
