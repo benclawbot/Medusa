@@ -208,7 +208,7 @@ fn starting_a_new_turn_removes_the_stale_terminal_failure_marker() {
 }
 
 #[test]
-fn model_form_requires_explicit_apply_and_updates_effort_and_session_key() {
+fn model_form_requires_explicit_apply_and_updates_session_key_with_capability_effort() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(
         repository.path().to_path_buf(),
@@ -257,7 +257,7 @@ fn model_form_requires_explicit_apply_and_updates_effort_and_session_key() {
         KeyCode::Up,
         KeyModifiers::NONE,
     )))
-    .expect("select medium effort");
+    .expect("keep the only supported automatic effort");
     app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
         KeyCode::Enter,
         KeyModifiers::NONE,
@@ -290,7 +290,7 @@ fn model_form_requires_explicit_apply_and_updates_effort_and_session_key() {
     };
     assert_eq!(configuration.provider, "minimax");
     assert_eq!(configuration.model, "MiniMax-M3");
-    assert_eq!(configuration.effort, Effort::Medium);
+    assert_eq!(configuration.effort, Effort::Auto);
     assert_eq!(configuration.api_key.as_deref(), Some("replacement-key"));
     assert!(!format!("{configuration:?}").contains("replacement-key"));
     assert!(app.transcript.is_empty());
