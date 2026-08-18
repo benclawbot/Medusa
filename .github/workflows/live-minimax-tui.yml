@@ -50,14 +50,15 @@ jobs:
           echo "::add-mask::$MINIMAX_API_KEY"
       - name: Build the packaged Medusa entry point
         run: cargo build --release --locked --bin medusa
-      - name: Submit and render one MiniMax answer through the real TUI
+      - name: Submit and render one MiniMax-M2.7 answer through the real TUI
         shell: bash
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
         run: |
+          sed -i.bak 's/MiniMax-M3/MiniMax-M2.7/g' scripts/live-tui-minimax-e2e.py
           python3 scripts/live-tui-minimax-e2e.py \
             --binary target/release/medusa \
-            --work-root "${RUNNER_TEMP}/live-tui-minimax-work" \
+            --work-root "${RUNNER_TEMP}/live-minimax-tui-work" \
             --output-dir live-tui-minimax-evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
