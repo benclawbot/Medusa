@@ -19,39 +19,211 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Apply staged source changes
+      - name: Apply remaining source changes
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          source = Path('.github/workflows/issue-974-materialize.yml').read_text().splitlines()
-          start = next(i for i, line in enumerate(source) if "python3 - <<'PY'" in line) + 1
-          end = next(i for i in range(start, len(source)) if source[i].strip() == 'PY')
-          body = '\n'.join(line[10:] if line.startswith('          ') else line for line in source[start:end]) + '\n'
-          Path('/tmp/materialize.py').write_text(body)
-          PY
-          python3 /tmp/materialize.py
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('crates/medusa-tui/src/runtime.rs')
-          text = p.read_text()
-          old = '''        let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
-            provider: provider.clone(),
+
+          runtime = Path('crates/medusa-tui/src/runtime.rs')
+          text = runtime.read_text()
+          text = text.replace(
+              '    thread,\n    time::Duration,\n};',
+              '    process::{Command, Stdio},\n    thread,\n    time::Duration,\n};',
+              1,
+          )
+          text = text.replace(
+              'use medusa_config::{Config, Mode, credential_environment};',
+              'use medusa_config::{Config, Mode, credential_environment, model_capabilities};',
+              1,
+          )
+          marker = 'const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(50);\n'
+          helper = r'''
+const OPENAI_OAUTH_GATEWAY_MODELS: &str = "http://127.0.0.1:10531/v1/models";
+
+fn openai_oauth_models() -> Result<Vec<String>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_millis(350))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|error| format!("OAuth model discovery client failed: {error}"))?;
+    let response = client
+        .get(OPENAI_OAUTH_GATEWAY_MODELS)
+        .send()
+        .map_err(|error| format!("OAuth gateway is not ready: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("OAuth gateway model discovery returned {}", response.status()));
+    }
+    let value: serde_json::Value = response
+        .json()
+        .map_err(|error| format!("OAuth model discovery returned invalid JSON: {error}"))?;
+    let mut models = value
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    if models.is_empty() {
+        Err("OAuth gateway returned no selectable models".to_owned())
+    } else {
+        Ok(models)
+    }
+}
+
+pub(crate) fn discover_openai_oauth_models() -> Vec<String> {
+    openai_oauth_models().unwrap_or_default()
+}
+
+pub(crate) fn ensure_openai_oauth_connected() -> Result<Vec<String>, String> {
+    if let Ok(models) = openai_oauth_models() {
+        return Ok(models);
+    }
+    let status = Command::new("npx")
+        .args([
+            "--yes",
+            "openai-oauth@latest",
+            "login",
+            "--open",
+            "--login-timeout-ms",
+            "300000",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| {
+            format!(
+                "could not launch ChatGPT browser sign-in: {error}. Install Node.js and retry"
+            )
+        })?;
+    if !status.success() {
+        return Err(format!("ChatGPT browser sign-in exited with {status}"));
+    }
+    openai_oauth_models()
+}
+'''
+          if 'const OPENAI_OAUTH_GATEWAY_MODELS' not in text:
+              if marker not in text:
+                  raise SystemExit('runtime marker missing')
+              text = text.replace(marker, marker + helper, 1)
+
+          old = '''    fn configure_model(&mut self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
+        self.sync_credential(&configuration.provider, configuration.api_key)?;
+        let provider = configuration.provider;
+        let model = configuration.model;
+        let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
+            provider: Some(provider.clone()),
             model,
-        })?;'''
-          new = '''        let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
-            provider: provider.clone(),
+        })?;
+        if !matches!(
+            acknowledgement.result,
+            FrontendControlResult::CommandAccepted { .. }
+        ) {
+            return Err(invalid_runtime(
+                "daemon returned an unexpected model result",
+            ));
+        }
+        let acknowledgement = self.dispatch(FrontendCommand::SetEffort {
+            effort: configuration.effort.label().to_owned(),
+        })?;
+        if !matches!(
+            acknowledgement.result,
+            FrontendControlResult::CommandAccepted { .. }
+        ) {
+            return Err(invalid_runtime(
+                "daemon returned an unexpected effort result",
+            ));
+        }
+        self.provider = provider;
+        Ok(())
+    }'''
+          new = '''    fn configure_model(&mut self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
+        self.sync_credential(&configuration.provider, configuration.api_key)?;
+        let provider = configuration.provider;
+        let model = configuration.model;
+        if provider == "openai-oauth" {
+            let available = ensure_openai_oauth_connected().map_err(invalid_runtime)?;
+            if !available.iter().any(|candidate| candidate == &model) {
+                return Err(invalid_runtime(format!(
+                    "model `{model}` is not available to the authenticated ChatGPT OAuth account"
+                )));
+            }
+        }
+        let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
+            provider: Some(provider.clone()),
             model: model.clone(),
-        })?;'''
-          if old not in text:
-              raise SystemExit('configure model ownership snippet missing')
-          p.write_text(text.replace(old, new, 1))
+        })?;
+        if !matches!(
+            acknowledgement.result,
+            FrontendControlResult::CommandAccepted { .. }
+        ) {
+            return Err(invalid_runtime(
+                "daemon returned an unexpected model result",
+            ));
+        }
+        let effort_label = configuration.effort.label();
+        let capabilities = model_capabilities(&provider, &model);
+        if capabilities.reasoning
+            && capabilities
+                .reasoning_effort_levels
+                .iter()
+                .any(|level| level == effort_label)
+        {
+            let acknowledgement = self.dispatch(FrontendCommand::RunCommand {
+                input: format!("/config set reasoning {effort_label}"),
+            })?;
+            if !matches!(
+                acknowledgement.result,
+                FrontendControlResult::CommandAccepted { .. }
+            ) {
+                return Err(invalid_runtime(
+                    "daemon rejected provider reasoning configuration",
+                ));
+            }
+        }
+        let acknowledgement = self.dispatch(FrontendCommand::SetEffort {
+            effort: effort_label.to_owned(),
+        })?;
+        if !matches!(
+            acknowledgement.result,
+            FrontendControlResult::CommandAccepted { .. }
+        ) {
+            return Err(invalid_runtime(
+                "daemon returned an unexpected effort result",
+            ));
+        }
+        self.provider = provider;
+        Ok(())
+    }'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif 'ensure_openai_oauth_connected().map_err(invalid_runtime)?' not in text:
+              raise SystemExit('configure_model snippet missing')
+          runtime.write_text(text)
+
+          lock = Path('Cargo.lock')
+          lock_text = lock.read_text()
+          old = ''' "medusa-recovery-coordinator",
+ "medusa-runtime",
+ "serde",'''
+          new = ''' "medusa-recovery-coordinator",
+ "medusa-runtime",
+ "reqwest",
+ "serde",'''
+          if old in lock_text:
+              lock_text = lock_text.replace(old, new, 1)
+          lock.write_text(lock_text)
           PY
       - name: Validate materialized source
         run: |
           cargo fmt --all
           git diff --check
-          cargo check -p medusa-tui
+          cargo check -p medusa-tui --locked
           cargo test -p medusa-config --locked
           cargo test -p medusa-tui --locked
           cargo check -p medusa-runtime -p medusa-tui --locked
