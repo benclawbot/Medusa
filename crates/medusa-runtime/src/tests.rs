@@ -287,6 +287,49 @@ fn controller_exposes_shared_busy_and_cancel_semantics() {
 }
 
 #[test]
+fn initial_submit_reports_pre_session_failure_instead_of_channel_loss() {
+    let directory = tempdir().expect("temporary directory");
+    let submission = std::sync::Arc::new(std::sync::Mutex::new(SubmissionState::default()));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (_frontend_tx, frontend_rx) = mpsc::channel();
+    let (event_sender, _runtime_event_rx) = mpsc::channel();
+    let runtime = RuntimeController {
+        commands: command_tx,
+        events: frontend_rx,
+        cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        submission: std::sync::Arc::clone(&submission),
+        event_sender,
+        team_control: TeamControlPlane::default(),
+        repo: directory.path().to_path_buf(),
+    };
+    let worker = thread::spawn(move || {
+        let RuntimeCommand::Submit { accepted, .. } =
+            command_rx.recv().expect("submission command")
+        else {
+            panic!("expected submission command");
+        };
+        accepted
+            .send(Err("capability discovery failed: persistence failed".to_owned()))
+            .expect("reject submission");
+    });
+
+    let error = runtime
+        .submit(PromptDraft {
+            text: "start a durable session".to_owned(),
+            ..PromptDraft::default()
+        })
+        .expect_err("pre-session failure should be returned");
+    assert!(
+        error
+            .to_string()
+            .contains("capability discovery failed: persistence failed")
+    );
+    assert!(!error.to_string().contains("prompt ended"));
+    worker.join().expect("worker joins");
+    assert!(!submission.lock().expect("submission state").busy);
+}
+
+#[test]
 fn model_configuration_redacts_session_api_keys() {
     let directory = tempdir().expect("temporary directory");
     let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
@@ -711,7 +754,9 @@ fn initial_submit_waits_for_session_acceptance_before_returning() {
         assert!(state.busy);
         state.active_session_id = Some("session-accepted".to_owned());
         drop(state);
-        accepted.send(()).expect("accept submission");
+        accepted
+            .send(Ok(()))
+            .expect("accept submission");
     });
 
     assert_eq!(

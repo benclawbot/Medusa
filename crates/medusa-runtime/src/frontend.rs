@@ -645,9 +645,19 @@ fn dispatch_when_idle(
                 accepted: accepted_tx,
             })
             .map_err(|_| RuntimeError::WorkerStopped)?;
-        accepted_rx.recv().map_err(|_| {
-            RuntimeError::agent("runtime prompt ended before a durable session accepted the action")
-        })?;
+        match accepted_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(RuntimeError::agent(format!(
+                    "runtime failed before a durable session accepted the action: {error}"
+                )));
+            }
+            Err(_) => {
+                return Err(RuntimeError::agent(
+                    "runtime worker stopped before a durable session accepted the action",
+                ));
+            }
+        }
         let sequence = find_committed_delivery(
             &repo,
             &action,
