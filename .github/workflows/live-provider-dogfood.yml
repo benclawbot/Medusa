@@ -27,64 +27,13 @@ on:
       - ".github/workflows/live-provider-dogfood.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: live-provider-dogfood-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  patch-956:
-    name: Materialize issue 956 source fix
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/956-windows-longpaths-v2'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-          persist-credentials: true
-      - name: Patch worker Git commands and add regression
-        shell: python
-        run: |
-          from pathlib import Path
-
-          path = Path('crates/medusa-workers/src/lib.rs')
-          text = path.read_text(encoding='utf-8')
-          old = 'Command::new("git").args(args).current_dir(repo).output()?'
-          new = 'git_command(repo).args(args).output()?'
-          if text.count(old) != 5:
-              raise SystemExit(f'expected 5 direct Git command sites, found {text.count(old)}')
-          text = text.replace(old, new)
-
-          anchor = '''fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {\n'''
-          helper = '''fn git_command(repo: &Path) -> Command {\n    let mut command = Command::new("git");\n    command\n        .args(["-c", "core.longPaths=true"])\n        .current_dir(repo);\n    command\n}\n\n'''
-          if anchor not in text:
-              raise SystemExit('Git helper insertion point changed')
-          text = text.replace(anchor, helper + anchor, 1)
-
-          test_anchor = '''    #[test]\n    fn cleanup_removes_worktree_and_temporary_branch() {\n'''
-          regression = '''    #[cfg(windows)]\n    #[test]\n    fn windows_cleanup_handles_deep_medusa_runtime_paths() {\n        let (_directory, repo, worktrees) = repository();\n        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");\n        let base = manager.repository_head().expect("base");\n        let worker = manager\n            .create_worker("long-path-cleanup")\n            .expect("worker");\n        let worktree = worker.worktree.clone();\n        let execution_id = "e".repeat(64);\n        let session_id = "s".repeat(64);\n        let request_id = "r".repeat(64);\n        let artifact_id = "a".repeat(64);\n        let deep = worker\n            .worktree\n            .join(".medusa")\n            .join("executions")\n            .join(execution_id)\n            .join("sessions")\n            .join(session_id)\n            .join("request-manifests")\n            .join(request_id)\n            .join("artifacts")\n            .join(artifact_id);\n        fs::create_dir_all(&deep).expect("deep runtime directory");\n        let manifest = deep.join("request-manifest.json");\n        fs::write(&manifest, "{}\\n").expect("deep runtime manifest");\n        assert!(\n            manifest.as_os_str().to_string_lossy().len() > 260,\n            "fixture must exceed the legacy Windows path limit"\n        );\n\n        manager\n            .discard_untracked_runtime_state(&worker, &base)\n            .expect("discard deep runtime state");\n        assert!(!worker.worktree.join(".medusa").exists());\n\n        manager.cleanup(&[worker]).expect("cleanup worktree");\n        assert!(!worktree.exists());\n    }\n\n'''
-          if test_anchor not in text:
-              raise SystemExit('cleanup regression insertion point changed')
-          text = text.replace(test_anchor, regression + test_anchor, 1)
-          path.write_text(text, encoding='utf-8')
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-      - name: Format and validate worker crate
-        run: |
-          cargo fmt --all
-          cargo test -p medusa-workers --locked
-      - name: Commit only the product fix
-        shell: bash
-        run: |
-          git checkout origin/main -- .github/workflows/live-provider-dogfood.yml
-          git config user.name 'Medusa CI'
-          git config user.email 'medusa@users.noreply.github.com'
-          git add crates/medusa-workers/src/lib.rs .github/workflows/live-provider-dogfood.yml
-          git diff --cached --check
-          git commit -m 'fix(workers): make Windows cleanup long-path safe'
-          git push origin HEAD:${{ github.head_ref }}
-
   contract:
     name: Harness contract
     runs-on: ubuntu-latest

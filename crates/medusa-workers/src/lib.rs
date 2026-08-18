@@ -701,7 +701,7 @@ fn changed_component_paths(components: &[ChangedComponent]) -> Vec<String> {
 }
 
 fn git_changed_components(repo: &Path, args: &[&str]) -> MedusaResult<Vec<ChangedComponent>> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = git_command(repo).args(args).output()?;
     if !output.status.success() {
         return output_result(&format!("git {}", args.join(" ")), output).map(|_| Vec::new());
     }
@@ -808,23 +808,31 @@ fn branch_exists(repo: &Path, branch: &str) -> MedusaResult<bool> {
     )
 }
 
+fn git_command(repo: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .args(["-c", "core.longPaths=true"])
+        .current_dir(repo);
+    command
+}
+
 fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = git_command(repo).args(args).output()?;
     output_result(&format!("git {}", args.join(" ")), output).map(|_| ())
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> MedusaResult<String> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = git_command(repo).args(args).output()?;
     output_result(&format!("git {}", args.join(" ")), output).map(|text| text.trim().to_owned())
 }
 
 fn git_success(repo: &Path, args: &[&str]) -> MedusaResult<bool> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = git_command(repo).args(args).output()?;
     Ok(output.status.success())
 }
 
 fn git_nul_paths(repo: &Path, args: &[&str]) -> MedusaResult<Vec<String>> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = git_command(repo).args(args).output()?;
     if !output.status.success() {
         return output_result(&format!("git {}", args.join(" ")), output).map(|_| Vec::new());
     }
@@ -1250,6 +1258,46 @@ mod tests {
             "primary\n"
         );
         manager.cleanup(&[worker]).expect("cleanup");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cleanup_handles_deep_medusa_runtime_paths() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker = manager.create_worker("long-path-cleanup").expect("worker");
+        let worktree = worker.worktree.clone();
+        let execution_id = "e".repeat(64);
+        let session_id = "s".repeat(64);
+        let request_id = "r".repeat(64);
+        let artifact_id = "a".repeat(64);
+        let deep = worker
+            .worktree
+            .join(".medusa")
+            .join("executions")
+            .join(execution_id)
+            .join("sessions")
+            .join(session_id)
+            .join("request-manifests")
+            .join(request_id)
+            .join("artifacts")
+            .join(artifact_id);
+        fs::create_dir_all(&deep).expect("deep runtime directory");
+        let manifest = deep.join("request-manifest.json");
+        fs::write(&manifest, "{}\n").expect("deep runtime manifest");
+        assert!(
+            manifest.as_os_str().to_string_lossy().len() > 260,
+            "fixture must exceed the legacy Windows path limit"
+        );
+
+        manager
+            .discard_untracked_runtime_state(&worker, &base)
+            .expect("discard deep runtime state");
+        assert!(!worker.worktree.join(".medusa").exists());
+
+        manager.cleanup(&[worker]).expect("cleanup worktree");
+        assert!(!worktree.exists());
     }
 
     #[test]
