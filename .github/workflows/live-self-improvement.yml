@@ -59,8 +59,8 @@ jobs:
           source = pathlib.Path(os.environ["MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT"])
           report = json.loads(source.read_text(encoding="utf-8"))
           assert report["schema_version"] == 1
-          assert report["provider"] == "minimax"
-          assert report["model"] == "MiniMax-M3"
+          assert report["provider"] == os.environ["MEDUSA_PROVIDER"]
+          assert report["model"] == os.environ["MEDUSA_MODEL"].strip()
           assert report["live_request_count"] == 3
           assert report["production_loop"] == {
               "correction_candidate_evaluated": True,

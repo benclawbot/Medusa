@@ -64,7 +64,7 @@ struct LiveSelfImprovementEvidence {
     platform: String,
     recorded_at_unix_ms: i64,
     provider: &'static str,
-    model: &'static str,
+    model: String,
     live_request_count: usize,
     initial_assistant: RedactedTextEvidence,
     correction: RedactedTextEvidence,
@@ -151,10 +151,17 @@ fn session(repo: &Path, objective: &str, messages: Vec<Message>) -> AgentSession
     }
 }
 
-fn provider(api_key: String) -> impl ModelProvider {
+fn required_model(value: Option<&str>) -> Result<String, &'static str> {
+    let model = value.map(str::trim).filter(|model| !model.is_empty());
+    model
+        .map(ToOwned::to_owned)
+        .ok_or("MEDUSA_MODEL is required and must not be empty")
+}
+
+fn provider(api_key: String, model: &str) -> impl ModelProvider {
     let mut config = Config::default();
     config.model.provider = "minimax".to_owned();
-    config.model.name = "MiniMax-M3".to_owned();
+    config.model.name = model.to_owned();
     config.model.tool_calling = false;
     ConfiguredProvider::from_config_with_api_key(&config, Some(api_key))
         .expect("configured MiniMax provider")
@@ -309,6 +316,20 @@ fn tree_contains(root: &Path, needle: &[u8]) -> bool {
 }
 
 #[test]
+fn non_default_live_model_selection_is_preserved() {
+    assert_eq!(
+        required_model(Some("MiniMax-M2.7")).expect("non-default model"),
+        "MiniMax-M2.7"
+    );
+    assert_eq!(
+        required_model(Some("  MiniMax-M3  ")).expect("trimmed model"),
+        "MiniMax-M3"
+    );
+    assert!(required_model(None).is_err());
+    assert!(required_model(Some("   ")).is_err());
+}
+
+#[test]
 #[ignore = "requires the protected MINIMAX_API_KEY live-test secret"]
 fn live_correction_repeats_verified_outcomes_and_rolls_back_exactly() {
     let report_path = env::var_os("MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT")
@@ -316,7 +337,9 @@ fn live_correction_repeats_verified_outcomes_and_rolls_back_exactly() {
         .expect("MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT is required");
     let api_key = env::var("MINIMAX_API_KEY").expect("MINIMAX_API_KEY is required");
     assert!(api_key.len() >= 20, "live credential is unexpectedly short");
-    let provider = provider(api_key.clone());
+    let model_env = env::var("MEDUSA_MODEL").ok();
+    let model = required_model(model_env.as_deref()).expect("valid MEDUSA_MODEL");
+    let provider = provider(api_key.clone(), &model);
     let repo = repository();
 
     let initial_assistant = live_completion(
@@ -525,7 +548,7 @@ fn live_correction_repeats_verified_outcomes_and_rolls_back_exactly() {
         platform: format!("{}-{}", env::consts::OS, env::consts::ARCH),
         recorded_at_unix_ms: OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000,
         provider: "minimax",
-        model: "MiniMax-M3",
+        model: model.clone(),
         live_request_count: 3,
         initial_assistant: redacted_text(&initial_assistant),
         correction: redacted_text(CORRECTION),
