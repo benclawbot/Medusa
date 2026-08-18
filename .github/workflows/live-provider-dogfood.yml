@@ -52,7 +52,7 @@ jobs:
   live-provider:
     name: Live installed binary (${{ matrix.platform }})
     needs: contract
-    if: github.event_name != 'pull_request' || github.head_ref == 'agent/555-cross-platform-dogfood'
+    if: github.event_name != 'pull_request' || github.head_ref == 'diag/m27-post-956-live'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
@@ -67,7 +67,7 @@ jobs:
             os: windows-2022
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-      MEDUSA_LIVE_MODEL: ${{ github.event.inputs.model || '' }}
+      MEDUSA_LIVE_MODEL: ${{ github.event_name == 'pull_request' && 'MiniMax-M2.7' || github.event.inputs.model || '' }}
       LIVE_E2E_TIMEOUT_SECONDS: "1500"
       LIVE_E2E_HEARTBEAT_SECONDS: "60"
     steps:
@@ -123,7 +123,7 @@ jobs:
             --markdown live-provider-report/report.md
       - name: Upload exact-build report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b540449e92b4886f43607fa02
         with:
           name: live-provider-report
           path: live-provider-report
