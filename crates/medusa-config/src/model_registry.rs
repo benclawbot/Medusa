@@ -266,14 +266,12 @@ pub fn model_context_limit(provider: &str, model: &str) -> Option<u64> {
     let normalized = model.to_ascii_lowercase();
     match (provider, normalized.as_str()) {
         ("minimax", "minimax-m3") => Some(1_000_000),
-        (
-            "minimax",
-            "minimax-m2.7" | "minimax-m2.7-highspeed" | "minimax-m2.5",
-        ) => Some(204_800),
+        ("minimax", "minimax-m2.7" | "minimax-m2.7-highspeed" | "minimax-m2.5") => Some(204_800),
         ("anthropic", "claude-opus-4-6" | "claude-sonnet-4-6") => Some(1_000_000),
         ("anthropic", "claude-haiku-4-5") => Some(200_000),
-        ("openai", "gpt-5.1-codex" | "gpt-5.1" | "gpt-5-mini")
-        | ("openai-oauth", "gpt-5") => Some(400_000),
+        ("openai", "gpt-5.1-codex" | "gpt-5.1" | "gpt-5-mini") | ("openai-oauth", "gpt-5") => {
+            Some(400_000)
+        }
         _ => None,
     }
 }
@@ -422,26 +420,43 @@ mod tests {
             let registry = model_registry(provider, catalog.default_model, Ok(&[]), None, 1);
             for model_id in catalog.known_models {
                 let expected = model_context_limit(provider, model_id).unwrap_or_else(|| {
-                    panic!("catalogued fixed-vendor model {provider}/{model_id} needs context metadata")
+                    panic!(
+                        "catalogued fixed-vendor model {provider}/{model_id} needs context metadata"
+                    )
                 });
                 let metadata = registry.find(model_id).expect("catalog model metadata");
                 assert_eq!(metadata.context_limit, Some(expected));
             }
         }
 
-        assert_eq!(model_context_limit("minimax", "MiniMax-M3"), Some(1_000_000));
-        assert_eq!(model_context_limit("minimax", "MiniMax-M2.7"), Some(204_800));
+        assert_eq!(
+            model_context_limit("minimax", "MiniMax-M3"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            model_context_limit("minimax", "MiniMax-M2.7"),
+            Some(204_800)
+        );
         assert_eq!(
             model_context_limit("minimax", "MiniMax-M2.7-highspeed"),
             Some(204_800)
         );
-        assert_eq!(model_context_limit("minimax", "MiniMax-M2.5"), Some(204_800));
+        assert_eq!(
+            model_context_limit("minimax", "MiniMax-M2.5"),
+            Some(204_800)
+        );
         assert_eq!(
             model_context_limit("anthropic", "claude-sonnet-4-6"),
             Some(1_000_000)
         );
-        assert_eq!(model_context_limit("anthropic", "claude-haiku-4-5"), Some(200_000));
-        assert_eq!(model_context_limit("openai", "gpt-5.1-codex"), Some(400_000));
+        assert_eq!(
+            model_context_limit("anthropic", "claude-haiku-4-5"),
+            Some(200_000)
+        );
+        assert_eq!(
+            model_context_limit("openai", "gpt-5.1-codex"),
+            Some(400_000)
+        );
         assert_eq!(model_context_limit("openai-oauth", "gpt-5"), Some(400_000));
     }
 
