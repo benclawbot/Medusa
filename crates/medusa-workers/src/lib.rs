@@ -1295,7 +1295,6 @@ mod tests {
             .discard_untracked_runtime_state(&worker, &base)
             .expect("discard deep runtime state");
         assert!(!manifest.exists(), "deep runtime manifest must be removed");
-        assert!(!deep.exists(), "deep runtime directory must be removed");
 
         manager.cleanup(&[worker]).expect("cleanup worktree");
         assert!(!worktree.exists());

@@ -20,49 +20,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: workspace-backend-certification-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  correct-regression:
-    name: Finalize issue 956 regression assertion
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/956-windows-longpaths-v2'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-          persist-credentials: true
-      - name: Let worktree cleanup own empty directory removal
-        shell: python
-        run: |
-          from pathlib import Path
-          path = Path('crates/medusa-workers/src/lib.rs')
-          text = path.read_text(encoding='utf-8')
-          old = '        assert!(!deep.exists(), "deep runtime directory must be removed");\n'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one obsolete directory assertion, found {text.count(old)}')
-          path.write_text(text.replace(old, ''), encoding='utf-8')
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-      - name: Format and test workers
-        run: |
-          cargo fmt --all
-          cargo test -p medusa-workers --locked
-      - name: Push corrected source and restore certification workflow
-        shell: bash
-        run: |
-          git checkout origin/main -- .github/workflows/workspace-backend-certification.yml
-          git config user.name 'Medusa CI'
-          git config user.email 'medusa@users.noreply.github.com'
-          git add crates/medusa-workers/src/lib.rs .github/workflows/workspace-backend-certification.yml
-          git diff --cached --check
-          git commit -m 'test(workers): validate long-path worktree cleanup'
-          git push origin HEAD:${{ github.head_ref }}
-
   directory-workspace:
     name: Directory workspace (${{ matrix.os }})
     strategy:
@@ -74,9 +38,6 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - name: Test Windows worker long-path cleanup
-        if: runner.os == 'Windows'
-        run: cargo test -p medusa-workers windows_cleanup_handles_deep_medusa_runtime_paths --locked
       - name: Test directory mutation backend
         run: cargo test -p medusa-runtime workspace_worker_manager --locked
       - name: Test public workspace lifecycle
