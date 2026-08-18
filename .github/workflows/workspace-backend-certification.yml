@@ -38,6 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Test Windows worker long-path cleanup
+        if: runner.os == 'Windows'
+        run: cargo test -p medusa-workers windows_cleanup_handles_deep_medusa_runtime_paths --locked
       - name: Test directory mutation backend
         run: cargo test -p medusa-runtime workspace_worker_manager --locked
       - name: Test public workspace lifecycle
