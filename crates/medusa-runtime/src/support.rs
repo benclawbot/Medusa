@@ -109,11 +109,7 @@ pub(super) fn protocol_for_provider(provider: &str) -> &'static str {
 }
 
 pub(super) fn model_context_window_tokens(model: &str, configured_default: u64) -> u64 {
-    match model.to_ascii_lowercase().as_str() {
-        "minimax-m3" => 1_000_000,
-        "minimax-m2.7" => 204_800,
-        _ => configured_default,
-    }
+    medusa_config::model_registry::model_context_limit(model).unwrap_or(configured_default)
 }
 
 pub(super) fn should_auto_compact(
@@ -828,6 +824,17 @@ mod tests {
         assert_eq!(credential_environment("other"), None);
         assert!(!should_auto_compact(399_999, 1_000_000, 40));
         assert!(should_auto_compact(400_000, 1_000_000, 40));
+    }
+
+    #[test]
+    fn runtime_context_budget_uses_every_curated_minimax_limit() {
+        let catalog = medusa_config::provider_catalog_entry("minimax").expect("minimax catalog");
+        for model in catalog.known_models {
+            let expected = medusa_config::model_registry::model_context_limit(model)
+                .expect("catalogued MiniMax model must have context metadata");
+            assert_eq!(model_context_window_tokens(model, 777_777), expected);
+        }
+        assert_eq!(model_context_window_tokens("custom-model", 777_777), 777_777);
     }
 
     #[test]
