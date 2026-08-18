@@ -23,21 +23,22 @@ jobs:
           source = Path('.github/workflows/issue-974-materialize.yml').read_text().splitlines()
           start = next(i for i, line in enumerate(source) if "python3 - <<'PY'" in line) + 1
           end = next(i for i in range(start, len(source)) if source[i].strip() == 'PY')
-          body = source[start:end]
-          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
-          Path('/tmp/materialize.py').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          body = '\n'.join(line[10:] if line.startswith('          ') else line for line in source[start:end]) + '\n'
+          Path('/tmp/materialize.py').write_text(body)
           PY
           python3 /tmp/materialize.py
       - name: Format and test
         run: |
           cargo fmt --all
+          git diff --check
           cargo test -p medusa-config --locked
           cargo test -p medusa-tui --locked
           cargo check -p medusa-runtime -p medusa-tui --locked
+          cargo clippy -p medusa-config -p medusa-runtime -p medusa-tui --all-targets -- -D warnings
       - name: Commit materialized fix
         shell: bash
         run: |
-          rm .github/workflows/issue-974-materialize.yml .github/workflows/issue-974-pr-materialize.yml
+          rm -f .github/workflows/issue-974-materialize.yml .github/workflows/issue-974-pr-materialize.yml .github/issue-974-trigger
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
