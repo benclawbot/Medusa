@@ -41,11 +41,14 @@ jobs:
           fi
           echo "::add-mask::$MINIMAX_API_KEY"
       - name: Exercise the production correction loop against MiniMax-M2.7
+        shell: bash
         env:
           MEDUSA_LIVE_SELF_IMPROVEMENT_REPORT: ${{ runner.temp }}/live-self-improvement-report.json
-        run: >-
-          cargo test -p medusa-runtime --test live_self_improvement_loop --locked --
-          --ignored --nocapture
+        run: |
+          # Temporary diagnostic workaround for #948: the live Rust test hard-codes M3.
+          # Patch only the checked-out test so this run truly exercises M2.7.
+          sed -i.bak 's/MiniMax-M3/MiniMax-M2.7/g' crates/medusa-runtime/tests/live_self_improvement_loop.rs
+          cargo test -p medusa-runtime --test live_self_improvement_loop --locked -- --ignored --nocapture
       - name: Validate and stage the sanitized evidence
         shell: python
         env:
