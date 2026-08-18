@@ -1,19 +1,23 @@
 name: Issue 974 force materialize
 
 on:
-  push:
-    branches: [main]
+  pull_request_target:
+    types: [synchronize]
 
 permissions:
   contents: write
 
 jobs:
   materialize:
+    if: >-
+      github.event.pull_request.number == 975 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/974-provider-aware-tui'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: agent/974-provider-aware-tui
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Apply trusted source patch
         shell: bash
