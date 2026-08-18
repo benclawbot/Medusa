@@ -88,6 +88,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
+      - name: Enable long-path-safe Git for Windows diagnostic
+        if: runner.os == 'Windows'
+        run: git config --global core.longPaths true
       - name: Require and mask the live credential
         run: python -c "import os,sys; key=os.environ.get('MINIMAX_API_KEY',''); print('::add-mask::'+key) if key else sys.exit('MINIMAX_API_KEY is required')"
       - name: Run bounded live product dogfood
