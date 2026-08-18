@@ -119,7 +119,7 @@ impl ProviderProfile {
             "direct"
                 if matches!(
                     self.provider.as_str(),
-                    "minimax" | "anthropic" | "anthropic-compatible"
+                    "anthropic" | "anthropic-compatible"
                 ) =>
             {
                 "anthropic"
