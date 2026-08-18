@@ -933,21 +933,9 @@ mod tests {
     fn exact_scope_preserves_rename_delete_generated_and_owner() {
         let (_directory, repo, worktrees) = repository();
         fs::create_dir_all(repo.join("apps/web/src")).expect("source directory");
-        fs::write(
-            repo.join("apps/web/package.json"),
-            "{}\n",
-        )
-        .expect("package");
-        fs::write(
-            repo.join("apps/web/src/old.tsx"),
-            "old\n",
-        )
-        .expect("old source");
-        fs::write(
-            repo.join("apps/web/src/delete.css"),
-            "delete\n",
-        )
-        .expect("deleted source");
+        fs::write(repo.join("apps/web/package.json"), "{}\n").expect("package");
+        fs::write(repo.join("apps/web/src/old.tsx"), "old\n").expect("old source");
+        fs::write(repo.join("apps/web/src/delete.css"), "delete\n").expect("deleted source");
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-m", "fixture"]);
         let base = git_stdout(&repo, &["rev-parse", "HEAD"]).expect("base");
@@ -1219,11 +1207,7 @@ mod tests {
             "npm diagnostic\n",
         )
         .expect("npm log");
-        fs::write(
-            worker.worktree.join(".npm/product-state.json"),
-            "{}\n",
-        )
-        .expect("product state");
+        fs::write(worker.worktree.join(".npm/product-state.json"), "{}\n").expect("product state");
 
         manager
             .discard_untracked_runtime_state(&worker, &base)
