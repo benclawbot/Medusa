@@ -59,12 +59,13 @@ pub(super) fn configure_model(
         )));
     }
     state.config.model.protocol = protocol_for_provider(&configuration.provider).to_owned();
-    state.config.model.provider = configuration.provider;
-    state.config.model.name = configuration.model;
     state.config.model.context_window_tokens = model_context_window_tokens(
-        &state.config.model.name,
+        &configuration.provider,
+        &configuration.model,
         state.base_config.model.context_window_tokens,
     );
+    state.config.model.provider = configuration.provider;
+    state.config.model.name = configuration.model;
     state.effort = configuration.effort;
     state.config.agent.max_turns = match configuration.effort {
         Effort::Auto => state.base_config.agent.max_turns,
@@ -108,8 +109,12 @@ pub(super) fn protocol_for_provider(provider: &str) -> &'static str {
     medusa_config::provider_runtime_protocol(provider).unwrap_or("openai")
 }
 
-pub(super) fn model_context_window_tokens(model: &str, configured_default: u64) -> u64 {
-    medusa_config::model_registry::model_context_limit(model).unwrap_or(configured_default)
+pub(super) fn model_context_window_tokens(
+    provider: &str,
+    model: &str,
+    configured_default: u64,
+) -> u64 {
+    medusa_config::model_registry::model_context_limit(provider, model).unwrap_or(configured_default)
 }
 
 pub(super) fn should_auto_compact(
@@ -827,14 +832,43 @@ mod tests {
     }
 
     #[test]
-    fn runtime_context_budget_uses_every_curated_minimax_limit() {
-        let catalog = medusa_config::provider_catalog_entry("minimax").expect("minimax catalog");
-        for model in catalog.known_models {
-            let expected = medusa_config::model_registry::model_context_limit(model)
-                .expect("catalogued MiniMax model must have context metadata");
-            assert_eq!(model_context_window_tokens(model, 777_777), expected);
+    fn runtime_context_budget_uses_every_fixed_vendor_limit() {
+        for provider in ["minimax", "anthropic", "openai", "openai-oauth"] {
+            let catalog =
+                medusa_config::provider_catalog_entry(provider).expect("fixed vendor catalog");
+            for model in catalog.known_models {
+                let expected = medusa_config::model_registry::model_context_limit(provider, model)
+                    .expect("fixed vendor model must have context metadata");
+                assert_eq!(
+                    model_context_window_tokens(provider, model, 777_777),
+                    expected
+                );
+            }
         }
-        assert_eq!(model_context_window_tokens("custom-model", 777_777), 777_777);
+    }
+
+    #[test]
+    fn runtime_context_budget_preserves_non_authoritative_provider_defaults() {
+        assert_eq!(
+            model_context_window_tokens("local", "MiniMax-M3", 777_777),
+            777_777
+        );
+        assert_eq!(
+            model_context_window_tokens("openai-compatible", "gpt-5.1", 333_333),
+            333_333
+        );
+        assert_eq!(
+            model_context_window_tokens("anthropic-compatible", "claude-opus-4-6", 222_222),
+            222_222
+        );
+        assert_eq!(
+            model_context_window_tokens("omniroute", "gpt-5", 111_111),
+            111_111
+        );
+        assert_eq!(
+            model_context_window_tokens("openai", "custom-model", 999_999),
+            999_999
+        );
     }
 
     #[test]
