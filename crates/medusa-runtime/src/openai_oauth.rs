@@ -70,9 +70,7 @@ fn start_browser_login() -> Result<Child, String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| {
-            format!(
-                "could not launch ChatGPT browser sign-in: {error}. Install Node.js and retry"
-            )
+            format!("could not launch ChatGPT browser sign-in: {error}. Install Node.js and retry")
         })
 }
 
