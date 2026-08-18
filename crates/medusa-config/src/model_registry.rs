@@ -257,6 +257,19 @@ pub fn model_capabilities(provider: &str, model: &str) -> ModelCapabilities {
     curated_model(provider, provider, model).capabilities
 }
 
+/// Returns the authoritative context limit for curated model identifiers.
+///
+/// Unknown/custom models intentionally return `None` so callers can preserve an explicit
+/// configured limit instead of inheriting metadata from an unrelated catalog model.
+#[must_use]
+pub fn model_context_limit(model: &str) -> Option<u64> {
+    match model.to_ascii_lowercase().as_str() {
+        "minimax-m3" => Some(1_000_000),
+        "minimax-m2.7" | "minimax-m2.7-highspeed" | "minimax-m2.5" => Some(204_800),
+        _ => None,
+    }
+}
+
 fn curated_model(provider_id: &str, profile_provider: &str, model: &str) -> ModelMetadata {
     let normalized = model.to_ascii_lowercase();
     let is_openai = provider_id == "openai" || provider_id == "openai-oauth";
@@ -271,7 +284,7 @@ fn curated_model(provider_id: &str, profile_provider: &str, model: &str) -> Mode
         profile_provider: profile_provider.to_owned(),
         availability: ModelAvailability::NotDiscovered,
         source: ModelSource::Curated,
-        context_limit: None,
+        context_limit: model_context_limit(model),
         output_limit: None,
         capabilities: ModelCapabilities {
             tool_calling: is_openai || is_anthropic || is_minimax,
@@ -392,6 +405,28 @@ mod tests {
         assert!(model.capabilities.image_input);
         assert!(model.capabilities.tool_calling);
         assert!(model.capabilities.reasoning);
+    }
+
+    #[test]
+    fn minimax_catalog_models_have_authoritative_context_limits() {
+        let catalog = provider_catalog_entry("minimax").expect("minimax catalog");
+        let registry = model_registry("minimax", catalog.default_model, Ok(&[]), None, 1);
+        for model_id in catalog.known_models {
+            let metadata = registry.find(model_id).expect("catalog model metadata");
+            assert_eq!(metadata.context_limit, model_context_limit(model_id));
+            assert!(
+                metadata.context_limit.is_some(),
+                "catalogued MiniMax model {model_id} must declare a context limit"
+            );
+        }
+        assert_eq!(model_context_limit("MiniMax-M3"), Some(1_000_000));
+        assert_eq!(model_context_limit("MiniMax-M2.7"), Some(204_800));
+        assert_eq!(
+            model_context_limit("MiniMax-M2.7-highspeed"),
+            Some(204_800)
+        );
+        assert_eq!(model_context_limit("MiniMax-M2.5"), Some(204_800));
+        assert_eq!(model_context_limit("custom-model"), None);
     }
 
     #[test]
