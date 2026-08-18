@@ -1,0 +1,66 @@
+name: PR 975 repair stale TUI expectations
+
+on:
+  push:
+    branches:
+      - agent/974-provider-aware-tui
+    paths:
+      - .github/workflows/pr-975-fix-stale-tui-tests.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/974-provider-aware-tui
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Update capability-aware effort expectations
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          tests = Path('crates/medusa-tui/src/app/tests.rs')
+          text = tests.read_text()
+          text = text.replace(
+              'fn model_form_requires_explicit_apply_and_updates_effort_and_session_key() {',
+              'fn model_form_requires_explicit_apply_and_updates_session_key_with_capability_effort() {'
+          )
+          text = text.replace(
+              '''    app.handle_event(Event::Key(crossterm::event::KeyEvent::new(\n        KeyCode::Up,\n        KeyModifiers::NONE,\n    )))\n    .expect("select medium effort");\n''',
+              '''    app.handle_event(Event::Key(crossterm::event::KeyEvent::new(\n        KeyCode::Up,\n        KeyModifiers::NONE,\n    )))\n    .expect("keep the only supported automatic effort");\n'''
+          )
+          text = text.replace(
+              '    assert_eq!(configuration.effort, Effort::Medium);',
+              '    assert_eq!(configuration.effort, Effort::Auto);'
+          )
+          tests.write_text(text)
+
+          lib = Path('crates/medusa-tui/src/lib.rs')
+          text = lib.read_text().replace(
+              'line.text.contains("Effort    high")',
+              'line.text.contains("Effort    auto")'
+          )
+          lib.write_text(text)
+          PY
+      - name: Validate focused TUI suite
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p medusa-tui --all-features --locked --lib
+          cargo clippy -p medusa-tui --all-features --locked --lib -- -D warnings
+      - name: Commit validated repair
+        shell: bash
+        run: |
+          rm .github/workflows/pr-975-fix-stale-tui-tests.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test(tui): align legacy model form expectations with capabilities"
+          git push origin HEAD:agent/974-provider-aware-tui
