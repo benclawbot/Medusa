@@ -517,12 +517,13 @@ impl WorkerManager {
             .ok_or_else(|| invalid("authorized worker produced no integration receipt"))
     }
 
-    /// Removes per-session runtime state and generated interpreter caches from a worktree.
+    /// Removes per-session runtime state and generated verification caches/logs from a worktree.
     ///
-    /// Agent sessions persist under `.medusa`, and supervised Python verification can create
-    /// bytecode or test caches. These files are execution residue, not product changes, and must
-    /// never enter a worker commit. Files tracked by the base commit remain untouched and are still
-    /// subject to ordinary scope validation.
+    /// Agent sessions persist under `.medusa`, supervised Python verification can create bytecode
+    /// or test caches, and npm verification can create diagnostic logs under `.npm/_logs`.
+    /// These files are execution residue, not product changes, and must never enter a worker
+    /// commit. Files tracked by the base commit remain untouched and are still subject to ordinary
+    /// scope validation.
     pub fn discard_untracked_runtime_state(
         &self,
         worker: &Worker,
@@ -558,6 +559,7 @@ impl WorkerManager {
                 "-fdx",
                 "--",
                 ".medusa",
+                ":(glob).npm/_logs/**",
                 ":(glob)**/__pycache__/**",
                 ":(glob)**/.pytest_cache/**",
                 ":(glob)**/*.pyc",
@@ -766,6 +768,7 @@ fn git_changed_components(repo: &Path, args: &[&str]) -> MedusaResult<Vec<Change
 fn is_runtime_residue(path: &str) -> bool {
     path == ".medusa"
         || path.starts_with(".medusa/")
+        || path.starts_with(".npm/_logs/")
         || path
             .split('/')
             .any(|component| matches!(component, "__pycache__" | ".pytest_cache"))
@@ -938,24 +941,9 @@ mod tests {
     fn exact_scope_preserves_rename_delete_generated_and_owner() {
         let (_directory, repo, worktrees) = repository();
         fs::create_dir_all(repo.join("apps/web/src")).expect("source directory");
-        fs::write(
-            repo.join("apps/web/package.json"),
-            "{}
-",
-        )
-        .expect("package");
-        fs::write(
-            repo.join("apps/web/src/old.tsx"),
-            "old
-",
-        )
-        .expect("old source");
-        fs::write(
-            repo.join("apps/web/src/delete.css"),
-            "delete
-",
-        )
-        .expect("deleted source");
+        fs::write(repo.join("apps/web/package.json"), "{}\n").expect("package");
+        fs::write(repo.join("apps/web/src/old.tsx"), "old\n").expect("old source");
+        fs::write(repo.join("apps/web/src/delete.css"), "delete\n").expect("deleted source");
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-m", "fixture"]);
         let base = git_stdout(&repo, &["rev-parse", "HEAD"]).expect("base");
@@ -969,8 +957,7 @@ mod tests {
         fs::create_dir_all(worker.worktree.join("apps/web/generated")).expect("generated");
         fs::write(
             worker.worktree.join("apps/web/generated/schema.json"),
-            "{}
-",
+            "{}\n",
         )
         .expect("generated artifact");
         let components = manager
@@ -1115,6 +1102,7 @@ mod tests {
     fn runtime_residue_classification_is_narrow() {
         for path in [
             ".medusa/session.json",
+            ".npm/_logs/2026-08-18T07_40_00_000Z-debug-0.log",
             "src/__pycache__/slugify.cpython-312.pyc",
             "src/.pytest_cache/state",
             "generated.pyc",
@@ -1122,7 +1110,13 @@ mod tests {
         ] {
             assert!(is_runtime_residue(path), "{path} must be runtime residue");
         }
-        for path in ["src/slugify.py", "src/cache.rs", "docs/pytest_cache.md"] {
+        for path in [
+            "src/slugify.py",
+            "src/cache.rs",
+            "docs/pytest_cache.md",
+            ".npm/product-state.json",
+            "packages/web/.npm/_logs/product.log",
+        ] {
             assert!(
                 !is_runtime_residue(path),
                 "{path} must remain product content"
@@ -1205,6 +1199,35 @@ mod tests {
                 .changed_paths_since(&worker, &base)
                 .expect("changed paths")
                 .is_empty()
+        );
+        manager.cleanup(&[worker]).expect("cleanup");
+    }
+
+    #[test]
+    fn npm_log_cleanup_does_not_hide_other_npm_paths() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker = manager.create_worker("npm-log-cleanup").expect("worker");
+        fs::create_dir_all(worker.worktree.join(".npm/_logs")).expect("npm logs");
+        fs::write(
+            worker.worktree.join(".npm/_logs/2026-debug-0.log"),
+            "npm diagnostic\n",
+        )
+        .expect("npm log");
+        fs::write(worker.worktree.join(".npm/product-state.json"), "{}\n").expect("product state");
+
+        manager
+            .discard_untracked_runtime_state(&worker, &base)
+            .expect("discard npm log");
+
+        assert!(!worker.worktree.join(".npm/_logs/2026-debug-0.log").exists());
+        assert!(worker.worktree.join(".npm/product-state.json").is_file());
+        assert_eq!(
+            manager
+                .changed_paths_since(&worker, &base)
+                .expect("changed paths"),
+            vec![".npm/product-state.json"]
         );
         manager.cleanup(&[worker]).expect("cleanup");
     }
