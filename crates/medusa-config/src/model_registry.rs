@@ -421,10 +421,7 @@ mod tests {
         }
         assert_eq!(model_context_limit("MiniMax-M3"), Some(1_000_000));
         assert_eq!(model_context_limit("MiniMax-M2.7"), Some(204_800));
-        assert_eq!(
-            model_context_limit("MiniMax-M2.7-highspeed"),
-            Some(204_800)
-        );
+        assert_eq!(model_context_limit("MiniMax-M2.7-highspeed"), Some(204_800));
         assert_eq!(model_context_limit("MiniMax-M2.5"), Some(204_800));
         assert_eq!(model_context_limit("custom-model"), None);
     }
