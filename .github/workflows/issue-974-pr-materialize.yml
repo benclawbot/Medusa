@@ -1,0 +1,45 @@
+name: Issue 974 PR materialize
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Extract and apply materializer
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/issue-974-materialize.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(source) if "python3 - <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(source)) if source[i].strip() == 'PY')
+          body = source[start:end]
+          indent = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+          Path('/tmp/materialize.py').write_text('\n'.join(line[indent:] for line in body) + '\n')
+          PY
+          python3 /tmp/materialize.py
+      - name: Format and test
+        run: |
+          cargo fmt --all
+          cargo test -p medusa-config --locked
+          cargo test -p medusa-tui --locked
+          cargo check -p medusa-runtime -p medusa-tui --locked
+      - name: Commit materialized fix
+        shell: bash
+        run: |
+          rm .github/workflows/issue-974-materialize.yml .github/workflows/issue-974-pr-materialize.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(tui): make OAuth model configuration provider-aware"
+          git push origin HEAD:agent/974-provider-aware-tui
