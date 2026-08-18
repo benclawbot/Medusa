@@ -257,15 +257,21 @@ pub fn model_capabilities(provider: &str, model: &str) -> ModelCapabilities {
     curated_model(provider, provider, model).capabilities
 }
 
-/// Returns the authoritative context limit for curated model identifiers.
+/// Returns the authoritative context limit for a fixed vendor provider/model pair.
 ///
-/// Unknown/custom models intentionally return `None` so callers can preserve an explicit
-/// configured limit instead of inheriting metadata from an unrelated catalog model.
+/// Provider identity is part of the key so local, compatible, managed, discovered, and custom
+/// routes can reuse a vendor model label without inheriting that vendor's context budget.
 #[must_use]
-pub fn model_context_limit(model: &str) -> Option<u64> {
-    match model.to_ascii_lowercase().as_str() {
-        "minimax-m3" => Some(1_000_000),
-        "minimax-m2.7" | "minimax-m2.7-highspeed" | "minimax-m2.5" => Some(204_800),
+pub fn model_context_limit(provider: &str, model: &str) -> Option<u64> {
+    let normalized = model.to_ascii_lowercase();
+    match (provider, normalized.as_str()) {
+        ("minimax", "minimax-m3") => Some(1_000_000),
+        ("minimax", "minimax-m2.7" | "minimax-m2.7-highspeed" | "minimax-m2.5") => Some(204_800),
+        ("anthropic", "claude-opus-4-6" | "claude-sonnet-4-6") => Some(1_000_000),
+        ("anthropic", "claude-haiku-4-5") => Some(200_000),
+        ("openai", "gpt-5.1-codex" | "gpt-5.1" | "gpt-5-mini") | ("openai-oauth", "gpt-5") => {
+            Some(400_000)
+        }
         _ => None,
     }
 }
@@ -284,7 +290,7 @@ fn curated_model(provider_id: &str, profile_provider: &str, model: &str) -> Mode
         profile_provider: profile_provider.to_owned(),
         availability: ModelAvailability::NotDiscovered,
         source: ModelSource::Curated,
-        context_limit: model_context_limit(model),
+        context_limit: model_context_limit(provider_id, model),
         output_limit: None,
         capabilities: ModelCapabilities {
             tool_calling: is_openai || is_anthropic || is_minimax,
@@ -408,22 +414,65 @@ mod tests {
     }
 
     #[test]
-    fn minimax_catalog_models_have_authoritative_context_limits() {
-        let catalog = provider_catalog_entry("minimax").expect("minimax catalog");
-        let registry = model_registry("minimax", catalog.default_model, Ok(&[]), None, 1);
-        for model_id in catalog.known_models {
-            let metadata = registry.find(model_id).expect("catalog model metadata");
-            assert_eq!(metadata.context_limit, model_context_limit(model_id));
-            assert!(
-                metadata.context_limit.is_some(),
-                "catalogued MiniMax model {model_id} must declare a context limit"
-            );
+    fn fixed_vendor_catalog_models_have_authoritative_context_limits() {
+        for provider in ["minimax", "anthropic", "openai", "openai-oauth"] {
+            let catalog = provider_catalog_entry(provider).expect("fixed vendor catalog");
+            let registry = model_registry(provider, catalog.default_model, Ok(&[]), None, 1);
+            for model_id in catalog.known_models {
+                let expected = model_context_limit(provider, model_id).unwrap_or_else(|| {
+                    panic!(
+                        "catalogued fixed-vendor model {provider}/{model_id} needs context metadata"
+                    )
+                });
+                let metadata = registry.find(model_id).expect("catalog model metadata");
+                assert_eq!(metadata.context_limit, Some(expected));
+            }
         }
-        assert_eq!(model_context_limit("MiniMax-M3"), Some(1_000_000));
-        assert_eq!(model_context_limit("MiniMax-M2.7"), Some(204_800));
-        assert_eq!(model_context_limit("MiniMax-M2.7-highspeed"), Some(204_800));
-        assert_eq!(model_context_limit("MiniMax-M2.5"), Some(204_800));
-        assert_eq!(model_context_limit("custom-model"), None);
+
+        assert_eq!(
+            model_context_limit("minimax", "MiniMax-M3"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            model_context_limit("minimax", "MiniMax-M2.7"),
+            Some(204_800)
+        );
+        assert_eq!(
+            model_context_limit("minimax", "MiniMax-M2.7-highspeed"),
+            Some(204_800)
+        );
+        assert_eq!(
+            model_context_limit("minimax", "MiniMax-M2.5"),
+            Some(204_800)
+        );
+        assert_eq!(
+            model_context_limit("anthropic", "claude-sonnet-4-6"),
+            Some(1_000_000)
+        );
+        assert_eq!(
+            model_context_limit("anthropic", "claude-haiku-4-5"),
+            Some(200_000)
+        );
+        assert_eq!(
+            model_context_limit("openai", "gpt-5.1-codex"),
+            Some(400_000)
+        );
+        assert_eq!(model_context_limit("openai-oauth", "gpt-5"), Some(400_000));
+    }
+
+    #[test]
+    fn context_limits_require_the_authoritative_provider_route() {
+        assert_eq!(model_context_limit("local", "MiniMax-M3"), None);
+        assert_eq!(model_context_limit("openai-compatible", "gpt-5.1"), None);
+        assert_eq!(
+            model_context_limit("anthropic-compatible", "claude-opus-4-6"),
+            None
+        );
+        assert_eq!(model_context_limit("omniroute", "gpt-5"), None);
+        assert_eq!(model_context_limit("openai", "custom-model"), None);
+
+        let local = model_registry("local", "MiniMax-M3", Ok(&[]), None, 1);
+        assert_eq!(local.find("MiniMax-M3").unwrap().context_limit, None);
     }
 
     #[test]
