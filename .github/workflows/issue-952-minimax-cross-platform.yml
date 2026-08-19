@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: issue-952-real-tui-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   live-tui:
     if: github.event_name == 'push' || github.head_ref == 'validation/952-minimax-m2-7-cross-platform'
