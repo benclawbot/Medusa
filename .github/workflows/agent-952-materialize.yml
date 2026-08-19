@@ -1,0 +1,41 @@
+name: Materialize issue 952 fix
+
+on:
+  push:
+    branches: [agent/952-stale-session-revision]
+    paths:
+      - '.github/agent/issue-952.patch'
+      - '.github/workflows/agent-952-materialize.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Apply source patch
+        run: git apply .github/agent/issue-952.patch
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Targeted runtime validation
+        run: cargo test -p medusa-runtime --locked
+      - name: Runtime lint
+        run: cargo clippy -p medusa-runtime --all-targets --locked -- -D warnings
+      - name: Commit validated source only
+        shell: bash
+        run: |
+          rm .github/agent/issue-952.patch
+          rm .github/workflows/agent-952-materialize.yml
+          git config user.name 'BenClawBot (AlphaOM3G1)'
+          git config user.email 'benclawbot@gmail.com'
+          git add crates/medusa-runtime/src/frontend.rs .github/agent/issue-952.patch .github/workflows/agent-952-materialize.yml
+          git commit -m 'fix(runtime): reconcile one-revision frontend races'
+          git push origin HEAD:agent/952-stale-session-revision
