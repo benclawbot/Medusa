@@ -6,6 +6,11 @@ on:
     paths:
       - '.github/agent/issue-952.patch'
       - '.github/workflows/agent-952-materialize.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/agent/issue-952.patch'
+      - '.github/workflows/agent-952-materialize.yml'
   workflow_dispatch:
 
 permissions:
@@ -18,6 +23,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: agent/952-stale-session-revision
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
@@ -39,4 +45,3 @@ jobs:
           git add crates/medusa-runtime/src/frontend.rs .github/agent/issue-952.patch .github/workflows/agent-952-materialize.yml
           git commit -m 'fix(runtime): reconcile one-revision frontend races'
           git push origin HEAD:agent/952-stale-session-revision
-# trigger materialization after workflow exists on branch
