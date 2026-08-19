@@ -51,10 +51,16 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
     assert_eq!(app.model_modal().expect("modal").provider(), "anthropic");
 
     app.handle_event(key(KeyCode::Tab)).expect("focus model");
+    let expected_model = {
+        let modal = app.model_modal().expect("modal");
+        let options = modal.model_options();
+        assert!(!options.is_empty());
+        options[(modal.selected_model_index() + 1) % options.len()].clone()
+    };
     app.handle_event(key(KeyCode::Down)).expect("select model");
     assert_eq!(
         app.model_modal().expect("modal").selected_model(),
-        "claude-sonnet-4-6"
+        expected_model
     );
 
     app.handle_event(key(KeyCode::Tab)).expect("focus effort");
@@ -78,7 +84,7 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
         panic!("expected model configuration");
     };
     assert_eq!(configuration.provider, "anthropic");
-    assert_eq!(configuration.model, "claude-sonnet-4-6");
+    assert_eq!(configuration.model, expected_model);
     assert_eq!(configuration.effort, Effort::Auto);
     assert_eq!(configuration.api_key.as_deref(), Some("keywithspace"));
 }

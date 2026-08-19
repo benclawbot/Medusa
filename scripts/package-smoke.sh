@@ -4,7 +4,20 @@ cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-git
 medusa_binary="target/release/medusa"
 recall_binary="target/release/medusa-recall"
 github_operation_binary="target/release/medusa-github-operation"
-"$medusa_binary" --version | grep -F 'medusa 1.0.0'
+workspace_version="$(
+  awk '
+    /^\[workspace\.package\]$/ { in_workspace_package = 1; next }
+    /^\[/ && in_workspace_package { exit }
+    in_workspace_package && /^version = "/ {
+      sub(/^version = "/, "")
+      sub(/".*$/, "")
+      print
+      exit
+    }
+  ' Cargo.toml
+)"
+test -n "$workspace_version"
+"$medusa_binary" --version | grep -Fx "medusa $workspace_version"
 "$recall_binary" --help | grep -F 'medusa-recall'
 "$github_operation_binary" --help | grep -F 'medusa-github-operation'
 tmp="$(mktemp -d)"
@@ -21,6 +34,10 @@ cp "$github_operation_binary" "$tmp/medusa-github-operation"
 empty_repo="$tmp/empty-repo"
 mkdir -p "$empty_repo"
 "$tmp/medusa" recall --repo "$empty_repo" list | grep -F 'No recorded sessions.'
-sha256sum "$tmp/medusa" "$tmp/medusa-recall" "$tmp/medusa-github-operation" > "$tmp/SHA256SUMS"
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$tmp/medusa" "$tmp/medusa-recall" "$tmp/medusa-github-operation" > "$tmp/SHA256SUMS"
+else
+  shasum -a 256 "$tmp/medusa" "$tmp/medusa-recall" "$tmp/medusa-github-operation" > "$tmp/SHA256SUMS"
+fi
 test -s "$tmp/SHA256SUMS"
 echo package-smoke-ok
