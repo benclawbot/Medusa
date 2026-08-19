@@ -258,18 +258,17 @@ impl RuntimeController {
     /// Admits one action through the existing session journal and runtime authority.
     pub fn submit_session_action(
         &self,
-        mut request: SessionActionRequest,
+        request: SessionActionRequest,
     ) -> Result<SessionActionAdmission, RuntimeError> {
         validate_action_request(&request)?;
+        let action = request.into_action();
         let submission = lock_submission(&self.submission);
-        if submission.active_session_id.as_deref() != Some(request.target_session_id.as_str()) {
+        if submission.active_session_id.as_deref() != Some(action.target_session_id.as_str()) {
             return Err(RuntimeError::InvalidCommand(
                 "session action target is not the controller's active session".to_owned(),
             ));
         }
-        let snapshot = session_action_snapshot(&self.repo, &request.target_session_id)?;
-        reconcile_one_revision_frontend_race(&mut request, snapshot.revision);
-        let action = request.into_action();
+        let snapshot = session_action_snapshot(&self.repo, &action.target_session_id)?;
         if let Some(existing) = snapshot
             .actions
             .iter()
@@ -937,19 +936,6 @@ fn action_view(
         .ok_or_else(|| RuntimeError::agent("session action disappeared from canonical replay"))
 }
 
-fn reconcile_one_revision_frontend_race(
-    request: &mut SessionActionRequest,
-    authoritative_revision: u64,
-) {
-    if request
-        .expected_session_revision
-        .checked_add(1)
-        .is_some_and(|next| next == authoritative_revision)
-    {
-        request.expected_session_revision = authoritative_revision;
-    }
-}
-
 fn validate_action_request(request: &SessionActionRequest) -> Result<(), RuntimeError> {
     if request.idempotency_key.trim().is_empty()
         || request.source.trim().is_empty()
@@ -1164,10 +1150,7 @@ mod tests {
     use tempfile::tempdir;
     use time::OffsetDateTime;
 
-    use super::{
-        CanonicalFrontendEventStream, SessionActionRequest, reconcile_one_revision_frontend_race,
-        session_action_snapshot,
-    };
+    use super::{CanonicalFrontendEventStream, session_action_snapshot};
 
     fn durable_session(repo: &Path) -> AgentSession {
         AgentSession {
@@ -1388,42 +1371,6 @@ mod tests {
                 .lifecycle,
             SessionActionLifecycle::Queued
         );
-    }
-
-    #[test]
-    fn one_revision_frontend_race_rebases_to_fresh_authority() {
-        let mut request = SessionActionRequest {
-            idempotency_key: "idem-race".to_owned(),
-            source: "tui:test".to_owned(),
-            target_session_id: "session-race".to_owned(),
-            expected_session_revision: 12,
-            kind: SessionActionKind::FollowUp,
-            delivery_policy: SessionActionDeliveryPolicy::WhenIdle,
-            wake_policy: SessionActionWakePolicy::OnBoundary,
-            payload: json!({"text":"continue"}),
-        };
-
-        reconcile_one_revision_frontend_race(&mut request, 13);
-
-        assert_eq!(request.expected_session_revision, 13);
-    }
-
-    #[test]
-    fn reconciliation_never_skips_multiple_authoritative_revisions() {
-        let mut request = SessionActionRequest {
-            idempotency_key: "idem-too-stale".to_owned(),
-            source: "tui:test".to_owned(),
-            target_session_id: "session-race".to_owned(),
-            expected_session_revision: 12,
-            kind: SessionActionKind::FollowUp,
-            delivery_policy: SessionActionDeliveryPolicy::WhenIdle,
-            wake_policy: SessionActionWakePolicy::OnBoundary,
-            payload: json!({"text":"continue"}),
-        };
-
-        reconcile_one_revision_frontend_race(&mut request, 14);
-
-        assert_eq!(request.expected_session_revision, 12);
     }
 
     #[test]
