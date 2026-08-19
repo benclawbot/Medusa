@@ -43,7 +43,19 @@
  fn validate_action_request(request: &SessionActionRequest) -> Result<(), RuntimeError> {
      if request.idempotency_key.trim().is_empty()
          || request.source.trim().is_empty()
-@@ -1374,6 +1388,42 @@
+@@ -1151,7 +1165,10 @@
+     use tempfile::tempdir;
+     use time::OffsetDateTime;
+ 
+-    use super::{CanonicalFrontendEventStream, session_action_snapshot};
++    use super::{
++        CanonicalFrontendEventStream, SessionActionRequest, reconcile_one_revision_frontend_race,
++        session_action_snapshot,
++    };
+ 
+     fn durable_session(repo: &Path) -> AgentSession {
+         AgentSession {
+@@ -1374,6 +1391,42 @@
      }
  
      #[test]
