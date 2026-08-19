@@ -18,9 +18,17 @@ concurrency:
 jobs:
   live-tui:
     if: github.event_name == 'push' || github.head_ref == 'validation/952-minimax-m2-7-cross-platform'
-    name: MiniMax-M2.7 real TUI (Ubuntu)
-    runs-on: ubuntu-latest
+    name: MiniMax-M2.7 real TUI (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Ubuntu
+            os: ubuntu-latest
+          - platform: macOS
+            os: macos-latest
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
       MEDUSA_LIVE_MODEL: MiniMax-M2.7
@@ -32,7 +40,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
       - name: Validate committed exact-build dependency authority
         run: cargo metadata --locked --format-version 1 >/dev/null
-      - name: Install terminal and containment prerequisites
+      - name: Install Linux containment prerequisites
+        if: runner.os == 'Linux'
         shell: bash
         timeout-minutes: 4
         run: |
@@ -82,7 +91,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue-952-real-tui-ubuntu
+          name: issue-952-real-tui-${{ matrix.platform }}
           path: issue-952-tui-evidence
           if-no-files-found: warn
           retention-days: 14
