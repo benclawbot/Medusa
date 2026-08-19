@@ -1,0 +1,46 @@
+name: Restore Superpowers skills
+
+on:
+  push:
+    branches:
+      - agent/restore-superpowers-skills
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/restore-superpowers-skills
+          fetch-depth: 0
+
+      - name: Restore exact Superpowers v5.1.0 skill tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/superpowers"
+          git clone --quiet --depth 1 --branch v5.1.0 https://github.com/obra/superpowers.git "$source_dir"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "f2cbfbefebbfef77321e4c9abc9e949826bea9d7"
+
+          rm -rf skills
+          cp -a "$source_dir/skills" ./skills
+
+          test "$(find skills -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')" = "14"
+          test "$(find skills -type f | wc -l | tr -d ' ')" = "46"
+          test -x skills/brainstorming/scripts/start-server.sh
+          test -x skills/brainstorming/scripts/stop-server.sh
+          test -x skills/systematic-debugging/find-polluter.sh
+          test -x skills/writing-skills/render-graphs.js
+
+          rm -f .github/workflows/restore-superpowers-skills.yml
+
+          git config user.name "medusa-ci"
+          git config user.email "medusa-ci@users.noreply.github.com"
+          git add -A skills .github/workflows/restore-superpowers-skills.yml
+          git diff --cached --check
+          git commit -m "Restore Superpowers v5.1.0 skills pack"
+          git push origin HEAD:agent/restore-superpowers-skills
