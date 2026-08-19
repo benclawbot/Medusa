@@ -1,0 +1,62 @@
+name: Issue 952 MiniMax M2.7 cross-platform validation
+
+on:
+  push:
+    branches:
+      - validation/952-minimax-m2-7-cross-platform
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    if: github.event_name == 'push' || github.head_ref == 'validation/952-minimax-m2-7-cross-platform'
+    name: MiniMax-M2.7 installed binary (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macOS
+            os: macos-latest
+          - platform: Windows
+            os: windows-2022
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      MEDUSA_LIVE_MODEL: MiniMax-M2.7
+      LIVE_E2E_TIMEOUT_SECONDS: "1500"
+      LIVE_E2E_HEARTBEAT_SECONDS: "60"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Validate committed exact-build dependency authority
+        run: cargo metadata --locked --format-version 1
+      - name: Require and mask the live credential
+        run: python -c "import os,sys; key=os.environ.get('MINIMAX_API_KEY',''); print('::add-mask::'+key) if key else sys.exit('MINIMAX_API_KEY is required')"
+      - name: Run bounded MiniMax-M2.7 installed-binary dogfood
+        run: python scripts/run-live-coding-e2e.py --output issue-952-evidence
+      - name: Show sanitized acceptance summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f issue-952-evidence/summary.json ]]; then cat issue-952-evidence/summary.json; fi
+      - name: Upload sanitized platform evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-952-${{ matrix.platform }}
+          path: issue-952-evidence
+          if-no-files-found: error
+          retention-days: 14
