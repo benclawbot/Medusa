@@ -4,13 +4,18 @@ on:
   push:
     branches:
       - agent/restore-superpowers-skills
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   restore:
-    if: github.actor != 'github-actions[bot]'
+    if: >-
+      (github.event_name == 'push' && github.actor != 'github-actions[bot]') ||
+      (github.event_name == 'pull_request' && github.head_ref == 'agent/restore-superpowers-skills')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,11 +42,10 @@ jobs:
           test -x skills/writing-skills/render-graphs.js
 
           rm -f .github/workflows/restore-superpowers-skills.yml
-          rm -f .github/restore-superpowers-trigger
 
           git config user.name "medusa-ci"
           git config user.email "medusa-ci@users.noreply.github.com"
-          git add -A skills .github/workflows/restore-superpowers-skills.yml .github/restore-superpowers-trigger
+          git add -A skills .github/workflows/restore-superpowers-skills.yml
           git diff --cached --check
           git commit -m "Restore Superpowers v5.1.0 skills pack"
           git push origin HEAD:agent/restore-superpowers-skills
