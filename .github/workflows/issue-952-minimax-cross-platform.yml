@@ -14,13 +14,13 @@ permissions:
 jobs:
   live-tui:
     if: github.event_name == 'push' || github.head_ref == 'validation/952-minimax-m2-7-cross-platform'
-    name: MiniMax-M2.7 real TUI (macOS)
-    runs-on: macos-latest
-    timeout-minutes: 25
+    name: MiniMax-M2.7 real TUI (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
       MEDUSA_LIVE_MODEL: MiniMax-M2.7
-      LIVE_TUI_TIMEOUT_SECONDS: "900"
+      LIVE_TUI_TIMEOUT_SECONDS: "600"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -28,6 +28,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
       - name: Validate committed exact-build dependency authority
         run: cargo metadata --locked --format-version 1 >/dev/null
+      - name: Install terminal and containment prerequisites
+        shell: bash
+        timeout-minutes: 4
+        run: |
+          if ! command -v bwrap >/dev/null 2>&1; then
+            if [[ -f /etc/apt/apt-mirrors.txt ]]; then
+              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+            fi
+            if [[ -f /etc/apt/sources.list ]]; then
+              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            fi
+            if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+            fi
+            timeout 90s sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
+            timeout 90s sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 install -y bubblewrap
+          fi
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
       - name: Require and mask the live credential
         shell: bash
         run: |
@@ -47,18 +67,18 @@ jobs:
             --binary target/release/medusa \
             --work-root "${RUNNER_TEMP}/issue-952-tui-work" \
             --output-dir issue-952-tui-evidence
-      - name: Show sanitized acceptance evidence
+      - name: Show sanitized acceptance summary
         if: always()
         shell: bash
         run: |
-          if [[ -f issue-952-tui-evidence/status.txt ]]; then cat issue-952-tui-evidence/status.txt; fi
+          if [[ -f issue-952-tui-evidence/summary.json ]]; then cat issue-952-tui-evidence/summary.json; fi
           if [[ -f issue-952-tui-evidence/git-status.txt ]]; then cat issue-952-tui-evidence/git-status.txt; fi
           if [[ -f issue-952-tui-evidence/cargo-test.txt ]]; then cat issue-952-tui-evidence/cargo-test.txt; fi
       - name: Upload sanitized TUI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: issue-952-real-tui-macos
+          name: issue-952-real-tui-ubuntu
           path: issue-952-tui-evidence
           if-no-files-found: warn
           retention-days: 14
