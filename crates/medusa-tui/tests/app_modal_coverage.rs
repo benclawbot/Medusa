@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use medusa_config::model_capabilities;
 use medusa_tui::{
     app::{AppAction, AppState, ModelModalFocus, QuestionOption, QuestionPrompt, Scrollback},
     clipboard::{ClipboardContent, ClipboardError, ClipboardService},
@@ -18,6 +19,24 @@ impl ClipboardService for EmptyClipboard {
 
 fn key(code: KeyCode) -> Event {
     Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+}
+
+fn effort_options(provider: &str, model: &str) -> Vec<Effort> {
+    let capabilities = model_capabilities(provider, model);
+    let mut options = capabilities
+        .reasoning_effort_levels
+        .into_iter()
+        .filter_map(|level| match level.as_str() {
+            "low" => Some(Effort::Low),
+            "medium" => Some(Effort::Medium),
+            "high" => Some(Effort::High),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if options.is_empty() {
+        options.push(Effort::Auto);
+    }
+    options
 }
 
 #[test]
@@ -64,9 +83,19 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
     );
 
     app.handle_event(key(KeyCode::Tab)).expect("focus effort");
+    let expected_effort = {
+        let modal = app.model_modal().expect("modal");
+        let model = modal.selected_model();
+        let options = effort_options(modal.provider(), &model);
+        let current = options
+            .iter()
+            .position(|candidate| *candidate == modal.effort())
+            .unwrap_or(0);
+        options[(current + 1) % options.len()]
+    };
     app.handle_event(key(KeyCode::Down))
-        .expect("select auto effort");
-    assert_eq!(app.model_modal().expect("modal").effort(), Effort::Auto);
+        .expect("select next effort");
+    assert_eq!(app.model_modal().expect("modal").effort(), expected_effort);
 
     app.handle_event(key(KeyCode::Tab)).expect("focus key");
     app.handle_event(Event::Paste(" key with spaces ".to_owned()))
@@ -85,7 +114,7 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
     };
     assert_eq!(configuration.provider, "anthropic");
     assert_eq!(configuration.model, expected_model);
-    assert_eq!(configuration.effort, Effort::Auto);
+    assert_eq!(configuration.effort, expected_effort);
     assert_eq!(configuration.api_key.as_deref(), Some("keywithspace"));
 }
 
