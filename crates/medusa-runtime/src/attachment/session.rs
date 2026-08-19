@@ -95,15 +95,28 @@ impl RuntimeSessionAttachment {
         occurred_at_unix_ms: i64,
         event_id: impl Into<String>,
     ) -> Result<(), RuntimeError> {
-        let outcome = continuity_store(&self.repo, &self.session.id.to_string())
-            .acknowledge_cursor(CursorAckRequest {
-                client_id: self.client_id.clone(),
-                expected_revision: self.continuity.revision,
-                cursor,
-                occurred_at_unix_ms,
-                event_id: event_id.into(),
-            })
-            .map_err(RuntimeError::agent)?;
+        let client_id = self.client_id.clone();
+        let event_id = event_id.into();
+        let store = continuity_store(&self.repo, &self.session.id.to_string());
+        let request = |expected_revision| CursorAckRequest {
+            client_id: client_id.clone(),
+            expected_revision,
+            cursor,
+            occurred_at_unix_ms,
+            event_id: event_id.clone(),
+        };
+        let outcome = match store.acknowledge_cursor(request(self.continuity.revision)) {
+            Ok(outcome) => outcome,
+            Err(ContinuityError::StaleRevision { expected, actual })
+                if expected.checked_add(1) == Some(actual) =>
+            {
+                self.refresh_continuity()?;
+                store
+                    .acknowledge_cursor(request(self.continuity.revision))
+                    .map_err(RuntimeError::agent)?
+            }
+            Err(error) => return Err(RuntimeError::agent(error)),
+        };
         self.continuity = outcome.session().clone();
         Ok(())
     }
@@ -490,6 +503,63 @@ mod continuity_command_tests {
                 .iter()
                 .all(|attachment| attachment.client_id != "telegram-42")
         );
+    }
+
+    #[test]
+    fn cursor_acknowledgement_refreshes_one_revision_frontend_race() {
+        let repository = tempfile::tempdir().expect("repository");
+        let session = AgentEngine::new(UnusedProvider, Config::default())
+            .create_session(repository.path(), "Cursor race".to_owned())
+            .expect("session");
+        let session_id = session.id.to_string();
+        let mut owner = RuntimeSessionAttachment::attach(
+            repository.path().to_path_buf(),
+            request(
+                &session_id,
+                "tui-owner",
+                ClientKind::Tui,
+                AttachmentMode::Owner,
+                0,
+                0,
+                "attach-owner",
+            ),
+        )
+        .expect("owner");
+        let stale_revision = owner.continuity.revision;
+        let _observer = RuntimeSessionAttachment::attach(
+            repository.path().to_path_buf(),
+            request(
+                &session_id,
+                "desktop-observer",
+                ClientKind::Desktop,
+                AttachmentMode::ReadOnly,
+                stale_revision,
+                0,
+                "attach-observer",
+            ),
+        )
+        .expect("observer");
+        let authoritative_before_ack = continuity_store(repository.path(), &session_id)
+            .load()
+            .expect("continuity");
+        assert_eq!(authoritative_before_ack.revision, stale_revision + 1);
+
+        owner
+            .acknowledge_cursor(1, 19_000, "ack-after-observer")
+            .expect("stale cursor acknowledgement should refresh once");
+
+        assert_eq!(owner.mode(), AttachmentMode::Owner);
+        assert_eq!(
+            owner
+                .continuity
+                .attachments
+                .iter()
+                .find(|attachment| attachment.client_id == "tui-owner")
+                .expect("owner attachment")
+                .journal_cursor,
+            1
+        );
+        assert_eq!(owner.continuity.revision, stale_revision + 2);
     }
 
     #[test]
