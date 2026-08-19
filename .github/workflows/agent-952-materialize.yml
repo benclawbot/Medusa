@@ -39,3 +39,4 @@ jobs:
           git add crates/medusa-runtime/src/frontend.rs .github/agent/issue-952.patch .github/workflows/agent-952-materialize.yml
           git commit -m 'fix(runtime): reconcile one-revision frontend races'
           git push origin HEAD:agent/952-stale-session-revision
+# trigger materialization after workflow exists on branch
