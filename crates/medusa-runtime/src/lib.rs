@@ -98,7 +98,7 @@ use command_router::execute_slash_command;
 pub enum RuntimeCommand {
     Submit {
         draft: PromptDraft,
-        accepted: Sender<()>,
+        accepted: Sender<Result<(), String>>,
     },
     Slash(SlashCommand),
     ConfigureModel(ModelConfiguration),
@@ -428,13 +428,21 @@ impl RuntimeController {
             mark_idle(&self.submission, true);
             return Err(RuntimeError::WorkerStopped);
         }
-        if accepted_rx.recv().is_err() {
-            mark_idle(&self.submission, true);
-            return Err(RuntimeError::agent(
-                "runtime prompt ended before a durable session accepted the submission",
-            ));
+        match accepted_rx.recv() {
+            Ok(Ok(())) => Ok(SubmitDisposition::Started),
+            Ok(Err(error)) => {
+                mark_idle(&self.submission, true);
+                Err(RuntimeError::agent(format!(
+                    "runtime failed before a durable session accepted the submission: {error}"
+                )))
+            }
+            Err(_) => {
+                mark_idle(&self.submission, true);
+                Err(RuntimeError::agent(
+                    "runtime worker stopped before a durable session accepted the submission",
+                ))
+            }
         }
-        Ok(SubmitDisposition::Started)
     }
 
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
@@ -781,11 +789,12 @@ fn worker_loop_with_discovery<F>(
                     &events,
                     &cancel,
                     &submission,
-                    Some(accepted),
+                    Some(&accepted),
                 );
                 let event = match outcome {
                     Ok(completed) => completed,
                     Err(error) => {
+                        let _ = accepted.send(Err(error.to_string()));
                         mark_idle(&submission, true);
                         RuntimeEvent::Failed(error.to_string())
                     }
@@ -969,7 +978,7 @@ fn run_prompt(
     events: &Sender<RuntimeEvent>,
     cancel: &Arc<AtomicBool>,
     submission: &Arc<Mutex<SubmissionState>>,
-    accepted: Option<Sender<()>>,
+    accepted: Option<&Sender<Result<(), String>>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
     let config = state.config.clone();
     let max_turns = config.agent.max_turns;
@@ -1033,7 +1042,7 @@ fn run_prompt(
     lock_submission(submission).active_session_id = Some(session.id.to_string());
     state.session = Some(session);
     if let Some(accepted) = accepted {
-        let _ = accepted.send(());
+        let _ = accepted.send(Ok(()));
     }
     let session = state.session.as_mut().ok_or_else(|| {
         RuntimeError::agent("runtime session disappeared before execution plan recording")

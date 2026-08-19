@@ -285,10 +285,11 @@ fn resumed_worker_loop(
                     &events,
                     &cancel,
                     &submission,
-                    Some(accepted),
+                    Some(&accepted),
                 ) {
                     Ok(event) => event,
                     Err(error) => {
+                        let _ = accepted.send(Err(error.to_string()));
                         mark_idle(&submission, true);
                         RuntimeEvent::Failed(error.to_string())
                     }

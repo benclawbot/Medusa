@@ -3,6 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use medusa_browser_client::verification_route::VerificationRoute;
@@ -13,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const CAPABILITY_REGISTRY_SCHEMA_VERSION: u16 = 3;
+
+static CAPABILITY_PROBE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -1051,11 +1054,28 @@ fn insert_state(
 fn writable_state_directory(repository: &Path) -> MedusaResult<bool> {
     let directory = repository.join(".medusa");
     fs::create_dir_all(&directory).map_err(io_error)?;
-    let probe = directory.join(".capability-probe");
-    match fs::write(&probe, b"probe") {
-        Ok(()) => {
-            fs::remove_file(probe).map_err(io_error)?;
-            Ok(true)
+    let sequence = CAPABILITY_PROBE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let probe = directory.join(format!(
+        ".capability-probe-{}-{sequence}",
+        std::process::id()
+    ));
+    match fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+    {
+        Ok(mut file) => {
+            use std::io::Write as _;
+            if file.write_all(b"probe").is_err() {
+                let _ = fs::remove_file(&probe);
+                return Ok(false);
+            }
+            drop(file);
+            match fs::remove_file(&probe) {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                Err(error) => Err(io_error(error)),
+            }
         }
         Err(_) => Ok(false),
     }
@@ -1326,6 +1346,47 @@ mod tests {
                 &FakeProbe(BTreeSet::from(["test-browserd".into()])),
             )
             .available
+        );
+    }
+
+    #[test]
+    fn concurrent_discovery_uses_independent_writability_probes() {
+        use std::sync::{Arc, Barrier};
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let repository = Arc::new(directory.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(32));
+        let mut workers = Vec::new();
+
+        for _ in 0..32 {
+            let repository = Arc::clone(&repository);
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                CapabilityRegistry::discover_with(
+                    repository.as_ref().clone(),
+                    &FakeProbe(BTreeSet::new()),
+                )
+            }));
+        }
+
+        for worker in workers {
+            let registry = worker
+                .join()
+                .expect("discovery worker should not panic")
+                .expect("concurrent capability discovery should succeed");
+            assert!(registry.available(Capability::Memory));
+        }
+
+        let leftovers = fs::read_dir(repository.join(".medusa"))
+            .expect("state directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".capability-probe"))
+            .collect::<Vec<_>>();
+        assert!(
+            leftovers.is_empty(),
+            "probe artifacts were left behind: {leftovers:?}"
         );
     }
 
