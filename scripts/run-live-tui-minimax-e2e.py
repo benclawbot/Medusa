@@ -23,28 +23,7 @@ def load(name: str, path: Path):
 def main() -> int:
     selector = load("live_model_selection", ROOT / "live-model-selection.py")
     harness = load("live_tui_minimax_e2e", ROOT / "live-tui-minimax-e2e.py")
-    model = selector.selected_model()
-
-    def write_profile(config_home: Path) -> None:
-        medusa = config_home / "medusa"
-        medusa.mkdir(parents=True, exist_ok=True)
-        (medusa / "provider.toml").write_text(
-            "\n".join(
-                [
-                    'connection = "direct"',
-                    'provider = "minimax"',
-                    f'model = "{model}"',
-                    'speed = "balanced"',
-                    'reasoning = "medium"',
-                    'auth = "api-key"',
-                    "configured = true",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-
-    harness.write_profile = write_profile
+    harness.LIVE_MODEL = selector.selected_model()
     return int(harness.main())
 
 
