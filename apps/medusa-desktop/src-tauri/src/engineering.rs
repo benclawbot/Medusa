@@ -147,6 +147,7 @@ pub fn runtime_engineering_dashboard(
     let mut retries = 0;
     let mut interventions = 0;
     let mut latency_millis = 0_u64;
+    let mut latency_samples = 0_u32;
     for outcome in outcomes
         .values()
         .filter(|outcome| outcome.recorded_at_unix_ms >= cutoff_unix_ms)
@@ -162,7 +163,10 @@ pub fn runtime_engineering_dashboard(
             entry.1 += 1;
         }
         retries += outcome.retries;
-        latency_millis = latency_millis.saturating_add(outcome.latency_millis);
+        if let Some(latency) = outcome.latency_millis {
+            latency_millis = latency_millis.saturating_add(latency);
+            latency_samples = latency_samples.saturating_add(1);
+        }
         if outcome.user_correction_count > 0 || outcome.parent_review_revisions > 0 {
             interventions += 1;
         }
@@ -249,7 +253,7 @@ pub fn runtime_engineering_dashboard(
         },
         human_intervention_rate: rate(interventions, total),
         rollback_rate: rate(rolled_back, improvements.len() as u32),
-        average_duration_minutes: average_duration_minutes(latency_millis, total),
+        average_duration_minutes: average_duration_minutes(latency_millis, latency_samples),
         trend,
         friction,
         improvements,
