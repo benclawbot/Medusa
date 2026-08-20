@@ -55,6 +55,18 @@ fn live_repair_objective_resolves_sentence_terminated_counter_path() {
         "sentence punctuation must not remove the counter from mutation scope: {:?}",
         planned.scope
     );
+    let implementation = planned
+        .task(TaskKind::Implementation)
+        .expect("live repair objective should retain an implementation task");
+    assert!(
+        implementation
+            .task
+            .write_paths
+            .iter()
+            .any(|path| path == "src/counter.js"),
+        "sentence punctuation must not remove the counter from implementer write paths: {:?}",
+        implementation.task.write_paths
+    );
     assert_eq!(planned.requested_outcomes, vec![objective.to_owned()]);
     planned
         .validate()
