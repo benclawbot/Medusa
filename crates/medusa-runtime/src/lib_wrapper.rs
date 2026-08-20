@@ -16,6 +16,8 @@ pub use crate::workspace_worker_manager::{
 
 include!("lib.rs");
 
+pub mod behavioral_outcome;
+
 #[rustfmt::skip]
 mod parent_reviewer;
 // Conflict-aware mutation scheduling and deterministic aggregate staging.
