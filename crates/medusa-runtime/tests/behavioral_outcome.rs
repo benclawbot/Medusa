@@ -30,6 +30,25 @@ fn events(payloads: Vec<EventPayload>) -> Vec<EventEnvelope> {
         .collect()
 }
 
+fn append_event(journal: &mut Vec<EventEnvelope>, payload: EventPayload) {
+    let index = journal.len();
+    let session_id = journal.first().expect("existing journal").session_id.clone();
+    let previous_hash = journal.last().map(|event| event.checksum.clone());
+    journal.push(
+        EventEnvelope::new(
+            index as u64,
+            session_id,
+            Actor::Coordinator,
+            CorrelationId::new(),
+            payload,
+            previous_hash,
+            OffsetDateTime::from_unix_timestamp(1_700_000_000 + index as i64)
+                .expect("timestamp"),
+        )
+        .expect("event"),
+    );
+}
+
 #[test]
 fn model_claim_without_authoritative_receipts_is_not_success() {
     let journal = events(vec![
@@ -196,6 +215,37 @@ fn only_the_execution_preceding_mutation_gets_correctness_contribution() {
 }
 
 #[test]
+fn explicit_unmatched_response_id_is_not_attributed_to_latest_request() {
+    let journal = events(vec![
+        EventPayload::SessionCreated {
+            objective: "inspect provider history".to_owned(),
+        },
+        EventPayload::ModelRequestStarted {
+            provider: "provider-a".to_owned(),
+            model: "model-a".to_owned(),
+            request_id: Some("request-a".to_owned()),
+            request_fingerprint: Some("fingerprint-a".to_owned()),
+            manifest_ref: None,
+            attempt_ordinal: 1,
+            parent_request_id: None,
+        },
+        EventPayload::ModelResponseReceived {
+            response_id: Some("response-before-slice".to_owned()),
+            usage: json!({"total_tokens": 999}),
+            request_id: Some("request-before-slice".to_owned()),
+            request_fingerprint: Some("fingerprint-before-slice".to_owned()),
+        },
+    ]);
+
+    let outcome = behavioral_outcome_from_events("session-unmatched", None, &journal).expect("outcome");
+
+    assert_eq!(outcome.model_executions.len(), 1);
+    assert_eq!(outcome.model_executions[0].response_id, None);
+    assert_eq!(outcome.model_executions[0].usage, None);
+    assert_eq!(outcome.observed_token_usage, None);
+}
+
+#[test]
 fn failed_verification_then_repair_preserves_first_pass_failure() {
     let journal = events(vec![
         EventPayload::SessionCreated {
@@ -238,6 +288,37 @@ fn failed_verification_then_repair_preserves_first_pass_failure() {
     assert_eq!(outcome.failed_verification_attempts, 1);
     assert_eq!(outcome.mutation_count, 2);
     assert_eq!(outcome.verification_receipt_ids.len(), 2);
+}
+
+#[test]
+fn runtime_failure_superseded_by_later_verification_can_succeed() {
+    let journal = events(vec![
+        EventPayload::SessionCreated {
+            objective: "recover and verify".to_owned(),
+        },
+        EventPayload::RuntimeFailed {
+            message: "transient crash".to_owned(),
+        },
+        EventPayload::RecoveryActionCompleted {
+            receipt: json!({"id": "recovery-1"}),
+        },
+        EventPayload::VerificationCompleted {
+            passed: true,
+            evidence: vec!["verification-after-recovery".to_owned()],
+        },
+        EventPayload::SessionCompleted {
+            report_ref: "recovered-report".to_owned(),
+        },
+    ]);
+
+    let outcome = behavioral_outcome_from_events("session-recovered", None, &journal).expect("outcome");
+
+    assert!(outcome.verified_success);
+    assert_eq!(outcome.recovery_count, 1);
+    assert_eq!(
+        outcome.terminal_status,
+        BehavioralTerminalStatus::VerifiedSuccess
+    );
 }
 
 #[test]
@@ -291,4 +372,33 @@ fn replay_is_deterministic_and_cancelled_runs_remain_visible() {
     assert_eq!(first.terminal_status, BehavioralTerminalStatus::Cancelled);
     assert!(!first.verified_success);
     assert!(first.cancellation_requested);
+}
+
+#[test]
+fn post_terminal_events_do_not_create_a_distinct_behavioral_outcome() {
+    let mut journal = events(vec![
+        EventPayload::SessionCreated {
+            objective: "complete once".to_owned(),
+        },
+        EventPayload::VerificationCompleted {
+            passed: true,
+            evidence: vec!["verified".to_owned()],
+        },
+        EventPayload::SessionCompleted {
+            report_ref: "report".to_owned(),
+        },
+    ]);
+    let before = behavioral_outcome_from_events("session-stable", None, &journal).expect("before");
+
+    append_event(
+        &mut journal,
+        EventPayload::SessionReset {
+            reason: "new task".to_owned(),
+        },
+    );
+    let after = behavioral_outcome_from_events("session-stable", None, &journal).expect("after");
+
+    assert_eq!(before.outcome_id, after.outcome_id);
+    assert_eq!(before.source_event_ids, after.source_event_ids);
+    assert_eq!(before.terminal_status, after.terminal_status);
 }
