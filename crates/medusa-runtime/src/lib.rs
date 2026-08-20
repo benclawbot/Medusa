@@ -15,7 +15,7 @@ use medusa_agent::{
     compact_session, update_session_objective,
 };
 use medusa_capabilities::CapabilityRegistry;
-use medusa_config::{Config, ConfigurationChanged, Mode};
+use medusa_config::{Config, ConfigurationChanged, Mode, ProviderProfileStore};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
     ConfiguredProvider, Message, MessageBlock, ModelProvider, ProviderExecutionPhase, Role,
@@ -314,7 +314,10 @@ impl RuntimeController {
     }
 
     pub fn start_with_config(repo: PathBuf, config: Config) -> Self {
-        Self::start_with_state(RuntimeState::from_config(repo, config))
+        match RuntimeState::from_config_with_runtime(repo, config) {
+            Ok(state) => Self::start_with_state(state),
+            Err(error) => Self::failed_start(error),
+        }
     }
 
     fn start_with_state(state: RuntimeState) -> Self {
@@ -939,7 +942,20 @@ impl RuntimeState {
         let config =
             Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
                 .map_err(RuntimeError::agent)?;
-        Ok(Self::from_config(repo, config))
+        Self::from_config_with_runtime(repo, config)
+    }
+
+    fn from_config_with_runtime(
+        repo: PathBuf,
+        mut config: Config,
+    ) -> Result<Self, RuntimeError> {
+        let effective = runtime_config_effective_for_repo(&repo, &config)?;
+        apply_runtime_route(&mut config, &effective)?;
+        let mut state = Self::from_config(repo, config);
+        let binding = runtime_config_binding_from_effective(effective)?;
+        state.runtime_config_fingerprint = Some(binding.1.clone());
+        state.runtime_config_binding = Some(binding);
+        Ok(state)
     }
 
     fn from_config(repo: PathBuf, config: Config) -> Self {
@@ -1004,6 +1020,107 @@ fn runtime_config_binding(config: &Config) -> Option<(u16, String, serde_json::V
     })
 }
 
+fn runtime_config_binding_for_repo(
+    repo: &std::path::Path,
+    config: &Config,
+) -> Result<(u16, String, serde_json::Value), RuntimeError> {
+    let effective = runtime_config_effective_for_repo(repo, config)?;
+    runtime_config_binding_from_effective(effective)
+}
+
+fn runtime_config_effective_for_repo(
+    repo: &std::path::Path,
+    config: &Config,
+) -> Result<crate::runtime_config::EffectiveRuntimeConfigV1, RuntimeError> {
+    let loop_config = crate::runtime_config::RuntimeLoopConfigV1 {
+        provider: Some(config.model.provider.clone()),
+        model: Some(config.model.name.clone()),
+        ..crate::runtime_config::RuntimeLoopConfigV1::default()
+    };
+    let user_path = ProviderProfileStore::user()
+        .ok()
+        .and_then(|store| store.path().parent().map(|path| path.join("runtime.toml")));
+    let repository_path = repo.join(".medusa/runtime.toml");
+    let code_mode_ready = medusa_agent::tools::ToolManager::new(Default::default())
+        .code_mode_sdk(repo, config.agent.mode == Mode::ReadOnly)
+        .is_ok();
+    let effective = crate::runtime_config::compile_layered_config(
+        loop_config,
+        user_path.as_deref(),
+        Some(repository_path.as_path()),
+        None,
+        None,
+        crate::runtime_config::RuntimeConfigHardLimits::default(),
+        code_mode_ready,
+    )
+    .map_err(|errors| RuntimeError::agent(errors.join("; ")))?;
+    if let (Some(provider), Some(model)) = (&effective.config.provider, &effective.config.model)
+        && !is_admitted_runtime_route(config, provider, model)
+    {
+        return Err(RuntimeError::agent(format!(
+            "runtime configuration selected {provider}/{model}, which is not an admitted provider/model route"
+        )));
+    }
+    Ok(effective)
+}
+
+fn runtime_config_binding_from_effective(
+    effective: crate::runtime_config::EffectiveRuntimeConfigV1,
+) -> Result<(u16, String, serde_json::Value), RuntimeError> {
+    let fingerprint = effective.fingerprint.clone();
+    let snapshot = serde_json::to_value(&effective).map_err(RuntimeError::agent)?;
+    Ok((effective.schema_version, fingerprint, snapshot))
+}
+
+fn is_admitted_runtime_route(config: &Config, provider: &str, model: &str) -> bool {
+    (config.model.provider == provider && config.model.name == model)
+        || config
+            .model
+            .fallback_providers
+            .iter()
+            .any(|route| route.provider == provider && route.name == model)
+}
+
+fn apply_runtime_route(
+    config: &mut Config,
+    effective: &crate::runtime_config::EffectiveRuntimeConfigV1,
+) -> Result<(), RuntimeError> {
+    let Some(provider) = effective.config.provider.as_deref() else {
+        return Ok(());
+    };
+    let Some(model) = effective.config.model.as_deref() else {
+        return Err(RuntimeError::agent(
+            "runtime configuration provider/model selection is incomplete",
+        ));
+    };
+    if config.model.provider == provider && config.model.name == model {
+        return Ok(());
+    }
+    let Some(route) = config
+        .model
+        .fallback_providers
+        .iter()
+        .find(|route| route.provider == provider && route.name == model)
+        .cloned()
+    else {
+        return Err(RuntimeError::agent(format!(
+            "runtime configuration selected {provider}/{model}, which is not an admitted provider/model route"
+        )));
+    };
+    config.model.provider = route.provider;
+    config.model.name = route.name;
+    config.model.protocol = route.protocol;
+    config.model.base_url = route.base_url;
+    config.model.auth = route.auth;
+    config.model.tool_calling = route.tool_calling;
+    config.model.streaming = route.streaming;
+    config.model.max_retries = route.max_retries;
+    config.model.retry_base_delay_ms = route.retry_base_delay_ms;
+    config.model.retry_max_delay_ms = route.retry_max_delay_ms;
+    config.model.retry_jitter_ms = route.retry_jitter_ms;
+    Ok(())
+}
+
 fn session_runtime_config_binding(
     session: &AgentSession,
 ) -> Option<(u16, String, serde_json::Value)> {
@@ -1015,6 +1132,26 @@ fn session_runtime_config_binding(
         } => Some((*schema_version, fingerprint.clone(), snapshot.clone())),
         _ => None,
     })
+}
+
+fn validate_session_runtime_config_binding(
+    current: Option<&(u16, String, serde_json::Value)>,
+    persisted: Option<&(u16, String, serde_json::Value)>,
+) -> Result<(), RuntimeError> {
+    let Some(persisted) = persisted else {
+        return Ok(());
+    };
+    let Some(current) = current else {
+        return Err(RuntimeError::agent(
+            "active session has a runtime configuration binding but the current runtime could not compile one",
+        ));
+    };
+    if current.0 != persisted.0 || current.1 != persisted.1 {
+        return Err(RuntimeError::agent(
+            "active session is bound to a different runtime configuration; start a new session",
+        ));
+    }
+    Ok(())
 }
 
 fn bound_model(snapshot: &serde_json::Value) -> Option<(&str, &str)> {
@@ -1038,6 +1175,10 @@ fn run_prompt(
         .session
         .as_ref()
         .and_then(session_runtime_config_binding);
+    validate_session_runtime_config_binding(
+        state.runtime_config_binding.as_ref(),
+        session_binding.as_ref(),
+    )?;
     if let Some((_, _, snapshot)) = &session_binding
         && let Some((provider, model)) = bound_model(snapshot)
         && (provider != config.model.provider || model != config.model.name)

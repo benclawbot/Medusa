@@ -74,6 +74,121 @@ fn command_processing_does_not_wait_for_capability_discovery() {
 }
 
 #[test]
+fn resumed_session_rejects_a_changed_effective_runtime_configuration() {
+    let current = (
+        1_u16,
+        "current-fingerprint".to_owned(),
+        json!({"schema_version": 1, "fingerprint": "current-fingerprint"}),
+    );
+    let persisted = (
+        1_u16,
+        "persisted-fingerprint".to_owned(),
+        json!({"schema_version": 1, "fingerprint": "persisted-fingerprint"}),
+    );
+
+    let error = validate_session_runtime_config_binding(Some(&current), Some(&persisted))
+        .expect_err("a resumed session must not adopt changed runtime defaults");
+    assert!(error.to_string().contains("different runtime configuration"));
+}
+
+#[test]
+fn invalid_repository_runtime_configuration_fails_before_runtime_startup() {
+    let directory = tempdir().expect("temporary directory");
+    fs::create_dir_all(directory.path().join(".medusa")).expect("create project config");
+    fs::write(
+        directory.path().join(".medusa/runtime.toml"),
+        "unknown_authority = true\n",
+    )
+    .expect("write invalid runtime config");
+
+    let result = RuntimeState::load(directory.path().to_path_buf());
+    let error = match result {
+        Ok(_) => panic!("invalid runtime config must fail closed"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("failed to parse runtime configuration"));
+}
+
+#[test]
+fn unadmitted_repository_runtime_route_fails_before_provider_startup() {
+    let directory = tempdir().expect("temporary directory");
+    fs::create_dir_all(directory.path().join(".medusa")).expect("create project config");
+    fs::write(
+        directory.path().join(".medusa/runtime.toml"),
+        "schema_version = 1\nprovider = \"unadmitted-provider\"\nmodel = \"unadmitted-model\"\n",
+    )
+    .expect("write runtime route");
+
+    let result = RuntimeState::load(directory.path().to_path_buf());
+    let error = match result {
+        Ok(_) => panic!("an unadmitted runtime route must fail closed"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("not an admitted provider/model route"));
+}
+
+#[test]
+fn admitted_repository_runtime_route_applies_the_selected_fallback() {
+    let directory = tempdir().expect("temporary directory");
+    fs::create_dir_all(directory.path().join(".medusa")).expect("create project config");
+    fs::write(
+        directory.path().join(".medusa/runtime.toml"),
+        "schema_version = 1\nprovider = \"fallback\"\nmodel = \"fallback-model\"\n",
+    )
+    .expect("write runtime route");
+
+    let mut config = Config::default();
+    config
+        .model
+        .fallback_providers
+        .push(medusa_config::FallbackProviderConfig {
+            provider: "fallback".to_owned(),
+            name: "fallback-model".to_owned(),
+            protocol: "openai".to_owned(),
+            base_url: Some("https://fallback.invalid".to_owned()),
+            auth: "none".to_owned(),
+            tool_calling: true,
+            streaming: true,
+            max_retries: 2,
+            retry_base_delay_ms: 10,
+            retry_max_delay_ms: 100,
+            retry_jitter_ms: 0,
+        });
+
+    let effective = runtime_config_effective_for_repo(directory.path(), &config)
+        .expect("admitted route compiles");
+    apply_runtime_route(&mut config, &effective).expect("admitted route applies");
+    assert_eq!(config.model.provider, "fallback");
+    assert_eq!(config.model.name, "fallback-model");
+    assert_eq!(config.model.base_url.as_deref(), Some("https://fallback.invalid"));
+    assert_eq!(config.model.auth, "none");
+    assert!(config.model.streaming);
+    assert_eq!(config.model.max_retries, 2);
+}
+
+#[test]
+fn explicit_config_startup_rejects_invalid_runtime_policy() {
+    let directory = tempdir().expect("temporary directory");
+    fs::create_dir_all(directory.path().join(".medusa")).expect("create project config");
+    fs::write(
+        directory.path().join(".medusa/runtime.toml"),
+        "schema_version = 1\nservice_provider = \"unregistered-service\"\n",
+    )
+    .expect("write runtime policy");
+
+    let controller = RuntimeController::start_with_config(directory.path().to_path_buf(), Config::default());
+    let event = controller
+        .events
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("startup event");
+    assert!(matches!(
+        event,
+        RuntimeEvent::Failed(message)
+            if message.contains("no certified non-authority service provider is registered")
+    ));
+}
+
+#[test]
 fn text_prompt_becomes_user_message_block() {
     let draft = PromptDraft {
         text: "fix the failing test".to_owned(),
