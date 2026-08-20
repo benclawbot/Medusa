@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use medusa_protocol::{EventEnvelope, EventPayload};
+use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -63,6 +63,7 @@ pub struct BehavioralOutcomeV1 {
     pub root_task_id: String,
     pub session_id: String,
     pub trajectory_id: String,
+    pub root_task_eligible: bool,
     pub repository_revision: Option<String>,
     pub harness_version: String,
     pub terminal_status: BehavioralTerminalStatus,
@@ -104,13 +105,14 @@ impl BehavioralOutcomeV1 {
             return Err("behavioral outcome is incomplete");
         }
         if self.verified_success
-            && (self.terminal_status != BehavioralTerminalStatus::VerifiedSuccess
-                || self.verification_passed != Some(true)
+            && (!self.root_task_eligible
+                || self.terminal_status != BehavioralTerminalStatus::VerifiedSuccess
+                || self.verification_passed == Some(false)
                 || self.verification_receipt_ids.is_empty()
-                || self.integration_receipt_ids.is_empty())
+                    && self.integration_receipt_ids.is_empty())
         {
             return Err(
-                "verified behavioral success requires verification and integration authority",
+                "verified behavioral success requires eligible root verification authority",
             );
         }
         Ok(())
@@ -135,6 +137,17 @@ pub fn project_behavioral_outcome(
         return Err("behavioral outcome requires durable journal events".to_owned());
     }
 
+    for event in events {
+        event.validate().map_err(|error| error.to_string())?;
+    }
+    for pair in events.windows(2) {
+        if pair[1].sequence != pair[0].sequence.saturating_add(1)
+            || pair[1].previous_hash.as_deref() != Some(pair[0].checksum.as_str())
+        {
+            return Err("behavioral outcome source event chain is discontinuous".to_owned());
+        }
+    }
+
     let source_event_ids = events.iter().map(event_id).collect::<Vec<_>>();
     let source_event_checksums = events
         .iter()
@@ -146,6 +159,7 @@ pub fn project_behavioral_outcome(
         .zip(last_event_unix_ms)
         .and_then(|(first, last)| u64::try_from(last.saturating_sub(first)).ok());
 
+    let root_task_eligible = !delegated_worker_events(events);
     let mut model_executions = Vec::<BehavioralModelExecutionV1>::new();
     let mut request_indexes = BTreeMap::<String, usize>::new();
     let mut latest_successful_response = None::<usize>;
@@ -298,7 +312,9 @@ pub fn project_behavioral_outcome(
             }
             EventPayload::CancellationRequested { .. } => cancellation_requested = true,
             EventPayload::CancellationCompleted => cancellation_completed = true,
-            EventPayload::UserFollowupQueued { .. } | EventPayload::GoalUpdated { .. } => {
+            EventPayload::UserFollowupQueued { .. }
+            | EventPayload::UserPromptReceived { .. }
+            | EventPayload::GoalUpdated { .. } => {
                 user_correction_count = user_correction_count.saturating_add(1);
             }
             EventPayload::ApprovalDecisionRecorded { decision } => {
@@ -318,10 +334,12 @@ pub fn project_behavioral_outcome(
     integration_receipt_ids.sort();
     integration_receipt_ids.dedup();
 
-    let verified_success = session_completed
-        && verification_passed == Some(true)
-        && !verification_receipt_ids.is_empty()
-        && !integration_receipt_ids.is_empty()
+    let root_verification_passed = verification_passed == Some(true)
+        || (verification_passed.is_none() && !integration_receipt_ids.is_empty());
+    let verified_success = root_task_eligible
+        && session_completed
+        && root_verification_passed
+        && (!verification_receipt_ids.is_empty() || !integration_receipt_ids.is_empty())
         && !cancellation_completed
         && !session_failed
         && !runtime_failed;
@@ -346,6 +364,7 @@ pub fn project_behavioral_outcome(
         root_task_id: session_id.to_owned(),
         session_id: session_id.to_owned(),
         trajectory_id: session_id.to_owned(),
+        root_task_eligible,
         repository_revision,
         harness_version,
         terminal_status,
@@ -374,6 +393,25 @@ pub fn project_behavioral_outcome(
     outcome.outcome_id = normalized_outcome_id(&outcome)?;
     outcome.validate().map_err(str::to_owned)?;
     Ok(outcome)
+}
+
+fn delegated_worker_events(events: &[EventEnvelope]) -> bool {
+    if events
+        .iter()
+        .any(|event| matches!(&event.actor, Actor::Worker(_)))
+    {
+        return true;
+    }
+    events.iter().find_map(|event| match &event.payload {
+        EventPayload::SessionCreated { objective } => Some(objective.trim_start()),
+        _ => None,
+    }).is_some_and(|objective| {
+        objective.starts_with("Implement delegated task `")
+            || objective
+                .starts_with("Collect read-only repository evidence for the parent goal.")
+            || objective
+                .starts_with("Perform a read-only risk and failure-mode review for the parent goal.")
+    })
 }
 
 fn model_execution_index(
@@ -439,7 +477,9 @@ fn observed_token_usage(executions: &[BehavioralModelExecutionV1]) -> Option<u64
             let output = ["output_tokens", "completion_tokens", "output"]
                 .into_iter()
                 .find_map(|key| usage.get(key).and_then(Value::as_u64));
-            input.zip(output).map(|(input, output)| input.saturating_add(output))
+            input
+                .zip(output)
+                .map(|(input, output)| input.saturating_add(output))
         });
         if let Some(value) = value {
             observed = true;
@@ -470,6 +510,7 @@ fn normalized_outcome_id(outcome: &BehavioralOutcomeV1) -> Result<String, String
         &outcome.session_id,
         &outcome.source_event_ids,
         &outcome.source_event_checksums,
+        outcome.root_task_eligible,
         outcome.terminal_status,
         outcome.verified_success,
         &outcome.verification_receipt_ids,
