@@ -34,7 +34,11 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
+use crate::code_mode::{
+    CodeModeExecutionV1, CodeModeLimits, CodeModeProgramV1, CodeModeSdkV1, generate_sdk,
+};
 use crate::team::AgentExecutionPolicy;
+use crate::tool_result::CanonicalToolResultV1;
 use pipeline::{
     FinalToolOutcome, GuardDecision, ResolvedToolIdentity, ToolExecutionPipeline,
     ToolPipelineRequest,
@@ -66,12 +70,19 @@ static BROWSER_NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 pub(crate) struct CertifiedToolExecution {
     pub receipt: Value,
     pub result: MedusaResult<String>,
+    #[allow(dead_code)]
+    pub canonical: CanonicalToolResultV1,
 }
 
 fn certified_execution(outcome: FinalToolOutcome) -> MedusaResult<CertifiedToolExecution> {
     let receipt = outcome.receipt_value()?;
     let result = outcome.into_result();
-    Ok(CertifiedToolExecution { receipt, result })
+    let canonical = CanonicalToolResultV1::from_receipt(&receipt, &result);
+    Ok(CertifiedToolExecution {
+        receipt,
+        result,
+        canonical,
+    })
 }
 
 /// Single policy-aware registry for built-in tools shared by every agent frontend.
@@ -104,6 +115,68 @@ impl ToolManager {
         read_only: bool,
     ) -> MedusaResult<Vec<ToolDefinition>> {
         built_in_tools(repo, &self.desktop_commander, read_only)
+    }
+
+    /// Generates a Code Mode SDK from the same effective admitted definitions exposed to native
+    /// model calls. The SDK is presentation only; nested execution must use the certified path.
+    pub fn code_mode_sdk(&self, repo: &Path, read_only: bool) -> MedusaResult<CodeModeSdkV1> {
+        self.code_mode_sdk_for(repo, read_only, &AgentExecutionPolicy::unrestricted(), None)
+    }
+
+    /// Generates a Code Mode SDK after applying the same execution-policy and optional active
+    /// agent-scope filters used by the runtime. This prevents a presentation-only registry from
+    /// advertising tools that the current caller cannot actually invoke.
+    pub fn code_mode_sdk_for(
+        &self,
+        repo: &Path,
+        read_only: bool,
+        execution_policy: &AgentExecutionPolicy,
+        session_id: Option<&str>,
+    ) -> MedusaResult<CodeModeSdkV1> {
+        let mut definitions = self.definitions_for(repo, read_only)?;
+        definitions.retain(|definition| execution_policy.allows(&definition.name));
+        if let Some(session_id) = session_id {
+            let names = definitions
+                .iter()
+                .map(|definition| definition.name.clone())
+                .collect::<Vec<_>>();
+            let scoped = crate::agent_scope::effective_agent_scope_tools(repo, session_id, names)?;
+            definitions.retain(|definition| scoped.binary_search(&definition.name).is_ok());
+        }
+        generate_sdk(&definitions)
+    }
+
+    /// Executes a bounded declarative Code Mode call plan. The plan is intentionally an IR rather
+    /// than an unsandboxed language runtime: every child call is independently admitted and runs
+    /// through the existing certified pipeline with its own receipt and canonical result.
+    pub fn execute_code_mode(
+        &self,
+        repo: &Path,
+        program: &CodeModeProgramV1,
+        read_only: bool,
+        execution_policy: &AgentExecutionPolicy,
+        cancellation: &AtomicBool,
+    ) -> MedusaResult<CodeModeExecutionV1> {
+        let sdk = self.code_mode_sdk_for(repo, read_only, execution_policy, None)?;
+        program.validate(&sdk, CodeModeLimits::default())?;
+        let mut children = Vec::with_capacity(program.calls.len());
+        for (ordinal, call) in program.calls.iter().enumerate() {
+            let execution = execute_tool_cancellable_with_context_and_policy_certified(
+                repo,
+                &call.tool,
+                &call.input,
+                cancellation,
+                None,
+                execution_policy,
+            )?;
+            children.push(crate::code_mode::CodeModeChildResultV1::from_certified(
+                ordinal as u32,
+                &call.tool,
+                execution.receipt,
+                execution.canonical,
+            ));
+        }
+        Ok(CodeModeExecutionV1::from_children(children))
     }
 
     pub fn execute(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
@@ -955,6 +1028,8 @@ pub(crate) fn invalid_tool(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_mode::{CODE_MODE_SCHEMA_VERSION, CodeModeCallV1, CodeModeProgramV1};
+    use crate::tool_result::CanonicalToolOutcome;
 
     #[test]
     fn optional_string_rejects_present_non_string_values() {
@@ -1086,6 +1161,40 @@ mod tests {
         assert_eq!(
             execution.result.expect_err("policy denial").code,
             ErrorCode::PolicyDenied
+        );
+    }
+
+    #[test]
+    fn code_mode_executes_admitted_children_with_canonical_results() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        std::fs::write(directory.path().join("fixture.txt"), "code mode").expect("fixture");
+        let manager = ToolManager::new(Default::default());
+        let program = CodeModeProgramV1 {
+            schema_version: CODE_MODE_SCHEMA_VERSION,
+            calls: vec![CodeModeCallV1 {
+                tool: "fs_read".to_owned(),
+                input: json!({"path": "fixture.txt"}),
+            }],
+        };
+        let execution = manager
+            .execute_code_mode(
+                directory.path(),
+                &program,
+                true,
+                &AgentExecutionPolicy::unrestricted(),
+                &AtomicBool::new(false),
+            )
+            .expect("code mode execution");
+        assert_eq!(execution.children.len(), 1);
+        assert_eq!(
+            execution.children[0].canonical.outcome,
+            CanonicalToolOutcome::Success
+        );
+        assert_eq!(execution.outcome, CanonicalToolOutcome::Success);
+        assert!(
+            execution.model_projection["children"][0]["source_fingerprint"]
+                .as_str()
+                .is_some_and(|fingerprint| !fingerprint.is_empty())
         );
     }
 }

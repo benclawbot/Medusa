@@ -10,6 +10,9 @@ use medusa_context::refinement::{
 };
 use medusa_core::{MedusaResult, learning_policy::LearningAdmissionPolicy};
 use medusa_improvement::{
+    behavioral_outcome::{
+        BehavioralOutcomeV1, BehavioralTerminalStatus, project_behavioral_outcome,
+    },
     correction_loop::{
         CorrectionLoopEngine, CorrectionLoopRequest, DeterministicProductionReplayRunner,
     },
@@ -87,6 +90,74 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
     )
 }
 
+fn canonical_behavioral_outcome(session: &AgentSession) -> MedusaResult<BehavioralOutcomeV1> {
+    project_behavioral_outcome(
+        session.id.as_str(),
+        repository_revision(&session.repo),
+        format!("medusa-agent/{}", env!("CARGO_PKG_VERSION")),
+        &session.events,
+    )
+    .map_err(|error| {
+        medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PersistenceFailed,
+            medusa_core::ErrorCategory::Persistence,
+            format!("canonical behavioral outcome projection failed: {error}"),
+        )
+    })
+}
+
+fn behavioral_route(outcome: &BehavioralOutcomeV1) -> (String, String, String) {
+    let execution = outcome
+        .contributing_execution()
+        .or_else(|| outcome.model_executions.last());
+    (
+        execution
+            .map(|execution| execution.model.clone())
+            .unwrap_or_else(|| "unknown-model".to_owned()),
+        execution
+            .map(|execution| execution.provider.clone())
+            .unwrap_or_else(|| "unknown-provider".to_owned()),
+        execution
+            .and_then(|execution| execution.request_fingerprint.clone())
+            .unwrap_or_else(|| "unknown-request".to_owned()),
+    )
+}
+
+fn behavioral_status(outcome: &BehavioralOutcomeV1) -> OutcomeStatus {
+    match outcome.terminal_status {
+        BehavioralTerminalStatus::VerifiedSuccess => OutcomeStatus::Positive,
+        BehavioralTerminalStatus::VerifiedFailure
+        | BehavioralTerminalStatus::Partial
+        | BehavioralTerminalStatus::Invalidated => OutcomeStatus::Negative,
+        BehavioralTerminalStatus::Cancelled => OutcomeStatus::Censored,
+        BehavioralTerminalStatus::Inconclusive => OutcomeStatus::Inconclusive,
+    }
+}
+
+fn behavioral_tool_cohort(outcome: &BehavioralOutcomeV1) -> String {
+    let mut tools = outcome
+        .tool_executions
+        .iter()
+        .map(|execution| execution.tool.clone())
+        .collect::<Vec<_>>();
+    tools.sort();
+    tools.dedup();
+    if tools.is_empty() {
+        "none".to_owned()
+    } else {
+        tools.join(",")
+    }
+}
+
+fn behavioral_retry_count(outcome: &BehavioralOutcomeV1) -> u32 {
+    let model_retries = outcome
+        .model_executions
+        .iter()
+        .filter(|execution| execution.failed || execution.attempt_ordinal > 1)
+        .count() as u32;
+    model_retries.saturating_add(outcome.failed_verification_attempts)
+}
+
 fn record_meta_improvement_feedback(
     session: &AgentSession,
     policy: &LearningAdmissionPolicy,
@@ -95,9 +166,9 @@ fn record_meta_improvement_feedback(
     if !policy.telemetry_enabled() {
         return Ok(());
     }
-    let model = std::env::var("MEDUSA_MODEL").unwrap_or_else(|_| "unknown-model".into());
-    let provider = std::env::var("MEDUSA_PROVIDER").unwrap_or_else(|_| "unknown-provider".into());
-    let harness = format!("medusa-agent/{}", env!("CARGO_PKG_VERSION"));
+    let behavioral = canonical_behavioral_outcome(session)?;
+    let (model, provider, _) = behavioral_route(&behavioral);
+    let harness = behavioral.harness_version.clone();
     let mut store = MetaImprovementStore::open(&session.repo).map_err(|error| {
         medusa_core::MedusaError::new(
             medusa_core::ErrorCode::PersistenceFailed,
@@ -112,7 +183,9 @@ fn record_meta_improvement_feedback(
             &model,
             &provider,
             &harness,
-            session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000,
+            behavioral
+                .last_event_unix_ms
+                .unwrap_or_else(|| session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000),
         )
         .map_err(|error| {
             medusa_core::MedusaError::new(
@@ -132,38 +205,35 @@ fn record_monitor_outcome(
     if !policy.telemetry_enabled() {
         return Ok(());
     }
-    let Some(status) = session_outcome_status(session) else {
-        return Ok(());
-    };
-    let recorded_at_unix_ms = session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000;
-    let session_id = session.id.to_string();
-    let repository_revision =
-        repository_revision(&session.repo).unwrap_or_else(|| "unknown".to_owned());
-    let authoritative_receipt_ids = if status == OutcomeStatus::Positive {
-        authority_receipts(session)
-            .iter()
-            .filter_map(|receipt| receipt["event_id"].as_str().map(str::to_owned))
-            .collect()
-    } else {
-        session
-            .events
-            .iter()
-            .filter(|event| {
-                matches!(
-                    &event.payload,
-                    EventPayload::VerificationCompleted { passed: false, .. }
-                        | EventPayload::SessionFailed { .. }
-                        | EventPayload::RuntimeFailed { .. }
-                        | EventPayload::CancellationCompleted
-                )
-            })
-            .map(|event| event.event_id.to_string())
-            .collect()
-    };
+    let behavioral = canonical_behavioral_outcome(session)?;
+    let status = behavioral_status(&behavioral);
+    let recorded_at_unix_ms = behavioral
+        .last_event_unix_ms
+        .unwrap_or_else(|| session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000);
+    let repository_revision = behavioral
+        .repository_revision
+        .clone()
+        .unwrap_or_else(|| "unknown".to_owned());
+    let mut authoritative_receipt_ids = behavioral.verification_receipt_ids.clone();
+    authoritative_receipt_ids.extend(behavioral.integration_receipt_ids.iter().cloned());
+    authoritative_receipt_ids.sort();
+    authoritative_receipt_ids.dedup();
+    if authoritative_receipt_ids.is_empty() && status != OutcomeStatus::Positive {
+        authoritative_receipt_ids.extend(session.events.iter().filter_map(|event| {
+            matches!(
+                &event.payload,
+                EventPayload::SessionFailed { .. }
+                    | EventPayload::RuntimeFailed { .. }
+                    | EventPayload::CancellationCompleted
+            )
+            .then(|| event.event_id.to_string())
+        }));
+    }
     let evidence_ids = provenance
         .observations
         .iter()
         .map(|observation| observation.id.clone())
+        .chain(behavioral.source_event_ids.iter().cloned())
         .take(64)
         .collect();
     let task_features = session
@@ -172,11 +242,14 @@ fn record_monitor_outcome(
         .filter(|term| term.len() >= 2)
         .map(str::to_ascii_lowercase)
         .collect::<BTreeSet<_>>();
+    let (model, provider, request_fingerprint) = behavioral_route(&behavioral);
     let outcome = OutcomeRecord {
-        id: format!("learning-outcome-{session_id}"),
-        root_task_id: session_id.clone(),
-        trajectory_id: session_id.clone(),
-        session_id: session_id.clone(),
+        // Monitor ingestion is retried on every completed-session persistence. Keep its
+        // deduplication identity stable when the session later receives lifecycle events.
+        id: format!("learning-outcome-{}", behavioral.session_id),
+        root_task_id: behavioral.root_task_id.clone(),
+        trajectory_id: behavioral.trajectory_id.clone(),
+        session_id: behavioral.session_id.clone(),
         exposure_ids: Vec::new(),
         status,
         authoritative_receipt_ids,
@@ -184,34 +257,39 @@ fn record_monitor_outcome(
         task_features,
         repository_revision: repository_revision.clone(),
         cohort: CohortKey {
-            model: std::env::var("MEDUSA_MODEL").unwrap_or_else(|_| "unknown-model".into()),
-            provider: std::env::var("MEDUSA_PROVIDER")
-                .unwrap_or_else(|_| "unknown-provider".into()),
-            harness: format!("medusa-agent/{}", env!("CARGO_PKG_VERSION")),
-            prompt_fingerprint: "unattributed-session".into(),
+            model,
+            provider,
+            harness: behavioral.harness_version.clone(),
+            prompt_fingerprint: request_fingerprint,
             repository_revision,
-            tool_cohort: "unknown".into(),
+            tool_cohort: behavioral_tool_cohort(&behavioral),
             simultaneous_exposures: Vec::new(),
         },
-        authoritative_correct: (status == OutcomeStatus::Positive).then_some(true),
-        verification_passed: match status {
-            OutcomeStatus::Positive => Some(true),
-            OutcomeStatus::Negative => Some(false),
-            _ => None,
+        authoritative_correct: match behavioral.terminal_status {
+            BehavioralTerminalStatus::VerifiedSuccess => Some(true),
+            BehavioralTerminalStatus::VerifiedFailure
+            | BehavioralTerminalStatus::Partial
+            | BehavioralTerminalStatus::Invalidated => Some(false),
+            BehavioralTerminalStatus::Cancelled | BehavioralTerminalStatus::Inconclusive => None,
         },
+        verification_passed: behavioral.verification_passed,
         user_correction_count: provenance
             .observations
             .iter()
             .filter(|observation| observation.source == ProvenanceSource::UserCorrection)
             .count() as u32,
         parent_review_revisions: 0,
-        retries: 0,
-        tool_failures: provenance
-            .tool_observations()
-            .filter(|observation| observation.outcome == ProvenanceOutcome::Negative)
+        retries: behavioral_retry_count(&behavioral),
+        tool_failures: behavioral
+            .tool_executions
+            .iter()
+            .filter(|execution| {
+                execution.denied
+                    || execution.completed && execution.exit_code.is_some_and(|code| code != 0)
+            })
             .count() as u32,
-        latency_millis: 0,
-        token_cost: 0,
+        latency_millis: behavioral.latency_millis,
+        token_cost: behavioral.observed_token_usage,
         privacy_violation: false,
         safety_violation: false,
         recorded_at_unix_ms,
@@ -233,33 +311,6 @@ fn record_monitor_outcome(
             )
         })?;
     Ok(())
-}
-
-fn session_outcome_status(session: &AgentSession) -> Option<OutcomeStatus> {
-    if !session.completed {
-        return None;
-    }
-    if authoritative_success(session) {
-        return Some(OutcomeStatus::Positive);
-    }
-    if session
-        .events
-        .iter()
-        .any(|event| matches!(&event.payload, EventPayload::CancellationCompleted))
-    {
-        return Some(OutcomeStatus::Censored);
-    }
-    if session.events.iter().any(|event| {
-        matches!(
-            &event.payload,
-            EventPayload::VerificationCompleted { passed: false, .. }
-                | EventPayload::SessionFailed { .. }
-                | EventPayload::RuntimeFailed { .. }
-        )
-    }) {
-        return Some(OutcomeStatus::Negative);
-    }
-    Some(OutcomeStatus::Inconclusive)
 }
 
 fn process_correction_loop(
@@ -892,8 +943,17 @@ mod tests {
                 automatic_proposals_enabled: false,
             },
         );
-        let session = session(repo.path());
+        let mut session = session(repo.path());
         process(&session).expect("process");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionReset {
+                reason: "new task after completion".to_owned(),
+            },
+        )
+        .expect("post-terminal event");
+        process(&session).expect("reprocess after post-terminal event");
         let state: Value = serde_json::from_slice(
             &fs::read(repo.path().join(".medusa/learning-monitor/state.json"))
                 .expect("monitor state"),

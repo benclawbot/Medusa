@@ -8,8 +8,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     process::Command,
+    thread,
+    time::{Duration, SystemTime},
 };
 
 use medusa_context::refinement::{RefinementArtifactKind, RefinementLifecycle};
@@ -24,6 +27,10 @@ const MONITOR_ROOT: &str = ".medusa/learning-monitor";
 const MIN_SAMPLES: usize = 3;
 const NEGATIVE_RATE_MILLI: u16 = 500;
 const COOLDOWN_MS: i64 = 15 * 60 * 1_000;
+const LOCK_FILE_NAME: &str = ".learning-monitor.lock";
+const LOCK_RETRY_ATTEMPTS: usize = 200;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(25);
+const STALE_LOCK_AGE: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,8 +138,8 @@ pub struct OutcomeRecord {
     pub parent_review_revisions: u32,
     pub retries: u32,
     pub tool_failures: u32,
-    pub latency_millis: u64,
-    pub token_cost: u64,
+    pub latency_millis: Option<u64>,
+    pub token_cost: Option<u64>,
     pub privacy_violation: bool,
     pub safety_violation: bool,
     pub recorded_at_unix_ms: i64,
@@ -305,29 +312,58 @@ impl Default for MonitorDocument {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct MonitorEvent {
+    schema_version: u32,
+    revision: u64,
+    kind: String,
+    recorded_at_unix_ms: i64,
+    #[serde(default)]
+    document: Option<MonitorDocument>,
+}
+
+#[derive(Debug)]
 pub struct LearningMonitorStore {
     root: PathBuf,
     document: MonitorDocument,
+    _lock: FileLock,
 }
 
 impl LearningMonitorStore {
     pub fn open(repo: &Path) -> Result<Self, LearningMonitorError> {
         let root = repo.join(MONITOR_ROOT);
+        let lock = FileLock::acquire(&root.join(LOCK_FILE_NAME))?;
         let path = root.join("state.json");
-        let document = if path.is_file() {
-            let document: MonitorDocument = serde_json::from_slice(&fs::read(&path)?)?;
-            if document.schema_version != SCHEMA_VERSION {
-                return Err(LearningMonitorError::Validation(format!(
-                    "unsupported monitor schema {}",
-                    document.schema_version
-                )));
+        let state_document = if path.is_file() {
+            match serde_json::from_slice::<MonitorDocument>(&fs::read(&path)?) {
+                Ok(document) => {
+                    if document.schema_version != SCHEMA_VERSION {
+                        return Err(LearningMonitorError::Validation(format!(
+                            "unsupported monitor schema {}",
+                            document.schema_version
+                        )));
+                    }
+                    Some(document)
+                }
+                // `state.json` is a rebuildable cache. A malformed or torn cache must not
+                // hide valid append-only monitor snapshots; replay below is the recovery path.
+                Err(_) => None,
             }
-            document
         } else {
-            MonitorDocument::default()
+            None
         };
-        Ok(Self { root, document })
+        let replayed_document = replay_document(&root)?;
+        let document = match (state_document, replayed_document) {
+            (Some(state), Some(replayed)) if replayed.revision > state.revision => replayed,
+            (Some(state), _) => state,
+            (None, Some(replayed)) => replayed,
+            (None, None) => MonitorDocument::default(),
+        };
+        Ok(Self {
+            root,
+            document,
+            _lock: lock,
+        })
     }
 
     #[must_use]
@@ -624,6 +660,20 @@ impl LearningMonitorStore {
     fn commit_event(&mut self, kind: &str, now: i64) -> Result<(), LearningMonitorError> {
         self.document.revision = self.document.revision.saturating_add(1);
         fs::create_dir_all(&self.root)?;
+        let event = serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "revision": self.document.revision,
+            "kind": kind,
+            "recorded_at_unix_ms": now,
+            "document": &self.document,
+        });
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.root.join("events.jsonl"))?;
+        serde_json::to_writer(&mut file, &event)?;
+        file.write_all(b"\n")?;
+        file.sync_data()?;
         let state_path = self.root.join("state.json");
         let temporary = self.root.join(format!("state.tmp-{}", std::process::id()));
         fs::write(&temporary, serde_json::to_vec_pretty(&self.document)?)?;
@@ -631,22 +681,112 @@ impl LearningMonitorStore {
             fs::remove_file(&state_path)?;
         }
         fs::rename(temporary, state_path)?;
-        let event = serde_json::json!({
-            "schema_version": SCHEMA_VERSION,
-            "revision": self.document.revision,
-            "kind": kind,
-            "recorded_at_unix_ms": now,
-        });
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.root.join("events.jsonl"))?;
-        serde_json::to_writer(&mut file, &event)?;
-        use std::io::Write;
-        file.write_all(b"\n")?;
-        file.sync_data()?;
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct FileLock {
+    path: PathBuf,
+}
+
+impl FileLock {
+    fn acquire(path: &Path) -> Result<Self, LearningMonitorError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        for _ in 0..LOCK_RETRY_ATTEMPTS {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(mut file) => {
+                    writeln!(file, "pid={}", std::process::id())?;
+                    file.sync_all()?;
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::AlreadyExists
+                        || error.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    if lock_is_stale(path) {
+                        match fs::remove_file(path) {
+                            Ok(()) => continue,
+                            Err(remove_error)
+                                if remove_error.kind() == std::io::ErrorKind::NotFound =>
+                            {
+                                continue;
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    thread::sleep(LOCK_RETRY_DELAY);
+                }
+                Err(error) => return Err(LearningMonitorError::Io(error)),
+            }
+        }
+        Err(LearningMonitorError::Validation(format!(
+            "learning monitor is busy; could not acquire {}",
+            path.display()
+        )))
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn replay_document(root: &Path) -> Result<Option<MonitorDocument>, LearningMonitorError> {
+    let path = root.join("events.jsonl");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let mut latest = None;
+    let contents = fs::read_to_string(path)?;
+    let has_trailing_newline = contents.ends_with('\n');
+    let lines = contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    for (index, line) in lines.iter().enumerate() {
+        let event: MonitorEvent = match serde_json::from_str(line) {
+            Ok(event) => event,
+            Err(error) if index + 1 == lines.len() && !has_trailing_newline => {
+                // A process can die after writing only part of the final JSON object. Earlier
+                // snapshots remain authoritative for this rebuildable projection.
+                let _ = error;
+                break;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if event.schema_version != SCHEMA_VERSION {
+            return Err(LearningMonitorError::Validation(format!(
+                "unsupported monitor event schema {}",
+                event.schema_version
+            )));
+        }
+        if latest
+            .as_ref()
+            .is_none_or(|document: &MonitorDocument| event.revision > document.revision)
+            && let Some(document) = event.document
+        {
+            latest = Some(document);
+        }
+    }
+    Ok(latest)
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age >= STALE_LOCK_AGE)
 }
 
 fn build_report(
@@ -939,8 +1079,8 @@ mod tests {
             parent_review_revisions: 0,
             retries: 0,
             tool_failures: 0,
-            latency_millis: 10,
-            token_cost: 20,
+            latency_millis: Some(10),
+            token_cost: Some(20),
             privacy_violation: false,
             safety_violation: false,
             recorded_at_unix_ms: 1,
@@ -1358,6 +1498,111 @@ mod tests {
             LearningMonitorStore::record_selection(repo.path(), &context, &result, 0, 1)
                 .expect("selection"),
             0
+        );
+    }
+
+    #[test]
+    fn projection_rebuilds_from_durable_event_snapshots() {
+        let repo = tempdir().expect("repo");
+        let mut store = LearningMonitorStore::open(repo.path()).expect("store");
+        let expected = store
+            .record_outcome(
+                repo.path(),
+                outcome(
+                    "rebuildable",
+                    "missing-exposure",
+                    OutcomeStatus::Inconclusive,
+                ),
+            )
+            .expect("record")
+            .snapshot;
+        assert_eq!(expected.revision, 1);
+        assert!(
+            fs::read_to_string(repo.path().join(MONITOR_ROOT).join("events.jsonl"))
+                .expect("events")
+                .contains("\"document\"")
+        );
+        fs::remove_file(repo.path().join(MONITOR_ROOT).join("state.json")).expect("remove state");
+        drop(store);
+
+        let recovered = LearningMonitorStore::open(repo.path())
+            .expect("rebuild")
+            .snapshot();
+        assert_eq!(recovered, expected);
+    }
+
+    #[test]
+    fn corrupt_cache_and_torn_final_event_rebuild_from_prior_snapshot() {
+        let repo = tempdir().expect("repo");
+        let mut store = LearningMonitorStore::open(repo.path()).expect("store");
+        let expected = store
+            .record_outcome(
+                repo.path(),
+                outcome(
+                    "rebuildable-corrupt-cache",
+                    "missing-exposure",
+                    OutcomeStatus::Inconclusive,
+                ),
+            )
+            .expect("record")
+            .snapshot;
+        drop(store);
+
+        let monitor_root = repo.path().join(MONITOR_ROOT);
+        fs::write(monitor_root.join("state.json"), b"{\"torn").expect("corrupt cache");
+        let mut events = fs::OpenOptions::new()
+            .append(true)
+            .open(monitor_root.join("events.jsonl"))
+            .expect("events");
+        events
+            .write_all(b"{\"schema_version\":1,\"revision\":2")
+            .expect("torn event");
+
+        let recovered = LearningMonitorStore::open(repo.path())
+            .expect("rebuild after corruption")
+            .snapshot();
+        assert_eq!(recovered, expected);
+    }
+
+    #[test]
+    fn concurrent_outcome_writers_preserve_every_unique_record() {
+        let repo = tempdir().expect("repo");
+        let repo_path = std::sync::Arc::new(repo.path().to_path_buf());
+        let workers = (0..50)
+            .map(|index| {
+                let repo_path = repo_path.clone();
+                std::thread::spawn(move || {
+                    let mut store = LearningMonitorStore::open(&repo_path).expect("store");
+                    store
+                        .record_outcome(
+                            &repo_path,
+                            outcome(
+                                &format!("concurrent-{index}"),
+                                "missing-exposure",
+                                OutcomeStatus::Inconclusive,
+                            ),
+                        )
+                        .expect("record");
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().expect("writer");
+        }
+
+        let snapshot = LearningMonitorStore::open(&repo_path)
+            .expect("reopen")
+            .snapshot();
+        assert_eq!(snapshot.revision, 50);
+        assert_eq!(snapshot.unattributed_outcomes.len(), 50);
+        assert_eq!(
+            snapshot
+                .unattributed_outcomes
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            50
         );
     }
 }

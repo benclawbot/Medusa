@@ -2,6 +2,8 @@ extern crate self as hex;
 
 mod implementation;
 
+pub mod behavioral_metrics;
+pub mod behavioral_outcome;
 pub mod correction_loop;
 #[allow(clippy::obfuscated_if_else)]
 pub mod correction_signals;

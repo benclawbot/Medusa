@@ -168,6 +168,7 @@ pub(crate) fn create_dir_approved(path: &str) -> MedusaResult<String> {
 }
 
 fn normalized_policy_path(path: &Path) -> String {
+    let path = canonicalize_existing_prefix(path);
     let normalized = path.to_string_lossy().replace('\\', "/");
     let normalized = if let Some(suffix) = normalized.strip_prefix("//?/UNC/") {
         format!("//{suffix}")
@@ -182,6 +183,28 @@ fn normalized_policy_path(path: &Path) -> String {
     } else {
         normalized.to_owned()
     }
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> std::path::PathBuf {
+    let mut existing = path;
+    let mut suffix = Vec::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            return path.to_path_buf();
+        };
+        suffix.push(name.to_os_string());
+        let Some(parent) = existing.parent() else {
+            return path.to_path_buf();
+        };
+        existing = parent;
+    }
+    let Ok(mut canonical) = existing.canonicalize() else {
+        return path.to_path_buf();
+    };
+    for component in suffix.iter().rev() {
+        canonical.push(component);
+    }
+    canonical
 }
 
 fn path_is_at_or_below(path: &str, prefix: &str) -> bool {
