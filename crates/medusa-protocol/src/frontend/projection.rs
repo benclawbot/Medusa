@@ -599,10 +599,34 @@ fn safe_argument_summary(value: &Value) -> Vec<String> {
 }
 
 fn safe_value_details(value: &Value) -> Vec<String> {
-    if let Some(summary) = string(value, &["summary", "message", "status", "result"]) {
-        return vec![summary.chars().take(320).collect()];
+    string(value, &["summary", "message", "status", "result"])
+        .and_then(safe_presentation_summary)
+        .into_iter()
+        .collect()
+}
+
+fn safe_presentation_summary(summary: &str) -> Option<String> {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+
+    let mut remaining = summary;
+    let mut visible = String::with_capacity(summary.len());
+    loop {
+        let Some(start) = remaining.find(OPEN) else {
+            visible.push_str(remaining);
+            break;
+        };
+        visible.push_str(&remaining[..start]);
+        let after_open = &remaining[start + OPEN.len()..];
+        let Some(end) = after_open.find(CLOSE) else {
+            break;
+        };
+        remaining = &after_open[end + CLOSE.len()..];
     }
-    Vec::new()
+
+    let visible = visible.replace(CLOSE, "");
+    let visible = visible.trim();
+    (!visible.is_empty()).then(|| visible.chars().take(320).collect())
 }
 
 fn evidence_reference(value: &Value) -> Option<String> {
@@ -907,6 +931,61 @@ mod tests {
         assert_eq!(tui.cursor, desktop.cursor);
         assert!(tui.event_id.ends_with(":tui"));
         assert!(desktop.event_id.ends_with(":desktop"));
+    }
+
+    #[test]
+    fn tui_worker_evidence_hides_complete_reasoning_and_preserves_visible_result() {
+        let projected = project_event(
+            &event(EventPayload::WorkerEvidenceRecorded {
+                evidence: json!({
+                    "summary": "<think>private provider reasoning</think>\nApplied the requested fix",
+                    "evidence_ref": "artifact://worker-1"
+                }),
+            }),
+            1,
+            FrontendKind::Tui,
+        )
+        .expect("projection");
+        let FrontendEvent::Activity(activity) = projected.event else {
+            panic!("expected worker activity")
+        };
+        assert_eq!(activity.details, vec!["Applied the requested fix"]);
+        assert_eq!(activity.evidence_ref.as_deref(), Some("artifact://worker-1"));
+        assert!(activity.details.iter().all(|detail| !detail.contains("think")));
+        assert!(
+            activity
+                .details
+                .iter()
+                .all(|detail| !detail.contains("private provider reasoning"))
+        );
+    }
+
+    #[test]
+    fn worker_evidence_drops_unclosed_reasoning_tail() {
+        for summary in [
+            "<think>private provider reasoning without a closing tag",
+            "Public result<think>private trailing reasoning",
+        ] {
+            let projected = project_event(
+                &event(EventPayload::WorkerEvidenceRecorded {
+                    evidence: json!({"summary": summary, "evidence_ref": "artifact://worker-2"}),
+                }),
+                2,
+                FrontendKind::Tui,
+            )
+            .expect("projection");
+            let FrontendEvent::Activity(activity) = projected.event else {
+                panic!("expected worker activity")
+            };
+            assert!(activity.details.iter().all(|detail| !detail.contains("private")));
+            assert!(activity.details.iter().all(|detail| !detail.contains("<think>")));
+            if summary.starts_with("Public result") {
+                assert_eq!(activity.details, vec!["Public result"]);
+            } else {
+                assert!(activity.details.is_empty());
+            }
+            assert_eq!(activity.evidence_ref.as_deref(), Some("artifact://worker-2"));
+        }
     }
 
     #[test]
