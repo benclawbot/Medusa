@@ -9,6 +9,7 @@ pub mod correction_loop;
 pub mod correction_signals;
 pub mod learning;
 pub mod learning_admission;
+#[path = "learning_monitor_v2.rs"]
 pub mod learning_monitor;
 pub mod learning_review;
 pub mod lesson_inference;
