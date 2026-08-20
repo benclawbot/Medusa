@@ -1,4 +1,4 @@
-use std::sync::mpsc;
+use std::{cell::Cell, sync::mpsc};
 
 use crate::{
     production_orchestrator::{self, AgentRole},
@@ -39,11 +39,11 @@ fn repository(
     fs::create_dir_all(repo.join("src")).expect("src");
     fs::write(repo.join("src/lib.rs"), "pub fn value() -> u32 { 1 }\n").expect("source");
     #[cfg(windows)]
-        fs::write(
-            repo.join("verify.ps1"),
-            "$ErrorActionPreference='Stop'\nif (-not (Test-Path src/lib.rs)) { exit 1 }\nWrite-Output 'verification-ok'\n",
-        )
-        .expect("verify");
+    fs::write(
+        repo.join("verify.ps1"),
+        "$ErrorActionPreference='Stop'\nif (-not (Test-Path src/lib.rs)) { exit 1 }\nWrite-Output 'verification-ok'\n",
+    )
+    .expect("verify");
     #[cfg(not(windows))]
     fs::write(
         repo.join("verify.sh"),
@@ -164,6 +164,75 @@ fn isolated_implementation_is_verified_prepared_and_preserved() {
     assert!(!evidence.prepared_tree.is_empty());
     assert!(evidence.transaction_path.is_file());
     assert!(repo.join(".medusa/executions/test/worktrees").exists());
+}
+
+#[test]
+fn corrective_attempt_preserves_verified_partial_repairs() {
+    let (_directory, repo, plan, preflight) = repository("src/");
+    fs::write(repo.join("src/first.txt"), "one\n").expect("first fixture");
+    fs::write(repo.join("src/value.txt"), "one\n").expect("value fixture");
+    fs::write(repo.join("src/other.txt"), "one\n").expect("other fixture");
+    #[cfg(windows)]
+    fs::write(
+        repo.join("verify.ps1"),
+        "$ErrorActionPreference='Stop'\nif ((Get-Content src/first.txt -Raw).Trim() -ne 'two') { throw 'first assertion unresolved' }\nif ((Get-Content src/value.txt -Raw).Trim() -ne 'three') { throw 'value assertion unresolved' }\nif ((Get-Content src/other.txt -Raw).Trim() -ne 'four') { throw 'other assertion unresolved' }\nWrite-Output 'verification-ok'\n",
+    )
+    .expect("verify");
+    #[cfg(not(windows))]
+    fs::write(
+        repo.join("verify.sh"),
+        "#!/bin/sh\nset -eu\ngrep -Fxq 'two' src/first.txt\ngrep -Fxq 'three' src/value.txt\ngrep -Fxq 'four' src/other.txt\necho verification-ok\n",
+    )
+    .expect("verify");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-m", "three independent failing assertions"]);
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (events, _) = mpsc::channel();
+    let attempts = Cell::new(0u32);
+    let evidence = coordinate_with_executor(
+        &repo,
+        &plan,
+        &preflight,
+        &cancel,
+        &events,
+        |request| {
+            let attempt = attempts.get() + 1;
+            attempts.set(attempt);
+            match attempt {
+                1 => {
+                    fs::write(request.worker.worktree.join("src/first.txt"), "two\n")
+                        .map_err(|error| error.to_string())?;
+                }
+                2 => {
+                    let retained =
+                        fs::read_to_string(request.worker.worktree.join("src/first.txt"))
+                            .map_err(|error| error.to_string())?;
+                    if retained != "two\n" {
+                        return Err("corrective attempt lost the verified partial repair".to_owned());
+                    }
+                    fs::write(request.worker.worktree.join("src/value.txt"), "three\n")
+                        .map_err(|error| error.to_string())?;
+                    fs::write(request.worker.worktree.join("src/other.txt"), "four\n")
+                        .map_err(|error| error.to_string())?;
+                }
+                _ => return Err("unexpected extra implementation attempt".to_owned()),
+            }
+            Ok(WorkerRun {
+                session_id: format!("implementer-session-{attempt}"),
+                turns: 1,
+                summary: format!("implementation attempt {attempt}"),
+            })
+        },
+    )
+    .expect("corrective implementation");
+
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(
+        evidence.changed_paths,
+        vec!["src/first.txt", "src/other.txt", "src/value.txt"]
+    );
+    assert!(evidence.verification_receipt.passed);
 }
 
 #[test]

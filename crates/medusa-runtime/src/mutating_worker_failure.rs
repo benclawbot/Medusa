@@ -53,7 +53,12 @@ pub(super) fn record_attempt_failure(
             "team lifecycle failure recording failed: {team_error}"
         ));
     }
-    if let Err(cleanup_error) = manager.cleanup(std::slice::from_ref(worker)) {
+    let preserve_corrective_worktree = retryable
+        && !cancelled
+        && error.starts_with("isolated worktree verification failed:");
+    if !preserve_corrective_worktree
+        && let Err(cleanup_error) = manager.cleanup(std::slice::from_ref(worker))
+    {
         secondary.push(format!("isolated resource cleanup failed: {cleanup_error}"));
     }
     if let Some(run) = run {
@@ -61,7 +66,11 @@ pub(super) fn record_attempt_failure(
         state.turns = run.turns;
         state.summary.clone_from(&run.summary);
     }
-    state.worker.state = WorkerState::Failed;
+    state.worker.state = if preserve_corrective_worktree {
+        WorkerState::Ready
+    } else {
+        WorkerState::Failed
+    };
     state.changed_paths = changed_paths;
     state.verification_evidence = verification_evidence;
     state.status = if retryable && secondary.is_empty() {
