@@ -37,6 +37,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
         run: |
           set -euo pipefail
           git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > /tmp/engineering-policy-changed-paths.txt
@@ -51,11 +52,16 @@ jobs:
               --head "${HEAD_SHA}" \
               --json | tee engineering-policy-report.json
           else
+            CONDITION_ARGS=()
+            if [[ -n "${MINIMAX_API_KEY:-}" ]]; then
+              CONDITION_ARGS+=(--condition credentials_available_or_final_issue_certification)
+            fi
             python3 scripts/engineering-policy.py explain \
               --policy .github/engineering-policy.json \
               --root . \
               --base "${BASE_SHA}" \
               --head "${HEAD_SHA}" \
+              "${CONDITION_ARGS[@]}" \
               --json | tee engineering-policy-report.json
           fi
       - name: Enforce architecture policy
