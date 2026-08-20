@@ -148,6 +148,19 @@ pub fn project_behavioral_outcome(
         }
     }
 
+    let terminal_len = events
+        .iter()
+        .position(|event| {
+            matches!(
+                &event.payload,
+                EventPayload::SessionCompleted { .. }
+                    | EventPayload::SessionFailed { .. }
+                    | EventPayload::CancellationCompleted
+            )
+        })
+        .map_or(events.len(), |index| index + 1);
+    let events = &events[..terminal_len];
+
     let source_event_ids = events.iter().map(event_id).collect::<Vec<_>>();
     let source_event_checksums = events
         .iter()
