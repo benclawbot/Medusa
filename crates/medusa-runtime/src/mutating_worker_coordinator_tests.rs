@@ -168,19 +168,19 @@ fn isolated_implementation_is_verified_prepared_and_preserved() {
 
 #[test]
 fn corrective_attempt_preserves_verified_partial_repairs() {
-    let (_directory, repo, plan, preflight) = repository("repository");
-    fs::write(repo.join("value.txt"), "one\n").expect("value fixture");
+    let (_directory, repo, plan, preflight) = repository("src/");
+    fs::write(repo.join("src/value.txt"), "one\n").expect("value fixture");
     fs::write(repo.join("src/other.txt"), "one\n").expect("other fixture");
     #[cfg(windows)]
     fs::write(
         repo.join("verify.ps1"),
-        "$ErrorActionPreference='Stop'\nif ((Get-Content src/lib.rs -Raw) -notmatch 'value\\(\\) -> u32 \\{ 2 \\}') { throw 'lib assertion unresolved' }\nif ((Get-Content value.txt -Raw).Trim() -ne 'two') { throw 'value assertion unresolved' }\nif ((Get-Content src/other.txt -Raw).Trim() -ne 'three') { throw 'other assertion unresolved' }\nWrite-Output 'verification-ok'\n",
+        "$ErrorActionPreference='Stop'\nif ((Get-Content src/lib.rs -Raw) -notmatch 'value\\(\\) -> u32 \\{ 2 \\}') { throw 'lib assertion unresolved' }\nif ((Get-Content src/value.txt -Raw).Trim() -ne 'two') { throw 'value assertion unresolved' }\nif ((Get-Content src/other.txt -Raw).Trim() -ne 'three') { throw 'other assertion unresolved' }\nWrite-Output 'verification-ok'\n",
     )
     .expect("verify");
     #[cfg(not(windows))]
     fs::write(
         repo.join("verify.sh"),
-        "#!/bin/sh\nset -eu\ngrep -Fq 'pub fn value() -> u32 { 2 }' src/lib.rs\ngrep -Fxq 'two' value.txt\ngrep -Fxq 'three' src/other.txt\necho verification-ok\n",
+        "#!/bin/sh\nset -eu\ngrep -Fq 'pub fn value() -> u32 { 2 }' src/lib.rs\ngrep -Fxq 'two' src/value.txt\ngrep -Fxq 'three' src/other.txt\necho verification-ok\n",
     )
     .expect("verify");
     git(&repo, &["add", "-A"]);
@@ -212,7 +212,7 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
                     if retained != "pub fn value() -> u32 { 2 }\n" {
                         return Err("corrective attempt lost the verified partial repair".to_owned());
                     }
-                    fs::write(request.worker.worktree.join("value.txt"), "two\n")
+                    fs::write(request.worker.worktree.join("src/value.txt"), "two\n")
                         .map_err(|error| error.to_string())?;
                     fs::write(request.worker.worktree.join("src/other.txt"), "three\n")
                         .map_err(|error| error.to_string())?;
@@ -231,7 +231,7 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
     assert_eq!(attempts.get(), 2);
     assert_eq!(
         evidence.changed_paths,
-        vec!["src/lib.rs", "src/other.txt", "value.txt"]
+        vec!["src/lib.rs", "src/other.txt", "src/value.txt"]
     );
     assert!(evidence.verification_receipt.passed);
 }
