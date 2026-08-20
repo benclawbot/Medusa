@@ -239,7 +239,20 @@ fn platform_process_start_marker(pid: u32) -> io::Result<Option<NativeProcessSta
     if written == 0 {
         let error = io::Error::last_os_error();
         return match error.raw_os_error() {
-            Some(3) => Ok(None), // ESRCH
+            Some(libc::ESRCH) => Ok(None),
+            Some(libc::EPERM) => {
+                // On macOS, libproc can report EPERM for a child that has already been reaped.
+                // Confirm absence with the non-destructive signal-0 probe before treating the
+                // ownership identity as missing; a live but inaccessible PID remains fail-closed.
+                let probe = unsafe { libc::kill(pid as c_int, 0) };
+                if probe == -1
+                    && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
             _ => Err(error),
         };
     }
