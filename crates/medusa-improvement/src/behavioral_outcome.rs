@@ -402,16 +402,20 @@ fn delegated_worker_events(events: &[EventEnvelope]) -> bool {
     {
         return true;
     }
-    events.iter().find_map(|event| match &event.payload {
-        EventPayload::SessionCreated { objective } => Some(objective.trim_start()),
-        _ => None,
-    }).is_some_and(|objective| {
-        objective.starts_with("Implement delegated task `")
-            || objective
-                .starts_with("Collect read-only repository evidence for the parent goal.")
-            || objective
-                .starts_with("Perform a read-only risk and failure-mode review for the parent goal.")
-    })
+    events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::SessionCreated { objective } => Some(objective.trim_start()),
+            _ => None,
+        })
+        .is_some_and(|objective| {
+            objective.starts_with("Implement delegated task `")
+                || objective
+                    .starts_with("Collect read-only repository evidence for the parent goal.")
+                || objective.starts_with(
+                    "Perform a read-only risk and failure-mode review for the parent goal.",
+                )
+        })
 }
 
 fn model_execution_index(
