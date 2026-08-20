@@ -950,8 +950,16 @@ mod tests {
             panic!("expected worker activity")
         };
         assert_eq!(activity.details, vec!["Applied the requested fix"]);
-        assert_eq!(activity.evidence_ref.as_deref(), Some("artifact://worker-1"));
-        assert!(activity.details.iter().all(|detail| !detail.contains("think")));
+        assert_eq!(
+            activity.evidence_ref.as_deref(),
+            Some("artifact://worker-1")
+        );
+        assert!(
+            activity
+                .details
+                .iter()
+                .all(|detail| !detail.contains("think"))
+        );
         assert!(
             activity
                 .details
@@ -977,14 +985,27 @@ mod tests {
             let FrontendEvent::Activity(activity) = projected.event else {
                 panic!("expected worker activity")
             };
-            assert!(activity.details.iter().all(|detail| !detail.contains("private")));
-            assert!(activity.details.iter().all(|detail| !detail.contains("<think>")));
+            assert!(
+                activity
+                    .details
+                    .iter()
+                    .all(|detail| !detail.contains("private"))
+            );
+            assert!(
+                activity
+                    .details
+                    .iter()
+                    .all(|detail| !detail.contains("<think>"))
+            );
             if summary.starts_with("Public result") {
                 assert_eq!(activity.details, vec!["Public result"]);
             } else {
                 assert!(activity.details.is_empty());
             }
-            assert_eq!(activity.evidence_ref.as_deref(), Some("artifact://worker-2"));
+            assert_eq!(
+                activity.evidence_ref.as_deref(),
+                Some("artifact://worker-2")
+            );
         }
     }
 
