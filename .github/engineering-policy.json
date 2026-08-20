@@ -8,6 +8,11 @@
   ],
   "check_registry": {
     "documentation": {"kind": "command", "command": ["python3", "scripts/check-documentation.py"]},
+    "documentation-inventory": {"kind": "command", "command": ["python3", "scripts/check-documentation.py"]},
+    "provider-support-sync": {"kind": "command", "command": ["python3", "scripts/check-provider-support.py"]},
+    "capability-claims-sync": {"kind": "command", "command": ["python3", "scripts/check-capability-evidence.py"]},
+    "canonical-truth-authority": {"kind": "command", "command": ["python3", "scripts/check-architecture-index.py"]},
+    "evidence-authority": {"kind": "command", "command": ["python3", "scripts/check-evidence-authority.py"]},
     "architecture-policy": {"kind": "inline"},
     "architecture-conformance": {"kind": "workflow", "workflow_name": "Architecture v2 Baseline"},
     "containment-linux": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
@@ -37,101 +42,87 @@
       "protected": false
     },
     {
+      "id": "generated-documentation-inventory",
+      "description": "Governed Markdown is the source of truth for generated docs/documentation-inventory.json; regeneration and byte-for-byte freshness are mandatory.",
+      "include": ["docs/**", "README.md", "CONTRIBUTING.md", "SECURITY.md", "scripts/check-documentation.py"],
+      "exclude": ["docs/architecture/**"],
+      "required_checks": ["documentation-inventory"],
+      "protected": false
+    },
+    {
+      "id": "provider-support-source-of-truth",
+      "description": "docs/provider-support.json is the reviewed provider/live-dogfood source of truth and docs/PROVIDER-SUPPORT.md is generated from it; selectable support claims and references must stay synchronized.",
+      "include": ["docs/provider-support.json", "docs/PROVIDER-SUPPORT.md", "docs/LIVE-PROVIDER-DOGFOOD.md", "docs/PROVIDER-DELIVERY.md", "README.md", ".github/workflows/live-provider-dogfood.yml", "scripts/check-provider-support.py"],
+      "required_checks": ["provider-support-sync"],
+      "protected": false
+    },
+    {
+      "id": "capability-claim-synchronization",
+      "description": "Capability maturity claims, public documentation, implementation/test evidence, gates, supported platforms, and observability references must remain synchronized.",
+      "include": ["docs/CAPABILITY-CLAIMS.json", "docs/CAPABILITY-EVIDENCE.md", "scripts/check-capability-evidence.py", "README.md", "crates/**"],
+      "required_checks": ["capability-claims-sync"],
+      "protected": false
+    },
+    {
       "id": "architecture-boundary",
       "description": "Architecture authority and dependency-boundary changes require architecture conformance.",
-      "include": [
-        ".github/architecture-policy.json",
-        "scripts/architecture-policy.py",
-        "scripts/architecture-conformance.py",
-        "scripts/check-architecture-index.py",
-        "docs/architecture/**",
-        "Cargo.toml",
-        "crates/*/Cargo.toml"
-      ],
+      "include": [".github/architecture-policy.json", "scripts/architecture-policy.py", "scripts/architecture-conformance.py", "scripts/check-architecture-index.py", "docs/architecture/**", "Cargo.toml", "crates/*/Cargo.toml"],
       "required_checks": ["architecture-policy", "architecture-conformance"],
+      "protected": true
+    },
+    {
+      "id": "canonical-truth-authorities",
+      "description": "The Architecture v2 source-of-truth matrix owns canonical runtime, review, state-machine, capability, deployment, and component authorities; duplicate or parallel authorities require protected review and must not survive certification.",
+      "include": ["docs/architecture/baseline.json", "docs/architecture/owners.json", "docs/architecture/**", "Cargo.toml", "crates/medusa-runtime/**", "crates/medusa-agent/**", "crates/medusa-provider/**", "crates/medusa-evidence/**", "crates/medusa-multi-agent-scheduler/**", "scripts/check-architecture-index.py", "scripts/check-evidence-authority.py"],
+      "required_checks": ["canonical-truth-authority", "evidence-authority", "architecture-policy"],
       "protected": true
     },
     {
       "id": "containment",
       "description": "Containment or process-launch changes require cross-platform security certification.",
-      "include": [
-        "crates/medusa-process-containment/**",
-        "crates/medusa-agent/src/policy.rs",
-        "crates/medusa-agent/src/windows_sandbox.rs",
-        "scripts/check-unsafe-boundary.py",
-        ".github/workflows/*windows*",
-        ".github/workflows/*containment*",
-        ".github/workflows/unsafe-rust-boundary.yml"
-      ],
+      "include": ["crates/medusa-process-containment/**", "crates/medusa-agent/src/policy.rs", "crates/medusa-agent/src/windows_sandbox.rs", "scripts/check-unsafe-boundary.py", ".github/workflows/*windows*", ".github/workflows/*containment*", ".github/workflows/unsafe-rust-boundary.yml"],
       "required_checks": ["containment-linux", "containment-macos", "containment-windows", "unsafe-policy"],
       "protected": true
     },
     {
       "id": "provider-history",
       "description": "Provider wire/history changes require provider continuity and privacy regressions.",
-      "include": [
-        "crates/medusa-provider/**",
-        "crates/medusa-agent/src/engine/effective_request.rs",
-        "crates/medusa-agent/src/engine/**provider**"
-      ],
+      "include": ["crates/medusa-provider/**", "crates/medusa-agent/src/engine/effective_request.rs", "crates/medusa-agent/src/engine/**provider**"],
       "required_checks": ["provider-adapter", "provider-history", "privacy"],
       "protected": true
     },
     {
       "id": "durable-state",
       "description": "Durable state and journal changes require replay, migration, and recovery validation.",
-      "include": [
-        "crates/**/journal*.rs",
-        "crates/**/state*.rs",
-        "crates/**/migration*.rs",
-        "crates/**/recovery*.rs",
-        "crates/**/schema*.rs"
-      ],
+      "include": ["crates/**/journal*.rs", "crates/**/state*.rs", "crates/**/migration*.rs", "crates/**/recovery*.rs", "crates/**/schema*.rs"],
       "required_checks": ["journal-replay", "migration", "recovery"],
       "protected": true
     },
     {
       "id": "certified-tool-pipeline",
       "description": "Tool execution lifecycle changes require certified authority regressions.",
-      "include": [
-        "crates/medusa-agent/src/**tool**",
-        "scripts/check-certified-tool-pipeline.py",
-        "docs/TOOL-EXECUTION-PIPELINE.md"
-      ],
+      "include": ["crates/medusa-agent/src/**tool**", "scripts/check-certified-tool-pipeline.py", "docs/TOOL-EXECUTION-PIPELINE.md"],
       "required_checks": ["certified-tool-pipeline", "architecture-policy"],
       "protected": true
     },
     {
       "id": "performance-context",
       "description": "Performance, context, cache, and model-experience changes require benchmark evidence.",
-      "include": [
-        "benchmarks/**",
-        "crates/**/context*.rs",
-        "crates/**/cache*.rs",
-        "crates/**/compaction*.rs"
-      ],
+      "include": ["benchmarks/**", "crates/**/context*.rs", "crates/**/cache*.rs", "crates/**/compaction*.rs"],
       "required_checks": ["benchmark", "performance-regression"],
       "protected": false
     },
     {
       "id": "self-improvement",
       "description": "Evaluator and self-improvement changes require protected engineering review lanes.",
-      "include": [
-        "crates/**/learning*.rs",
-        "crates/**/improvement*.rs",
-        "crates/**/evaluator*.rs"
-      ],
+      "include": ["crates/**/learning*.rs", "crates/**/improvement*.rs", "crates/**/evaluator*.rs"],
       "required_checks": ["protected-improvement", "independent-verification"],
       "protected": true
     },
     {
       "id": "engineering-policy",
       "description": "Changes to engineering policy or its evaluator are protected and cannot self-authorize under the modified policy.",
-      "include": [
-        ".github/engineering-policy.json",
-        "scripts/engineering-policy.py",
-        ".github/workflows/architecture-policy.yml"
-      ],
+      "include": [".github/engineering-policy.json", "scripts/engineering-policy.py", ".github/workflows/architecture-policy.yml"],
       "required_checks": ["engineering-policy-base", "architecture-policy"],
       "protected": true,
       "evaluate_against_base": true
