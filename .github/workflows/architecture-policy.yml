@@ -28,6 +28,8 @@ jobs:
         run: python3 scripts/architecture-policy.py self-test
       - name: Exercise engineering policy fixtures
         run: python3 scripts/engineering-policy.py self-test
+      - name: Exercise repository engineering contract fixtures
+        run: python3 scripts/test-engineering-policy-contract.py
       - name: Validate engineering policy schema
         run: python3 scripts/engineering-policy.py validate --policy .github/engineering-policy.json --root .
       - name: Resolve required engineering checks with frozen authority
