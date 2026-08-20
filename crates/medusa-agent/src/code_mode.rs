@@ -316,7 +316,7 @@ fn typescript_type(schema: &Value) -> String {
 fn digest(value: &[u8]) -> String {
     Sha256::digest(value)
         .iter()
-        .map(|byte| format!("{:02x}", byte))
+        .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
