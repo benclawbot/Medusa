@@ -47,7 +47,11 @@ fn live_repair_objective_resolves_sentence_terminated_counter_path() {
 
     assert_eq!(planned.intent, PlanningIntent::MutationRequested);
     assert!(
-        planned.scope.effective.iter().any(|path| path == "src/counter.js"),
+        planned
+            .scope
+            .effective
+            .iter()
+            .any(|path| path == "src/counter.js"),
         "sentence punctuation must not remove the counter from mutation scope: {:?}",
         planned.scope
     );
