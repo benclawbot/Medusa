@@ -12,8 +12,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const BEHAVIORAL_OUTCOME_SCHEMA_VERSION: u16 = 1;
+pub const TASK_CLASSIFICATION_SCHEMA_VERSION: u16 = 1;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BehavioralTerminalStatus {
     VerifiedSuccess,
@@ -22,6 +23,62 @@ pub enum BehavioralTerminalStatus {
     Partial,
     Inconclusive,
     Invalidated,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BehavioralWorkspaceMode {
+    Git,
+    Directory,
+    Ephemeral,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BehavioralTaskIntent {
+    ReadOnlyAnalysis,
+    BugFix,
+    Feature,
+    Refactor,
+    DependencyMigration,
+    TestRepair,
+    UiBrowser,
+    Documentation,
+    RecoveryResume,
+    Other,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BehavioralRiskClass {
+    ReadOnly,
+    Low,
+    Medium,
+    High,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BehavioralComplexityBand {
+    Small,
+    Medium,
+    Large,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BehavioralTaskClassificationV1 {
+    pub schema_version: u16,
+    pub workspace_mode: BehavioralWorkspaceMode,
+    pub intent: BehavioralTaskIntent,
+    pub language_families: Vec<String>,
+    pub risk_class: BehavioralRiskClass,
+    pub complexity_band: BehavioralComplexityBand,
+    pub task_features: Vec<String>,
+    pub unknowns: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -66,6 +123,7 @@ pub struct BehavioralOutcomeV1 {
     pub root_task_eligible: bool,
     pub repository_revision: Option<String>,
     pub harness_version: String,
+    pub task_classification: BehavioralTaskClassificationV1,
     pub terminal_status: BehavioralTerminalStatus,
     pub verified_success: bool,
     pub verification_passed: Option<bool>,
@@ -94,6 +152,9 @@ impl BehavioralOutcomeV1 {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.schema_version != BEHAVIORAL_OUTCOME_SCHEMA_VERSION {
             return Err("unsupported behavioral outcome schema version");
+        }
+        if self.task_classification.schema_version != TASK_CLASSIFICATION_SCHEMA_VERSION {
+            return Err("unsupported task classification schema version");
         }
         if self.outcome_id.trim().is_empty()
             || self.root_task_id.trim().is_empty()
@@ -148,6 +209,9 @@ pub fn project_behavioral_outcome(
         }
     }
 
+    // A completed session can later receive lifecycle events such as SessionReset. Keep the
+    // outcome projection tied to the first terminal boundary so replay after that boundary does
+    // not rewrite the completed task's evidence or outcome identity.
     let terminal_len = events
         .iter()
         .position(|event| {
@@ -180,10 +244,8 @@ pub fn project_behavioral_outcome(
     let mut tools = Vec::<BehavioralToolExecutionV1>::new();
     let mut active_tool: Option<usize> = None;
     let mut verification_passed = None;
-    let mut last_verification_sequence = None::<u64>;
     let mut verification_receipt_ids = Vec::new();
     let mut integration_receipt_ids = Vec::new();
-    let mut last_integration_sequence = None::<u64>;
     let mut mutation_count = 0u32;
     let mut verification_attempts = 0u32;
     let mut failed_verification_attempts = 0u32;
@@ -191,13 +253,16 @@ pub fn project_behavioral_outcome(
     let mut cancellation_requested = false;
     let mut cancellation_completed = false;
     let mut session_completed = false;
-    let mut last_session_failure_sequence = None::<u64>;
-    let mut last_runtime_failure_sequence = None::<u64>;
+    let mut session_failed = false;
+    let mut runtime_failed = false;
     let mut user_correction_count = 0u32;
     let mut approval_denial_count = 0u32;
+    let mut objective = String::new();
+    let mut changed_paths = Vec::new();
 
     for event in events {
         match &event.payload {
+            EventPayload::SessionCreated { objective: value } => objective = value.clone(),
             EventPayload::ModelRequestStarted {
                 provider,
                 model,
@@ -298,8 +363,9 @@ pub fn project_behavioral_outcome(
                     tools[index].source_event_ids.push(event_id(event));
                 }
             }
-            EventPayload::FileTransactionCommitted { .. } => {
+            EventPayload::FileTransactionCommitted { paths, .. } => {
                 mutation_count = mutation_count.saturating_add(1);
+                changed_paths.extend(paths.iter().cloned());
                 if let Some(index) = latest_successful_response {
                     model_executions[index].mutation_contribution = true;
                 }
@@ -309,7 +375,6 @@ pub fn project_behavioral_outcome(
             }
             EventPayload::VerificationCompleted { passed, evidence } => {
                 verification_passed = Some(*passed);
-                last_verification_sequence = Some(event.sequence);
                 if !passed {
                     failed_verification_attempts = failed_verification_attempts.saturating_add(1);
                 }
@@ -320,7 +385,6 @@ pub fn project_behavioral_outcome(
                 }
             }
             EventPayload::IntegrationReceiptRecorded { receipt } => {
-                last_integration_sequence = Some(event.sequence);
                 integration_receipt_ids
                     .push(receipt_id(receipt).unwrap_or_else(|| event_id(event)));
             }
@@ -339,12 +403,8 @@ pub fn project_behavioral_outcome(
                     approval_denial_count = approval_denial_count.saturating_add(1);
                 }
             }
-            EventPayload::RuntimeFailed { .. } => {
-                last_runtime_failure_sequence = Some(event.sequence);
-            }
-            EventPayload::SessionFailed { .. } => {
-                last_session_failure_sequence = Some(event.sequence);
-            }
+            EventPayload::RuntimeFailed { .. } => runtime_failed = true,
+            EventPayload::SessionFailed { .. } => session_failed = true,
             EventPayload::SessionCompleted { .. } => session_completed = true,
             _ => {}
         }
@@ -355,43 +415,68 @@ pub fn project_behavioral_outcome(
     integration_receipt_ids.sort();
     integration_receipt_ids.dedup();
 
+    let verification_authority_sequence = if verification_passed == Some(true) {
+        events.iter().rev().find_map(|event| {
+            matches!(
+                &event.payload,
+                EventPayload::VerificationCompleted { passed: true, .. }
+            )
+            .then_some(event.sequence)
+        })
+    } else if verification_passed.is_none() {
+        events.iter().rev().find_map(|event| {
+            matches!(
+                &event.payload,
+                EventPayload::IntegrationReceiptRecorded { .. }
+            )
+            .then_some(event.sequence)
+        })
+    } else {
+        None
+    };
+    let invalidated_after_verification = verification_authority_sequence.is_some_and(|sequence| {
+        events.iter().any(|event| {
+            event.sequence >= sequence
+                && matches!(
+                    &event.payload,
+                    EventPayload::SessionFailed { .. }
+                        | EventPayload::RuntimeFailed { .. }
+                        | EventPayload::CancellationCompleted
+                )
+        })
+    });
+
     let root_verification_passed = verification_passed == Some(true)
         || (verification_passed.is_none() && !integration_receipt_ids.is_empty());
-    let verification_authority_sequence = match verification_passed {
-        Some(true) => last_verification_sequence,
-        Some(false) => None,
-        None => last_integration_sequence,
-    };
-    let terminal_session_failed = failure_remains_authoritative(
-        last_session_failure_sequence,
-        verification_authority_sequence,
-    );
-    let terminal_runtime_failed = failure_remains_authoritative(
-        last_runtime_failure_sequence,
-        verification_authority_sequence,
-    );
-    let terminal_failure = terminal_session_failed || terminal_runtime_failed;
     let verified_success = root_task_eligible
         && session_completed
         && root_verification_passed
         && (!verification_receipt_ids.is_empty() || !integration_receipt_ids.is_empty())
-        && !cancellation_completed
-        && !terminal_failure;
+        && !invalidated_after_verification;
     let terminal_status = if verified_success {
         BehavioralTerminalStatus::VerifiedSuccess
     } else if cancellation_completed {
         BehavioralTerminalStatus::Cancelled
     } else if verification_passed == Some(false) {
         BehavioralTerminalStatus::VerifiedFailure
-    } else if mutation_count > 0 && terminal_failure {
+    } else if mutation_count > 0 && (session_failed || runtime_failed) {
         BehavioralTerminalStatus::Partial
-    } else if terminal_failure {
+    } else if session_failed || runtime_failed {
         BehavioralTerminalStatus::Invalidated
     } else {
         BehavioralTerminalStatus::Inconclusive
     };
 
     let observed_token_usage = observed_token_usage(&model_executions);
+    let monetary_cost_microunits = observed_monetary_cost(&provider_execution_records);
+    let task_classification = classify_task(
+        &objective,
+        &changed_paths,
+        events.len(),
+        repository_revision.as_ref(),
+        mutation_count,
+        &tools,
+    );
     let mut outcome = BehavioralOutcomeV1 {
         schema_version: BEHAVIORAL_OUTCOME_SCHEMA_VERSION,
         outcome_id: String::new(),
@@ -401,6 +486,7 @@ pub fn project_behavioral_outcome(
         root_task_eligible,
         repository_revision,
         harness_version,
+        task_classification,
         terminal_status,
         verified_success,
         verification_passed,
@@ -418,7 +504,7 @@ pub fn project_behavioral_outcome(
         approval_denial_count,
         latency_millis,
         observed_token_usage,
-        monetary_cost_microunits: None,
+        monetary_cost_microunits,
         source_event_ids,
         source_event_checksums,
         first_event_unix_ms,
@@ -429,14 +515,128 @@ pub fn project_behavioral_outcome(
     Ok(outcome)
 }
 
-fn failure_remains_authoritative(
-    failure_sequence: Option<u64>,
-    authority_sequence: Option<u64>,
-) -> bool {
-    match (failure_sequence, authority_sequence) {
-        (None, _) => false,
-        (Some(_), None) => true,
-        (Some(failure), Some(authority)) => failure >= authority,
+fn classify_task(
+    objective: &str,
+    changed_paths: &[String],
+    event_count: usize,
+    repository_revision: Option<&String>,
+    mutation_count: u32,
+    tools: &[BehavioralToolExecutionV1],
+) -> BehavioralTaskClassificationV1 {
+    let normalized = objective.to_ascii_lowercase();
+    let intent = if normalized.trim().is_empty() {
+        BehavioralTaskIntent::Unknown
+    } else if contains_any(
+        &normalized,
+        &["read-only", "read only", "inspect", "analyze"],
+    ) {
+        BehavioralTaskIntent::ReadOnlyAnalysis
+    } else if contains_any(
+        &normalized,
+        &["dependency", "upgrade", "migration", "migrate"],
+    ) {
+        BehavioralTaskIntent::DependencyMigration
+    } else if contains_any(&normalized, &["test", "assertion", "coverage", "spec"]) {
+        BehavioralTaskIntent::TestRepair
+    } else if contains_any(&normalized, &["recover", "resume", "restart"]) {
+        BehavioralTaskIntent::RecoveryResume
+    } else if contains_any(&normalized, &["document", "readme", "docs"]) {
+        BehavioralTaskIntent::Documentation
+    } else if contains_any(&normalized, &["browser", "ui", "frontend", "interface"]) {
+        BehavioralTaskIntent::UiBrowser
+    } else if contains_any(&normalized, &["refactor", "restructure", "modularize"]) {
+        BehavioralTaskIntent::Refactor
+    } else if contains_any(
+        &normalized,
+        &["fix", "repair", "bug", "error", "failure", "regression"],
+    ) {
+        BehavioralTaskIntent::BugFix
+    } else if mutation_count > 0 {
+        BehavioralTaskIntent::Feature
+    } else {
+        BehavioralTaskIntent::Other
+    };
+
+    let mut language_families = changed_paths
+        .iter()
+        .filter_map(|path| path.rsplit('.').next())
+        .filter_map(language_family)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    language_families.sort();
+    language_families.dedup();
+
+    let risk_class = if mutation_count == 0 {
+        BehavioralRiskClass::ReadOnly
+    } else if tools.iter().any(|tool| {
+        let name = tool.tool.to_ascii_lowercase();
+        name.contains("shell") || name.contains("browser") || name.contains("network")
+    }) {
+        BehavioralRiskClass::High
+    } else if mutation_count > 3 || changed_paths.len() > 12 {
+        BehavioralRiskClass::Medium
+    } else {
+        BehavioralRiskClass::Low
+    };
+
+    let complexity_band = match event_count {
+        0..=8 => BehavioralComplexityBand::Small,
+        9..=24 => BehavioralComplexityBand::Medium,
+        25.. => BehavioralComplexityBand::Large,
+    };
+
+    let mut task_features = objective
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|term| term.len() >= 2)
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    task_features.sort();
+    task_features.dedup();
+
+    let mut unknowns = Vec::new();
+    if objective.trim().is_empty() {
+        unknowns.push("task_objective".to_owned());
+    }
+    if language_families.is_empty() {
+        unknowns.push("language_family".to_owned());
+    }
+    if repository_revision.is_none() {
+        unknowns.push("repository_revision".to_owned());
+    }
+
+    BehavioralTaskClassificationV1 {
+        schema_version: TASK_CLASSIFICATION_SCHEMA_VERSION,
+        workspace_mode: repository_revision.map_or(BehavioralWorkspaceMode::Unknown, |_| {
+            BehavioralWorkspaceMode::Git
+        }),
+        intent,
+        language_families,
+        risk_class,
+        complexity_band,
+        task_features,
+        unknowns,
+    }
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn language_family(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "rs" => Some("rust"),
+        "ts" | "tsx" | "js" | "jsx" => Some("typescript-javascript"),
+        "py" => Some("python"),
+        "go" => Some("go"),
+        "java" | "kt" => Some("jvm"),
+        "c" | "h" | "cc" | "cpp" | "hpp" => Some("c-cpp"),
+        "cs" => Some("csharp"),
+        "rb" => Some("ruby"),
+        "php" => Some("php"),
+        "swift" => Some("swift"),
+        "md" | "mdx" => Some("markdown"),
+        "toml" | "yaml" | "yml" | "json" => Some("configuration"),
+        _ => None,
     }
 }
 
@@ -531,6 +731,25 @@ fn observed_token_usage(executions: &[BehavioralModelExecutionV1]) -> Option<u64
                 .zip(output)
                 .map(|(input, output)| input.saturating_add(output))
         });
+        if let Some(value) = value {
+            observed = true;
+            total = total.saturating_add(value);
+        }
+    }
+    observed.then_some(total)
+}
+
+fn observed_monetary_cost(records: &[Value]) -> Option<u64> {
+    let mut total = 0u64;
+    let mut observed = false;
+    for record in records {
+        let value = [
+            "monetary_cost_microunits",
+            "cost_microunits",
+            "cost_microusd",
+        ]
+        .into_iter()
+        .find_map(|key| record.get(key).and_then(Value::as_u64));
         if let Some(value) = value {
             observed = true;
             total = total.saturating_add(value);

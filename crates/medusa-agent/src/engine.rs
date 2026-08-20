@@ -223,9 +223,11 @@ fn journal_certified_tool_execution(
     name: &str,
     input: &serde_json::Value,
     receipt: serde_json::Value,
+    result: &MedusaResult<String>,
     execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<()> {
     let scope = crate::agent_scope::load_published_scope_ref(&session.repo, session.id.as_str())?;
+    let canonical = crate::tool_result::CanonicalToolResultV1::from_receipt(&receipt, result);
     append_event(
         session,
         Actor::Coordinator,
@@ -235,6 +237,7 @@ fn journal_certified_tool_execution(
                 "tool_use_id": tool_use_id,
                 "tool": audited_tool_name(name, input),
                 "receipt": receipt,
+                "canonical_result": canonical.durable_evidence_projection(),
                 "execution_authority": execution_policy.audit_projection(),
                 "agent_scope_id": scope.scope_id,
                 "agent_scope_fingerprint": scope.scope_fingerprint,
@@ -880,6 +883,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     &approval.tool,
                     &approval.input,
                     execution.receipt,
+                    &execution.result,
                     &self.execution_policy,
                 )?;
                 let result = execution.result;
@@ -2060,6 +2064,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         &name,
                         &input,
                         receipt,
+                        &result,
                         &self.execution_policy,
                     )?;
                 }

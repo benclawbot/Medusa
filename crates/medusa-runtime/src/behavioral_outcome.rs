@@ -3,9 +3,12 @@
 use std::{path::Path, process::Command};
 
 use medusa_agent::session_browser::replay_events;
+pub use medusa_improvement::behavioral_metrics;
 pub use medusa_improvement::behavioral_outcome::{
-    BEHAVIORAL_OUTCOME_SCHEMA_VERSION, BehavioralModelExecutionV1, BehavioralOutcomeV1,
-    BehavioralTerminalStatus, BehavioralToolExecutionV1, project_behavioral_outcome,
+    BEHAVIORAL_OUTCOME_SCHEMA_VERSION, BehavioralComplexityBand, BehavioralModelExecutionV1,
+    BehavioralOutcomeV1, BehavioralRiskClass, BehavioralTaskClassificationV1, BehavioralTaskIntent,
+    BehavioralTerminalStatus, BehavioralToolExecutionV1, BehavioralWorkspaceMode,
+    TASK_CLASSIFICATION_SCHEMA_VERSION, project_behavioral_outcome,
 };
 
 use crate::RuntimeError;

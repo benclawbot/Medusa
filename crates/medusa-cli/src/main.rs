@@ -1235,7 +1235,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let existing = directory.path().join("nested");
         std::fs::create_dir(&existing).expect("nested directory");
-        assert_eq!(repository_path(&existing), existing);
+        assert_eq!(
+            repository_path(&existing).canonicalize().expect("resolved path"),
+            existing.canonicalize().expect("existing path")
+        );
 
         let missing = directory.path().join("does-not-exist");
         assert_eq!(repository_path(&missing), missing);

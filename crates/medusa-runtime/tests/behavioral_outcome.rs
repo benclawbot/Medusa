@@ -30,28 +30,6 @@ fn events(payloads: Vec<EventPayload>) -> Vec<EventEnvelope> {
         .collect()
 }
 
-fn append_event(journal: &mut Vec<EventEnvelope>, payload: EventPayload) {
-    let index = journal.len();
-    let session_id = journal
-        .first()
-        .expect("existing journal")
-        .session_id
-        .clone();
-    let previous_hash = journal.last().map(|event| event.checksum.clone());
-    journal.push(
-        EventEnvelope::new(
-            index as u64,
-            session_id,
-            Actor::Coordinator,
-            CorrelationId::new(),
-            payload,
-            previous_hash,
-            OffsetDateTime::from_unix_timestamp(1_700_000_000 + index as i64).expect("timestamp"),
-        )
-        .expect("event"),
-    );
-}
-
 #[test]
 fn model_claim_without_authoritative_receipts_is_not_success() {
     let journal = events(vec![
@@ -98,6 +76,9 @@ fn verified_success_uses_durable_route_and_receipt_authority() {
             usage: json!({"input_tokens": 123, "output_tokens": 45}),
             request_id: Some("request-1".to_owned()),
             request_fingerprint: Some("request-fingerprint".to_owned()),
+        },
+        EventPayload::ProviderExecutionRecorded {
+            status: json!({"cost_microusd": 17}),
         },
         EventPayload::FileTransactionCommitted {
             paths: vec!["src/lib.rs".to_owned()],
@@ -149,7 +130,81 @@ fn verified_success_uses_durable_route_and_receipt_authority() {
         Some("response-1")
     );
     assert_eq!(outcome.observed_token_usage, Some(168));
-    assert_eq!(outcome.monetary_cost_microunits, None);
+    assert_eq!(outcome.monetary_cost_microunits, Some(17));
+    assert_eq!(
+        outcome.task_classification.intent,
+        medusa_runtime::behavioral_outcome::BehavioralTaskIntent::BugFix
+    );
+    assert_eq!(outcome.task_classification.language_families, vec!["rust"]);
+}
+
+#[test]
+fn task_aware_cohorts_keep_unknown_cost_and_detect_sustained_success_drift() {
+    let success_events = events(vec![
+        EventPayload::SessionCreated {
+            objective: "fix Rust assertions".to_owned(),
+        },
+        EventPayload::FileTransactionCommitted {
+            paths: vec!["src/lib.rs".to_owned()],
+            rollback_ref: "rollback".to_owned(),
+        },
+        EventPayload::VerificationCompleted {
+            passed: true,
+            evidence: vec!["verified".to_owned()],
+        },
+        EventPayload::SessionCompleted {
+            report_ref: "report".to_owned(),
+        },
+    ]);
+    let failure_events = events(vec![
+        EventPayload::SessionCreated {
+            objective: "fix Rust assertions".to_owned(),
+        },
+        EventPayload::FileTransactionCommitted {
+            paths: vec!["src/lib.rs".to_owned()],
+            rollback_ref: "rollback".to_owned(),
+        },
+        EventPayload::VerificationCompleted {
+            passed: false,
+            evidence: vec!["failed".to_owned()],
+        },
+        EventPayload::SessionCompleted {
+            report_ref: "report".to_owned(),
+        },
+    ]);
+    let baseline = (0..16)
+        .map(|index| {
+            behavioral_outcome_from_events(&format!("baseline-{index}"), None, &success_events)
+                .expect("baseline")
+        })
+        .collect::<Vec<_>>();
+    let current = (0..16)
+        .map(|index| {
+            behavioral_outcome_from_events(&format!("current-{index}"), None, &failure_events)
+                .expect("current")
+        })
+        .collect::<Vec<_>>();
+    let baseline_report =
+        medusa_runtime::behavioral_outcome::behavioral_metrics::build_cohort_reports(&baseline)
+            .pop()
+            .expect("baseline report");
+    let current_report =
+        medusa_runtime::behavioral_outcome::behavioral_metrics::build_cohort_reports(&current)
+            .pop()
+            .expect("current report");
+    assert_eq!(baseline_report.cost_per_verified_success_microunits, None);
+    assert_eq!(baseline_report.verified_success_rate_milli, Some(1_000));
+    let drift =
+        medusa_runtime::behavioral_outcome::behavioral_metrics::detect_verified_success_drift(
+            &baseline_report,
+            &current_report,
+            medusa_runtime::behavioral_outcome::behavioral_metrics::DriftPolicy::default(),
+        );
+    assert_eq!(
+        drift.classification,
+        medusa_runtime::behavioral_outcome::behavioral_metrics::DriftClassification::Regression
+    );
+    assert!(drift.correlational_only);
 }
 
 #[test]
@@ -218,7 +273,7 @@ fn only_the_execution_preceding_mutation_gets_correctness_contribution() {
 }
 
 #[test]
-fn explicit_unmatched_response_id_is_not_attributed_to_latest_request() {
+fn unmatched_response_request_id_is_not_attributed_to_latest_execution() {
     let journal = events(vec![
         EventPayload::SessionCreated {
             objective: "inspect provider history".to_owned(),
@@ -295,7 +350,7 @@ fn failed_verification_then_repair_preserves_first_pass_failure() {
 }
 
 #[test]
-fn runtime_failure_superseded_by_later_verification_can_succeed() {
+fn recoverable_runtime_failure_before_final_verification_does_not_invalidate_success() {
     let journal = events(vec![
         EventPayload::SessionCreated {
             objective: "recover and verify".to_owned(),
@@ -319,11 +374,11 @@ fn runtime_failure_superseded_by_later_verification_can_succeed() {
         behavioral_outcome_from_events("session-recovered", None, &journal).expect("outcome");
 
     assert!(outcome.verified_success);
-    assert_eq!(outcome.recovery_count, 1);
     assert_eq!(
         outcome.terminal_status,
         BehavioralTerminalStatus::VerifiedSuccess
     );
+    assert_eq!(outcome.recovery_count, 1);
 }
 
 #[test]
@@ -380,7 +435,7 @@ fn replay_is_deterministic_and_cancelled_runs_remain_visible() {
 }
 
 #[test]
-fn post_terminal_events_do_not_create_a_distinct_behavioral_outcome() {
+fn post_terminal_events_do_not_change_completed_outcome_identity() {
     let mut journal = events(vec![
         EventPayload::SessionCreated {
             objective: "complete once".to_owned(),
@@ -395,12 +450,23 @@ fn post_terminal_events_do_not_create_a_distinct_behavioral_outcome() {
     ]);
     let before = behavioral_outcome_from_events("session-stable", None, &journal).expect("before");
 
-    append_event(
-        &mut journal,
+    let terminal_hash = journal.last().expect("terminal event").checksum.clone();
+    let event = EventEnvelope::new(
+        journal.len() as u64,
+        SessionId::new(),
+        Actor::Coordinator,
+        CorrelationId::new(),
         EventPayload::SessionReset {
             reason: "new task".to_owned(),
         },
-    );
+        Some(terminal_hash),
+        OffsetDateTime::from_unix_timestamp(1_700_000_100).expect("timestamp"),
+    )
+    .expect("post-terminal event");
+    // Keep the event chain valid while deliberately using a new session identity, as a replayed
+    // append can do when the original session is reopened.
+    journal.push(event);
+
     let after = behavioral_outcome_from_events("session-stable", None, &journal).expect("after");
 
     assert_eq!(before.outcome_id, after.outcome_id);

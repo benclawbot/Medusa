@@ -244,7 +244,9 @@ fn record_monitor_outcome(
         .collect::<BTreeSet<_>>();
     let (model, provider, request_fingerprint) = behavioral_route(&behavioral);
     let outcome = OutcomeRecord {
-        id: behavioral.outcome_id.clone(),
+        // Monitor ingestion is retried on every completed-session persistence. Keep its
+        // deduplication identity stable when the session later receives lifecycle events.
+        id: format!("learning-outcome-{}", behavioral.session_id),
         root_task_id: behavioral.root_task_id.clone(),
         trajectory_id: behavioral.trajectory_id.clone(),
         session_id: behavioral.session_id.clone(),
@@ -286,8 +288,8 @@ fn record_monitor_outcome(
                     || execution.completed && execution.exit_code.is_some_and(|code| code != 0)
             })
             .count() as u32,
-        latency_millis: behavioral.latency_millis.unwrap_or_default(),
-        token_cost: behavioral.observed_token_usage.unwrap_or_default(),
+        latency_millis: behavioral.latency_millis,
+        token_cost: behavioral.observed_token_usage,
         privacy_violation: false,
         safety_violation: false,
         recorded_at_unix_ms,
@@ -941,8 +943,17 @@ mod tests {
                 automatic_proposals_enabled: false,
             },
         );
-        let session = session(repo.path());
+        let mut session = session(repo.path());
         process(&session).expect("process");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionReset {
+                reason: "new task after completion".to_owned(),
+            },
+        )
+        .expect("post-terminal event");
+        process(&session).expect("reprocess after post-terminal event");
         let state: Value = serde_json::from_slice(
             &fs::read(repo.path().join(".medusa/learning-monitor/state.json"))
                 .expect("monitor state"),
