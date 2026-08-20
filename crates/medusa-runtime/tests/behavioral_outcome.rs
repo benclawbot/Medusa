@@ -187,7 +187,9 @@ fn only_the_execution_preceding_mutation_gets_correctness_contribution() {
     assert!(!outcome.model_executions[0].mutation_contribution);
     assert!(outcome.model_executions[1].mutation_contribution);
     assert_eq!(
-        outcome.contributing_execution().map(|execution| execution.model.as_str()),
+        outcome
+            .contributing_execution()
+            .map(|execution| execution.model.as_str()),
         Some("model-b")
     );
     assert_eq!(outcome.observed_token_usage, Some(30));
@@ -242,8 +244,9 @@ fn failed_verification_then_repair_preserves_first_pass_failure() {
 fn delegated_worker_completion_cannot_become_root_verified_success() {
     let journal = events(vec![
         EventPayload::SessionCreated {
-            objective: "Implement delegated task `implementation` inside this isolated Git worktree."
-                .to_owned(),
+            objective:
+                "Implement delegated task `implementation` inside this isolated Git worktree."
+                    .to_owned(),
         },
         EventPayload::VerificationCompleted {
             passed: true,
@@ -254,11 +257,15 @@ fn delegated_worker_completion_cannot_become_root_verified_success() {
         },
     ]);
 
-    let outcome = behavioral_outcome_from_events("worker-session", None, &journal).expect("outcome");
+    let outcome =
+        behavioral_outcome_from_events("worker-session", None, &journal).expect("outcome");
 
     assert!(!outcome.root_task_eligible);
     assert!(!outcome.verified_success);
-    assert_eq!(outcome.terminal_status, BehavioralTerminalStatus::Inconclusive);
+    assert_eq!(
+        outcome.terminal_status,
+        BehavioralTerminalStatus::Inconclusive
+    );
 }
 
 #[test]
