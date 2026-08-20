@@ -6,6 +6,27 @@
     "scripts/engineering-policy.py",
     ".github/workflows/architecture-policy.yml"
   ],
+  "check_registry": {
+    "documentation": {"kind": "command", "command": ["python3", "scripts/check-documentation.py"]},
+    "architecture-policy": {"kind": "inline"},
+    "architecture-conformance": {"kind": "workflow", "workflow_name": "Architecture v2 Baseline"},
+    "containment-linux": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
+    "containment-macos": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
+    "containment-windows": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
+    "unsafe-policy": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
+    "provider-adapter": {"kind": "workflow", "workflow_name": "CI"},
+    "provider-history": {"kind": "workflow", "workflow_name": "CI"},
+    "privacy": {"kind": "workflow", "workflow_name": "CI"},
+    "journal-replay": {"kind": "workflow", "workflow_name": "Journal Durability Certification"},
+    "migration": {"kind": "workflow", "workflow_name": "Resilience Certification"},
+    "recovery": {"kind": "workflow", "workflow_name": "Resilience Certification"},
+    "certified-tool-pipeline": {"kind": "inline"},
+    "benchmark": {"kind": "workflow", "workflow_name": "Reliability Benchmarks"},
+    "performance-regression": {"kind": "workflow", "workflow_name": "Performance Scenario Corpus"},
+    "protected-improvement": {"kind": "workflow", "workflow_name": "Live Self Improvement"},
+    "independent-verification": {"kind": "workflow", "workflow_name": "Continuous Verification Certification"},
+    "engineering-policy-base": {"kind": "inline"}
+  },
   "rules": [
     {
       "id": "docs-only",
@@ -37,9 +58,10 @@
         "crates/medusa-process-containment/**",
         "crates/medusa-agent/src/policy.rs",
         "crates/medusa-agent/src/windows_sandbox.rs",
-        "scripts/check-unsafe-policy.py",
+        "scripts/check-unsafe-boundary.py",
         ".github/workflows/*windows*",
-        ".github/workflows/*containment*"
+        ".github/workflows/*containment*",
+        ".github/workflows/unsafe-rust-boundary.yml"
       ],
       "required_checks": ["containment-linux", "containment-macos", "containment-windows", "unsafe-policy"],
       "protected": true
