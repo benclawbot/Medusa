@@ -110,7 +110,9 @@ impl BehavioralOutcomeV1 {
                 || self.verification_receipt_ids.is_empty()
                 || self.integration_receipt_ids.is_empty())
         {
-            return Err("verified behavioral success requires verification and integration authority");
+            return Err(
+                "verified behavioral success requires verification and integration authority",
+            );
         }
         Ok(())
     }
@@ -130,11 +132,16 @@ pub fn behavioral_outcome_from_events(
     events: &[EventEnvelope],
 ) -> Result<BehavioralOutcomeV1, RuntimeError> {
     if events.is_empty() {
-        return Err(RuntimeError::agent("behavioral outcome requires durable journal events"));
+        return Err(RuntimeError::agent(
+            "behavioral outcome requires durable journal events",
+        ));
     }
 
     let source_event_ids = events.iter().map(event_id).collect::<Vec<_>>();
-    let source_event_checksums = events.iter().map(|event| event.checksum.clone()).collect::<Vec<_>>();
+    let source_event_checksums = events
+        .iter()
+        .map(|event| event.checksum.clone())
+        .collect::<Vec<_>>();
     let first_event_unix_ms = events.first().map(event_unix_ms);
     let last_event_unix_ms = events.last().map(event_unix_ms);
     let latency_millis = first_event_unix_ms
@@ -198,7 +205,11 @@ pub fn behavioral_outcome_from_events(
                 request_id,
                 ..
             } => {
-                if let Some(index) = model_execution_index(request_id.as_deref(), &request_indexes, &model_executions) {
+                if let Some(index) = model_execution_index(
+                    request_id.as_deref(),
+                    &request_indexes,
+                    &model_executions,
+                ) {
                     model_executions[index].response_id = response_id.clone();
                     model_executions[index].usage = Some(usage.clone());
                 }
@@ -272,9 +283,8 @@ pub fn behavioral_outcome_from_events(
                 }
             }
             EventPayload::IntegrationReceiptRecorded { receipt } => {
-                integration_receipt_ids.push(
-                    receipt_id(receipt).unwrap_or_else(|| event_id(event)),
-                );
+                integration_receipt_ids
+                    .push(receipt_id(receipt).unwrap_or_else(|| event_id(event)));
             }
             EventPayload::RecoveryActionCompleted { .. } => {
                 recovery_count = recovery_count.saturating_add(1);
@@ -374,7 +384,11 @@ fn find_tool(
 ) -> Option<usize> {
     active
         .filter(|index| tools.get(*index).is_some_and(|item| item.tool == tool))
-        .or_else(|| tools.iter().rposition(|item| item.tool == tool && !item.completed))
+        .or_else(|| {
+            tools
+                .iter()
+                .rposition(|item| item.tool == tool && !item.completed)
+        })
 }
 
 fn receipt_id(value: &Value) -> Option<String> {
@@ -387,7 +401,12 @@ fn decision_is_denial(value: &Value) -> bool {
     ["decision", "status", "kind"]
         .into_iter()
         .filter_map(|key| value.get(key).and_then(Value::as_str))
-        .any(|value| matches!(value.to_ascii_lowercase().as_str(), "deny" | "denied" | "rejected"))
+        .any(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "deny" | "denied" | "rejected"
+            )
+        })
 }
 
 fn repository_revision(repo: &Path) -> Option<String> {
@@ -409,7 +428,11 @@ fn event_id(event: &EventEnvelope) -> String {
 fn event_unix_ms(event: &EventEnvelope) -> i64 {
     let nanos = event.timestamp.unix_timestamp_nanos();
     i64::try_from(nanos / 1_000_000).unwrap_or_else(|_| {
-        if nanos.is_negative() { i64::MIN } else { i64::MAX }
+        if nanos.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
     })
 }
 
@@ -425,5 +448,8 @@ fn normalized_outcome_id(outcome: &BehavioralOutcomeV1) -> Result<String, Runtim
         &outcome.integration_receipt_ids,
     ))
     .map_err(RuntimeError::agent)?;
-    Ok(format!("behavioral-outcome-{}", hex::encode(Sha256::digest(bytes))))
+    Ok(format!(
+        "behavioral-outcome-{}",
+        hex::encode(Sha256::digest(bytes))
+    ))
 }
