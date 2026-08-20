@@ -210,7 +210,6 @@ fn record_monitor_outcome(
     let recorded_at_unix_ms = behavioral
         .last_event_unix_ms
         .unwrap_or_else(|| session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000);
-    let session_id = session.id.to_string();
     let repository_revision = behavioral
         .repository_revision
         .clone()
