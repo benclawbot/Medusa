@@ -82,6 +82,7 @@ pub enum SlashCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConfigCommand {
     Show,
+    Explain,
     Profiles,
     UseProfile { name: String },
     Set { key: String, value: String },
@@ -206,7 +207,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "config",
-        usage: "/config [show|profiles|use <name>|set <key> <value>|unset <key>|validate]",
+        usage: "/config [show|explain|profiles|use <name>|set <key> <value>|unset <key>|validate]",
         description: "inspect or update shared redacted configuration",
     },
     CommandSpec {
@@ -288,6 +289,10 @@ fn parse_config_command(input: &str) -> Result<SlashCommand, String> {
             no_arguments("/config profiles")?;
             Ok(SlashCommand::Config(ConfigCommand::Profiles))
         }
+        "explain" => {
+            no_arguments("/config explain")?;
+            Ok(SlashCommand::Config(ConfigCommand::Explain))
+        }
         "validate" => {
             no_arguments("/config validate")?;
             Ok(SlashCommand::Config(ConfigCommand::Validate))
@@ -321,7 +326,7 @@ fn parse_config_command(input: &str) -> Result<SlashCommand, String> {
             }))
         }
         other => Err(format!(
-            "unknown /config action `{other}`; use show, profiles, use, set, unset, or validate"
+            "unknown /config action `{other}`; use show, explain, profiles, use, set, unset, or validate"
         )),
     }
 }
@@ -1007,6 +1012,10 @@ mod tests {
         assert_eq!(
             parse_slash_command("/config validate"),
             Ok(Some(SlashCommand::Config(ConfigCommand::Validate)))
+        );
+        assert_eq!(
+            parse_slash_command("/config explain"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Explain)))
         );
         assert!(parse_slash_command("/config use").is_err());
         assert!(parse_slash_command("/config set model").is_err());
