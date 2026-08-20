@@ -42,8 +42,7 @@ jobs:
       - name: Install terminal and containment prerequisites
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          bash scripts/install-live-ubuntu-prerequisites.sh
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
