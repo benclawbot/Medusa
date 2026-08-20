@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
@@ -28,27 +29,33 @@ jobs:
       - name: Exercise engineering policy fixtures
         run: python3 scripts/engineering-policy.py self-test
       - name: Validate engineering policy schema
-        run: python3 scripts/engineering-policy.py validate --policy .github/engineering-policy.json
-      - name: Resolve required engineering checks
+        run: python3 scripts/engineering-policy.py validate --policy .github/engineering-policy.json --root .
+      - name: Resolve required engineering checks with frozen authority
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if git cat-file -e "${BASE_SHA}:.github/engineering-policy.json" 2>/dev/null; then
+          set -euo pipefail
+          git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > /tmp/engineering-policy-changed-paths.txt
+          if grep -Eq '^(\.github/engineering-policy\.json|scripts/engineering-policy\.py|\.github/workflows/architecture-policy\.yml)$' /tmp/engineering-policy-changed-paths.txt; then
             git show "${BASE_SHA}:.github/engineering-policy.json" > /tmp/engineering-policy-base.json
-            echo "engineering policy authority: base branch"
+            git show "${BASE_SHA}:scripts/engineering-policy.py" > /tmp/engineering-policy-base.py
+            python3 /tmp/engineering-policy-base.py explain \
+              --policy /tmp/engineering-policy-base.json \
+              --base-policy /tmp/engineering-policy-base.json \
+              --root . \
+              --base "${BASE_SHA}" \
+              --head "${HEAD_SHA}" \
+              --json | tee engineering-policy-report.json
           else
-            cp .github/engineering-policy.json /tmp/engineering-policy-base.json
-            echo "engineering policy authority: bootstrap (no base policy exists yet)"
+            python3 scripts/engineering-policy.py explain \
+              --policy .github/engineering-policy.json \
+              --root . \
+              --base "${BASE_SHA}" \
+              --head "${HEAD_SHA}" \
+              --json | tee engineering-policy-report.json
           fi
-          python3 scripts/engineering-policy.py explain \
-            --policy .github/engineering-policy.json \
-            --base-policy /tmp/engineering-policy-base.json \
-            --root . \
-            --base "${BASE_SHA}" \
-            --head "${HEAD_SHA}" \
-            --json | tee engineering-policy-report.json
       - name: Enforce architecture policy
         run: |
           python3 scripts/architecture-policy.py check \
@@ -59,6 +66,21 @@ jobs:
         run: python3 scripts/github-authority-policy.py
       - name: Enforce certified tool execution pipeline
         run: python3 scripts/check-certified-tool-pipeline.py
+      - name: Enforce resolved engineering checks
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 scripts/engineering-policy.py enforce \
+            --policy .github/engineering-policy.json \
+            --report engineering-policy-report.json \
+            --root . \
+            --head "${HEAD_SHA}" \
+            --satisfied architecture-policy \
+            --satisfied certified-tool-pipeline \
+            --satisfied engineering-policy-base \
+            --timeout-seconds 600
       - name: Publish architecture report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
