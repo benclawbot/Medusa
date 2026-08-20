@@ -85,6 +85,17 @@ def write_profile(config_home: Path) -> None:
     )
 
 
+def configured_model(config_home: Path) -> str:
+    profile = config_home / "medusa" / "provider.toml"
+    for raw_line in profile.read_text(encoding="utf-8").splitlines():
+        key, separator, value = raw_line.partition("=")
+        if separator and key.strip() == "model":
+            model = value.strip().strip('"').strip()
+            if model:
+                return model
+    raise RuntimeError("saved MiniMax profile does not declare a model")
+
+
 def initialize_repository(repo: Path) -> None:
     (repo / "src").mkdir(parents=True)
     (repo / ".medusa").mkdir()
@@ -101,9 +112,6 @@ def initialize_repository(repo: Path) -> None:
         "    }\n}\n",
         encoding="utf-8",
     )
-    # TUI RuntimeController::start loads repository configuration. Keeping the fixture limits here
-    # proves the actual interactive path and prevents this acceptance task from reserving the
-    # production default output budget for every orchestration role.
     (repo / ".medusa" / "config.toml").write_text(
         "[agent]\nmax_turns = 24\nparallel_workers = 1\n\n"
         "[model]\nmax_output_tokens = 2048\n",
@@ -200,6 +208,27 @@ def session_evidence(repo: Path) -> tuple[list[Path], list[Path]]:
     return responses, assistants
 
 
+def durable_request_models(repo: Path) -> set[str]:
+    models: set[str] = set()
+    for path in (repo / ".medusa").rglob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict) or not isinstance(data.get("events"), list):
+            continue
+        for event in data["events"]:
+            if not isinstance(event, dict) or not isinstance(event.get("payload"), dict):
+                continue
+            payload = event["payload"]
+            if payload.get("type") != "model_request_started":
+                continue
+            model = payload.get("model")
+            if isinstance(model, str) and model.strip():
+                models.add(model.strip())
+    return models
+
+
 def source_is_correct(repo: Path) -> bool:
     try:
         source = (repo / "src" / "lib.rs").read_text(encoding="utf-8")
@@ -234,7 +263,7 @@ def capture_evidence(repo: Path, output_dir: Path) -> tuple[bool, list[str]]:
             (output_dir / name).write_bytes(result.stdout)
             if name == "cargo-test.txt":
                 tests_passed = result.returncode == 0
-        except Exception as error:  # evidence collection must preserve the primary failure
+        except Exception as error:
             errors.append(f"{name}: {error}")
     try:
         copy_regular_tree(repo / ".medusa", output_dir / "medusa-state")
@@ -271,11 +300,13 @@ def main() -> int:
     repo, home = work_root / "repo", work_root / "home"
     home.mkdir(parents=True)
     initialize_repository(repo)
-    write_profile(home / ".config")
+    config_home = home / ".config"
+    write_profile(config_home)
+    model = configured_model(config_home)
 
     env = os.environ.copy()
     env.update(
-        XDG_CONFIG_HOME=str(home / ".config"),
+        XDG_CONFIG_HOME=str(config_home),
         XDG_CACHE_HOME=str(home / ".cache"),
         MINIMAX_API_KEY=api_key,
         PYTHONUTF8="1",
@@ -303,9 +334,9 @@ def main() -> int:
                 except (BlockingIOError, OSError):
                     pass
             if not submitted and time.monotonic() - started >= 2:
-                os.write(fd, b"\r")  # dismiss welcome
+                os.write(fd, b"\r")
                 time.sleep(0.2)
-                os.write(fd, b"\r")  # submit initial prompt
+                os.write(fd, b"\r")
                 submitted = True
 
             text = transcript.decode("utf-8", errors="replace")
@@ -342,18 +373,25 @@ def main() -> int:
     text = transcript.decode("utf-8", errors="replace").replace(api_key, "[REDACTED]")
     (output_dir / "terminal.log").write_text(text, encoding="utf-8")
     responses, assistants = session_evidence(repo)
+    request_models = durable_request_models(repo)
     source_correct = source_is_correct(repo)
     tests_passed, evidence_errors = capture_evidence(repo, output_dir)
     passed = rendered and source_correct and tests_passed and error is None
     if rendered and not tests_passed:
         error = "MiniMax changed the file but cargo test did not pass"
         passed = False
+    if request_models and request_models != {model}:
+        error = (
+            f"durable request model mismatch: summary/profile model is {model}, "
+            f"observed request models are {sorted(request_models)}"
+        )
+        passed = False
 
     summary = {
         "schema_version": 4,
         "result": "pass" if passed else "fail",
         "provider": "minimax",
-        "model": "MiniMax-M3",
+        "model": model,
         "route": "saved-profile-to-interactive-tui",
         "fixture_max_output_tokens": 2048,
         "prompt_submitted": submitted,
@@ -362,6 +400,7 @@ def main() -> int:
         "source_change_verified": source_correct,
         "cargo_test_passed": tests_passed,
         "durable_response_observed": bool(responses),
+        "durable_request_models": sorted(request_models),
         "durable_response_files": [str(path.relative_to(repo)) for path in responses],
         "assistant_marker_files": [str(path.relative_to(repo)) for path in assistants],
         "elapsed_seconds": int(time.monotonic() - started),

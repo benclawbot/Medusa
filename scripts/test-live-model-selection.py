@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +22,7 @@ def load(name: str, path: Path):
 
 SELECTOR = load("live_model_selection_test", ROOT / "live-model-selection.py")
 REPORT = load("live_dogfood_report_runner_test", ROOT / "run-live-dogfood-report.py")
+TUI = load("live_tui_minimax_e2e_test", ROOT / "live-tui-minimax-e2e.py")
 
 
 class LiveModelSelectionTests(unittest.TestCase):
@@ -54,6 +57,38 @@ class LiveModelSelectionTests(unittest.TestCase):
             ]
         )
         self.assertTrue(errors)
+
+    def test_tui_summary_model_is_read_from_written_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            config_home = Path(raw)
+            medusa = config_home / "medusa"
+            medusa.mkdir()
+            (medusa / "provider.toml").write_text(
+                'provider = "minimax"\nmodel = "MiniMax-M2.7"\n', encoding="utf-8"
+            )
+            self.assertEqual(TUI.configured_model(config_home), "MiniMax-M2.7")
+
+    def test_tui_durable_request_models_capture_effective_model(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+            state = repo / ".medusa"
+            state.mkdir()
+            (state / "session.json").write_text(
+                json.dumps(
+                    {
+                        "events": [
+                            {
+                                "payload": {
+                                    "type": "model_request_started",
+                                    "model": "MiniMax-M2.7",
+                                }
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(TUI.durable_request_models(repo), {"MiniMax-M2.7"})
 
 
 if __name__ == "__main__":
