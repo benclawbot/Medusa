@@ -395,7 +395,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(directory.path().join("src")).expect("src fixture");
         fs::write(directory.path().join("src/lib.rs"), "pub fn value() {}\n").expect("source");
-        fs::write(directory.path().join("Cargo.toml"), "[package]\nname='fixture'\n").expect("manifest");
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname='fixture'\n",
+        )
+        .expect("manifest");
 
         let paths = [
             "src/lib.rs",
@@ -413,13 +417,26 @@ mod tests {
                 .collect::<Vec<_>>()
         });
 
-        assert!(results[0].1.as_ref().is_ok_and(|value| value.contains("value")));
-        assert!(results[1].1.as_ref().is_ok_and(|value| value.contains("package")));
+        assert!(
+            results[0]
+                .1
+                .as_ref()
+                .is_ok_and(|value| value.contains("value"))
+        );
+        assert!(
+            results[1]
+                .1
+                .as_ref()
+                .is_ok_and(|value| value.contains("package"))
+        );
         for (path, result) in &results[2..] {
             let error = result.as_ref().expect_err("missing read must fail");
             assert_eq!(error.code, ErrorCode::InvalidInput, "{path}");
             assert_eq!(error.category, ErrorCategory::Validation, "{path}");
-            assert_eq!(error.message, format!("repository path does not exist: {path}"));
+            assert_eq!(
+                error.message,
+                format!("repository path does not exist: {path}")
+            );
             assert_ne!(error.code, ErrorCode::PersistenceFailed, "{path}");
         }
     }
