@@ -176,6 +176,7 @@ class Harness:
     log_lines: list[str] = field(default_factory=list)
     credential_audited: bool = False
     usage: dict[str, int] = field(default_factory=dict)
+    baseline_commit: str | None = None
 
     def __post_init__(self) -> None:
         self.work_root = self.repo_root / "target" / "live-e2e-work" / platform_name().lower()
@@ -312,6 +313,10 @@ class Harness:
         )
         run_checked(["git", "add", "-A"], cwd=self.fixture)
         run_checked(["git", "commit", "-q", "-m", "baseline"], cwd=self.fixture)
+        baseline = run_checked(["git", "rev-parse", "HEAD"], cwd=self.fixture, capture=True)
+        self.baseline_commit = (baseline.stdout or "").strip()
+        if not self.baseline_commit:
+            raise HarnessError("fixture baseline commit identity is missing", "environment")
 
     def protected_hashes(self) -> dict[str, str]:
         return {
@@ -451,7 +456,6 @@ class Harness:
         if missing:
             raise HarnessError(f"independent verification missed markers: {missing}")
 
-
     def collect_usage(self) -> None:
         self.set_phase("usage-and-cost-audit")
         total_tokens = 0
@@ -492,13 +496,28 @@ class Harness:
             "estimated_cost_microusd": estimated_cost_microusd,
         }
 
+    def product_patch(self) -> str:
+        head_result = run_checked(["git", "rev-parse", "HEAD"], cwd=self.fixture, capture=True)
+        head = (head_result.stdout or "").strip()
+        if self.baseline_commit and head and head != self.baseline_commit:
+            patch = run_checked(
+                ["git", "diff", "--binary", self.baseline_commit, head, "--"],
+                cwd=self.fixture,
+                capture=True,
+            )
+            return patch.stdout or ""
+        patch = run_checked(
+            ["git", "diff", "--binary", "HEAD", "--"], cwd=self.fixture, capture=True
+        )
+        return patch.stdout or ""
+
     def collect(self) -> None:
         self.set_phase("collect-evidence")
         session_dir = self.output_dir / "multi-language-repair"
         session_dir.mkdir(parents=True, exist_ok=True)
-        patch = run_checked(["git", "diff", "--binary"], cwd=self.fixture, capture=True)
+        patch = self.product_patch()
         status = run_checked(["git", "status", "--short"], cwd=self.fixture, capture=True)
-        (session_dir / "change.patch").write_text(patch.stdout or "", encoding="utf-8")
+        (session_dir / "change.patch").write_text(patch, encoding="utf-8")
         (session_dir / "status.txt").write_text(status.stdout or "", encoding="utf-8")
         sessions = self.fixture / ".medusa" / "sessions"
         if sessions.is_dir():
