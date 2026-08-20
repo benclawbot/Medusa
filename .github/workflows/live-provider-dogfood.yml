@@ -30,7 +30,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-provider-dogfood-${{ github.workflow }}-${{ github.ref }}
+  group: live-provider-dogfood-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
