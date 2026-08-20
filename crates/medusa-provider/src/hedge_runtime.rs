@@ -625,9 +625,13 @@ mod tests {
 
     #[test]
     fn authoritative_stream_failure_is_returned_without_exposing_secondary_output() {
-        let mut primary = provider("primary", 30);
+        // Leave ample wall-clock room for the coordinator to launch the delayed
+        // hedge even when the test process is contending with the other provider
+        // contract tests. The assertion below is about cancellation semantics,
+        // not a scheduler race at the 20 ms threshold.
+        let mut primary = provider("primary", 100);
         primary.fail_after_output = true;
-        let secondary = provider("secondary", 100);
+        let secondary = provider("secondary", 200);
         let secondary_cancellations = Arc::clone(&secondary.cancellations);
         let providers = vec![primary, secondary];
         let profiles = vec![profile("primary"), profile("secondary")];

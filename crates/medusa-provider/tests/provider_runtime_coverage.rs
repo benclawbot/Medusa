@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    process::Command,
     thread,
 };
 
@@ -10,6 +11,25 @@ use medusa_provider::{
     OpenAiProvider, ProviderManager, ResponseBlock, Role, ToolDefinition,
 };
 use serde_json::json;
+
+fn with_insecure_loopback_for_test(test_name: &str, test: impl FnOnce()) {
+    if std::env::var_os("MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP").is_some() {
+        test();
+        return;
+    }
+
+    // These coverage fixtures use local plaintext servers. Keep the opt-in
+    // scoped to a child process so production URL validation stays enabled.
+    let status = Command::new(std::env::current_exe().expect("provider coverage executable"))
+        .env("MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP", "1")
+        .args(["--exact", test_name, "--nocapture"])
+        .status()
+        .expect("spawn opted-in provider coverage test");
+    assert!(
+        status.success(),
+        "opted-in provider coverage test failed: {status}"
+    );
+}
 
 fn request() -> ModelRequest {
     ModelRequest {
@@ -113,83 +133,100 @@ fn openai_config(base_url: String, auth: &str) -> Config {
 
 #[test]
 fn openai_success_maps_messages_tools_usage_and_auth() {
-    let body = r#"{"id":"resp-1","choices":[{"finish_reason":"tool_calls","message":{"content":"answer","tool_calls":[{"id":"call-2","function":{"name":"write","arguments":"{\"path\":\"b\"}"}}]}}],"usage":{"prompt_tokens":11,"completion_tokens":7}}"#;
-    let (url, server) = serve(vec![("200 OK", body)]);
-    let provider = OpenAiProvider::from_config_with_api_key(
-        &openai_config(url, "api-key"),
-        Some("secret".into()),
-    )
-    .expect("provider");
-    let response = provider.complete(&request()).expect("completion");
-    assert_eq!(response.response_id.as_deref(), Some("resp-1"));
-    assert_eq!(response.stop_reason.as_deref(), Some("tool_calls"));
-    assert_eq!(response.usage.input_tokens, 11);
-    assert_eq!(response.usage.output_tokens, 7);
-    assert!(matches!(&response.blocks[0], ResponseBlock::Text { text } if text == "answer"));
-    assert!(matches!(&response.blocks[1], ResponseBlock::ToolUse { name, .. } if name == "write"));
-    let wire = server.join().expect("server").pop().expect("request");
-    assert!(
-        wire.contains("Authorization: Bearer secret")
-            || wire.contains("authorization: Bearer secret")
-    );
-    assert!(wire.contains("chat/completions"));
-    assert!(wire.contains("tool_calls"));
-    assert!(wire.contains("tool_call_id"));
+    with_insecure_loopback_for_test("openai_success_maps_messages_tools_usage_and_auth", || {
+        let body = r#"{"id":"resp-1","choices":[{"finish_reason":"tool_calls","message":{"content":"answer","tool_calls":[{"id":"call-2","function":{"name":"write","arguments":"{\"path\":\"b\"}"}}]}}],"usage":{"prompt_tokens":11,"completion_tokens":7}}"#;
+        let (url, server) = serve(vec![("200 OK", body)]);
+        let provider = OpenAiProvider::from_config_with_api_key(
+            &openai_config(url, "api-key"),
+            Some("secret".into()),
+        )
+        .expect("provider");
+        let response = provider.complete(&request()).expect("completion");
+        assert_eq!(response.response_id.as_deref(), Some("resp-1"));
+        assert_eq!(response.stop_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(response.usage.input_tokens, 11);
+        assert_eq!(response.usage.output_tokens, 7);
+        assert!(matches!(&response.blocks[0], ResponseBlock::Text { text } if text == "answer"));
+        assert!(
+            matches!(&response.blocks[1], ResponseBlock::ToolUse { name, .. } if name == "write")
+        );
+        let wire = server.join().expect("server").pop().expect("request");
+        assert!(
+            wire.contains("Authorization: Bearer secret")
+                || wire.contains("authorization: Bearer secret")
+        );
+        assert!(wire.contains("chat/completions"));
+        assert!(wire.contains("tool_calls"));
+        assert!(wire.contains("tool_call_id"));
+    });
 }
 
 #[test]
 fn openai_handles_no_auth_empty_choices_and_policy_errors() {
-    let missing = OpenAiProvider::from_config_with_api_key(
-        &openai_config("http://127.0.0.1:1".into(), "api-key"),
-        None,
-    );
-    assert!(missing.is_err());
+    with_insecure_loopback_for_test(
+        "openai_handles_no_auth_empty_choices_and_policy_errors",
+        || {
+            let missing = OpenAiProvider::from_config_with_api_key(
+                &openai_config("http://127.0.0.1:1".into(), "api-key"),
+                None,
+            );
+            assert!(missing.is_err());
 
-    let (url, server) = serve(vec![("200 OK", r#"{"choices":[]}"#)]);
-    let provider = OpenAiProvider::from_config_with_api_key(&openai_config(url, "none"), None)
-        .expect("provider");
-    assert!(
-        provider
-            .complete(&request())
-            .expect_err("empty choices")
-            .to_string()
-            .contains("no choices")
-    );
-    server.join().expect("server");
+            let (url, server) = serve(vec![("200 OK", r#"{"choices":[]}"#)]);
+            let provider =
+                OpenAiProvider::from_config_with_api_key(&openai_config(url, "none"), None)
+                    .expect("provider");
+            assert!(
+                provider
+                    .complete(&request())
+                    .expect_err("empty choices")
+                    .to_string()
+                    .contains("no choices")
+            );
+            server.join().expect("server");
 
-    let (url, server) = serve(vec![("401 Unauthorized", r#"{"error":"bad key"}"#)]);
-    let provider = OpenAiProvider::from_config_with_api_key(&openai_config(url, "none"), None)
-        .expect("provider");
-    let error = provider.complete(&request()).expect_err("policy error");
-    assert!(error.to_string().contains("401"));
-    server.join().expect("server");
+            let (url, server) = serve(vec![("401 Unauthorized", r#"{"error":"bad key"}"#)]);
+            let provider =
+                OpenAiProvider::from_config_with_api_key(&openai_config(url, "none"), None)
+                    .expect("provider");
+            let error = provider.complete(&request()).expect_err("policy error");
+            assert!(error.to_string().contains("401"));
+            server.join().expect("server");
+        },
+    );
 }
 
 #[test]
 fn manager_retries_transient_openai_statuses_and_accepts_session_configuration() {
-    let (url, server) = serve(vec![
-        ("500 Internal Server Error", r#"{"error":"one"}"#),
-        ("429 Too Many Requests", r#"{"error":"two"}"#),
-        (
-            "200 OK",
-            r#"{"id":"ok","choices":[{"finish_reason":"stop","message":{"content":"done","tool_calls":[]}}]}"#,
-        ),
-    ]);
-    let config = openai_config(format!("{url}/"), "existing");
-    let provider = ConfiguredProvider::from_config_with_api_key(&config, Some("session".into()))
-        .expect("provider");
-    assert!(
-        provider
-            .capabilities()
-            .supported_image_media_types
-            .is_empty()
+    with_insecure_loopback_for_test(
+        "manager_retries_transient_openai_statuses_and_accepts_session_configuration",
+        || {
+            let (url, server) = serve(vec![
+                ("500 Internal Server Error", r#"{"error":"one"}"#),
+                ("429 Too Many Requests", r#"{"error":"two"}"#),
+                (
+                    "200 OK",
+                    r#"{"id":"ok","choices":[{"finish_reason":"stop","message":{"content":"done","tool_calls":[]}}]}"#,
+                ),
+            ]);
+            let config = openai_config(format!("{url}/"), "existing");
+            let provider =
+                ConfiguredProvider::from_config_with_api_key(&config, Some("session".into()))
+                    .expect("provider");
+            assert!(
+                provider
+                    .capabilities()
+                    .supported_image_media_types
+                    .is_empty()
+            );
+            let manager = ProviderManager::new(vec![provider]).with_retries(2);
+            let response = manager.complete(&request()).expect("completion");
+            assert!(matches!(&response.blocks[0], ResponseBlock::Text { text } if text == "done"));
+            assert_eq!(manager.health()[0].attempts, 3);
+            assert_eq!(manager.health()[0].retries, 2);
+            assert_eq!(server.join().expect("server").len(), 3);
+        },
     );
-    let manager = ProviderManager::new(vec![provider]).with_retries(2);
-    let response = manager.complete(&request()).expect("completion");
-    assert!(matches!(&response.blocks[0], ResponseBlock::Text { text } if text == "done"));
-    assert_eq!(manager.health()[0].attempts, 3);
-    assert_eq!(manager.health()[0].retries, 2);
-    assert_eq!(server.join().expect("server").len(), 3);
 }
 
 #[test]
@@ -227,12 +264,17 @@ fn anthropic_selection_rejects_unknown_provider_and_image_input() {
 
 #[test]
 fn configured_provider_constructor_covers_protocol_selection() {
-    let (url, server) = serve(vec![(
-        "200 OK",
-        r#"{"choices":[{"finish_reason":"stop","message":{"content":"ok","tool_calls":[]}}]}"#,
-    )]);
-    let config = openai_config(url, "none");
-    let provider = ConfiguredProvider::from_config(&config).expect("provider");
-    assert!(provider.complete(&request()).is_ok());
-    server.join().expect("server");
+    with_insecure_loopback_for_test(
+        "configured_provider_constructor_covers_protocol_selection",
+        || {
+            let (url, server) = serve(vec![(
+                "200 OK",
+                r#"{"choices":[{"finish_reason":"stop","message":{"content":"ok","tool_calls":[]}}]}"#,
+            )]);
+            let config = openai_config(url, "none");
+            let provider = ConfiguredProvider::from_config(&config).expect("provider");
+            assert!(provider.complete(&request()).is_ok());
+            server.join().expect("server");
+        },
+    );
 }
