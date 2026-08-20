@@ -189,7 +189,10 @@ fn profile_path(path: &Path) -> String {
 
 #[cfg(target_os = "macos")]
 fn macos_python_runtime_root(executable: &Path) -> Option<PathBuf> {
-    let name = executable.file_name()?.to_string_lossy().to_ascii_lowercase();
+    let name = executable
+        .file_name()?
+        .to_string_lossy()
+        .to_ascii_lowercase();
     if !name.starts_with("python") {
         return None;
     }
@@ -324,9 +327,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_python_runtime_prefix_is_read_only_visible() {
-        let executable = Path::new(
-            "/Users/runner/hostedtoolcache/Python/3.13.5/arm64/bin/python3",
-        );
+        let executable = Path::new("/Users/runner/hostedtoolcache/Python/3.13.5/arm64/bin/python3");
         assert_eq!(
             macos_python_runtime_root(executable),
             Some(PathBuf::from(
