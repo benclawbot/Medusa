@@ -55,8 +55,7 @@ pub(super) fn record_attempt_failure(
     }
     let preserve_corrective_worktree = retryable
         && !cancelled
-        && error.starts_with("isolated worktree verification failed:")
-        && !verification_evidence.is_empty();
+        && error.starts_with("isolated worktree verification failed:");
     if !preserve_corrective_worktree
         && let Err(cleanup_error) = manager.cleanup(std::slice::from_ref(worker))
     {
