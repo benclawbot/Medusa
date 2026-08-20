@@ -102,7 +102,8 @@ fn reconcile_from_canonical_authority(
     let mut changed = false;
     for artifact in &mut snapshot.artifacts {
         let Some(record) = canonical.records.iter().find(|record| {
-            record.proposal_id == artifact.artifact_id && record.version == artifact.artifact_version
+            record.proposal_id == artifact.artifact_id
+                && record.version == artifact.artifact_version
         }) else {
             continue;
         };
@@ -366,14 +367,14 @@ mod tests {
         assert_eq!(recovered.revision, 8);
         assert_eq!(recovered.artifacts.len(), 1);
         assert!(!recovered.artifacts[0].active);
-        assert_eq!(recovered.artifacts[0].predecessor_id.as_deref(), Some("previous"));
+        assert_eq!(
+            recovered.artifacts[0].predecessor_id.as_deref(),
+            Some("previous")
+        );
         assert_eq!(recovered.artifacts[0].predecessor_version, Some(1));
 
-        let events = fs::read_to_string(
-            repo.path()
-                .join(".medusa/learning-monitor/events.jsonl"),
-        )
-        .expect("events");
+        let events = fs::read_to_string(repo.path().join(".medusa/learning-monitor/events.jsonl"))
+            .expect("events");
         assert!(events.contains("authority_reconciliation"));
     }
 }
