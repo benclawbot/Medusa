@@ -105,6 +105,12 @@ impl ModelExperienceContractV1 {
             .map(|component| (component.id.clone(), component.fingerprint.clone()))
             .collect()
     }
+
+    #[must_use]
+    pub fn fingerprint(&self) -> String {
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        digest(&bytes)
+    }
 }
 
 fn component_material(component: &ModelExperienceComponentV1) -> String {

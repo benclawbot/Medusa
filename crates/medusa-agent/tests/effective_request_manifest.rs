@@ -288,6 +288,42 @@ fn runtime_configuration_fingerprint_is_bound_to_effective_request_evidence() {
     );
 }
 
+#[test]
+fn model_experience_contract_is_bound_to_effective_request_evidence() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    );
+    let mut session = engine
+        .create_session(directory.path(), "inspect the repository".to_owned())
+        .expect("create session");
+    engine.step(&mut session).expect("model step");
+
+    let manifest = session
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted {
+                manifest_ref: Some(reference),
+                ..
+            } => Some(reference.clone()),
+            _ => None,
+        })
+        .expect("request manifest");
+    let audit = inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest)
+        .expect("inspect request");
+    let provenance = &audit["assembly_provenance"];
+    assert!(provenance["model_experience_contract"].is_string());
+    assert!(provenance["model_experience_component:system"].is_string());
+    assert!(provenance["model_experience_component:tools"].is_string());
+    assert!(provenance["model_experience_estimated_tokens"].is_string());
+}
+
 fn request_manifests(session: &AgentSession) -> Vec<(String, String)> {
     session
         .events

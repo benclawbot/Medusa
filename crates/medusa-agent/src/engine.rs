@@ -53,6 +53,9 @@ use crate::{
     engine_support::*,
     evidence::append_event,
     identity_guard::validate_provider_text,
+    model_experience::{
+        ComponentStability, ModelExperienceComponentV1, ModelExperienceContractV1, PrivacyClass,
+    },
     output_envelope::{OutputFormat, wrap as wrap_envelope},
     policy::validate_shell_command_hard_denials,
     session::{
@@ -405,6 +408,91 @@ fn early_tool_identity_error(id: &str) -> MedusaError {
 
 fn duration_ns(duration: std::time::Duration) -> u64 {
     duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn model_experience_component(
+    id: &str,
+    order: u32,
+    location: &str,
+    stability: ComponentStability,
+    value: &impl serde::Serialize,
+    privacy_class: PrivacyClass,
+    max_bytes: Option<u64>,
+) -> ModelExperienceComponentV1 {
+    let serialized = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = u64::try_from(serialized.len()).unwrap_or(u64::MAX);
+    ModelExperienceComponentV1 {
+        id: id.to_owned(),
+        version: "1".to_owned(),
+        insertion_order: order,
+        location: location.to_owned(),
+        stability,
+        estimated_tokens: Some(bytes.saturating_add(3) / 4),
+        actual_tokens: None,
+        cache_eligible: Some(matches!(
+            stability,
+            ComponentStability::Static | ComponentStability::SessionStable
+        )),
+        cache_breaking_dimensions: match stability {
+            ComponentStability::Static | ComponentStability::SessionStable => {
+                vec!["authority_state".to_owned(), "tool_schema".to_owned()]
+            }
+            ComponentStability::TurnStable | ComponentStability::RequestDynamic => {
+                vec!["turn".to_owned(), "request_content".to_owned()]
+            }
+        },
+        privacy_class,
+        max_bytes,
+        fingerprint: effective_request::fragment_fingerprint(&String::from_utf8_lossy(&serialized)),
+    }
+}
+
+fn model_experience_contract(
+    phase: ProviderExecutionPhase,
+    request: &ModelRequest,
+) -> ModelExperienceContractV1 {
+    let components = vec![
+        model_experience_component(
+            "system",
+            0,
+            "system",
+            ComponentStability::SessionStable,
+            &request.system,
+            PrivacyClass::SecretExcluded,
+            Some(256 * 1024),
+        ),
+        model_experience_component(
+            "messages",
+            1,
+            "conversation",
+            ComponentStability::RequestDynamic,
+            &request.messages,
+            PrivacyClass::UserContent,
+            Some(2 * 1024 * 1024),
+        ),
+        model_experience_component(
+            "tools",
+            2,
+            "tool_schema",
+            ComponentStability::SessionStable,
+            &request.tools,
+            PrivacyClass::Public,
+            Some(512 * 1024),
+        ),
+        model_experience_component(
+            "response_budget",
+            3,
+            "request_parameters",
+            ComponentStability::TurnStable,
+            &(&request.max_tokens, &request.temperature_milli),
+            PrivacyClass::Public,
+            None,
+        ),
+    ];
+    let tool_schema_fingerprint = effective_request::fragment_fingerprint(
+        &serde_json::to_string(&request.tools).unwrap_or_default(),
+    );
+    ModelExperienceContractV1::new(format!("{phase:?}"), components, tool_schema_fingerprint)
 }
 
 impl<P: ModelProvider> AgentEngine<P> {
@@ -1410,6 +1498,20 @@ impl<P: ModelProvider> AgentEngine<P> {
             max_tokens: max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
+        let model_experience = model_experience_contract(phase, &request);
+        assembly_provenance.insert(
+            "model_experience_contract".to_owned(),
+            model_experience.fingerprint(),
+        );
+        assembly_provenance.insert(
+            "model_experience_estimated_tokens".to_owned(),
+            model_experience
+                .estimated_total_tokens
+                .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string()),
+        );
+        for (id, fingerprint) in model_experience.component_fingerprints() {
+            assembly_provenance.insert(format!("model_experience_component:{id}"), fingerprint);
+        }
         let execution_policy = self.execution_policy.audit_projection();
         let capabilities = self.provider.capabilities();
         let mut active_manifest = effective_request::persist_before_provider_call(
