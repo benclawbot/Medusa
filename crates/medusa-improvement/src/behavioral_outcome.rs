@@ -167,8 +167,10 @@ pub fn project_behavioral_outcome(
     let mut tools = Vec::<BehavioralToolExecutionV1>::new();
     let mut active_tool: Option<usize> = None;
     let mut verification_passed = None;
+    let mut last_verification_sequence = None::<u64>;
     let mut verification_receipt_ids = Vec::new();
     let mut integration_receipt_ids = Vec::new();
+    let mut last_integration_sequence = None::<u64>;
     let mut mutation_count = 0u32;
     let mut verification_attempts = 0u32;
     let mut failed_verification_attempts = 0u32;
@@ -176,8 +178,8 @@ pub fn project_behavioral_outcome(
     let mut cancellation_requested = false;
     let mut cancellation_completed = false;
     let mut session_completed = false;
-    let mut session_failed = false;
-    let mut runtime_failed = false;
+    let mut last_session_failure_sequence = None::<u64>;
+    let mut last_runtime_failure_sequence = None::<u64>;
     let mut user_correction_count = 0u32;
     let mut approval_denial_count = 0u32;
 
@@ -294,6 +296,7 @@ pub fn project_behavioral_outcome(
             }
             EventPayload::VerificationCompleted { passed, evidence } => {
                 verification_passed = Some(*passed);
+                last_verification_sequence = Some(event.sequence);
                 if !passed {
                     failed_verification_attempts = failed_verification_attempts.saturating_add(1);
                 }
@@ -304,6 +307,7 @@ pub fn project_behavioral_outcome(
                 }
             }
             EventPayload::IntegrationReceiptRecorded { receipt } => {
+                last_integration_sequence = Some(event.sequence);
                 integration_receipt_ids
                     .push(receipt_id(receipt).unwrap_or_else(|| event_id(event)));
             }
@@ -322,8 +326,12 @@ pub fn project_behavioral_outcome(
                     approval_denial_count = approval_denial_count.saturating_add(1);
                 }
             }
-            EventPayload::RuntimeFailed { .. } => runtime_failed = true,
-            EventPayload::SessionFailed { .. } => session_failed = true,
+            EventPayload::RuntimeFailed { .. } => {
+                last_runtime_failure_sequence = Some(event.sequence);
+            }
+            EventPayload::SessionFailed { .. } => {
+                last_session_failure_sequence = Some(event.sequence);
+            }
             EventPayload::SessionCompleted { .. } => session_completed = true,
             _ => {}
         }
@@ -336,22 +344,35 @@ pub fn project_behavioral_outcome(
 
     let root_verification_passed = verification_passed == Some(true)
         || (verification_passed.is_none() && !integration_receipt_ids.is_empty());
+    let verification_authority_sequence = match verification_passed {
+        Some(true) => last_verification_sequence,
+        Some(false) => None,
+        None => last_integration_sequence,
+    };
+    let terminal_session_failed = failure_remains_authoritative(
+        last_session_failure_sequence,
+        verification_authority_sequence,
+    );
+    let terminal_runtime_failed = failure_remains_authoritative(
+        last_runtime_failure_sequence,
+        verification_authority_sequence,
+    );
+    let terminal_failure = terminal_session_failed || terminal_runtime_failed;
     let verified_success = root_task_eligible
         && session_completed
         && root_verification_passed
         && (!verification_receipt_ids.is_empty() || !integration_receipt_ids.is_empty())
         && !cancellation_completed
-        && !session_failed
-        && !runtime_failed;
+        && !terminal_failure;
     let terminal_status = if verified_success {
         BehavioralTerminalStatus::VerifiedSuccess
     } else if cancellation_completed {
         BehavioralTerminalStatus::Cancelled
     } else if verification_passed == Some(false) {
         BehavioralTerminalStatus::VerifiedFailure
-    } else if mutation_count > 0 && (session_failed || runtime_failed) {
+    } else if mutation_count > 0 && terminal_failure {
         BehavioralTerminalStatus::Partial
-    } else if session_failed || runtime_failed {
+    } else if terminal_failure {
         BehavioralTerminalStatus::Invalidated
     } else {
         BehavioralTerminalStatus::Inconclusive
@@ -395,6 +416,17 @@ pub fn project_behavioral_outcome(
     Ok(outcome)
 }
 
+fn failure_remains_authoritative(
+    failure_sequence: Option<u64>,
+    authority_sequence: Option<u64>,
+) -> bool {
+    match (failure_sequence, authority_sequence) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(failure), Some(authority)) => failure >= authority,
+    }
+}
+
 fn delegated_worker_events(events: &[EventEnvelope]) -> bool {
     if events
         .iter()
@@ -423,9 +455,10 @@ fn model_execution_index(
     request_indexes: &BTreeMap<String, usize>,
     executions: &[BehavioralModelExecutionV1],
 ) -> Option<usize> {
-    request_id
-        .and_then(|request_id| request_indexes.get(request_id).copied())
-        .or_else(|| executions.len().checked_sub(1))
+    match request_id {
+        Some(request_id) => request_indexes.get(request_id).copied(),
+        None => executions.len().checked_sub(1),
+    }
 }
 
 fn find_tool(
