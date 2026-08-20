@@ -118,8 +118,7 @@ fn resolve_prose_delimited_paths(value: &str, repository_paths: &[String]) -> St
 
 fn resolve_prose_delimited_path_token(token: &str, repository_paths: &[String]) -> String {
     let candidate = token.trim_matches(|character: char| {
-        !character.is_ascii_alphanumeric()
-            && !matches!(character, '/' | '\\' | '.' | '-' | '_')
+        !character.is_ascii_alphanumeric() && !matches!(character, '/' | '\\' | '.' | '-' | '_')
     });
     if candidate.is_empty()
         || (!candidate.contains('/') && !candidate.contains('\\') && !candidate.contains('.'))
