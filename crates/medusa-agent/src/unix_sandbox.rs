@@ -165,8 +165,15 @@ pub(crate) fn macos_command(
 #[cfg(target_os = "macos")]
 fn macos_profile(root: &Path, read_only_roots: &[PathBuf]) -> String {
     let mut profile = String::from(
-        "(version 1)\n(deny default)\n(allow process-exec* process-fork)\n(allow file-read*\n",
+        "(version 1)\n(deny default)\n(allow process-exec* process-fork)\n(allow signal (target same-sandbox))\n(allow process-info* (target same-sandbox))\n",
     );
+    profile.push_str(
+        "(allow sysctl-read\n  (sysctl-name \"hw.activecpu\")\n  (sysctl-name \"hw.byteorder\")\n  (sysctl-name \"hw.cacheconfig\")\n  (sysctl-name \"hw.cachelinesize\")\n  (sysctl-name \"hw.cachelinesize_compat\")\n  (sysctl-name \"hw.cpufamily\")\n  (sysctl-name \"hw.cputype\")\n  (sysctl-name \"hw.logicalcpu_max\")\n  (sysctl-name \"hw.machine\")\n  (sysctl-name \"hw.ncpu\")\n  (sysctl-name \"hw.pagesize\")\n  (sysctl-name \"hw.pagesize_compat\")\n  (sysctl-name \"hw.physicalcpu_max\")\n  (sysctl-name \"kern.hostname\")\n  (sysctl-name \"kern.maxfilesperproc\")\n  (sysctl-name \"kern.osrelease\")\n  (sysctl-name \"kern.ostype\")\n  (sysctl-name \"kern.osversion\")\n  (sysctl-name \"kern.version\"))\n",
+    );
+    profile.push_str(
+        "(allow file-read* file-write-data file-ioctl\n  (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n(allow file-read* file-ioctl\n  (require-all (literal \"/dev/zero\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/random\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/urandom\") (vnode-type CHARACTER-DEVICE)))\n",
+    );
+    profile.push_str("(allow file-read*\n");
     profile.push_str(&format!("  (subpath \"{}\")\n", profile_path(root)));
     for read_only in read_only_roots {
         profile.push_str(&format!("  (subpath \"{}\")\n", profile_path(read_only)));
@@ -338,6 +345,19 @@ mod tests {
             macos_python_runtime_root(Path::new("/Users/runner/.local/bin/node")),
             None
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_profile_allows_only_minimal_runtime_primitives() {
+        let profile = macos_profile(Path::new("/tmp/workspace"), &[]);
+        assert!(profile.contains("(allow signal (target same-sandbox))"));
+        assert!(profile.contains("(allow process-info* (target same-sandbox))"));
+        assert!(profile.contains("(sysctl-name \"hw.ncpu\")"));
+        assert!(profile.contains("(literal \"/dev/urandom\")"));
+        assert!(profile.contains("(deny network*)"));
+        assert!(!profile.contains("(allow network"));
+        assert!(!profile.contains("(allow mach-lookup"));
     }
 
     #[test]
