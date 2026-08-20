@@ -25,6 +25,10 @@ pub(crate) fn inputs(program: &str) -> io::Result<UnixSandboxInputs> {
     if let Some(parent) = executable.parent() {
         read_only_roots.insert(parent.to_path_buf());
     }
+    #[cfg(target_os = "macos")]
+    if let Some(runtime_root) = macos_python_runtime_root(&executable) {
+        read_only_roots.insert(runtime_root);
+    }
 
     if let Some(path) = env::var_os("PATH") {
         for entry in env::split_paths(&path) {
@@ -183,6 +187,19 @@ fn profile_path(path: &Path) -> String {
         .replace('"', "\\\"")
 }
 
+#[cfg(target_os = "macos")]
+fn macos_python_runtime_root(executable: &Path) -> Option<PathBuf> {
+    let name = executable.file_name()?.to_string_lossy().to_ascii_lowercase();
+    if !name.starts_with("python") {
+        return None;
+    }
+    let bin = executable.parent()?;
+    if bin.file_name().and_then(|name| name.to_str()) != Some("bin") {
+        return None;
+    }
+    bin.parent().map(Path::to_path_buf)
+}
+
 fn resolve_program(program: &str) -> io::Result<PathBuf> {
     let requested = Path::new(program);
     if requested.components().count() > 1 {
@@ -302,6 +319,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_python_runtime_prefix_is_read_only_visible() {
+        let executable = Path::new(
+            "/Users/runner/hostedtoolcache/Python/3.13.5/arm64/bin/python3",
+        );
+        assert_eq!(
+            macos_python_runtime_root(executable),
+            Some(PathBuf::from(
+                "/Users/runner/hostedtoolcache/Python/3.13.5/arm64"
+            ))
+        );
+        assert_eq!(
+            macos_python_runtime_root(Path::new("/Users/runner/.local/bin/node")),
+            None
+        );
     }
 
     #[test]
