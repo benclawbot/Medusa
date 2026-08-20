@@ -20,6 +20,7 @@ on:
       - "scripts/run-live-dogfood-report.py"
       - "scripts/install-live-ubuntu-prerequisites.sh"
       - "scripts/test-live-ubuntu-prerequisites.py"
+      - "scripts/test-live-change-patch.py"
       - "scripts/test-live-dogfood.py"
       - "scripts/test-live-model-selection.py"
       - "scripts/check-provider-support.py"
@@ -46,11 +47,12 @@ jobs:
           python-version: "3.13"
       - name: Compile and test the evidence contract
         run: |
-          python -m py_compile scripts/live-coding-e2e.py scripts/run-live-coding-e2e.py scripts/live-model-selection.py scripts/live-dogfood-report.py scripts/run-live-dogfood-report.py scripts/test-live-dogfood.py scripts/test-live-model-selection.py scripts/test-live-ubuntu-prerequisites.py scripts/check-provider-support.py
+          python -m py_compile scripts/live-coding-e2e.py scripts/run-live-coding-e2e.py scripts/live-model-selection.py scripts/live-dogfood-report.py scripts/run-live-dogfood-report.py scripts/test-live-change-patch.py scripts/test-live-dogfood.py scripts/test-live-model-selection.py scripts/test-live-ubuntu-prerequisites.py scripts/check-provider-support.py
           python scripts/check-provider-support.py
           python scripts/test-live-dogfood.py
           python scripts/test-live-model-selection.py
           python scripts/test-live-ubuntu-prerequisites.py
+          python scripts/test-live-change-patch.py
 
   live-provider:
     name: Live installed binary (${{ matrix.platform }})
