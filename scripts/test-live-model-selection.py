@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +22,7 @@ def load(name: str, path: Path):
 
 SELECTOR = load("live_model_selection_test", ROOT / "live-model-selection.py")
 REPORT = load("live_dogfood_report_runner_test", ROOT / "run-live-dogfood-report.py")
+TUI = load("live_tui_minimax_e2e_test", ROOT / "live-tui-minimax-e2e.py")
 
 
 class LiveModelSelectionTests(unittest.TestCase):
@@ -54,6 +57,77 @@ class LiveModelSelectionTests(unittest.TestCase):
             ]
         )
         self.assertTrue(errors)
+
+    def test_tui_override_controls_profile_and_durable_evidence_model(self) -> None:
+        selected = SELECTOR.selected_model({SELECTOR.OVERRIDE_ENV: "MiniMax-M2.7"})
+        original = TUI.LIVE_MODEL
+        try:
+            TUI.LIVE_MODEL = selected
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                TUI.write_profile(root / "config")
+                profile = (root / "config" / "medusa" / "provider.toml").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn('model = "MiniMax-M2.7"', profile)
+
+                state = root / "repo" / ".medusa" / "session.json"
+                state.parent.mkdir(parents=True)
+                state.write_text(
+                    json.dumps(
+                        {
+                            "events": [
+                                {
+                                    "payload": {
+                                        "type": "model_request_started",
+                                        "provider": "minimax",
+                                        "model": "MiniMax-M2.7",
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    TUI.durable_request_models(root / "repo"), ["MiniMax-M2.7"]
+                )
+                self.assertEqual(TUI.LIVE_MODEL, "MiniMax-M2.7")
+        finally:
+            TUI.LIVE_MODEL = original
+
+    def test_tui_durable_evidence_exposes_stale_model_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            state = repo / ".medusa" / "session.json"
+            state.parent.mkdir(parents=True)
+            state.write_text(
+                json.dumps(
+                    {
+                        "events": [
+                            {
+                                "payload": {
+                                    "type": "model_request_started",
+                                    "provider": "minimax",
+                                    "model": "MiniMax-M3",
+                                }
+                            },
+                            {
+                                "payload": {
+                                    "type": "model_request_started",
+                                    "provider": "minimax",
+                                    "model": "MiniMax-M2.7",
+                                }
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                TUI.durable_request_models(repo), ["MiniMax-M2.7", "MiniMax-M3"]
+            )
+            self.assertNotEqual(TUI.durable_request_models(repo), ["MiniMax-M2.7"])
 
 
 if __name__ == "__main__":
