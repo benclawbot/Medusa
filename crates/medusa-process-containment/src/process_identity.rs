@@ -245,9 +245,7 @@ fn platform_process_start_marker(pid: u32) -> io::Result<Option<NativeProcessSta
                 // Confirm absence with the non-destructive signal-0 probe before treating the
                 // ownership identity as missing; a live but inaccessible PID remains fail-closed.
                 let probe = unsafe { libc::kill(pid as c_int, 0) };
-                if probe == -1
-                    && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-                {
+                if probe == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
                     Ok(None)
                 } else {
                     Err(error)
