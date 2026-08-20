@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use medusa_core::MedusaResult;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use walkdir::WalkDir;
 
 use crate::{
@@ -37,7 +37,18 @@ pub(crate) fn read(repo: &Path, relative: &str) -> MedusaResult<String> {
     if relative == "." {
         return Ok(repository_listing(repo));
     }
-    Ok(fs::read_to_string(safe_path(repo, relative)?)?)
+    let path = safe_path(repo, relative)?;
+    fs::read_to_string(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            MedusaError::new(
+                ErrorCode::InvalidInput,
+                ErrorCategory::Validation,
+                format!("repository path does not exist: {relative}"),
+            )
+        } else {
+            error.into()
+        }
+    })
 }
 
 fn repository_listing(repo: &Path) -> String {
@@ -344,7 +355,9 @@ pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{fs, path::Path, thread};
+
+    use medusa_core::{ErrorCategory, ErrorCode};
 
     use super::{
         approved_absolute_path, create_dir, normalized_policy_path, read,
@@ -375,6 +388,57 @@ mod tests {
         let matches = search(directory.path(), "beta").expect("search");
         assert!(matches.contains("nested/value.txt:2:beta"));
         assert!(!matches.contains("hidden.txt"));
+    }
+
+    #[test]
+    fn concurrent_reads_report_missing_repository_paths_as_input_errors() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(directory.path().join("src")).expect("src fixture");
+        fs::write(directory.path().join("src/lib.rs"), "pub fn value() {}\n").expect("source");
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname='fixture'\n",
+        )
+        .expect("manifest");
+
+        let paths = [
+            "src/lib.rs",
+            "Cargo.toml",
+            "rust-toolchain.toml",
+            ".cargo/config.toml",
+        ];
+        let results = thread::scope(|scope| {
+            paths
+                .iter()
+                .map(|path| scope.spawn(|| (*path, read(directory.path(), path))))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|handle| handle.join().expect("read thread"))
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            results[0]
+                .1
+                .as_ref()
+                .is_ok_and(|value| value.contains("value"))
+        );
+        assert!(
+            results[1]
+                .1
+                .as_ref()
+                .is_ok_and(|value| value.contains("package"))
+        );
+        for (path, result) in &results[2..] {
+            let error = result.as_ref().expect_err("missing read must fail");
+            assert_eq!(error.code, ErrorCode::InvalidInput, "{path}");
+            assert_eq!(error.category, ErrorCategory::Validation, "{path}");
+            assert_eq!(
+                error.message,
+                format!("repository path does not exist: {path}")
+            );
+            assert_ne!(error.code, ErrorCode::PersistenceFailed, "{path}");
+        }
     }
 
     #[test]
