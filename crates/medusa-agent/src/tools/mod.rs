@@ -157,10 +157,56 @@ impl ToolManager {
         execution_policy: &AgentExecutionPolicy,
         cancellation: &AtomicBool,
     ) -> MedusaResult<CodeModeExecutionV1> {
-        let sdk = self.code_mode_sdk_for(repo, read_only, execution_policy, None)?;
+        self.execute_code_mode_with_session(
+            repo,
+            program,
+            read_only,
+            execution_policy,
+            cancellation,
+            None,
+        )
+    }
+
+    /// Executes Code Mode while binding every nested call to the active durable agent scope.
+    /// Scope projection is refreshed before each child so revocation cannot race with a
+    /// previously generated SDK and leave a stale tool callable.
+    pub fn execute_code_mode_for_session(
+        &self,
+        repo: &Path,
+        session_id: &str,
+        program: &CodeModeProgramV1,
+        read_only: bool,
+        execution_policy: &AgentExecutionPolicy,
+        cancellation: &AtomicBool,
+    ) -> MedusaResult<CodeModeExecutionV1> {
+        self.execute_code_mode_with_session(
+            repo,
+            program,
+            read_only,
+            execution_policy,
+            cancellation,
+            Some(session_id),
+        )
+    }
+
+    fn execute_code_mode_with_session(
+        &self,
+        repo: &Path,
+        program: &CodeModeProgramV1,
+        read_only: bool,
+        execution_policy: &AgentExecutionPolicy,
+        cancellation: &AtomicBool,
+        session_id: Option<&str>,
+    ) -> MedusaResult<CodeModeExecutionV1> {
+        let sdk = self.code_mode_sdk_for(repo, read_only, execution_policy, session_id)?;
         program.validate(&sdk, CodeModeLimits::default())?;
         let mut children = Vec::with_capacity(program.calls.len());
         for (ordinal, call) in program.calls.iter().enumerate() {
+            if session_id.is_some() {
+                let current_sdk =
+                    self.code_mode_sdk_for(repo, read_only, execution_policy, session_id)?;
+                program.validate(&current_sdk, CodeModeLimits::default())?;
+            }
             let execution = execute_tool_cancellable_with_context_and_policy_certified(
                 repo,
                 &call.tool,
@@ -1196,5 +1242,73 @@ mod tests {
                 .as_str()
                 .is_some_and(|fingerprint| !fingerprint.is_empty())
         );
+    }
+
+    #[test]
+    fn session_code_mode_refreshes_scope_before_nested_calls() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        std::fs::write(directory.path().join("fixture.txt"), "scoped code mode").expect("fixture");
+        let session = medusa_core::SessionId::new();
+        let provider_profile = json!({"provider": "test", "model": "test-model"});
+        let execution_policy = json!({"policy": "read_only"});
+        let contract = crate::agent_scope::prepare_agent_scope(
+            directory.path(),
+            &session,
+            crate::agent_scope::AgentScopePreparation {
+                mode: medusa_config::Mode::ReadOnly,
+                provider_profile: provider_profile.clone(),
+                execution_policy: execution_policy.clone(),
+                effective_tools: vec!["fs_read".to_owned()],
+                team_id: None,
+                member_id: None,
+                analysis_workspace: false,
+            },
+        )
+        .expect("prepare scope");
+        let scope = crate::agent_scope::publish_agent_scope(
+            directory.path(),
+            &contract,
+            provider_profile,
+            execution_policy,
+            vec!["fs_read".to_owned()],
+        )
+        .expect("publish scope");
+        let manager = ToolManager::new(Default::default());
+        let program = CodeModeProgramV1 {
+            schema_version: CODE_MODE_SCHEMA_VERSION,
+            calls: vec![CodeModeCallV1 {
+                tool: "fs_read".to_owned(),
+                input: json!({"path": "fixture.txt"}),
+            }],
+        };
+        manager
+            .execute_code_mode_for_session(
+                directory.path(),
+                session.as_str(),
+                &program,
+                true,
+                &AgentExecutionPolicy::unrestricted(),
+                &AtomicBool::new(false),
+            )
+            .expect("scoped code mode execution");
+
+        crate::agent_scope::revoke_agent_scope_tool(
+            directory.path(),
+            session.as_str(),
+            &scope,
+            "fs_read",
+        )
+        .expect("revoke scope tool");
+        let error = manager
+            .execute_code_mode_for_session(
+                directory.path(),
+                session.as_str(),
+                &program,
+                true,
+                &AgentExecutionPolicy::unrestricted(),
+                &AtomicBool::new(false),
+            )
+            .expect_err("revoked tool must not remain callable");
+        assert!(error.to_string().contains("effective admitted SDK"));
     }
 }
