@@ -39,6 +39,7 @@ PROMPT = (
     f"before integration. After fs_write succeeds, the implementation task must return exactly {EXPECTED}."
 )
 DEFAULT_TIMEOUT_SECONDS = 600
+LIVE_MODEL = "MiniMax-M3"
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,7 +74,7 @@ def write_profile(config_home: Path) -> None:
             [
                 'connection = "direct"',
                 'provider = "minimax"',
-                'model = "MiniMax-M3"',
+                f'model = "{LIVE_MODEL}"',
                 'speed = "balanced"',
                 'reasoning = "medium"',
                 'auth = "api-key"',
@@ -198,6 +199,30 @@ def session_evidence(repo: Path) -> tuple[list[Path], list[Path]]:
         if assistant_contains(data.get("messages")):
             assistants.append(path)
     return responses, assistants
+
+
+def durable_request_models(repo: Path) -> list[str]:
+    models: set[str] = set()
+    for path in (repo / ".medusa").rglob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        events = data.get("events")
+        if not isinstance(events, list):
+            continue
+        for event in events:
+            if not isinstance(event, dict) or not isinstance(event.get("payload"), dict):
+                continue
+            payload = event["payload"]
+            if payload.get("type") != "model_request_started" or payload.get("provider") != "minimax":
+                continue
+            model = payload.get("model")
+            if isinstance(model, str) and model.strip():
+                models.add(model.strip())
+    return sorted(models)
 
 
 def source_is_correct(repo: Path) -> bool:
@@ -342,8 +367,15 @@ def main() -> int:
     text = transcript.decode("utf-8", errors="replace").replace(api_key, "[REDACTED]")
     (output_dir / "terminal.log").write_text(text, encoding="utf-8")
     responses, assistants = session_evidence(repo)
+    request_models = durable_request_models(repo)
+    model_matches_durable = not request_models or request_models == [LIVE_MODEL]
     source_correct = source_is_correct(repo)
     tests_passed, evidence_errors = capture_evidence(repo, output_dir)
+    if not model_matches_durable:
+        error = (
+            f"selected model {LIVE_MODEL} does not match durable MiniMax request models: "
+            + ", ".join(request_models)
+        )
     passed = rendered and source_correct and tests_passed and error is None
     if rendered and not tests_passed:
         error = "MiniMax changed the file but cargo test did not pass"
@@ -353,7 +385,9 @@ def main() -> int:
         "schema_version": 4,
         "result": "pass" if passed else "fail",
         "provider": "minimax",
-        "model": "MiniMax-M3",
+        "model": LIVE_MODEL,
+        "durable_request_models": request_models,
+        "model_matches_durable_evidence": model_matches_durable,
         "route": "saved-profile-to-interactive-tui",
         "fixture_max_output_tokens": 2048,
         "prompt_submitted": submitted,
