@@ -28,6 +28,7 @@ pub fn project_event(
         return None;
     }
     let frontend = match &event.payload {
+        EventPayload::RuntimeConfigurationBound { .. } => return None,
         EventPayload::SessionCreated { .. } => FrontendEvent::SubmissionAccepted,
         EventPayload::SessionStateChanged { from, to } => FrontendEvent::Activity(activity(
             event,

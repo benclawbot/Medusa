@@ -174,6 +174,8 @@ pub struct AgentEngine<P> {
     desktop_commander: Mutex<Option<DesktopCommanderClient>>,
     cancellation: Arc<AtomicBool>,
     execution_policy: AgentExecutionPolicy,
+    runtime_config_fingerprint: Option<String>,
+    runtime_config_binding: Option<(u16, String, serde_json::Value)>,
     team_context: Option<TeamMemberContext>,
     analysis_host: Option<Arc<dyn AnalysisWorkspaceHost>>,
 }
@@ -415,6 +417,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             desktop_commander: Mutex::new(None),
             cancellation: Arc::new(AtomicBool::new(false)),
             execution_policy: AgentExecutionPolicy::unrestricted(),
+            runtime_config_fingerprint: None,
+            runtime_config_binding: None,
             team_context: None,
             analysis_host: None,
         }
@@ -433,6 +437,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             desktop_commander: Mutex::new(None),
             cancellation,
             execution_policy: AgentExecutionPolicy::unrestricted(),
+            runtime_config_fingerprint: None,
+            runtime_config_binding: None,
             team_context: None,
             analysis_host: None,
         }
@@ -441,6 +447,33 @@ impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn with_execution_policy(mut self, policy: AgentExecutionPolicy) -> Self {
         self.execution_policy = policy;
+        self
+    }
+
+    /// Binds the versioned runtime-loop configuration to every effective request manifest.
+    ///
+    /// The runtime owns compilation and validation of this fingerprint; the agent only records
+    /// it as assembly provenance so replay/audit can distinguish configuration generations.
+    #[must_use]
+    pub fn with_runtime_config_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
+        self.runtime_config_fingerprint = Some(fingerprint.into());
+        self
+    }
+
+    /// Binds a redacted, versioned effective runtime configuration to new sessions.
+    ///
+    /// The binding is persisted in the canonical session journal and is intentionally separate
+    /// from secrets or process-local provider credentials.
+    #[must_use]
+    pub fn with_runtime_config_binding(
+        mut self,
+        schema_version: u16,
+        fingerprint: impl Into<String>,
+        snapshot: serde_json::Value,
+    ) -> Self {
+        let fingerprint = fingerprint.into();
+        self.runtime_config_fingerprint = Some(fingerprint.clone());
+        self.runtime_config_binding = Some((schema_version, fingerprint, snapshot));
         self
     }
 
@@ -458,6 +491,19 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     fn scope_provider_profile(&self) -> MedusaResult<serde_json::Value> {
         serde_json::to_value(&self.config.model).map_err(json_error)
+    }
+
+    fn bind_runtime_config_provenance(&self, provenance: &mut BTreeMap<String, String>) {
+        if let Some(fingerprint) = self
+            .runtime_config_fingerprint
+            .as_deref()
+            .filter(|fingerprint| !fingerprint.trim().is_empty())
+        {
+            provenance.insert(
+                "runtime_config_fingerprint".to_owned(),
+                fingerprint.to_owned(),
+            );
+        }
     }
 
     fn scope_effective_tools(&self, repo: &Path) -> MedusaResult<Vec<String>> {
@@ -622,6 +668,37 @@ impl<P: ModelProvider> AgentEngine<P> {
     ) -> MedusaResult<AgentSession> {
         let content = content_with_session_goal(content, &objective);
         validate_user_content(&content, &self.provider.capabilities())?;
+        if let Some((schema_version, fingerprint, snapshot)) = &self.runtime_config_binding {
+            if *schema_version == 0 || fingerprint.trim().is_empty() {
+                return Err(MedusaError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorCategory::Validation,
+                    "runtime configuration binding requires a schema version and fingerprint",
+                ));
+            }
+            if snapshot.is_null() {
+                return Err(MedusaError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorCategory::Validation,
+                    "runtime configuration binding requires a redacted snapshot",
+                ));
+            }
+            let snapshot_schema = snapshot
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64);
+            let snapshot_fingerprint = snapshot
+                .get("fingerprint")
+                .and_then(serde_json::Value::as_str);
+            if snapshot_schema != Some(u64::from(*schema_version))
+                || snapshot_fingerprint != Some(fingerprint.as_str())
+            {
+                return Err(MedusaError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorCategory::Validation,
+                    "runtime configuration binding snapshot does not match its identity",
+                ));
+            }
+        }
         bootstrap(repo)?;
         medusa_intelligence::recover_patch_transactions(repo)?;
         let effective_tools = self.scope_effective_tools(repo)?;
@@ -682,6 +759,20 @@ impl<P: ModelProvider> AgentEngine<P> {
         ) {
             let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
             return Err(error);
+        }
+        if let Some((schema_version, fingerprint, snapshot)) = &self.runtime_config_binding {
+            if let Err(error) = append_event(
+                &mut session,
+                Actor::Coordinator,
+                EventPayload::RuntimeConfigurationBound {
+                    schema_version: *schema_version,
+                    fingerprint: fingerprint.clone(),
+                    snapshot: snapshot.clone(),
+                },
+            ) {
+                let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
+                return Err(error);
+            }
         }
         if let Err(error) = persist(&session) {
             let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
@@ -972,6 +1063,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                 effective_request::fragment_fingerprint(focus.unwrap_or_default()),
             ),
         ]);
+        let mut summary_provenance = summary_provenance;
+        self.bind_runtime_config_provenance(&mut summary_provenance);
         let execution_policy = self.execution_policy.audit_projection();
         let capabilities = self.provider.capabilities();
         let manifest = effective_request::persist_before_provider_call(
@@ -1195,6 +1288,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             });
         }
         let mut assembly_provenance = BTreeMap::new();
+        self.bind_runtime_config_provenance(&mut assembly_provenance);
         if let Some(context) = additional_system_context.filter(|text| !text.trim().is_empty()) {
             assembly_provenance.insert(
                 "additional_system_context".to_owned(),

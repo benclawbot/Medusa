@@ -108,6 +108,74 @@ fn effective_request_is_persisted_before_start_and_auditable_after_restart() {
 }
 
 #[test]
+fn session_persists_runtime_configuration_binding_for_resume() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let binding = serde_json::json!({
+        "schema_version": 1,
+        "fingerprint": "runtime-config-session-fingerprint",
+        "config": {"provider": "test", "model": "test-model"}
+    });
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    )
+    .with_runtime_config_binding(1, "runtime-config-session-fingerprint", binding.clone());
+
+    let session = engine
+        .create_session(directory.path(), "persist the runtime binding".to_owned())
+        .expect("create session");
+    let recorded = session
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::RuntimeConfigurationBound {
+                schema_version,
+                fingerprint,
+                snapshot,
+            } => Some((*schema_version, fingerprint.clone(), snapshot.clone())),
+            _ => None,
+        })
+        .expect("runtime configuration binding event");
+    assert_eq!(recorded.0, 1);
+    assert_eq!(recorded.1, "runtime-config-session-fingerprint");
+    assert_eq!(recorded.2, binding);
+
+    let loaded = engine
+        .load_session(directory.path(), session.id.as_str())
+        .expect("load session");
+    assert!(loaded.events.iter().any(|event| {
+        matches!(
+            event.payload,
+            EventPayload::RuntimeConfigurationBound { .. }
+        )
+    }));
+}
+
+#[test]
+fn invalid_runtime_configuration_binding_fails_before_session_bootstrap() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    )
+    .with_runtime_config_binding(0, "", serde_json::Value::Null);
+
+    let error = engine
+        .create_session(directory.path(), "reject invalid binding".to_owned())
+        .expect_err("invalid binding must fail closed");
+    assert_eq!(error.code, medusa_core::ErrorCode::InvalidConfiguration);
+    assert!(!directory.path().join(".medusa/sessions").exists());
+}
+
+#[test]
 fn execution_policy_and_ambient_config_are_bound_without_replay_drift() {
     let directory = tempfile::tempdir().expect("temporary repository");
     let mut config = Config::default();
@@ -180,6 +248,43 @@ fn execution_policy_and_ambient_config_are_bound_without_replay_drift() {
     assert_eq!(
         audit["execution_policy"]["allowed_write_paths"],
         serde_json::json!(["src"]),
+    );
+}
+
+#[test]
+fn runtime_configuration_fingerprint_is_bound_to_effective_request_evidence() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::clone(&calls),
+        },
+        config,
+    )
+    .with_runtime_config_fingerprint("runtime-config-test-fingerprint");
+    let mut session = engine
+        .create_session(directory.path(), "inspect the repository".to_owned())
+        .expect("create session");
+    engine.step(&mut session).expect("model step");
+
+    let manifest = session
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted {
+                manifest_ref: Some(reference),
+                ..
+            } => Some(reference.clone()),
+            _ => None,
+        })
+        .expect("request manifest");
+    let audit = inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest)
+        .expect("inspect request");
+    assert_eq!(
+        audit["assembly_provenance"]["runtime_config_fingerprint"],
+        "runtime-config-test-fingerprint"
     );
 }
 

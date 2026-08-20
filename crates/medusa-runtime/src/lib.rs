@@ -925,6 +925,8 @@ struct RuntimeState {
     pending_goal: Option<String>,
     pending_skill: Option<SelectedSkill>,
     session_api_key: Option<String>,
+    runtime_config_fingerprint: Option<String>,
+    runtime_config_binding: Option<(u16, String, serde_json::Value)>,
     effort: Effort,
     plan_mode: bool,
     team_control: TeamControlPlane,
@@ -941,6 +943,10 @@ impl RuntimeState {
     }
 
     fn from_config(repo: PathBuf, config: Config) -> Self {
+        let runtime_config_binding = runtime_config_binding(&config);
+        let runtime_config_fingerprint = runtime_config_binding
+            .as_ref()
+            .map(|(_, fingerprint, _)| fingerprint.clone());
         Self {
             repo,
             base_config: config.clone(),
@@ -951,6 +957,8 @@ impl RuntimeState {
             pending_goal: None,
             pending_skill: None,
             session_api_key: None,
+            runtime_config_fingerprint,
+            runtime_config_binding,
             team_control: TeamControlPlane::default(),
         }
     }
@@ -972,6 +980,51 @@ impl RuntimeState {
     }
 }
 
+fn runtime_config_binding(config: &Config) -> Option<(u16, String, serde_json::Value)> {
+    let loop_config = crate::runtime_config::RuntimeLoopConfigV1 {
+        provider: Some(config.model.provider.clone()),
+        model: Some(config.model.name.clone()),
+        ..crate::runtime_config::RuntimeLoopConfigV1::default()
+    };
+    crate::runtime_config::compile_effective_config(
+        loop_config,
+        BTreeMap::from([
+            ("provider".to_owned(), "resolved_model_config".to_owned()),
+            ("model".to_owned(), "resolved_model_config".to_owned()),
+        ]),
+        crate::runtime_config::RuntimeConfigHardLimits::default(),
+        true,
+    )
+    .ok()
+    .and_then(|effective| {
+        let fingerprint = effective.fingerprint.clone();
+        serde_json::to_value(&effective)
+            .ok()
+            .map(|snapshot| (effective.schema_version, fingerprint, snapshot))
+    })
+}
+
+fn session_runtime_config_binding(
+    session: &AgentSession,
+) -> Option<(u16, String, serde_json::Value)> {
+    session.events.iter().find_map(|event| match &event.payload {
+        EventPayload::RuntimeConfigurationBound {
+            schema_version,
+            fingerprint,
+            snapshot,
+        } => Some((*schema_version, fingerprint.clone(), snapshot.clone())),
+        _ => None,
+    })
+}
+
+fn bound_model(snapshot: &serde_json::Value) -> Option<(&str, &str)> {
+    let config = snapshot.get("config")?;
+    Some((
+        config.get("provider")?.as_str()?,
+        config.get("model")?.as_str()?,
+    ))
+}
+
 fn run_prompt(
     state: &mut RuntimeState,
     draft: PromptDraft,
@@ -981,6 +1034,18 @@ fn run_prompt(
     accepted: Option<&Sender<Result<(), String>>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
     let config = state.config.clone();
+    let session_binding = state
+        .session
+        .as_ref()
+        .and_then(session_runtime_config_binding);
+    if let Some((_, _, snapshot)) = &session_binding
+        && let Some((provider, model)) = bound_model(snapshot)
+        && (provider != config.model.provider || model != config.model.name)
+    {
+        return Err(RuntimeError::agent(
+            "active session is bound to a different provider/model configuration; start a new session",
+        ));
+    }
     let max_turns = config.agent.max_turns;
     let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
         .map_err(RuntimeError::agent)?;
@@ -1006,8 +1071,20 @@ fn run_prompt(
         events.clone(),
         Arc::clone(cancel),
     ));
-    let engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel))
-        .with_analysis_workspace_host(analysis_host);
+    let mut engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
+    if let Some((_, fingerprint, _)) = session_binding {
+        engine = engine.with_runtime_config_fingerprint(fingerprint);
+    } else if let Some((schema_version, fingerprint, snapshot)) = state.runtime_config_binding.clone() {
+        engine = engine.with_runtime_config_binding(schema_version, fingerprint, snapshot);
+    } else {
+        engine = engine.with_runtime_config_fingerprint(
+            state
+                .runtime_config_fingerprint
+                .clone()
+                .unwrap_or_else(|| "runtime-config-unavailable".to_owned()),
+        );
+    }
+    let engine = engine.with_analysis_workspace_host(analysis_host);
     let engine = if coordinated {
         engine.with_execution_policy(medusa_agent::AgentExecutionPolicy::for_team_role(
             medusa_agent::TeamRole::Reviewer,

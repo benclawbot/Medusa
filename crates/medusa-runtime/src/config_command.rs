@@ -197,6 +197,11 @@ fn effective_config(
 fn apply_effective_model(state: &mut RuntimeState, effective: Config) {
     state.base_config.model = effective.model.clone();
     state.config.model = effective.model;
+    state.runtime_config_binding = crate::runtime_config_binding(&state.config);
+    state.runtime_config_fingerprint = state
+        .runtime_config_binding
+        .as_ref()
+        .map(|(_, fingerprint, _)| fingerprint.clone());
 }
 
 fn status_details(
