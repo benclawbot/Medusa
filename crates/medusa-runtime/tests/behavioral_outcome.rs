@@ -100,6 +100,7 @@ fn verified_success_uses_durable_route_and_receipt_authority() {
         behavioral_outcome_from_events("session-b", Some("revision-b".to_owned()), &journal)
             .expect("outcome");
 
+    assert!(outcome.root_task_eligible);
     assert!(outcome.verified_success);
     assert_eq!(
         outcome.terminal_status,
@@ -116,6 +117,7 @@ fn verified_success_uses_durable_route_and_receipt_authority() {
     assert_eq!(outcome.model_executions.len(), 1);
     assert_eq!(outcome.model_executions[0].provider, "minimax");
     assert_eq!(outcome.model_executions[0].model, "MiniMax-M2.7");
+    assert!(outcome.model_executions[0].mutation_contribution);
     assert_eq!(
         outcome.model_executions[0].request_id.as_deref(),
         Some("request-1")
@@ -124,7 +126,71 @@ fn verified_success_uses_durable_route_and_receipt_authority() {
         outcome.model_executions[0].response_id.as_deref(),
         Some("response-1")
     );
+    assert_eq!(outcome.observed_token_usage, Some(168));
     assert_eq!(outcome.monetary_cost_microunits, None);
+}
+
+#[test]
+fn only_the_execution_preceding_mutation_gets_correctness_contribution() {
+    let journal = events(vec![
+        EventPayload::SessionCreated {
+            objective: "repair the repository".to_owned(),
+        },
+        EventPayload::ModelRequestStarted {
+            provider: "provider-a".to_owned(),
+            model: "model-a".to_owned(),
+            request_id: Some("request-a".to_owned()),
+            request_fingerprint: Some("fingerprint-a".to_owned()),
+            manifest_ref: Some("manifest-a".to_owned()),
+            attempt_ordinal: 1,
+            parent_request_id: None,
+        },
+        EventPayload::ModelResponseReceived {
+            response_id: Some("response-a".to_owned()),
+            usage: json!({"total_tokens": 10}),
+            request_id: Some("request-a".to_owned()),
+            request_fingerprint: Some("fingerprint-a".to_owned()),
+        },
+        EventPayload::ModelRequestStarted {
+            provider: "provider-b".to_owned(),
+            model: "model-b".to_owned(),
+            request_id: Some("request-b".to_owned()),
+            request_fingerprint: Some("fingerprint-b".to_owned()),
+            manifest_ref: Some("manifest-b".to_owned()),
+            attempt_ordinal: 1,
+            parent_request_id: None,
+        },
+        EventPayload::ModelResponseReceived {
+            response_id: Some("response-b".to_owned()),
+            usage: json!({"total_tokens": 20}),
+            request_id: Some("request-b".to_owned()),
+            request_fingerprint: Some("fingerprint-b".to_owned()),
+        },
+        EventPayload::FileTransactionCommitted {
+            paths: vec!["src/lib.rs".to_owned()],
+            rollback_ref: "rollback".to_owned(),
+        },
+        EventPayload::VerificationCompleted {
+            passed: true,
+            evidence: vec!["verified".to_owned()],
+        },
+        EventPayload::IntegrationReceiptRecorded {
+            receipt: json!({"id": "integrated"}),
+        },
+        EventPayload::SessionCompleted {
+            report_ref: "report".to_owned(),
+        },
+    ]);
+
+    let outcome = behavioral_outcome_from_events("session-route", None, &journal).expect("outcome");
+
+    assert!(!outcome.model_executions[0].mutation_contribution);
+    assert!(outcome.model_executions[1].mutation_contribution);
+    assert_eq!(
+        outcome.contributing_execution().map(|execution| execution.model.as_str()),
+        Some("model-b")
+    );
+    assert_eq!(outcome.observed_token_usage, Some(30));
 }
 
 #[test]
@@ -170,6 +236,29 @@ fn failed_verification_then_repair_preserves_first_pass_failure() {
     assert_eq!(outcome.failed_verification_attempts, 1);
     assert_eq!(outcome.mutation_count, 2);
     assert_eq!(outcome.verification_receipt_ids.len(), 2);
+}
+
+#[test]
+fn delegated_worker_completion_cannot_become_root_verified_success() {
+    let journal = events(vec![
+        EventPayload::SessionCreated {
+            objective: "Implement delegated task `implementation` inside this isolated Git worktree."
+                .to_owned(),
+        },
+        EventPayload::VerificationCompleted {
+            passed: true,
+            evidence: vec!["worker-verification".to_owned()],
+        },
+        EventPayload::SessionCompleted {
+            report_ref: "worker-report".to_owned(),
+        },
+    ]);
+
+    let outcome = behavioral_outcome_from_events("worker-session", None, &journal).expect("outcome");
+
+    assert!(!outcome.root_task_eligible);
+    assert!(!outcome.verified_success);
+    assert_eq!(outcome.terminal_status, BehavioralTerminalStatus::Inconclusive);
 }
 
 #[test]
