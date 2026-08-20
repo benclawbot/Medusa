@@ -358,10 +358,11 @@ mod tests {
         use std::process::Command;
 
         let mut child = Command::new("/bin/sleep")
-            .arg("0.1")
+            .arg("30")
             .spawn()
             .expect("spawn macOS child");
         let receipt = ProcessOwnershipReceipt::capture(child.id()).expect("capture child identity");
+        child.kill().expect("terminate macOS child");
         child.wait().expect("reap macOS child");
         assert_eq!(
             receipt.verify(),
