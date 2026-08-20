@@ -352,6 +352,24 @@ mod tests {
         assert_eq!(parse_linux_start_ticks(&stat).expect("start ticks"), 987654);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reaped_child_is_reported_missing_instead_of_identity_unavailable() {
+        use std::process::Command;
+
+        let mut child = Command::new("/bin/sleep")
+            .arg("0.1")
+            .spawn()
+            .expect("spawn macOS child");
+        let receipt = ProcessOwnershipReceipt::capture(child.id()).expect("capture child identity");
+        child.wait().expect("reap macOS child");
+        assert_eq!(
+            receipt.verify(),
+            ProcessOwnershipVerification::ProcessMissing,
+            "a reaped child must not surface libproc EPERM as identity unavailable"
+        );
+    }
+
     #[test]
     fn current_process_has_native_start_marker() {
         let marker = process_start_marker(std::process::id())
