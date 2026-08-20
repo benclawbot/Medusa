@@ -32,7 +32,11 @@ fn events(payloads: Vec<EventPayload>) -> Vec<EventEnvelope> {
 
 fn append_event(journal: &mut Vec<EventEnvelope>, payload: EventPayload) {
     let index = journal.len();
-    let session_id = journal.first().expect("existing journal").session_id.clone();
+    let session_id = journal
+        .first()
+        .expect("existing journal")
+        .session_id
+        .clone();
     let previous_hash = journal.last().map(|event| event.checksum.clone());
     journal.push(
         EventEnvelope::new(
@@ -42,8 +46,7 @@ fn append_event(journal: &mut Vec<EventEnvelope>, payload: EventPayload) {
             CorrelationId::new(),
             payload,
             previous_hash,
-            OffsetDateTime::from_unix_timestamp(1_700_000_000 + index as i64)
-                .expect("timestamp"),
+            OffsetDateTime::from_unix_timestamp(1_700_000_000 + index as i64).expect("timestamp"),
         )
         .expect("event"),
     );
@@ -237,7 +240,8 @@ fn explicit_unmatched_response_id_is_not_attributed_to_latest_request() {
         },
     ]);
 
-    let outcome = behavioral_outcome_from_events("session-unmatched", None, &journal).expect("outcome");
+    let outcome =
+        behavioral_outcome_from_events("session-unmatched", None, &journal).expect("outcome");
 
     assert_eq!(outcome.model_executions.len(), 1);
     assert_eq!(outcome.model_executions[0].response_id, None);
@@ -311,7 +315,8 @@ fn runtime_failure_superseded_by_later_verification_can_succeed() {
         },
     ]);
 
-    let outcome = behavioral_outcome_from_events("session-recovered", None, &journal).expect("outcome");
+    let outcome =
+        behavioral_outcome_from_events("session-recovered", None, &journal).expect("outcome");
 
     assert!(outcome.verified_success);
     assert_eq!(outcome.recovery_count, 1);
