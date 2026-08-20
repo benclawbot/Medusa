@@ -302,7 +302,7 @@ class Harness:
             "print('verified-python-slugify')\n"
             "npm = shutil.which('npm') or shutil.which('npm.cmd')\n"
             "assert npm, 'npm is required'\n"
-            "subprocess.run([npm, 'test'], check=True)\n",
+            "subprocess.run([npm, '--no-update-notifier', 'test'], check=True)\n",
             encoding="utf-8",
         )
         run_checked(["git", "init", "-q", "-b", "main"], cwd=self.fixture)
