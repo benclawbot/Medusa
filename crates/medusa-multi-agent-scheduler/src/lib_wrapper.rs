@@ -41,14 +41,16 @@ const MUTATION_VERBS: &[&str] = &[
     "upgrade",
     "write",
 ];
+const TERMINAL_PROSE_PATH_DELIMITERS: &[char] = &['.', ',', ';', ':', ')', ']', '}', '!', '?'];
 
 /// Plans through the public scheduler boundary while preserving scoped protection clauses.
 ///
 /// The core planner intentionally fails closed when it sees read-only language. A coding objective
 /// can also use that language to protect specific files, for example "repair X without modifying
 /// verify.py". In that mixed case, neutralize only the scoped protection phrase for intent
-/// classification. The protected path remains present in the objective and therefore in the
-/// repository evidence; the caller's accepted objective is restored before returning.
+/// classification. Repository-aware path cleanup also removes terminal prose punctuation only when
+/// the exact token does not resolve and a stripped candidate does. The caller's accepted objective
+/// is restored before returning.
 pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static str> {
     let original_objective = input.objective.trim().to_owned();
     input.objective = original_objective.clone();
@@ -56,6 +58,7 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
     if has_affirmative_mutation_request(&input.objective) {
         input.objective = neutralize_scoped_read_only_phrases(&input.objective);
     }
+    input.objective = resolve_prose_delimited_paths(&input.objective, &input.repository_paths);
 
     let mut result = core::plan_typed(input)?;
     if result.requested_outcomes == [original_objective.clone()] {
@@ -103,6 +106,54 @@ fn neutralize_scoped_read_only_phrases(value: &str) -> String {
         }
     }
     normalized
+}
+
+fn resolve_prose_delimited_paths(value: &str, repository_paths: &[String]) -> String {
+    value
+        .split_whitespace()
+        .map(|token| resolve_prose_delimited_path_token(token, repository_paths))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn resolve_prose_delimited_path_token(token: &str, repository_paths: &[String]) -> String {
+    let candidate = token.trim_matches(|character: char| {
+        !character.is_ascii_alphanumeric()
+            && !matches!(character, '/' | '\\' | '.' | '-' | '_')
+    });
+    if candidate.is_empty()
+        || (!candidate.contains('/') && !candidate.contains('\\') && !candidate.contains('.'))
+        || repository_path_exists(candidate, repository_paths)
+    {
+        return token.to_owned();
+    }
+
+    let mut stripped = candidate;
+    while let Some(last) = stripped.chars().last() {
+        if !TERMINAL_PROSE_PATH_DELIMITERS.contains(&last) {
+            break;
+        }
+        stripped = &stripped[..stripped.len() - last.len_utf8()];
+        if stripped.is_empty() {
+            break;
+        }
+        if repository_path_exists(stripped, repository_paths) {
+            return token.replacen(candidate, stripped, 1);
+        }
+    }
+
+    token.to_owned()
+}
+
+fn repository_path_exists(candidate: &str, repository_paths: &[String]) -> bool {
+    let candidate = candidate.replace('\\', "/");
+    repository_paths.iter().any(|path| {
+        let path = path.replace('\\', "/");
+        path == candidate
+            || path
+                .strip_prefix(&candidate)
+                .is_some_and(|remainder| remainder.starts_with('/'))
+    })
 }
 
 fn planning_fingerprint(result: &PlanningResult) -> String {
