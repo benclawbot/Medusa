@@ -44,12 +44,16 @@ fn model_claim_without_authoritative_receipts_is_not_success() {
         },
     ]);
 
-    let outcome = behavioral_outcome_from_events("session-a", Some("revision-a".to_owned()), &journal)
-        .expect("outcome");
+    let outcome =
+        behavioral_outcome_from_events("session-a", Some("revision-a".to_owned()), &journal)
+            .expect("outcome");
 
     assert!(!outcome.verified_success);
     assert_eq!(outcome.verification_passed, None);
-    assert_eq!(outcome.terminal_status, BehavioralTerminalStatus::Inconclusive);
+    assert_eq!(
+        outcome.terminal_status,
+        BehavioralTerminalStatus::Inconclusive
+    );
 }
 
 #[test]
@@ -92,18 +96,34 @@ fn verified_success_uses_durable_route_and_receipt_authority() {
         },
     ]);
 
-    let outcome = behavioral_outcome_from_events("session-b", Some("revision-b".to_owned()), &journal)
-        .expect("outcome");
+    let outcome =
+        behavioral_outcome_from_events("session-b", Some("revision-b".to_owned()), &journal)
+            .expect("outcome");
 
     assert!(outcome.verified_success);
-    assert_eq!(outcome.terminal_status, BehavioralTerminalStatus::VerifiedSuccess);
-    assert_eq!(outcome.verification_receipt_ids, vec!["verification-receipt-1"]);
-    assert_eq!(outcome.integration_receipt_ids, vec!["integration-receipt-1"]);
+    assert_eq!(
+        outcome.terminal_status,
+        BehavioralTerminalStatus::VerifiedSuccess
+    );
+    assert_eq!(
+        outcome.verification_receipt_ids,
+        vec!["verification-receipt-1"]
+    );
+    assert_eq!(
+        outcome.integration_receipt_ids,
+        vec!["integration-receipt-1"]
+    );
     assert_eq!(outcome.model_executions.len(), 1);
     assert_eq!(outcome.model_executions[0].provider, "minimax");
     assert_eq!(outcome.model_executions[0].model, "MiniMax-M2.7");
-    assert_eq!(outcome.model_executions[0].request_id.as_deref(), Some("request-1"));
-    assert_eq!(outcome.model_executions[0].response_id.as_deref(), Some("response-1"));
+    assert_eq!(
+        outcome.model_executions[0].request_id.as_deref(),
+        Some("request-1")
+    );
+    assert_eq!(
+        outcome.model_executions[0].response_id.as_deref(),
+        Some("response-1")
+    );
     assert_eq!(outcome.monetary_cost_microunits, None);
 }
 
@@ -164,10 +184,12 @@ fn replay_is_deterministic_and_cancelled_runs_remain_visible() {
         EventPayload::CancellationCompleted,
     ]);
 
-    let first = behavioral_outcome_from_events("session-d", Some("revision-d".to_owned()), &journal)
-        .expect("first");
-    let second = behavioral_outcome_from_events("session-d", Some("revision-d".to_owned()), &journal)
-        .expect("second");
+    let first =
+        behavioral_outcome_from_events("session-d", Some("revision-d".to_owned()), &journal)
+            .expect("first");
+    let second =
+        behavioral_outcome_from_events("session-d", Some("revision-d".to_owned()), &journal)
+            .expect("second");
 
     assert_eq!(first, second);
     assert_eq!(first.terminal_status, BehavioralTerminalStatus::Cancelled);
