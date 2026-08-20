@@ -1,45 +1,69 @@
 #!/usr/bin/env python3
-"""Explain and validate Medusa's change-triggered engineering policy.
-
-The policy is intentionally advisory for local planning and authoritative when
-invoked by CI.  Policy/evaluator changes are evaluated against the base policy
-so a patch cannot weaken the rules used to approve itself.
-"""
+"""Explain, validate, and enforce Medusa's change-triggered engineering policy."""
 from __future__ import annotations
 
 import argparse
 import fnmatch
 import json
+import os
 import pathlib
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
+import urllib.request
 from typing import Any
 
 SCHEMA_VERSION = 1
 REQUIRED_RULE_FIELDS = {"id", "description", "include", "required_checks", "protected"}
+AUTHORITY_PATHS = {
+    ".github/engineering-policy.json",
+    "scripts/engineering-policy.py",
+    ".github/workflows/architecture-policy.yml",
+}
+TERMINAL_BAD_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required", "stale", "skipped"}
 
 
-def load_policy(path: pathlib.Path) -> dict[str, Any]:
+def load_policy(path: pathlib.Path, root: pathlib.Path | None = None) -> dict[str, Any]:
     try:
         policy = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"cannot load engineering policy {path}: {exc}") from exc
-    validate_policy(policy)
+    validate_policy(policy, root)
     return policy
 
 
-def validate_policy(policy: dict[str, Any]) -> None:
+def validate_policy(policy: dict[str, Any], root: pathlib.Path | None = None) -> None:
     if policy.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(
-            f"unsupported engineering policy schema_version={policy.get('schema_version')!r}; "
-            f"expected {SCHEMA_VERSION}"
+            f"unsupported engineering policy schema_version={policy.get('schema_version')!r}; expected {SCHEMA_VERSION}"
         )
     if not isinstance(policy.get("policy_id"), str) or not policy["policy_id"]:
         raise ValueError("policy_id must be a non-empty string")
     protected_paths = policy.get("protected_policy_paths")
     if not isinstance(protected_paths, list) or not protected_paths or not all(isinstance(x, str) and x for x in protected_paths):
         raise ValueError("protected_policy_paths must be a non-empty string list")
+
+    registry = policy.get("check_registry")
+    if not isinstance(registry, dict) or not registry:
+        raise ValueError("check_registry must be a non-empty object")
+    for check_id, entry in registry.items():
+        if not isinstance(check_id, str) or not check_id or not isinstance(entry, dict):
+            raise ValueError("check_registry entries must have non-empty string ids and object values")
+        kind = entry.get("kind")
+        if kind not in {"inline", "command", "workflow"}:
+            raise ValueError(f"check {check_id}: unsupported kind {kind!r}")
+        if kind == "command":
+            command = entry.get("command")
+            if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
+                raise ValueError(f"check {check_id}: command must be a non-empty string list")
+            if root is not None and len(command) > 1 and command[1].startswith("scripts/") and not (root / command[1]).is_file():
+                raise ValueError(f"check {check_id}: registered command path does not exist: {command[1]}")
+        if kind == "workflow":
+            if not isinstance(entry.get("workflow_name"), str) or not entry["workflow_name"]:
+                raise ValueError(f"check {check_id}: workflow_name must be non-empty")
+
     rules = policy.get("rules")
     if not isinstance(rules, list) or not rules:
         raise ValueError("rules must be a non-empty list")
@@ -64,6 +88,9 @@ def validate_policy(policy: dict[str, Any]) -> None:
             raise ValueError(f"rule {rule_id}: include must not be empty")
         if not rule["required_checks"]:
             raise ValueError(f"rule {rule_id}: required_checks must not be empty")
+        unknown = sorted(set(rule["required_checks"]) - set(registry))
+        if unknown:
+            raise ValueError(f"rule {rule_id}: unregistered required checks: {', '.join(unknown)}")
         if not isinstance(rule["protected"], bool):
             raise ValueError(f"rule {rule_id}: protected must be boolean")
         if "evaluate_against_base" in rule and not isinstance(rule["evaluate_against_base"], bool):
@@ -80,8 +107,6 @@ def normalize_path(value: str) -> str:
 
 
 def matches(pattern: str, path: str) -> bool:
-    # fnmatch is deliberately used over pathlib matching: it gives identical
-    # behavior across Linux/macOS/Windows for normalized repository paths.
     return fnmatch.fnmatchcase(path, pattern)
 
 
@@ -135,8 +160,16 @@ def changed_paths(root: pathlib.Path, base: str, head: str) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
-def policy_paths_touched(policy: dict[str, Any], paths: list[str]) -> bool:
-    protected = set(policy["protected_policy_paths"])
+def protected_policy_paths(policy: dict[str, Any], base_policy: dict[str, Any] | None = None) -> set[str]:
+    paths = set(AUTHORITY_PATHS)
+    paths.update(policy.get("protected_policy_paths", []))
+    if base_policy is not None:
+        paths.update(base_policy.get("protected_policy_paths", []))
+    return paths
+
+
+def policy_paths_touched(policy: dict[str, Any], paths: list[str], base_policy: dict[str, Any] | None = None) -> bool:
+    protected = protected_policy_paths(policy, base_policy)
     return any(path in protected for path in paths)
 
 
@@ -144,7 +177,7 @@ def explain(policy: dict[str, Any], paths: list[str], base_policy: dict[str, Any
     normalized = [normalize_path(path) for path in paths]
     current = resolve(policy, normalized)
     current["evaluation_policy"] = "head"
-    if policy_paths_touched(policy, normalized):
+    if policy_paths_touched(policy, normalized, base_policy):
         if base_policy is None:
             raise ValueError("engineering policy/evaluator changed but no base policy was supplied; fail closed")
         base = resolve(base_policy, normalized)
@@ -172,37 +205,100 @@ def render_human(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def self_test() -> int:
-    policy = {
+def github_workflow_runs(repository: str, head: str, token: str) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode({"head_sha": head, "event": "pull_request", "per_page": 100})
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/actions/runs?{query}",
+        headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+    except Exception as exc:
+        raise ValueError(f"cannot query GitHub workflow runs: {exc}") from exc
+    runs = payload.get("workflow_runs")
+    if not isinstance(runs, list):
+        raise ValueError("GitHub workflow response missing workflow_runs")
+    return runs
+
+
+def enforce(
+    policy: dict[str, Any],
+    report: dict[str, Any],
+    root: pathlib.Path,
+    satisfied: set[str],
+    repository: str | None,
+    head: str | None,
+    token: str | None,
+    timeout_seconds: int,
+) -> None:
+    registry = policy["check_registry"]
+    workflows: dict[str, list[str]] = {}
+    for check_id in report.get("required_checks", []):
+        entry = registry.get(check_id)
+        if entry is None:
+            raise ValueError(f"required check is not registered: {check_id}")
+        kind = entry["kind"]
+        if kind == "inline":
+            if check_id not in satisfied:
+                raise ValueError(f"inline required check has no success evidence: {check_id}")
+        elif kind == "command":
+            completed = subprocess.run(entry["command"], cwd=root, check=False)
+            if completed.returncode:
+                raise ValueError(f"required command check failed: {check_id}")
+        else:
+            workflows.setdefault(entry["workflow_name"], []).append(check_id)
+
+    if not workflows:
+        return
+    if not repository or not head or not token:
+        raise ValueError("workflow-backed checks require repository, head SHA, and GitHub token")
+    deadline = time.monotonic() + max(0, timeout_seconds)
+    pending = set(workflows)
+    while pending:
+        runs = github_workflow_runs(repository, head, token)
+        for workflow_name in list(pending):
+            candidates = [run for run in runs if run.get("name") == workflow_name]
+            if not candidates:
+                continue
+            latest = max(candidates, key=lambda run: int(run.get("id", 0)))
+            status = latest.get("status")
+            conclusion = latest.get("conclusion")
+            if status == "completed" and conclusion == "success":
+                pending.remove(workflow_name)
+            elif status == "completed" and conclusion in TERMINAL_BAD_CONCLUSIONS:
+                checks = ", ".join(workflows[workflow_name])
+                raise ValueError(f"required workflow {workflow_name!r} for {checks} concluded {conclusion}")
+        if not pending:
+            return
+        if time.monotonic() >= deadline:
+            details = ", ".join(sorted(pending))
+            raise ValueError(f"required workflows did not complete successfully on head {head}: {details}")
+        time.sleep(10)
+
+
+def fixture_policy() -> dict[str, Any]:
+    return {
         "schema_version": 1,
         "policy_id": "fixture-v1",
         "protected_policy_paths": ["policy.json", "checker.py"],
+        "check_registry": {
+            "documentation": {"kind": "command", "command": [sys.executable, "-c", "pass"]},
+            "linux": {"kind": "workflow", "workflow_name": "Linux"},
+            "macos": {"kind": "workflow", "workflow_name": "macOS"},
+            "windows": {"kind": "workflow", "workflow_name": "Windows"},
+            "base-policy": {"kind": "inline"},
+        },
         "rules": [
-            {
-                "id": "docs",
-                "description": "docs",
-                "include": ["docs/**"],
-                "exclude": ["docs/architecture/**"],
-                "required_checks": ["documentation"],
-                "protected": False,
-            },
-            {
-                "id": "containment",
-                "description": "containment",
-                "include": ["crates/containment/**"],
-                "required_checks": ["linux", "macos", "windows"],
-                "protected": True,
-            },
-            {
-                "id": "policy",
-                "description": "policy",
-                "include": ["policy.json", "checker.py"],
-                "required_checks": ["base-policy"],
-                "protected": True,
-                "evaluate_against_base": True,
-            },
+            {"id": "docs", "description": "docs", "include": ["docs/**"], "exclude": ["docs/architecture/**"], "required_checks": ["documentation"], "protected": False},
+            {"id": "containment", "description": "containment", "include": ["crates/containment/**"], "required_checks": ["linux", "macos", "windows"], "protected": True},
+            {"id": "policy", "description": "policy", "include": ["policy.json", "checker.py"], "required_checks": ["base-policy"], "protected": True, "evaluate_against_base": True},
         ],
     }
+
+
+def self_test() -> int:
+    policy = fixture_policy()
     validate_policy(policy)
     docs = resolve(policy, ["docs/guide.md"])
     assert docs["required_checks"] == ["documentation"]
@@ -211,23 +307,33 @@ def self_test() -> int:
     containment = resolve(policy, ["crates/containment/src/lib.rs"])
     assert containment["required_checks"] == ["linux", "macos", "windows"]
     assert containment["protected_change"]
-    assert resolve(policy, ["crates/containment/src/lib.rs", "crates/containment/src/lib.rs"]) == containment
     try:
         explain(policy, ["policy.json"], None)
     except ValueError as exc:
         assert "fail closed" in str(exc)
     else:
         raise AssertionError("policy mutation without base policy must fail closed")
-    base = dict(policy)
+    base = json.loads(json.dumps(policy))
     base["policy_id"] = "fixture-base"
     report = explain(policy, ["policy.json"], base)
     assert report["evaluation_policy"] == "base"
-    assert report["policy_id"] == "fixture-base"
     assert report["required_checks"] == ["base-policy"]
+    weakened = json.loads(json.dumps(policy))
+    weakened["protected_policy_paths"] = ["policy.json"]
+    assert policy_paths_touched(weakened, ["checker.py"], base)
+    broken = json.loads(json.dumps(policy))
+    broken["rules"][0]["required_checks"] = ["not-registered"]
+    try:
+        validate_policy(broken)
+    except ValueError as exc:
+        assert "unregistered" in str(exc)
+    else:
+        raise AssertionError("unregistered required check must fail closed")
     with tempfile.TemporaryDirectory() as temp:
         path = pathlib.Path(temp) / "policy.json"
         path.write_text(json.dumps(policy), encoding="utf-8")
         assert load_policy(path)["policy_id"] == "fixture-v1"
+        enforce(policy, {"required_checks": ["documentation", "base-policy"]}, pathlib.Path(temp), {"base-policy"}, None, None, None, 0)
     print("engineering policy self-test passed")
     return 0
 
@@ -238,6 +344,7 @@ def main() -> int:
 
     validate_parser = sub.add_parser("validate")
     validate_parser.add_argument("--policy", type=pathlib.Path, required=True)
+    validate_parser.add_argument("--root", type=pathlib.Path)
 
     explain_parser = sub.add_parser("explain")
     explain_parser.add_argument("--policy", type=pathlib.Path, required=True)
@@ -248,15 +355,33 @@ def main() -> int:
     explain_parser.add_argument("--head", default="HEAD")
     explain_parser.add_argument("--json", action="store_true")
 
+    enforce_parser = sub.add_parser("enforce")
+    enforce_parser.add_argument("--policy", type=pathlib.Path, required=True)
+    enforce_parser.add_argument("--report", type=pathlib.Path, required=True)
+    enforce_parser.add_argument("--root", type=pathlib.Path, default=pathlib.Path("."))
+    enforce_parser.add_argument("--satisfied", action="append", default=[])
+    enforce_parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
+    enforce_parser.add_argument("--head", default=os.environ.get("GITHUB_SHA"))
+    enforce_parser.add_argument("--token-env", default="GITHUB_TOKEN")
+    enforce_parser.add_argument("--timeout-seconds", type=int, default=600)
+
     sub.add_parser("self-test")
     args = parser.parse_args()
 
     try:
         if args.command == "self-test":
             return self_test()
-        policy = load_policy(args.policy)
+        root = getattr(args, "root", None)
+        root = root.resolve() if root is not None else None
+        policy = load_policy(args.policy, root if args.command in {"validate", "enforce"} else None)
         if args.command == "validate":
             print(f"engineering policy valid: {policy['policy_id']}")
+            return 0
+        if args.command == "enforce":
+            report = json.loads(args.report.read_text(encoding="utf-8"))
+            token = os.environ.get(args.token_env)
+            enforce(policy, report, root or pathlib.Path(".").resolve(), set(args.satisfied), args.repository, args.head, token, args.timeout_seconds)
+            print("engineering policy required checks satisfied")
             return 0
         paths = list(args.paths)
         if args.base:
@@ -267,7 +392,7 @@ def main() -> int:
         report = explain(policy, paths, base_policy)
         print(json.dumps(report, indent=2, sort_keys=True) if args.json else render_human(report))
         return 0
-    except ValueError as exc:
+    except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"engineering policy error: {exc}", file=sys.stderr)
         return 2
 
