@@ -6,6 +6,50 @@
     "scripts/engineering-policy.py",
     ".github/workflows/architecture-policy.yml"
   ],
+  "unsafe_code_policy": {
+    "default": "forbid",
+    "allowed_ffi_paths": ["crates/medusa-process-containment/**"],
+    "required_check": "unsafe-policy"
+  },
+  "source_of_truth_relationships": [
+    {
+      "id": "provider-support-authority",
+      "sources": ["docs/provider-support.json"],
+      "generated": ["docs/PROVIDER-SUPPORT.md"],
+      "synchronized": ["README.md", "docs/LIVE-PROVIDER-DOGFOOD.md", "docs/PROVIDER-DELIVERY.md", ".github/workflows/live-provider-dogfood.yml"],
+      "required_checks": ["provider-support-sync"]
+    },
+    {
+      "id": "release-version-authority",
+      "sources": ["Cargo.toml"],
+      "generated": [],
+      "synchronized": ["apps/medusa-desktop/src-tauri/Cargo.toml", "apps/medusa-desktop/package.json", "apps/medusa-desktop/src-tauri/tauri.conf.json"],
+      "required_checks": ["release-evidence"]
+    }
+  ],
+  "canonical_truth_stores": [
+    {
+      "id": "architecture-ownership",
+      "authority_paths": ["docs/architecture/owners.json", "docs/architecture/baseline.json"],
+      "governed_paths": ["Cargo.toml", "crates/*/Cargo.toml", "docs/architecture/**"],
+      "parallel_authority_policy": "reject_or_protected_review",
+      "required_checks": ["architecture-policy", "architecture-conformance"]
+    },
+    {
+      "id": "github-operation-authority",
+      "authority_paths": ["crates/medusa-github/**"],
+      "governed_paths": ["crates/medusa-cli/src/github_operation.rs", "crates/*github*/**", "docs/architecture/**"],
+      "parallel_authority_policy": "reject",
+      "required_checks": ["github-authority"]
+    },
+    {
+      "id": "durable-journal-authority",
+      "authority_paths": ["crates/medusa-agent/src/journal.rs"],
+      "governed_paths": ["crates/**/journal*.rs", "crates/**/state*.rs", "crates/**/migration*.rs", "crates/**/recovery*.rs", "crates/**/schema*.rs"],
+      "parallel_authority_policy": "reject_or_protected_review",
+      "required_checks": ["journal-replay", "migration", "recovery"]
+    }
+  ],
   "check_registry": {
     "documentation": {"kind": "command", "command": ["python3", "scripts/check-documentation.py"]},
     "documentation-inventory": {"kind": "command", "command": ["python3", "scripts/check-documentation.py"]},
@@ -15,6 +59,7 @@
     "evidence-authority": {"kind": "command", "command": ["python3", "scripts/check-evidence-authority.py"]},
     "architecture-policy": {"kind": "inline"},
     "architecture-conformance": {"kind": "workflow", "workflow_name": "Architecture v2 Baseline"},
+    "github-authority": {"kind": "command", "command": ["python3", "scripts/github-authority-policy.py"]},
     "containment-linux": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
     "containment-macos": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
     "containment-windows": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
@@ -22,12 +67,17 @@
     "provider-adapter": {"kind": "workflow", "workflow_name": "CI"},
     "provider-history": {"kind": "workflow", "workflow_name": "CI"},
     "privacy": {"kind": "workflow", "workflow_name": "CI"},
+    "provider-delivery-claims": {"kind": "command", "command": ["python3", "scripts/check-provider-delivery.py"]},
+    "provider-live-dogfood": {"kind": "workflow", "workflow_name": "Live provider dogfood"},
     "journal-replay": {"kind": "workflow", "workflow_name": "Journal Durability Certification"},
     "migration": {"kind": "workflow", "workflow_name": "Resilience Certification"},
     "recovery": {"kind": "workflow", "workflow_name": "Resilience Certification"},
     "certified-tool-pipeline": {"kind": "inline"},
     "benchmark": {"kind": "workflow", "workflow_name": "Reliability Benchmarks"},
     "performance-regression": {"kind": "workflow", "workflow_name": "Performance Scenario Corpus"},
+    "release-evidence": {"kind": "command", "command": ["python3", "scripts/check-desktop-version-sync.py"]},
+    "release-build-evidence": {"kind": "command", "command": ["python3", "scripts/release-evidence.py", "self-test"]},
+    "verified-prebuilt-update": {"kind": "workflow", "workflow_name": "Verified Prebuilt Update"},
     "protected-improvement": {"kind": "workflow", "workflow_name": "Live Self Improvement"},
     "independent-verification": {"kind": "workflow", "workflow_name": "Continuous Verification Certification"},
     "engineering-policy-base": {"kind": "inline"}
@@ -37,8 +87,10 @@
       "id": "docs-only",
       "description": "Documentation-only changes do not trigger unrelated platform certification.",
       "include": ["docs/**", "README.md", "CONTRIBUTING.md", "SECURITY.md"],
-      "exclude": ["docs/architecture/**"],
+      "exclude": ["docs/architecture/**", "docs/provider-support.json", "docs/PROVIDER-SUPPORT.md", "docs/PROVIDER-DELIVERY.md", "docs/LIVE-PROVIDER-DOGFOOD.md"],
       "required_checks": ["documentation"],
+      "policy_sources": ["scripts/check-documentation.py"],
+      "promotion": "bounded-autonomous",
       "protected": false
     },
     {
@@ -47,6 +99,8 @@
       "include": ["docs/**", "README.md", "CONTRIBUTING.md", "SECURITY.md", "scripts/check-documentation.py"],
       "exclude": ["docs/architecture/**"],
       "required_checks": ["documentation-inventory"],
+      "policy_sources": ["scripts/check-documentation.py"],
+      "promotion": "bounded-autonomous",
       "protected": false
     },
     {
@@ -54,20 +108,28 @@
       "description": "docs/provider-support.json is the reviewed provider/live-dogfood source of truth and docs/PROVIDER-SUPPORT.md is generated from it; selectable support claims and references must stay synchronized.",
       "include": ["docs/provider-support.json", "docs/PROVIDER-SUPPORT.md", "docs/LIVE-PROVIDER-DOGFOOD.md", "docs/PROVIDER-DELIVERY.md", "README.md", ".github/workflows/live-provider-dogfood.yml", "scripts/check-provider-support.py"],
       "required_checks": ["provider-support-sync"],
-      "protected": false
+      "source_of_truth": ["provider-support-authority"],
+      "policy_sources": ["docs/provider-support.json"],
+      "promotion": "protected-review",
+      "protected": true
     },
     {
       "id": "capability-claim-synchronization",
       "description": "Capability maturity claims, public documentation, implementation/test evidence, gates, supported platforms, and observability references must remain synchronized.",
       "include": ["docs/CAPABILITY-CLAIMS.json", "docs/CAPABILITY-EVIDENCE.md", "scripts/check-capability-evidence.py", "README.md", "crates/**"],
       "required_checks": ["capability-claims-sync"],
+      "policy_sources": ["docs/CAPABILITY-CLAIMS.json"],
+      "promotion": "bounded-autonomous",
       "protected": false
     },
     {
       "id": "architecture-boundary",
       "description": "Architecture authority and dependency-boundary changes require architecture conformance.",
       "include": [".github/architecture-policy.json", "scripts/architecture-policy.py", "scripts/architecture-conformance.py", "scripts/check-architecture-index.py", "docs/architecture/**", "Cargo.toml", "crates/*/Cargo.toml"],
-      "required_checks": ["architecture-policy", "architecture-conformance"],
+      "required_checks": ["architecture-policy", "architecture-conformance", "github-authority"],
+      "canonical_authorities": ["architecture-ownership", "github-operation-authority"],
+      "policy_sources": [".github/architecture-policy.json", "docs/architecture/owners.json", "docs/architecture/baseline.json"],
+      "promotion": "protected-review",
       "protected": true
     },
     {
@@ -75,6 +137,9 @@
       "description": "The Architecture v2 source-of-truth matrix owns canonical runtime, review, state-machine, capability, deployment, and component authorities; duplicate or parallel authorities require protected review and must not survive certification.",
       "include": ["docs/architecture/baseline.json", "docs/architecture/owners.json", "docs/architecture/**", "Cargo.toml", "crates/medusa-runtime/**", "crates/medusa-agent/**", "crates/medusa-provider/**", "crates/medusa-evidence/**", "crates/medusa-multi-agent-scheduler/**", "scripts/check-architecture-index.py", "scripts/check-evidence-authority.py"],
       "required_checks": ["canonical-truth-authority", "evidence-authority", "architecture-policy"],
+      "canonical_authorities": ["architecture-ownership"],
+      "policy_sources": ["docs/architecture/baseline.json", "docs/architecture/owners.json"],
+      "promotion": "protected-review",
       "protected": true
     },
     {
@@ -82,20 +147,31 @@
       "description": "Containment or process-launch changes require cross-platform security certification.",
       "include": ["crates/medusa-process-containment/**", "crates/medusa-agent/src/policy.rs", "crates/medusa-agent/src/windows_sandbox.rs", "scripts/check-unsafe-boundary.py", ".github/workflows/*windows*", ".github/workflows/*containment*", ".github/workflows/unsafe-rust-boundary.yml"],
       "required_checks": ["containment-linux", "containment-macos", "containment-windows", "unsafe-policy"],
+      "platforms": ["linux", "macos", "windows"],
+      "policy_sources": [".github/workflows/unsafe-rust-boundary.yml", "scripts/check-unsafe-boundary.py"],
+      "promotion": "protected-review",
       "protected": true
     },
     {
       "id": "provider-history",
-      "description": "Provider wire/history changes require provider continuity and privacy regressions.",
-      "include": ["crates/medusa-provider/**", "crates/medusa-agent/src/engine/effective_request.rs", "crates/medusa-agent/src/engine/**provider**"],
-      "required_checks": ["provider-adapter", "provider-history", "privacy"],
+      "description": "Provider wire/history and public provider claims require continuity, privacy, synchronized support evidence, and live acceptance when credentials or final certification require it.",
+      "include": ["crates/medusa-provider/**", "crates/medusa-agent/src/engine/effective_request.rs", "crates/medusa-agent/src/engine/**provider**", "docs/provider-support.json", "docs/PROVIDER-SUPPORT.md", "docs/PROVIDER-DELIVERY.md", "docs/LIVE-PROVIDER-DOGFOOD.md", "scripts/check-provider-support.py", "scripts/check-provider-delivery.py", ".github/workflows/live-provider-dogfood.yml"],
+      "required_checks": ["provider-adapter", "provider-history", "privacy", "provider-delivery-claims", "provider-support-sync"],
+      "conditional_checks": [{"check": "provider-live-dogfood", "when": "credentials_available_or_final_issue_certification", "substitute_evidence": ["provider-delivery-claims", "provider-support-sync"]}],
+      "source_of_truth": ["provider-support-authority"],
+      "providers": ["configured-provider-set"],
+      "policy_sources": ["docs/provider-support.json", "docs/provider-delivery-contract.json"],
+      "promotion": "protected-review",
       "protected": true
     },
     {
       "id": "durable-state",
-      "description": "Durable state and journal changes require replay, migration, and recovery validation.",
+      "description": "Durable state and journal changes require replay, migration, recovery, and canonical-authority validation.",
       "include": ["crates/**/journal*.rs", "crates/**/state*.rs", "crates/**/migration*.rs", "crates/**/recovery*.rs", "crates/**/schema*.rs"],
       "required_checks": ["journal-replay", "migration", "recovery"],
+      "canonical_authorities": ["durable-journal-authority"],
+      "policy_sources": ["crates/medusa-agent/src/journal.rs", "docs/durable-journal-policy.md"],
+      "promotion": "protected-review",
       "protected": true
     },
     {
@@ -103,20 +179,37 @@
       "description": "Tool execution lifecycle changes require certified authority regressions.",
       "include": ["crates/medusa-agent/src/**tool**", "scripts/check-certified-tool-pipeline.py", "docs/TOOL-EXECUTION-PIPELINE.md"],
       "required_checks": ["certified-tool-pipeline", "architecture-policy"],
+      "policy_sources": ["scripts/check-certified-tool-pipeline.py", "docs/TOOL-EXECUTION-PIPELINE.md"],
+      "promotion": "protected-review",
       "protected": true
     },
     {
       "id": "performance-context",
-      "description": "Performance, context, cache, and model-experience changes require benchmark evidence.",
+      "description": "Performance, context, cache, and model-experience changes require benchmark and release evidence.",
       "include": ["benchmarks/**", "crates/**/context*.rs", "crates/**/cache*.rs", "crates/**/compaction*.rs"],
-      "required_checks": ["benchmark", "performance-regression"],
+      "required_checks": ["benchmark", "performance-regression", "release-build-evidence"],
+      "policy_sources": ["benchmarks/**", "scripts/release-evidence.py"],
+      "promotion": "bounded-autonomous",
       "protected": false
+    },
+    {
+      "id": "release-artifacts",
+      "description": "Release/updater changes require synchronized checkout versions, build evidence, and verified prebuilt evidence.",
+      "include": ["Cargo.lock", "crates/medusa-update/**", "crates/medusa-cli/**update**", "scripts/release-evidence.py", "scripts/check-desktop-version-sync.py", ".github/workflows/verified-prebuilt-update.yml", "apps/medusa-desktop/src-tauri/Cargo.toml", "apps/medusa-desktop/package.json", "apps/medusa-desktop/src-tauri/tauri.conf.json"],
+      "required_checks": ["release-evidence", "release-build-evidence", "verified-prebuilt-update"],
+      "source_of_truth": ["release-version-authority"],
+      "platforms": ["linux", "macos", "windows"],
+      "policy_sources": ["Cargo.toml", "scripts/check-desktop-version-sync.py", "scripts/release-evidence.py"],
+      "promotion": "protected-review",
+      "protected": true
     },
     {
       "id": "self-improvement",
       "description": "Evaluator and self-improvement changes require protected engineering review lanes.",
       "include": ["crates/**/learning*.rs", "crates/**/improvement*.rs", "crates/**/evaluator*.rs"],
       "required_checks": ["protected-improvement", "independent-verification"],
+      "policy_sources": [".github/workflows/live-self-improvement.yml", ".github/workflows/continuous-verification-certification.yml"],
+      "promotion": "protected-review",
       "protected": true
     },
     {
@@ -124,6 +217,8 @@
       "description": "Changes to engineering policy or its evaluator are protected and cannot self-authorize under the modified policy.",
       "include": [".github/engineering-policy.json", "scripts/engineering-policy.py", ".github/workflows/architecture-policy.yml"],
       "required_checks": ["engineering-policy-base", "architecture-policy"],
+      "policy_sources": [".github/engineering-policy.json", "scripts/engineering-policy.py"],
+      "promotion": "protected-review",
       "protected": true,
       "evaluate_against_base": true
     }
