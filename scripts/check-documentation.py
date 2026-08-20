@@ -16,11 +16,6 @@ from pathlib import Path
 HISTORICAL_MARKER = "> Historical record —"
 INLINE_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 REFERENCE_LINK = re.compile(r"(?m)^\s*\[[^\]]+\]:\s*(\S+)")
-VENDORED_MARKDOWN_PATHS = frozenset(
-    {
-        "skills/writing-skills/anthropic-best-practices.md",
-    }
-)
 
 
 class DocumentationError(RuntimeError):
@@ -29,7 +24,8 @@ class DocumentationError(RuntimeError):
 
 def is_governed_markdown(root: Path, path: Path) -> bool:
     """Return whether a Markdown file belongs to Medusa's reviewed documentation surface."""
-    return path.relative_to(root).as_posix() not in VENDORED_MARKDOWN_PATHS
+    relative = path.relative_to(root)
+    return not relative.parts or relative.parts[0] != "skills"
 
 
 def markdown_paths(root: Path) -> list[Path]:
