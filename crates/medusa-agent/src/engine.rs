@@ -2151,6 +2151,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             }
 
             for (id, name, input, result, receipt, timing, post_action) in executed {
+                let canonical_model_projection = receipt.as_ref().map(|receipt| {
+                    crate::tool_result::CanonicalToolResultV1::from_receipt(receipt, &result)
+                        .model_projection(8 * 1024)
+                });
                 if let Some(receipt) = receipt {
                     journal_certified_tool_execution(
                         session,
@@ -2304,11 +2308,28 @@ impl<P: ModelProvider> AgentEngine<P> {
                 ) {
                     Ok(env) => {
                         let compact = compact_envelope_for_model(&env);
-                        // Persist the artifact path on the session for later
-                        // reference (cleanup, replay). Currently unused by
-                        // downstream consumers — Task 7 wires SessionBrowser on top.
+                        // Persist the artifact path on the session for later reference (cleanup,
+                        // replay, and explicit model expansion).
                         session.tool_artifacts.push(env.path.clone());
-                        if is_error {
+                        if let Some(mut projection) = canonical_model_projection {
+                            projection["rendered"] = serde_json::Value::String(if is_error {
+                                format!("[error]\n{compact}")
+                            } else {
+                                compact.clone()
+                            });
+                            projection["rendering"] = serde_json::json!({
+                                "line_count": env.line_count,
+                                "byte_count": env.byte_count,
+                                "expansion_handle": env.path,
+                            });
+                            serde_json::to_string(&projection).unwrap_or_else(|_| {
+                                if is_error {
+                                    format!("[error]\n{compact}")
+                                } else {
+                                    compact
+                                }
+                            })
+                        } else if is_error {
                             format!("[error]\n{compact}")
                         } else {
                             compact
