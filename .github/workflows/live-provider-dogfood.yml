@@ -18,6 +18,8 @@ on:
       - "scripts/live-coding-e2e.sh"
       - "scripts/live-dogfood-report.py"
       - "scripts/run-live-dogfood-report.py"
+      - "scripts/install-live-ubuntu-prerequisites.sh"
+      - "scripts/test-live-ubuntu-prerequisites.py"
       - "scripts/test-live-dogfood.py"
       - "scripts/test-live-model-selection.py"
       - "scripts/check-provider-support.py"
@@ -44,10 +46,11 @@ jobs:
           python-version: "3.13"
       - name: Compile and test the evidence contract
         run: |
-          python -m py_compile scripts/live-coding-e2e.py scripts/run-live-coding-e2e.py scripts/live-model-selection.py scripts/live-dogfood-report.py scripts/run-live-dogfood-report.py scripts/test-live-dogfood.py scripts/test-live-model-selection.py scripts/check-provider-support.py
+          python -m py_compile scripts/live-coding-e2e.py scripts/run-live-coding-e2e.py scripts/live-model-selection.py scripts/live-dogfood-report.py scripts/run-live-dogfood-report.py scripts/test-live-dogfood.py scripts/test-live-model-selection.py scripts/test-live-ubuntu-prerequisites.py scripts/check-provider-support.py
           python scripts/check-provider-support.py
           python scripts/test-live-dogfood.py
           python scripts/test-live-model-selection.py
+          python scripts/test-live-ubuntu-prerequisites.py
 
   live-provider:
     name: Live installed binary (${{ matrix.platform }})
@@ -86,31 +89,7 @@ jobs:
       - name: Install Linux containment backend
         if: runner.os == 'Linux'
         shell: bash
-        run: |
-          set -euo pipefail
-          if command -v bwrap >/dev/null 2>&1; then
-            echo "bubblewrap already available; skipping apt bootstrap"
-            exit 0
-          fi
-          apt_args=(
-            -o Acquire::Retries=2
-            -o Acquire::http::Timeout=15
-            -o Acquire::https::Timeout=15
-            -o Acquire::http::ConnectTimeout=10
-            -o Acquire::https::ConnectTimeout=10
-          )
-          if ! timeout --signal=TERM --kill-after=10s 120s sudo apt-get "${apt_args[@]}" update; then
-            echo "::error title=Live prerequisite unavailable::apt update failed or exceeded 120s while installing bubblewrap"
-            exit 2
-          fi
-          if ! timeout --signal=TERM --kill-after=10s 120s sudo apt-get "${apt_args[@]}" install --yes bubblewrap; then
-            echo "::error title=Live prerequisite unavailable::bubblewrap installation failed or exceeded 120s"
-            exit 2
-          fi
-          command -v bwrap >/dev/null 2>&1 || {
-            echo "::error title=Live prerequisite unavailable::bubblewrap installation completed without a bwrap executable"
-            exit 2
-          }
+        run: bash scripts/install-live-ubuntu-prerequisites.sh
       - name: Require and mask the live credential
         run: python -c "import os,sys; key=os.environ.get('MINIMAX_API_KEY',''); print('::add-mask::'+key) if key else sys.exit('MINIMAX_API_KEY is required')"
       - name: Run bounded live product dogfood
