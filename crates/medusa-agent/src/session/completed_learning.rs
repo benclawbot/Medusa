@@ -283,7 +283,8 @@ fn record_monitor_outcome(
             .tool_executions
             .iter()
             .filter(|execution| {
-                execution.denied || execution.completed && execution.exit_code.is_some_and(|code| code != 0)
+                execution.denied
+                    || execution.completed && execution.exit_code.is_some_and(|code| code != 0)
             })
             .count() as u32,
         latency_millis: behavioral.latency_millis.unwrap_or_default(),
