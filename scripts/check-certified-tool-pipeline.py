@@ -101,6 +101,7 @@ def main() -> int:
         "fn journal_certified_tool_execution(",
         "EventPayload::WorkerEvidenceRecorded",
         '"kind": "certified_tool_execution"',
+        '"canonical_result": canonical.durable_evidence_projection()',
         '"execution_authority": execution_policy.audit_projection()',
         "persist(session)",
     ]
@@ -108,11 +109,13 @@ def main() -> int:
         if marker not in engine:
             fail(f"durable certified publication contract is missing: {marker}")
     central_journal_match = re.search(
-        r"journal_certified_tool_execution\(\s*session,\s*&id,\s*&name,\s*&input,\s*receipt,\s*&self\.execution_policy,\s*\)\?;",
+        r"journal_certified_tool_execution\(\s*session,\s*&id,\s*&name,\s*&input,\s*receipt,\s*&execution\.result,\s*&self\.execution_policy,\s*\)\?;",
         engine,
     )
     if central_journal_match is None:
-        fail("durable certified publication contract must carry active execution authority")
+        fail(
+            "durable certified publication contract must carry canonical result and active execution authority"
+        )
     central_journal = central_journal_match.start()
     completion = engine.find("EventPayload::ToolExecutionCompleted", central_journal)
     frontend = engine.find("observer(&AgentUpdate::ToolOutput", central_journal)
