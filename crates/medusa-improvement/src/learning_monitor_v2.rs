@@ -318,7 +318,11 @@ mod tests {
 
         let error = LearningMonitorStore::open(repo.path()).expect_err("missing authority record");
         assert!(matches!(error, LearningMonitorError::Authority(_)));
-        assert!(error.to_string().contains("missing monitor artifact harmful:1"));
+        assert!(
+            error
+                .to_string()
+                .contains("missing monitor artifact harmful:1")
+        );
     }
 
     #[test]
