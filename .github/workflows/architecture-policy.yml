@@ -18,11 +18,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Validate committed dependency authority
         run: cargo metadata --locked --format-version 1 >/dev/null
-      - name: Exercise policy fixtures
+      - name: Exercise architecture policy fixtures
         run: python3 scripts/architecture-policy.py self-test
+      - name: Exercise engineering policy fixtures
+        run: python3 scripts/engineering-policy.py self-test
+      - name: Validate engineering policy schema
+        run: python3 scripts/engineering-policy.py validate --policy .github/engineering-policy.json
+      - name: Resolve required engineering checks
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git cat-file -e "${BASE_SHA}:.github/engineering-policy.json" 2>/dev/null; then
+            git show "${BASE_SHA}:.github/engineering-policy.json" > /tmp/engineering-policy-base.json
+            echo "engineering policy authority: base branch"
+          else
+            cp .github/engineering-policy.json /tmp/engineering-policy-base.json
+            echo "engineering policy authority: bootstrap (no base policy exists yet)"
+          fi
+          python3 scripts/engineering-policy.py explain \
+            --policy .github/engineering-policy.json \
+            --base-policy /tmp/engineering-policy-base.json \
+            --root . \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}" \
+            --json | tee engineering-policy-report.json
       - name: Enforce architecture policy
         run: |
           python3 scripts/architecture-policy.py check \
@@ -38,5 +64,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: architecture-policy-report
-          path: architecture-policy-report.md
-          if-no-files-found: error
+          path: |
+            architecture-policy-report.md
+            engineering-policy-report.json
+          if-no-files-found: warn
