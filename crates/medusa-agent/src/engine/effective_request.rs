@@ -8,7 +8,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_protocol::EventPayload;
+use medusa_protocol::{EventEnvelope, EventPayload};
 use medusa_provider::{
     ModelRequest, ProviderAttemptDescriptor, ProviderCapabilities, ProviderExecutionPhase,
 };
@@ -138,6 +138,7 @@ pub(crate) fn persist_before_provider_call(
         assembly_provenance,
         previous,
     } = input;
+    let mut assembly_provenance = assembly_provenance;
     let scope = crate::agent_scope::load_published_scope_ref(&session.repo, session.id.as_str())?;
     let preceding_event_sequence = session.events.last().map_or(0, |event| event.sequence);
     let started_event_sequence = preceding_event_sequence.saturating_add(1);
@@ -193,6 +194,10 @@ pub(crate) fn persist_before_provider_call(
         .filter(|event| event.sequence <= preceding_event_sequence)
         .map(|event| event.sequence)
         .collect::<Vec<_>>();
+    assembly_provenance.insert(
+        "source_events_fingerprint".to_owned(),
+        source_events_fingerprint(&session.events, &source_event_sequences)?,
+    );
     let already_linked = session
         .events
         .iter()
@@ -468,6 +473,7 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         );
         return Err(error);
     }
+    let reconstruction = verify_source_events(repo, session_id, &manifest)?;
     let request_material = RequestFingerprintMaterial {
         schema_version: manifest.schema_version,
         execution_phase: manifest.execution_phase,
@@ -553,6 +559,7 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         "execution_policy_fingerprint": manifest.execution_policy_fingerprint,
         "execution_policy": manifest.execution_policy,
         "assembly_provenance": manifest.assembly_provenance,
+        "reconstruction": reconstruction,
         "delivered_action_ids": manifest.delivered_action_ids,
         "compaction_generation": manifest.compaction_generation,
         "compaction_source_event_sequences": manifest.compaction_source_event_sequences,
@@ -638,6 +645,70 @@ fn tool_schema_fingerprints_from_value(request: &Value) -> MedusaResult<BTreeMap
 
 pub(crate) fn fragment_fingerprint(text: &str) -> String {
     sha256(text.as_bytes())
+}
+
+fn source_events_fingerprint(events: &[EventEnvelope], sequences: &[u64]) -> MedusaResult<String> {
+    let material = sequences
+        .iter()
+        .map(|sequence| {
+            let event = events
+                .iter()
+                .find(|event| event.sequence == *sequence)
+                .ok_or_else(|| {
+                    audit_error(format!(
+                        "effective request source event is unavailable: {sequence}"
+                    ))
+                })?;
+            let value = canonicalize_value(serde_json::to_value(event).map_err(json_error)?);
+            Ok((*sequence, fingerprint_value(&value)?))
+        })
+        .collect::<MedusaResult<BTreeMap<_, _>>>()?;
+    fingerprint_value(&serde_json::to_value(material).map_err(json_error)?)
+}
+
+fn verify_source_events(
+    repo: &Path,
+    session_id: &str,
+    manifest: &EffectiveModelRequestManifestV1,
+) -> MedusaResult<Value> {
+    let Some(recorded) = manifest
+        .assembly_provenance
+        .get("source_events_fingerprint")
+    else {
+        return Ok(json!({
+            "status": "legacy_artifact_only",
+            "source_event_count": manifest.source_event_sequences.len(),
+        }));
+    };
+    let session = crate::session::load(repo, session_id).map_err(|error| {
+        audit_error(format!(
+            "effective request source session is unavailable for reconstruction: {error}"
+        ))
+    })?;
+    if session.id.as_str() != manifest.session_id {
+        return Err(audit_error(
+            "effective request source session identity does not match its manifest",
+        ));
+    }
+    let reconstructed =
+        source_events_fingerprint(&session.events, &manifest.source_event_sequences)?;
+    if &reconstructed != recorded {
+        let mut error = audit_error("effective request source events do not match their manifest");
+        error.context.insert(
+            "recorded_source_events_fingerprint".to_owned(),
+            json!(recorded),
+        );
+        error.context.insert(
+            "reconstructed_source_events_fingerprint".to_owned(),
+            json!(reconstructed),
+        );
+        return Err(error);
+    }
+    Ok(json!({
+        "status": "source_bound",
+        "source_event_count": manifest.source_event_sequences.len(),
+        "source_events_fingerprint": reconstructed,
+    }))
 }
 
 fn component_mismatches(

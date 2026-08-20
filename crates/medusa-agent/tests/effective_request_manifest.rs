@@ -105,6 +105,8 @@ fn effective_request_is_persisted_before_start_and_auditable_after_restart() {
     assert!(audit["canonical_request"]["system"].is_string());
     assert!(audit["canonical_request"]["messages"].is_array());
     assert!(audit["canonical_request"]["tools"].is_array());
+    assert_eq!(audit["reconstruction"]["status"], "source_bound");
+    assert!(audit["reconstruction"]["source_events_fingerprint"].is_string());
 }
 
 #[test]
