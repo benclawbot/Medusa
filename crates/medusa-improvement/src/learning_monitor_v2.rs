@@ -101,12 +101,19 @@ fn reconcile_from_canonical_authority(
 
     let mut changed = false;
     for artifact in &mut snapshot.artifacts {
-        let Some(record) = canonical.records.iter().find(|record| {
-            record.proposal_id == artifact.artifact_id
-                && record.version == artifact.artifact_version
-        }) else {
-            continue;
-        };
+        let record = canonical
+            .records
+            .iter()
+            .find(|record| {
+                record.proposal_id == artifact.artifact_id
+                    && record.version == artifact.artifact_version
+            })
+            .ok_or_else(|| {
+                LearningMonitorError::Authority(format!(
+                    "canonical refinement authority is missing monitor artifact {}:{}",
+                    artifact.artifact_id, artifact.artifact_version
+                ))
+            })?;
 
         let canonical_active = canonical.active.iter().any(|proposal| {
             proposal.id == artifact.artifact_id && proposal.version == artifact.artifact_version
@@ -296,6 +303,22 @@ mod tests {
             reports: Vec::new(),
             actions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn reopen_fails_closed_when_canonical_record_is_missing() {
+        let repo = tempdir().expect("repo");
+        let stale = LearningMonitorSnapshot {
+            schema_version: 1,
+            revision: 3,
+            artifacts: vec![stale_artifact()],
+            unattributed_outcomes: Vec::new(),
+        };
+        persist_reconciled_snapshot(repo.path(), &stale).expect("stale monitor projection");
+
+        let error = LearningMonitorStore::open(repo.path()).expect_err("missing authority record");
+        assert!(matches!(error, LearningMonitorError::Authority(_)));
+        assert!(error.to_string().contains("missing monitor artifact harmful:1"));
     }
 
     #[test]
