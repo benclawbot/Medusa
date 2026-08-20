@@ -31,6 +31,13 @@ def main() -> int:
         lf.write_bytes(b"# Title\n\nReviewed documentation.\n")
         crlf.write_bytes(b"# Title\r\n\r\nReviewed documentation.\r\n")
         assert checker.document_sha256(lf) == checker.document_sha256(crlf)
+
+        skill = root / "skills" / "writing-skills" / "SKILL.md"
+        nested_skill_reference = root / "skills" / "using-superpowers" / "references" / "codex-tools.md"
+        governed = root / "docs" / "guide.md"
+        assert not checker.is_governed_markdown(root, skill)
+        assert not checker.is_governed_markdown(root, nested_skill_reference)
+        assert checker.is_governed_markdown(root, governed)
     print("documentation-tests-ok")
     return 0
 

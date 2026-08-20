@@ -42,6 +42,8 @@ jobs:
           tool: cargo-llvm-cov
       - name: Run complete workspace coverage suite
         shell: bash
+        env:
+          MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
         run: |
           set -o pipefail
           cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 75 2>&1 | tee coverage.log

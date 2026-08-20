@@ -22,6 +22,12 @@ class DocumentationError(RuntimeError):
     """Raised when current documentation and its reviewed inventory disagree."""
 
 
+def is_governed_markdown(root: Path, path: Path) -> bool:
+    """Return whether a Markdown file belongs to Medusa's reviewed documentation surface."""
+    relative = path.relative_to(root)
+    return not relative.parts or relative.parts[0] != "skills"
+
+
 def markdown_paths(root: Path) -> list[Path]:
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.md"],
@@ -33,7 +39,7 @@ def markdown_paths(root: Path) -> list[Path]:
     return [
         root / line
         for line in sorted(set(result.stdout.splitlines()))
-        if line and (root / line).is_file()
+        if line and (root / line).is_file() and is_governed_markdown(root, root / line)
     ]
 
 

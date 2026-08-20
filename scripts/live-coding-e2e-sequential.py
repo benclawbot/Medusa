@@ -87,6 +87,8 @@ def main() -> int:
         os.environ["LIVE_E2E_TIMEOUT_SECONDS"] = str(
             max(configured_timeout, MIN_SEQUENTIAL_TIMEOUT_SECONDS)
         )
+        os.environ["NO_UPDATE_NOTIFIER"] = "1"
+        os.environ["NPM_CONFIG_UPDATE_NOTIFIER"] = "false"
         return module.main()
     finally:
         if temporary_path is not None:

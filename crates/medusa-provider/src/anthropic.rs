@@ -1,4 +1,8 @@
-use std::{env, sync::atomic::AtomicBool};
+use std::{
+    collections::HashMap,
+    env,
+    sync::{Arc, Mutex, atomic::AtomicBool},
+};
 
 use medusa_config::{Config, model_capabilities};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -13,6 +17,8 @@ use crate::{
     shared_blocking_http_client,
 };
 
+type WireHistory = Arc<Mutex<HashMap<String, Arc<Vec<Value>>>>>;
+
 /// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.
 #[derive(Clone)]
 pub struct MiniMaxProvider {
@@ -22,6 +28,7 @@ pub struct MiniMaxProvider {
     api_key: String,
     model: String,
     capabilities: ProviderCapabilities,
+    wire_history: WireHistory,
 }
 
 impl MiniMaxProvider {
@@ -63,7 +70,36 @@ impl MiniMaxProvider {
             api_key,
             model: config.model.name.clone(),
             capabilities,
+            wire_history: Arc::default(),
         })
+    }
+
+    fn request_messages(&self, request: &ModelRequest) -> Value {
+        let mut messages = json!(request.messages);
+        let history = self
+            .wire_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(message_values) = messages.as_array_mut() else {
+            return messages;
+        };
+        for message in message_values {
+            if message.get("role").and_then(Value::as_str) != Some("assistant") {
+                continue;
+            }
+            let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            let replay = content
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+                .filter_map(|block| block.get("id").and_then(Value::as_str))
+                .find_map(|tool_use_id| history.get(tool_use_id).cloned());
+            if let Some(replay) = replay {
+                *content = replay.as_ref().clone();
+            }
+        }
+        messages
     }
 
     fn request_body(&self, request: &ModelRequest) -> Value {
@@ -80,12 +116,49 @@ impl MiniMaxProvider {
                 "text": request.system,
                 "cache_control": {"type": "ephemeral"}
             }],
-            "messages": request.messages,
+            "messages": self.request_messages(request),
             "tools": tools,
             "max_tokens": request.max_tokens,
             "temperature": f64::from(request.temperature_milli) / 1000.0,
             "stream": false
         })
+    }
+
+    fn cache_wire_history(&self, content: &[WireBlock]) {
+        if !content
+            .iter()
+            .any(|block| matches!(block, WireBlock::Thinking { .. }))
+        {
+            return;
+        }
+        let tool_use_ids = content
+            .iter()
+            .filter_map(|block| match block {
+                WireBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if tool_use_ids.is_empty() {
+            return;
+        }
+        let replay = Arc::new(
+            content
+                .iter()
+                .filter_map(WireBlock::replay_value)
+                .collect::<Vec<_>>(),
+        );
+        let mut history = self
+            .wire_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for tool_use_id in tool_use_ids {
+            history.insert(tool_use_id, replay.clone());
+        }
+    }
+
+    fn model_response_from_wire(&self, wire: WireResponse) -> ModelResponse {
+        self.cache_wire_history(&wire.content);
+        wire.into_model_response()
     }
 
     fn validate_request(&self, request: &ModelRequest) -> MedusaResult<()> {
@@ -139,7 +212,7 @@ impl MiniMaxProvider {
             .map_err(provider_error)?;
         if response.status().is_success() {
             let wire: WireResponse = blocking_response_json(response)?;
-            return Ok(wire.into_model_response());
+            return Ok(self.model_response_from_wire(wire));
         }
         Err(blocking_response_error(response))
     }
@@ -158,7 +231,7 @@ impl MiniMaxProvider {
             .map_err(provider_error)?;
         if response.status().is_success() {
             let wire: WireResponse = async_response_json(response).await?;
-            return Ok(wire.into_model_response());
+            return Ok(self.model_response_from_wire(wire));
         }
         Err(async_response_error(response).await)
     }
@@ -262,7 +335,7 @@ fn anthropic_capabilities() -> ProviderCapabilities {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct WireResponse {
     id: Option<String>,
     stop_reason: Option<String>,
@@ -272,7 +345,7 @@ struct WireResponse {
     usage: WireUsage,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WireBlock {
     Text {
@@ -286,12 +359,41 @@ enum WireBlock {
     Thinking {
         #[serde(default)]
         thinking: String,
+        #[serde(default)]
+        signature: Option<String>,
     },
     #[serde(other)]
     Unknown,
 }
 
-#[derive(Debug, Default, Deserialize)]
+impl WireBlock {
+    fn replay_value(&self) -> Option<Value> {
+        match self {
+            Self::Text { text } => Some(json!({"type": "text", "text": text})),
+            Self::ToolUse { id, name, input } => Some(json!({
+                "type": "tool_use",
+                "id": id,
+                "name": name,
+                "input": input
+            })),
+            Self::Thinking {
+                thinking,
+                signature,
+            } => {
+                let mut block = json!({"type": "thinking", "thinking": thinking});
+                if let Some(signature) = signature
+                    && let Some(object) = block.as_object_mut()
+                {
+                    object.insert("signature".to_owned(), Value::String(signature.clone()));
+                }
+                Some(block)
+            }
+            Self::Unknown => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
 struct WireUsage {
     #[serde(default)]
     input_tokens: u64,
@@ -313,8 +415,11 @@ impl WireResponse {
                 WireBlock::ToolUse { id, name, input } => {
                     Some(ResponseBlock::ToolUse { id, name, input })
                 }
-                WireBlock::Thinking { thinking } => {
-                    let _ = thinking;
+                WireBlock::Thinking {
+                    thinking,
+                    signature,
+                } => {
+                    let _ = (thinking, signature);
                     None
                 }
                 WireBlock::Unknown => None,
@@ -337,6 +442,7 @@ impl WireResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Message, Role};
 
     fn empty_request() -> ModelRequest {
         ModelRequest {
@@ -348,16 +454,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn request_marks_stable_system_and_tool_prefix_for_native_caching() {
-        let provider = MiniMaxProvider {
+    fn test_provider() -> MiniMaxProvider {
+        MiniMaxProvider {
             blocking_client: shared_blocking_http_client().expect("blocking client"),
             async_client: shared_async_http_client().expect("async client"),
             base_url: "https://example.invalid".to_owned(),
             api_key: "test".to_owned(),
             model: "test-model".to_owned(),
             capabilities: anthropic_capabilities(),
-        };
+            wire_history: Arc::default(),
+        }
+    }
+
+    #[test]
+    fn request_marks_stable_system_and_tool_prefix_for_native_caching() {
+        let provider = test_provider();
         let mut request = empty_request();
         request.tools.push(crate::ToolDefinition {
             name: "fs_read".to_owned(),
@@ -371,22 +482,117 @@ mod tests {
 
     #[test]
     fn thinking_is_not_exposed_or_persisted() {
+        let provider = test_provider();
         let wire: WireResponse = serde_json::from_value(json!({
             "id": "msg-1",
             "stop_reason": "end_turn",
             "content": [
-                {"type": "thinking", "thinking": "private chain"},
+                {
+                    "type": "thinking",
+                    "thinking": "private chain",
+                    "signature": "private signature"
+                },
                 {"type": "text", "text": "concise result"}
             ],
             "usage": {"input_tokens": 10, "output_tokens": 4}
         }))
         .expect("wire response");
+        let response = provider.model_response_from_wire(wire);
         assert_eq!(
-            wire.into_model_response().blocks,
+            response.blocks,
             vec![ResponseBlock::Text {
                 text: "concise result".into()
             }]
         );
+        let public = serde_json::to_string(&response).expect("serialize public response");
+        assert!(!public.contains("private chain"));
+        assert!(!public.contains("private signature"));
+    }
+
+    #[test]
+    fn thinking_and_signature_are_replayed_only_in_provider_wire_history() {
+        let provider = test_provider();
+        let wire: WireResponse = serde_json::from_value(json!({
+            "id": "msg-2",
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "opaque reasoning",
+                    "signature": "opaque signature"
+                },
+                {"type": "text", "text": "I will inspect the file."},
+                {
+                    "type": "tool_use",
+                    "id": "tool-1",
+                    "name": "fs_read",
+                    "input": {"path": "src/lib.rs"}
+                }
+            ],
+            "usage": {"input_tokens": 20, "output_tokens": 8}
+        }))
+        .expect("wire response");
+        let response = provider.model_response_from_wire(wire);
+        assert_eq!(
+            response.blocks,
+            vec![
+                ResponseBlock::Text {
+                    text: "I will inspect the file.".into()
+                },
+                ResponseBlock::ToolUse {
+                    id: "tool-1".into(),
+                    name: "fs_read".into(),
+                    input: json!({"path": "src/lib.rs"})
+                }
+            ]
+        );
+        let public = serde_json::to_string(&response).expect("serialize public response");
+        assert!(!public.contains("opaque reasoning"));
+        assert!(!public.contains("opaque signature"));
+
+        let mut request = empty_request();
+        request.messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    MessageBlock::Text {
+                        text: "I will inspect the file.".into(),
+                    },
+                    MessageBlock::ToolUse {
+                        id: "tool-1".into(),
+                        name: "fs_read".into(),
+                        input: json!({"path": "src/lib.rs"}),
+                    },
+                ],
+            },
+            Message {
+                role: Role::User,
+                content: vec![MessageBlock::ToolResult {
+                    tool_use_id: "tool-1".into(),
+                    content: "file contents".into(),
+                    is_error: false,
+                }],
+            },
+        ];
+        let body = provider.clone().request_body(&request);
+        assert_eq!(
+            body["messages"][0]["content"],
+            json!([
+                {
+                    "type": "thinking",
+                    "thinking": "opaque reasoning",
+                    "signature": "opaque signature"
+                },
+                {"type": "text", "text": "I will inspect the file."},
+                {
+                    "type": "tool_use",
+                    "id": "tool-1",
+                    "name": "fs_read",
+                    "input": {"path": "src/lib.rs"}
+                }
+            ])
+        );
+        assert_eq!(body["messages"][1]["content"][0]["type"], "tool_result");
     }
 
     #[test]
