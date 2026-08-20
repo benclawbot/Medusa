@@ -120,7 +120,7 @@ pub fn compile_effective_config(
     let canonical = serde_json::to_vec(&config).unwrap_or_default();
     let fingerprint = Sha256::digest(canonical)
         .iter()
-        .map(|byte| format!("{:02x}", byte))
+        .map(|byte| format!("{byte:02x}"))
         .collect();
     Ok(EffectiveRuntimeConfigV1 {
         schema_version: RUNTIME_CONFIG_SCHEMA_VERSION,
