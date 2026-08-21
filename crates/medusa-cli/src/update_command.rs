@@ -142,10 +142,12 @@ fn release_channel(
         sequence_file: Some(repo.join(".medusa/update-sequence")),
         rollout_sequence: Some(release.rollout_sequence),
     };
+    // Stop the repository daemon before staging so its running executable is
+    // no longer locked when the detached replacement helper swaps it.
+    super::request_daemon_shutdown(repo);
     installer.schedule_replace(&candidate, &restart, std::process::id())?;
     staging_timer.finish("atomic-handoff-staged", Some(artifact.bytes), None)?;
     progress.set(98);
-    super::request_daemon_shutdown(repo);
     diagnostics
         .phase(UpdatePhase::RestartHandoff)
         .finish("health-check-pending", None, None)?;
@@ -181,6 +183,9 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
 
     let mut progress = UpdateProgress::new();
     progress.set(2);
+    // Stop the repository daemon before staging so its running executable is
+    // no longer locked when the detached replacement helper swaps it.
+    super::request_daemon_shutdown(repo);
     updater.schedule_main_install(
         &location.executable,
         repo,
@@ -188,7 +193,6 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
         |downloaded, total| progress.download(downloaded, total, 4, 92),
     )?;
     progress.set(98);
-    super::request_daemon_shutdown(repo);
     progress.finish();
     Ok(())
 }

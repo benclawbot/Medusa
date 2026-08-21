@@ -4,6 +4,10 @@ import { configDefaults } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
+  // Tauri serves packaged assets from its custom protocol rather than a site
+  // root. Relative URLs keep the production WebView pointed at the embedded
+  // bundle on Windows and macOS as well as during local preview.
+  base: "./",
   clearScreen: false,
   server: {
     strictPort: true,

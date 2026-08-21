@@ -10,6 +10,8 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Command,
+    thread,
+    time::{Duration, Instant},
 };
 
 use clap::{Parser, Subcommand};
@@ -544,7 +546,22 @@ fn is_unjournaled_runtime_failure(message: &str) -> bool {
 
 fn request_daemon_shutdown(repo: &Path) {
     let paths = DaemonPaths::for_repo(repo);
+    if !paths.owner.exists() {
+        return;
+    }
     let _ = DaemonClient::new(&paths.socket).request(Request::ShutdownNow);
+
+    // The daemon acknowledges the request before its accept loop has finished
+    // tearing down the listener and releasing the executable on Windows. Wait
+    // for ownership to disappear before the updater stages the replacement.
+    wait_for_daemon_shutdown(&paths.owner);
+}
+
+fn wait_for_daemon_shutdown(owner: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while owner.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn health(
@@ -1556,5 +1573,21 @@ mod tests {
         assert!(!is_unjournaled_runtime_failure(
             "provider returned an ordinary session-bound failure"
         ));
+    }
+
+    #[test]
+    fn updater_waits_for_daemon_ownership_to_be_released() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let owner = directory.path().join("owner");
+        fs::write(&owner, b"1234").expect("owner");
+        let release = owner.clone();
+        let worker = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            fs::remove_file(release).expect("release owner");
+        });
+
+        wait_for_daemon_shutdown(&owner);
+        worker.join().expect("release worker");
+        assert!(!owner.exists());
     }
 }
