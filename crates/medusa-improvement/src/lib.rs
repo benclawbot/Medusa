@@ -23,6 +23,7 @@ pub mod retrieval;
 pub mod scoped_memory;
 #[allow(clippy::collapsible_if)]
 pub mod solution_selection;
+pub mod tool_learning;
 pub use implementation::*;
 
 #[must_use]
