@@ -59,6 +59,19 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
             );
             return;
         }
+        #[cfg(target_os = "macos")]
+        {
+            let message = _error.to_string();
+            assert!(
+                message.contains("contained analysis backend failed"),
+                "restricted macOS hosts must fail closed when the contained reducer is terminated by the host boundary: {message}"
+            );
+            assert_eq!(
+                fs::read_to_string(temp.path().join("large.txt")).expect("source remains readable"),
+                "alpha\nbeta\nalpha two\n"
+            );
+            return;
+        }
     }
 
     let result = result.expect("contained reduction");

@@ -212,10 +212,19 @@ impl OwnedProcessTree {
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(libc::ESRCH) {
                 self.terminated = true;
-                Ok(())
-            } else {
-                Err(error)
+                return Ok(());
             }
+            #[cfg(target_os = "macos")]
+            if error.raw_os_error() == Some(libc::EPERM)
+                && matches!(
+                    macos_process_group_has_no_live_members(self.process_group),
+                    Ok(true)
+                )
+            {
+                self.terminated = true;
+                return Ok(());
+            }
+            Err(error)
         }
         #[cfg(windows)]
         {
@@ -232,6 +241,48 @@ impl OwnedProcessTree {
             Ok(())
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_group_has_no_live_members(process_group: i32) -> io::Result<bool> {
+    let output = Command::new("/bin/ps")
+        .args(["-axo", "pgid=,stat="])
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(
+            "failed to verify macOS process-group termination",
+        ));
+    }
+    let listing = std::str::from_utf8(&output.stdout)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    macos_process_group_has_no_live_members_from_ps(process_group, listing)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_group_has_no_live_members_from_ps(
+    process_group: i32,
+    listing: &str,
+) -> io::Result<bool> {
+    for line in listing.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(group) = fields.next() else { continue };
+        let group = group
+            .parse::<i32>()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if group != process_group {
+            continue;
+        }
+        let state = fields.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "macOS process listing omitted process state",
+            )
+        })?;
+        if !state.starts_with('Z') {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 impl Drop for OwnedProcessTree {
@@ -330,6 +381,36 @@ mod tests {
         }
         assert!(tree.try_wait().expect("completed tree").is_some());
         wait_until_dead(grandchild_pid);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_group_verification_accepts_missing_group() {
+        let listing = " 101 S\n 202 S+\n";
+        assert!(
+            macos_process_group_has_no_live_members_from_ps(303, listing)
+                .expect("valid process listing")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_group_verification_accepts_zombie_only_group() {
+        let listing = " 101 S\n 303 Z\n 303 Z+\n";
+        assert!(
+            macos_process_group_has_no_live_members_from_ps(303, listing)
+                .expect("valid process listing")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_group_verification_rejects_live_member() {
+        let listing = " 303 Z\n 303 S+\n";
+        assert!(
+            !macos_process_group_has_no_live_members_from_ps(303, listing)
+                .expect("valid process listing")
+        );
     }
 
     fn helper_command(pid_file: &std::path::Path, role: &str) -> Command {
