@@ -356,21 +356,24 @@ fn start_scheduler(
 
 type SharedJobScheduler = Arc<Mutex<JobScheduler>>;
 
+#[derive(Clone)]
+struct ConnectionContext {
+    paths: DaemonPaths,
+    jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: Arc<ProcessRegistry>,
+    frontend: Arc<Mutex<FrontendControlPlane>>,
+    shutdown: Arc<AtomicU8>,
+    scheduler: SharedJobScheduler,
+    frontend_in_flight: Arc<AtomicUsize>,
+}
+
 struct ConnectionWorkerPool {
     sender: Option<SyncSender<LocalStream>>,
     workers: Vec<thread::JoinHandle<()>>,
 }
 
 impl ConnectionWorkerPool {
-    fn start(
-        paths: DaemonPaths,
-        jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
-        processes: Arc<ProcessRegistry>,
-        frontend: Arc<Mutex<FrontendControlPlane>>,
-        shutdown: Arc<AtomicU8>,
-        scheduler: SharedJobScheduler,
-        frontend_in_flight: Arc<AtomicUsize>,
-    ) -> MedusaResult<Self> {
+    fn start(context: ConnectionContext) -> MedusaResult<Self> {
         let (sender, receiver) = mpsc::sync_channel(CONNECTION_QUEUE_CAPACITY);
         let receiver = Arc::new(Mutex::new(receiver));
         let mut pool = Self {
@@ -380,26 +383,11 @@ impl ConnectionWorkerPool {
 
         for index in 0..CONNECTION_WORKERS {
             let worker_receiver = Arc::clone(&receiver);
-            let worker_paths = paths.clone();
-            let worker_jobs = Arc::clone(&jobs);
-            let worker_processes = Arc::clone(&processes);
-            let worker_frontend = Arc::clone(&frontend);
-            let worker_shutdown = Arc::clone(&shutdown);
-            let worker_scheduler = Arc::clone(&scheduler);
-            let worker_frontend_in_flight = Arc::clone(&frontend_in_flight);
+            let worker_context = context.clone();
             match thread::Builder::new()
                 .name(format!("medusa-connection-worker-{index}"))
                 .spawn(move || {
-                    connection_worker_loop(
-                        worker_receiver,
-                        worker_paths,
-                        worker_jobs,
-                        worker_processes,
-                        worker_frontend,
-                        worker_shutdown,
-                        worker_scheduler,
-                        worker_frontend_in_flight,
-                    );
+                    connection_worker_loop(worker_receiver, worker_context);
                 })
             {
                 Ok(worker) => pool.workers.push(worker),
@@ -450,16 +438,10 @@ impl Drop for ConnectionWorkerPool {
 
 fn connection_worker_loop(
     receiver: Arc<Mutex<Receiver<LocalStream>>>,
-    paths: DaemonPaths,
-    jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    processes: Arc<ProcessRegistry>,
-    frontend: Arc<Mutex<FrontendControlPlane>>,
-    shutdown: Arc<AtomicU8>,
-    scheduler: SharedJobScheduler,
-    frontend_in_flight: Arc<AtomicUsize>,
+    context: ConnectionContext,
 ) {
     loop {
-        if shutdown.load(Ordering::SeqCst) != SHUTDOWN_NONE {
+        if context.shutdown.load(Ordering::SeqCst) != SHUTDOWN_NONE {
             return;
         }
         let stream = {
@@ -471,19 +453,10 @@ fn connection_worker_loop(
                 Err(_) => return,
             }
         };
-        if shutdown.load(Ordering::SeqCst) != SHUTDOWN_NONE {
+        if context.shutdown.load(Ordering::SeqCst) != SHUTDOWN_NONE {
             return;
         }
-        let _ = handle_connection(
-            stream,
-            &paths,
-            &jobs,
-            &processes,
-            &frontend,
-            &shutdown,
-            &scheduler,
-            &frontend_in_flight,
-        );
+        let _ = handle_connection(stream, &context);
     }
 }
 
@@ -497,16 +470,16 @@ fn run_loop(
     scheduler: JobScheduler,
 ) -> MedusaResult<()> {
     let scheduler = Arc::new(Mutex::new(scheduler));
-    let frontend_in_flight = Arc::new(AtomicUsize::new(0));
-    let mut connections = match ConnectionWorkerPool::start(
-        paths.clone(),
-        Arc::clone(&jobs),
-        Arc::clone(&processes),
-        Arc::clone(&frontend),
-        Arc::clone(&shutdown),
-        Arc::clone(&scheduler),
-        frontend_in_flight,
-    ) {
+    let context = ConnectionContext {
+        paths: paths.clone(),
+        jobs: Arc::clone(&jobs),
+        processes: Arc::clone(&processes),
+        frontend: Arc::clone(&frontend),
+        shutdown: Arc::clone(&shutdown),
+        scheduler: Arc::clone(&scheduler),
+        frontend_in_flight: Arc::new(AtomicUsize::new(0)),
+    };
+    let mut connections = match ConnectionWorkerPool::start(context) {
         Ok(connections) => connections,
         Err(error) => {
             listener.cleanup();
@@ -609,16 +582,7 @@ impl Drop for FrontendConnectionPermit<'_> {
     }
 }
 
-fn handle_connection(
-    mut stream: LocalStream,
-    paths: &DaemonPaths,
-    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    processes: &Arc<ProcessRegistry>,
-    frontend: &Arc<Mutex<FrontendControlPlane>>,
-    shutdown: &Arc<AtomicU8>,
-    scheduler: &SharedJobScheduler,
-    frontend_in_flight: &AtomicUsize,
-) -> MedusaResult<()> {
+fn handle_connection(mut stream: LocalStream, context: &ConnectionContext) -> MedusaResult<()> {
     stream
         .set_read_timeout(Some(REQUEST_IO_TIMEOUT))
         .map_err(transport_error)?;
@@ -665,7 +629,7 @@ fn handle_connection(
         );
     }
     let _frontend_permit = if request_uses_frontend_serialization(&envelope.request) {
-        match FrontendConnectionPermit::try_acquire(frontend_in_flight) {
+        match FrontendConnectionPermit::try_acquire(context.frontend_in_flight.as_ref()) {
             Some(permit) => Some(permit),
             None => {
                 return write_response(
@@ -683,12 +647,12 @@ fn handle_connection(
     };
     let response = dispatch(
         envelope.request,
-        paths,
-        jobs,
-        processes,
-        frontend,
-        shutdown,
-        scheduler,
+        &context.paths,
+        &context.jobs,
+        &context.processes,
+        &context.frontend,
+        &context.shutdown,
+        &context.scheduler,
     )?;
     write_response(&mut stream, response)
 }
