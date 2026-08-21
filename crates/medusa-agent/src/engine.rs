@@ -498,6 +498,96 @@ fn model_experience_contract(
     ModelExperienceContractV1::new(format!("{phase:?}"), components, tool_schema_fingerprint)
 }
 
+fn attach_model_experience_measurement(
+    mut usage: serde_json::Value,
+    contract: &ModelExperienceContractV1,
+) -> serde_json::Value {
+    let cache = if usage.get("provenance").and_then(serde_json::Value::as_str)
+        == Some("provider_reported")
+    {
+        let read_tokens = usage
+            .get("cache_read_input_tokens")
+            .and_then(serde_json::Value::as_u64);
+        let write_tokens = usage
+            .get("cache_creation_input_tokens")
+            .and_then(serde_json::Value::as_u64);
+        CacheObservationV1::Observed {
+            read_tokens,
+            write_tokens,
+            hit: read_tokens.map(|tokens| tokens > 0),
+        }
+    } else {
+        CacheObservationV1::Unknown
+    };
+    let measurement = contract.measurement(cache);
+    if let Some(fields) = usage.as_object_mut() {
+        fields.insert(
+            "model_experience_measurement".to_owned(),
+            serde_json::to_value(measurement).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "schema_version": crate::model_experience::MODEL_EXPERIENCE_SCHEMA_VERSION
+                })
+            }),
+        );
+    }
+    usage
+}
+
+#[cfg(test)]
+mod model_experience_usage_tests {
+    use super::*;
+
+    fn contract() -> ModelExperienceContractV1 {
+        model_experience_contract(
+            ProviderExecutionPhase::Default,
+            &ModelRequest {
+                system: "system".to_owned(),
+                messages: Vec::new(),
+                tools: Vec::new(),
+                max_tokens: 128,
+                temperature_milli: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn provider_usage_records_observed_cache_measurement() {
+        let usage = attach_model_experience_measurement(
+            serde_json::json!({
+                "provenance": "provider_reported",
+                "cache_read_input_tokens": 120,
+                "cache_creation_input_tokens": 8,
+            }),
+            &contract(),
+        );
+        assert_eq!(
+            usage["model_experience_measurement"]["cache"]["status"],
+            "observed"
+        );
+        assert_eq!(
+            usage["model_experience_measurement"]["cache"]["read_tokens"],
+            120
+        );
+        assert_eq!(usage["model_experience_measurement"]["cache"]["hit"], true);
+    }
+
+    #[test]
+    fn estimated_usage_keeps_cache_unknown() {
+        let usage = attach_model_experience_measurement(
+            serde_json::json!({
+                "provenance": "estimated",
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }),
+            &contract(),
+        );
+        assert_eq!(
+            usage["model_experience_measurement"]["cache"]["status"],
+            "unknown"
+        );
+    }
+}
+
 impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn new(provider: P, config: Config) -> Self {
@@ -1144,6 +1234,8 @@ impl<P: ModelProvider> AgentEngine<P> {
         focus: Option<&str>,
     ) -> MedusaResult<()> {
         let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
+        let summary_model_experience =
+            model_experience_contract(ProviderExecutionPhase::Summarization, &summary_request);
         let summary_provenance = BTreeMap::from([
             (
                 "compaction_v2_system".to_owned(),
@@ -1156,6 +1248,18 @@ impl<P: ModelProvider> AgentEngine<P> {
         ]);
         let mut summary_provenance = summary_provenance;
         self.bind_runtime_config_provenance(&mut summary_provenance);
+        summary_provenance.insert(
+            "model_experience_contract".to_owned(),
+            summary_model_experience.fingerprint(),
+        );
+        summary_provenance.insert(
+            "model_experience_total_bytes".to_owned(),
+            summary_model_experience
+                .measurement(CacheObservationV1::Unknown)
+                .total_bytes
+                .map_or_else(|| "unknown".to_owned(), |bytes| bytes.to_string()),
+        );
+        summary_provenance.insert("model_experience_cache".to_owned(), "unknown".to_owned());
         let execution_policy = self.execution_policy.audit_projection();
         let capabilities = self.provider.capabilities();
         let manifest = effective_request::persist_before_provider_call(
@@ -1213,7 +1317,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                     effective_request::response_event(
                         &manifest,
                         response.response_id.clone(),
-                        serde_json::to_value(turn_usage).map_err(json_error)?,
+                        attach_model_experience_measurement(
+                            serde_json::to_value(turn_usage).map_err(json_error)?,
+                            &summary_model_experience,
+                        ),
                     ),
                 )?;
                 session.updated_at = OffsetDateTime::now_utc();
@@ -1720,7 +1827,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             effective_request::response_event(
                 &active_manifest,
                 response.response_id.clone(),
-                serde_json::to_value(turn_usage).map_err(json_error)?,
+                attach_model_experience_measurement(
+                    serde_json::to_value(turn_usage).map_err(json_error)?,
+                    &model_experience,
+                ),
             ),
             &mut observer,
         )?;

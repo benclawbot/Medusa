@@ -405,6 +405,8 @@ Provider selection is explicit and role-aware. `model.role_routes` can pin plann
 
 When no user pin overrides route choice, the provider manager can use durable route telemetry for latency, throughput, retry recovery, error categories, downstream verified success, and externally supplied monetary cost. Bounded hedging is eligibility- and budget-gated, publishes only one authoritative winner, and preserves ordinary retry/failover when a hedge is inadmissible or unsuccessful.
 
+Every persisted model-response usage record also carries a versioned model-experience measurement tied to the exact request contract. Provider-reported cache read/write counts are recorded as observed cache evidence; estimator-only usage keeps cache status unknown, so request-time manifests never claim cache behavior that was not yet measured.
+
 ### Tools and integrations
 
 - guarded workspace file operations;
