@@ -75,9 +75,19 @@ pub(crate) struct CertifiedToolExecution {
 }
 
 fn certified_execution(outcome: FinalToolOutcome) -> MedusaResult<CertifiedToolExecution> {
-    let receipt = outcome.receipt_value()?;
+    let mut receipt = outcome.receipt_value()?;
     let result = outcome.into_result();
     let canonical = CanonicalToolResultV1::from_receipt(&receipt, &result);
+    if let Value::Object(fields) = &mut receipt {
+        fields.insert(
+            "canonical_result_schema_version".to_owned(),
+            Value::from(canonical.schema_version),
+        );
+        fields.insert(
+            "canonical_result_fingerprint".to_owned(),
+            Value::String(canonical.source_fingerprint.clone()),
+        );
+    }
     Ok(CertifiedToolExecution {
         receipt,
         result,
@@ -1189,6 +1199,14 @@ mod tests {
         )
         .expect("certified execution");
         assert_eq!(execution.receipt["outcome"], json!("success"));
+        assert_eq!(
+            execution.receipt["canonical_result_schema_version"],
+            json!(crate::tool_result::CANONICAL_TOOL_RESULT_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            execution.receipt["canonical_result_fingerprint"],
+            execution.canonical.source_fingerprint
+        );
         assert!(execution.result.expect("result").contains("receipt"));
     }
 

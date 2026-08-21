@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -245,6 +250,51 @@ pub fn wrap(
         path,
         format,
     })
+}
+
+/// Resolves a model-visible expansion handle through the repository's artifact boundary.
+///
+/// Handles are references, not permissions: callers must still pass through this check before
+/// reading an artifact. Canonicalization also rejects symlinks that leave the artifact directory.
+pub fn validate_expansion_handle(repo: &Path, handle: &Path) -> MedusaResult<PathBuf> {
+    let root = repo.canonicalize().map_err(|error| {
+        MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!("cannot resolve repository for expansion handle: {error}"),
+        )
+    })?;
+    let artifacts = root
+        .join(".medusa")
+        .join("artifacts")
+        .canonicalize()
+        .map_err(|error| {
+            MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                format!("artifact directory is unavailable: {error}"),
+            )
+        })?;
+    let candidate = if handle.is_absolute() {
+        handle.to_path_buf()
+    } else {
+        root.join(handle)
+    };
+    let candidate = candidate.canonicalize().map_err(|error| {
+        MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!("invalid expansion handle: {error}"),
+        )
+    })?;
+    if !candidate.starts_with(&artifacts) || !candidate.is_file() {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            "expansion handle is outside the repository artifact boundary",
+        ));
+    }
+    Ok(candidate)
 }
 
 fn adapt_git_lines<'a>(
@@ -523,5 +573,26 @@ mod tests {
         let out = sanitize_tool_name(&long).expect("long input");
         assert_eq!(out.len(), 64);
         assert!(out.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn expansion_handle_is_limited_to_repository_artifacts() {
+        let root = tempfile::tempdir().expect("temporary repository");
+        let artifacts = root.path().join(".medusa").join("artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifact directory");
+        let allowed = artifacts.join("result.txt");
+        std::fs::write(&allowed, "safe").expect("artifact");
+
+        let resolved = validate_expansion_handle(root.path(), &allowed).expect("allowed artifact");
+        assert_eq!(
+            resolved,
+            allowed.canonicalize().expect("canonical artifact")
+        );
+
+        let outside = root.path().join("outside.txt");
+        std::fs::write(&outside, "not allowed").expect("outside file");
+        let error = validate_expansion_handle(root.path(), &outside)
+            .expect_err("outside artifacts must be denied");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
     }
 }

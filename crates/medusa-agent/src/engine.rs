@@ -56,7 +56,7 @@ use crate::{
     model_experience::{
         ComponentStability, ModelExperienceComponentV1, ModelExperienceContractV1, PrivacyClass,
     },
-    output_envelope::{OutputFormat, wrap as wrap_envelope},
+    output_envelope::{OutputFormat, validate_expansion_handle, wrap as wrap_envelope},
     policy::validate_shell_command_hard_denials,
     session::{
         AgentPlanStep, AgentQuestion, AgentQuestionItem, AgentQuestionOption, AgentSession,
@@ -2419,10 +2419,15 @@ impl<P: ModelProvider> AgentEngine<P> {
                             } else {
                                 compact.clone()
                             });
+                            let expansion_handle =
+                                validate_expansion_handle(&session.repo, &env.path)
+                                    .ok()
+                                    .map(|path| path.display().to_string());
                             projection["rendering"] = serde_json::json!({
                                 "line_count": env.line_count,
                                 "byte_count": env.byte_count,
-                                "expansion_handle": env.path,
+                                "expansion_available": expansion_handle.is_some(),
+                                "expansion_handle": expansion_handle,
                             });
                             serde_json::to_string(&projection).unwrap_or_else(|_| {
                                 if is_error {
