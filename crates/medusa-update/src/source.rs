@@ -416,7 +416,7 @@ mod tests {
             },
         ] {
             let error = rolling_asset_name(platform, REVISION).expect_err("unsupported platform");
-            assert_eq!(error.code(), ErrorCode::InvalidConfiguration);
+            assert_eq!(error.code, ErrorCode::InvalidConfiguration);
         }
     }
 
