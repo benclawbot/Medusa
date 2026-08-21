@@ -5,15 +5,12 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
     time::Duration,
 };
-
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
 
 #[cfg(unix)]
 use std::process::Command;
@@ -45,7 +42,8 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const CONNECTION_WORKERS: usize = 8;
-const CONNECTION_QUEUE_CAPACITY: usize = 32;
+const CONNECTION_QUEUE_CAPACITY: usize = 128;
+const MAX_BLOCKING_FRONTEND_CONNECTIONS: usize = CONNECTION_WORKERS / 2;
 const SHUTDOWN_NONE: u8 = 0;
 const SHUTDOWN_GRACEFUL: u8 = 1;
 const SHUTDOWN_IMMEDIATE: u8 = 2;
@@ -371,6 +369,7 @@ impl ConnectionWorkerPool {
         frontend: Arc<Mutex<FrontendControlPlane>>,
         shutdown: Arc<AtomicU8>,
         scheduler: SharedJobScheduler,
+        frontend_in_flight: Arc<AtomicUsize>,
     ) -> MedusaResult<Self> {
         let (sender, receiver) = mpsc::sync_channel(CONNECTION_QUEUE_CAPACITY);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -387,6 +386,7 @@ impl ConnectionWorkerPool {
             let worker_frontend = Arc::clone(&frontend);
             let worker_shutdown = Arc::clone(&shutdown);
             let worker_scheduler = Arc::clone(&scheduler);
+            let worker_frontend_in_flight = Arc::clone(&frontend_in_flight);
             match thread::Builder::new()
                 .name(format!("medusa-connection-worker-{index}"))
                 .spawn(move || {
@@ -398,6 +398,7 @@ impl ConnectionWorkerPool {
                         worker_frontend,
                         worker_shutdown,
                         worker_scheduler,
+                        worker_frontend_in_flight,
                     );
                 })
             {
@@ -455,6 +456,7 @@ fn connection_worker_loop(
     frontend: Arc<Mutex<FrontendControlPlane>>,
     shutdown: Arc<AtomicU8>,
     scheduler: SharedJobScheduler,
+    frontend_in_flight: Arc<AtomicUsize>,
 ) {
     loop {
         if shutdown.load(Ordering::SeqCst) != SHUTDOWN_NONE {
@@ -480,6 +482,7 @@ fn connection_worker_loop(
             &frontend,
             &shutdown,
             &scheduler,
+            &frontend_in_flight,
         );
     }
 }
@@ -494,6 +497,7 @@ fn run_loop(
     scheduler: JobScheduler,
 ) -> MedusaResult<()> {
     let scheduler = Arc::new(Mutex::new(scheduler));
+    let frontend_in_flight = Arc::new(AtomicUsize::new(0));
     let mut connections = match ConnectionWorkerPool::start(
         paths.clone(),
         Arc::clone(&jobs),
@@ -501,6 +505,7 @@ fn run_loop(
         Arc::clone(&frontend),
         Arc::clone(&shutdown),
         Arc::clone(&scheduler),
+        frontend_in_flight,
     ) {
         Ok(connections) => connections,
         Err(error) => {
@@ -564,6 +569,46 @@ fn reject_busy_connection(mut stream: LocalStream) {
     );
 }
 
+fn request_uses_frontend_serialization(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Frontend { .. }
+            | Request::FrontendArtifact { .. }
+            | Request::FrontendArtifactExport { .. }
+            | Request::FrontendCredential { .. }
+    )
+}
+
+struct FrontendConnectionPermit<'a> {
+    in_flight: &'a AtomicUsize,
+}
+
+impl<'a> FrontendConnectionPermit<'a> {
+    fn try_acquire(in_flight: &'a AtomicUsize) -> Option<Self> {
+        let mut current = in_flight.load(Ordering::SeqCst);
+        loop {
+            if current >= MAX_BLOCKING_FRONTEND_CONNECTIONS {
+                return None;
+            }
+            match in_flight.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Some(Self { in_flight }),
+                Err(observed) => current = observed,
+            }
+        }
+    }
+}
+
+impl Drop for FrontendConnectionPermit<'_> {
+    fn drop(&mut self) {
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn handle_connection(
     mut stream: LocalStream,
     paths: &DaemonPaths,
@@ -572,6 +617,7 @@ fn handle_connection(
     frontend: &Arc<Mutex<FrontendControlPlane>>,
     shutdown: &Arc<AtomicU8>,
     scheduler: &SharedJobScheduler,
+    frontend_in_flight: &AtomicUsize,
 ) -> MedusaResult<()> {
     stream
         .set_read_timeout(Some(REQUEST_IO_TIMEOUT))
@@ -609,22 +655,41 @@ fn handle_connection(
             },
         );
     }
-    let response = if envelope.version != DAEMON_PROTOCOL_VERSION {
-        Response::Error {
-            code: "incompatible_protocol".into(),
-            message: format!("unsupported protocol {}", envelope.version),
+    if envelope.version != DAEMON_PROTOCOL_VERSION {
+        return write_response(
+            &mut stream,
+            Response::Error {
+                code: "incompatible_protocol".into(),
+                message: format!("unsupported protocol {}", envelope.version),
+            },
+        );
+    }
+    let _frontend_permit = if request_uses_frontend_serialization(&envelope.request) {
+        match FrontendConnectionPermit::try_acquire(frontend_in_flight) {
+            Some(permit) => Some(permit),
+            None => {
+                return write_response(
+                    &mut stream,
+                    Response::Error {
+                        code: "daemon_busy".to_owned(),
+                        message: "daemon frontend request capacity is reserved for health and control traffic; retry later"
+                            .to_owned(),
+                    },
+                );
+            }
         }
     } else {
-        dispatch(
-            envelope.request,
-            paths,
-            jobs,
-            processes,
-            frontend,
-            shutdown,
-            scheduler,
-        )?
+        None
     };
+    let response = dispatch(
+        envelope.request,
+        paths,
+        jobs,
+        processes,
+        frontend,
+        shutdown,
+        scheduler,
+    )?;
     write_response(&mut stream, response)
 }
 
@@ -1145,7 +1210,7 @@ mod connection_concurrency_tests {
     }
 
     #[test]
-    fn health_ping_remains_responsive_while_frontend_dispatch_is_blocked() {
+    fn health_ping_keeps_reserved_capacity_under_frontend_saturation() {
         let _probe_reset = ProbeReset;
         let directory = tempfile::tempdir().expect("tempdir");
         let paths = DaemonPaths::for_repo(directory.path());
@@ -1177,25 +1242,29 @@ mod connection_concurrency_tests {
             })
         };
 
-        let envelope = FrontendCommandEnvelope {
-            protocol_version: FRONTEND_PROTOCOL_VERSION,
-            command_id: "blocked-frontend".to_owned(),
-            idempotency_key: "blocked-frontend".to_owned(),
-            frontend: FrontendKind::Tui,
-            client_id: "blocked-frontend-client".to_owned(),
-            session_id: None,
-            turn_id: None,
-            timestamp: OffsetDateTime::now_utc(),
-            command: FrontendCommand::ListSessions,
-        };
-        let blocked_client = DaemonClient::new(&paths.socket);
-        let blocked_request = thread::spawn(move || blocked_client.frontend(envelope));
+        let blocked_requests = (0..(MAX_BLOCKING_FRONTEND_CONNECTIONS + 2))
+            .map(|index| {
+                let envelope = FrontendCommandEnvelope {
+                    protocol_version: FRONTEND_PROTOCOL_VERSION,
+                    command_id: format!("blocked-frontend-{index}"),
+                    idempotency_key: format!("blocked-frontend-{index}"),
+                    frontend: FrontendKind::Tui,
+                    client_id: format!("blocked-frontend-client-{index}"),
+                    session_id: None,
+                    turn_id: None,
+                    timestamp: OffsetDateTime::now_utc(),
+                    command: FrontendCommand::ListSessions,
+                };
+                let blocked_client = DaemonClient::new(&paths.socket);
+                thread::spawn(move || blocked_client.frontend(envelope))
+            })
+            .collect::<Vec<_>>();
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while FRONTEND_LOCK_PROBE_HITS.load(Ordering::SeqCst) == 0 {
+        while FRONTEND_LOCK_PROBE_HITS.load(Ordering::SeqCst) < MAX_BLOCKING_FRONTEND_CONNECTIONS {
             assert!(
                 Instant::now() < deadline,
-                "frontend request did not reach the blocked control-plane lock"
+                "frontend requests did not saturate the bounded blocking capacity"
             );
             thread::sleep(Duration::from_millis(10));
         }
@@ -1203,18 +1272,24 @@ mod connection_concurrency_tests {
         let started = Instant::now();
         let response = DaemonClient::new(&paths.socket)
             .request(Request::Ping)
-            .expect("health ping while frontend request is blocked");
+            .expect("health ping while frontend requests are blocked");
         assert!(matches!(response, Response::Pong));
         assert!(
             started.elapsed() < Duration::from_secs(1),
-            "health ping waited behind a blocked frontend request"
+            "health ping waited behind blocked frontend requests"
         );
 
         drop(frontend_guard);
-        blocked_request
-            .join()
-            .expect("join blocked request")
-            .expect("blocked frontend request completes");
+        let mut rejected = 0;
+        for request in blocked_requests {
+            if request.join().expect("join blocked request").is_err() {
+                rejected += 1;
+            }
+        }
+        assert!(
+            rejected >= 1,
+            "frontend saturation must fail fast instead of consuming health capacity"
+        );
         assert!(matches!(
             DaemonClient::new(&paths.socket)
                 .request(Request::Shutdown)
