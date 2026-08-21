@@ -25,6 +25,9 @@ original/projected size, omission reason, redaction, and expansion availability;
 artifact handle is only a reference and must be revalidated against the repository's
 `.medusa/artifacts` boundary before reading.
 
+Shell output that exceeds the model budget is spilled as a redacted, content-addressed artifact;
+the canonical result records that safe reference while the model receives only the bounded projection.
+
 ## Fixed authorities
 
 Middleware may attach only at certified seams. It must not replace or weaken:
