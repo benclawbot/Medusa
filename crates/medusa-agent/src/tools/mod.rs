@@ -1255,10 +1255,20 @@ mod tests {
             CanonicalToolOutcome::Success
         );
         assert_eq!(execution.outcome, CanonicalToolOutcome::Success);
+        assert_eq!(
+            execution.children[0]
+                .parent_execution_fingerprint
+                .as_deref(),
+            Some(execution.execution_fingerprint.as_str())
+        );
         assert!(
             execution.model_projection["children"][0]["source_fingerprint"]
                 .as_str()
                 .is_some_and(|fingerprint| !fingerprint.is_empty())
+        );
+        assert_eq!(
+            execution.model_projection["children"][0]["parent_execution_fingerprint"],
+            execution.execution_fingerprint
         );
     }
 
