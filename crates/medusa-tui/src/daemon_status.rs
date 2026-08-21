@@ -1,76 +1,49 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use medusa_daemon::{
-    DaemonClient, DaemonLaunch, DaemonLifecycleState, DaemonSupervisor, JobRecord, Request,
-    Response,
-};
+use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
 
 use crate::app::{AppState, TranscriptEntry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DaemonConnectionKind {
     Connected,
-    Started,
-    Recovered,
     Unexpected,
     Degraded,
 }
 
 pub(crate) type DaemonSnapshot = (Vec<JobRecord>, String);
 
+/// Presentation-only daemon status observer.
+///
+/// The TUI runtime owns daemon startup and recovery. Keeping this monitor read-only
+/// prevents one terminal frontend from creating two independent lifecycle
+/// supervisors that can race each other during Windows daemon startup/recovery.
 pub(crate) struct DaemonMonitor {
-    supervisor: Option<DaemonSupervisor>,
     client: DaemonClient,
     last_kind: Option<DaemonConnectionKind>,
 }
 
 impl DaemonMonitor {
     pub fn new(endpoint: PathBuf) -> Self {
-        if let Some(repo) = repository_for_default_endpoint(&endpoint) {
-            let supervisor = DaemonLaunch::for_current_executable()
-                .ok()
-                .map(|launch| DaemonSupervisor::new(&repo, launch))
-                .unwrap_or_else(|| DaemonSupervisor::observe_only(&repo));
-            let client = supervisor.client();
-            return Self {
-                supervisor: Some(supervisor),
-                client,
-                last_kind: None,
-            };
-        }
         Self {
-            supervisor: None,
             client: DaemonClient::new(endpoint),
             last_kind: None,
         }
     }
 
     pub fn poll(&mut self, app: &mut AppState) -> DaemonSnapshot {
-        let lifecycle = self.supervisor.as_mut().map(DaemonSupervisor::poll);
         let (kind, snapshot, transition) = match self.client.request(Request::List) {
             Ok(Response::Jobs { jobs }) => {
-                let state = lifecycle
-                    .as_ref()
-                    .map(|value| value.state)
-                    .unwrap_or(DaemonLifecycleState::Connected);
-                let kind = match state {
-                    DaemonLifecycleState::Started => DaemonConnectionKind::Started,
-                    DaemonLifecycleState::Recovered => DaemonConnectionKind::Recovered,
-                    DaemonLifecycleState::Connected | DaemonLifecycleState::Degraded => {
-                        DaemonConnectionKind::Connected
-                    }
-                };
-                let label = match kind {
-                    DaemonConnectionKind::Started => "daemon started",
-                    DaemonConnectionKind::Recovered => "daemon recovered",
-                    _ => "daemon connected",
-                };
                 let transition = format!(
-                    "{label} · {} background job{}",
+                    "daemon connected · {} background job{}",
                     jobs.len(),
                     if jobs.len() == 1 { "" } else { "s" }
                 );
-                (kind, (jobs, state.as_str().to_owned()), transition)
+                (
+                    DaemonConnectionKind::Connected,
+                    (jobs, "connected".to_owned()),
+                    transition,
+                )
             }
             Ok(other) => {
                 let details = format!("unexpected response: {other:?}");
@@ -81,14 +54,7 @@ impl DaemonMonitor {
                 )
             }
             Err(error) => {
-                let lifecycle_detail = lifecycle
-                    .as_ref()
-                    .filter(|value| value.state == DaemonLifecycleState::Degraded)
-                    .map(|value| value.detail.as_str());
-                let details = match lifecycle_detail {
-                    Some(detail) => format!("degraded: {detail}; connection error: {error}"),
-                    None => format!("degraded: {error}"),
-                };
+                let details = format!("degraded: {error}");
                 (
                     DaemonConnectionKind::Degraded,
                     (Vec::new(), details.clone()),
@@ -104,32 +70,10 @@ impl DaemonMonitor {
     }
 
     fn should_record(&mut self, kind: DaemonConnectionKind) -> bool {
-        let suppress_connected_after_start = matches!(
-            (self.last_kind, kind),
-            (
-                Some(DaemonConnectionKind::Started | DaemonConnectionKind::Recovered),
-                DaemonConnectionKind::Connected
-            )
-        );
         let changed = self.last_kind != Some(kind);
         self.last_kind = Some(kind);
-        changed && !suppress_connected_after_start
+        changed
     }
-}
-
-fn repository_for_default_endpoint(endpoint: &Path) -> Option<PathBuf> {
-    if endpoint.file_name()?.to_str()? != "medusa.sock" {
-        return None;
-    }
-    let daemon = endpoint.parent()?;
-    if daemon.file_name()?.to_str()? != "daemon" {
-        return None;
-    }
-    let medusa = daemon.parent()?;
-    if medusa.file_name()?.to_str()? != ".medusa" {
-        return None;
-    }
-    Some(medusa.parent()?.to_path_buf())
 }
 
 #[cfg(test)]
@@ -201,8 +145,17 @@ mod tests {
     }
 
     #[test]
-    fn custom_socket_does_not_infer_repository_ownership() {
-        let endpoint = PathBuf::from("/tmp/custom.sock");
-        assert!(repository_for_default_endpoint(&endpoint).is_none());
+    fn default_endpoint_monitor_never_starts_or_recovers_daemon() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonPaths::for_repo(directory.path());
+        let mut app = app(directory.path());
+        let mut monitor = DaemonMonitor::new(paths.socket.clone());
+
+        let snapshot = monitor.poll(&mut app);
+
+        assert!(snapshot.1.starts_with("degraded:"));
+        assert!(!paths.owner.exists());
+        assert!(!paths.startup.exists());
+        assert!(!paths.socket.exists());
     }
 }
