@@ -192,6 +192,12 @@ fn macos_profile(
 (allow file-read-metadata file-test-existence (path-ancestors \"{}\"))\n",
             profile_path(root)
         ));
+        for read_only in read_only_roots {
+            profile.push_str(&format!(
+                "(allow file-read-metadata file-test-existence (path-ancestors \"{}\"))\n",
+                profile_path(read_only)
+            ));
+        }
     }
     profile.push_str(
         "(allow file-read* file-write-data file-ioctl\n  (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n(allow file-read* file-ioctl\n  (require-all (literal \"/dev/zero\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/random\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/urandom\") (vnode-type CHARACTER-DEVICE)))\n",
@@ -415,11 +421,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_analysis_profile_allows_only_libinfo_identity_lookup() {
-        let profile = macos_profile(Path::new("/tmp/workspace"), &[], true);
+        let profile = macos_profile(
+            Path::new("/tmp/workspace"),
+            &[PathBuf::from("/opt/homebrew/bin")],
+            true,
+        );
         assert!(profile.contains("(global-name \"com.apple.system.opendirectoryd.libinfo\")"));
         assert_eq!(profile.matches("(global-name ").count(), 1);
         assert!(profile.contains("(literal \"/\")"));
         assert!(profile.contains("(path-ancestors \"/tmp/workspace\")"));
+        assert!(profile.contains("(path-ancestors \"/opt/homebrew/bin\")"));
         assert!(profile.contains("(deny network*)"));
         assert!(!profile.contains("(allow network"));
     }
