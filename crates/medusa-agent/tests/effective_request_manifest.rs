@@ -107,6 +107,16 @@ fn effective_request_is_persisted_before_start_and_auditable_after_restart() {
     assert!(audit["canonical_request"]["tools"].is_array());
     assert_eq!(audit["reconstruction"]["status"], "source_bound");
     assert!(audit["reconstruction"]["source_events_fingerprint"].is_string());
+    assert_eq!(audit["reconstruction_receipt"]["schema_version"], 1);
+    assert_eq!(
+        audit["reconstruction_receipt"]["assembler_version"],
+        "effective-request-reconstructor-v1"
+    );
+    assert_eq!(audit["reconstruction_receipt"]["content_match"], true);
+    assert_eq!(
+        audit["reconstruction_receipt"]["source_status"],
+        "source_bound"
+    );
 }
 
 #[test]
@@ -324,6 +334,9 @@ fn model_experience_contract_is_bound_to_effective_request_evidence() {
     assert!(provenance["model_experience_component:system"].is_string());
     assert!(provenance["model_experience_component:tools"].is_string());
     assert!(provenance["model_experience_estimated_tokens"].is_string());
+    assert!(provenance["model_experience_total_bytes"].is_string());
+    assert!(provenance["model_experience_stable_prefix_bytes"].is_string());
+    assert_eq!(provenance["model_experience_cache"], "unknown");
 }
 
 fn request_manifests(session: &AgentSession) -> Vec<(String, String)> {

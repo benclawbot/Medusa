@@ -54,7 +54,8 @@ use crate::{
     evidence::append_event,
     identity_guard::validate_provider_text,
     model_experience::{
-        ComponentStability, ModelExperienceComponentV1, ModelExperienceContractV1, PrivacyClass,
+        CacheObservationV1, ComponentStability, ModelExperienceComponentV1,
+        ModelExperienceContractV1, PrivacyClass,
     },
     output_envelope::{OutputFormat, validate_expansion_handle, wrap as wrap_envelope},
     policy::validate_shell_command_hard_denials,
@@ -429,6 +430,8 @@ fn model_experience_component(
         stability,
         estimated_tokens: Some(bytes.saturating_add(3) / 4),
         actual_tokens: None,
+        estimated_bytes: Some(bytes),
+        actual_bytes: Some(bytes),
         cache_eligible: Some(matches!(
             stability,
             ComponentStability::Static | ComponentStability::SessionStable
@@ -1509,6 +1512,21 @@ impl<P: ModelProvider> AgentEngine<P> {
                 .estimated_total_tokens
                 .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string()),
         );
+        let model_experience_measurement =
+            model_experience.measurement(CacheObservationV1::Unknown);
+        assembly_provenance.insert(
+            "model_experience_total_bytes".to_owned(),
+            model_experience_measurement
+                .total_bytes
+                .map_or_else(|| "unknown".to_owned(), |bytes| bytes.to_string()),
+        );
+        assembly_provenance.insert(
+            "model_experience_stable_prefix_bytes".to_owned(),
+            model_experience_measurement
+                .stable_prefix_bytes
+                .map_or_else(|| "unknown".to_owned(), |bytes| bytes.to_string()),
+        );
+        assembly_provenance.insert("model_experience_cache".to_owned(), "unknown".to_owned());
         for (id, fingerprint) in model_experience.component_fingerprints() {
             assembly_provenance.insert(format!("model_experience_component:{id}"), fingerprint);
         }

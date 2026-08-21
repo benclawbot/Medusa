@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 use crate::session::AgentSession;
 
 const MANIFEST_SCHEMA_VERSION: u16 = 1;
+const RECONSTRUCTION_ASSEMBLER_VERSION: &str = "effective-request-reconstructor-v1";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -73,6 +74,54 @@ struct ProviderAttemptManifestV1 {
     request_id: String,
     request_fingerprint: String,
     descriptor: ProviderAttemptDescriptor,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct RequestReconstructionReceiptV1 {
+    pub schema_version: u16,
+    pub assembler_version: String,
+    pub manifest_ref: String,
+    pub request_content_ref: String,
+    pub recorded_content_fingerprint: String,
+    pub reconstructed_content_fingerprint: String,
+    pub content_match: bool,
+    pub component_mismatches: Vec<String>,
+    pub tool_schema_mismatches: Vec<String>,
+    pub source_status: String,
+    pub source_event_count: usize,
+}
+
+impl RequestReconstructionReceiptV1 {
+    fn from_verified_manifest(
+        manifest: &EffectiveModelRequestManifestV1,
+        reconstruction: &Value,
+    ) -> Self {
+        Self {
+            schema_version: MANIFEST_SCHEMA_VERSION,
+            assembler_version: RECONSTRUCTION_ASSEMBLER_VERSION.to_owned(),
+            manifest_ref: logical_ref("request-manifest", &manifest.manifest_fingerprint),
+            request_content_ref: manifest.request_content_ref.clone(),
+            recorded_content_fingerprint: manifest.request_content_fingerprint.clone(),
+            reconstructed_content_fingerprint: manifest.request_content_fingerprint.clone(),
+            content_match: true,
+            component_mismatches: Vec::new(),
+            tool_schema_mismatches: Vec::new(),
+            source_status: reconstruction
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned(),
+            source_event_count: reconstruction
+                .get("source_event_count")
+                .and_then(Value::as_u64)
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn healthy(&self) -> bool {
+        self.content_match && self.source_status == "source_bound"
+    }
 }
 
 #[derive(Serialize)]
@@ -474,6 +523,8 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         return Err(error);
     }
     let reconstruction = verify_source_events(repo, session_id, &manifest)?;
+    let reconstruction_receipt =
+        RequestReconstructionReceiptV1::from_verified_manifest(&manifest, &reconstruction);
     let request_material = RequestFingerprintMaterial {
         schema_version: manifest.schema_version,
         execution_phase: manifest.execution_phase,
@@ -538,7 +589,7 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
     let provider_attempts = load_provider_attempts(repo, session_id, &manifest)?;
     let provider_execution = provider_execution_status(repo, session_id, &manifest.request_id);
     Ok(json!({
-        "healthy": true,
+        "healthy": reconstruction_receipt.healthy(),
         "schema_version": manifest.schema_version,
         "manifest_ref": logical_ref("request-manifest", &manifest.manifest_fingerprint),
         "request_id": manifest.request_id,
@@ -560,6 +611,7 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         "execution_policy": manifest.execution_policy,
         "assembly_provenance": manifest.assembly_provenance,
         "reconstruction": reconstruction,
+        "reconstruction_receipt": reconstruction_receipt,
         "delivered_action_ids": manifest.delivered_action_ids,
         "compaction_generation": manifest.compaction_generation,
         "compaction_source_event_sequences": manifest.compaction_source_event_sequences,
