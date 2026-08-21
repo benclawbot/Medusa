@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::service_provider::ServiceProviderRegistry;
+
 pub const RUNTIME_CONFIG_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -364,6 +366,21 @@ pub fn compile_effective_config(
     limits: RuntimeConfigHardLimits,
     code_mode_ready: bool,
 ) -> Result<EffectiveRuntimeConfigV1, Vec<String>> {
+    compile_effective_config_with_registry(config, provenance, limits, code_mode_ready, None)
+}
+
+/// Compiles an effective configuration against an admitted non-authority service registry.
+///
+/// The legacy entry point intentionally has no registry and therefore rejects every selected
+/// service provider. Callers that own a registry must pass it explicitly; a string in config is
+/// never enough to create or replace a runtime service.
+pub fn compile_effective_config_with_registry(
+    config: RuntimeLoopConfigV1,
+    provenance: BTreeMap<String, String>,
+    limits: RuntimeConfigHardLimits,
+    code_mode_ready: bool,
+    registry: Option<&ServiceProviderRegistry>,
+) -> Result<EffectiveRuntimeConfigV1, Vec<String>> {
     let mut errors = Vec::new();
     if config.schema_version != RUNTIME_CONFIG_SCHEMA_VERSION {
         errors.push("unsupported runtime configuration schema".to_owned());
@@ -383,10 +400,18 @@ pub fn compile_effective_config(
         .is_some_and(|value| value.trim().is_empty())
     {
         errors.push("service_provider must not be empty when selected".to_owned());
-    } else if config.service_provider.is_some() {
-        errors.push(
-            "no certified non-authority service provider is registered for this runtime".to_owned(),
-        );
+    } else if let Some(provider_id) = config.service_provider.as_deref() {
+        let registered = registry
+            .map(|registry| registry.contains_provider(provider_id))
+            .transpose()
+            .map_err(|error| vec![error.to_string()])?
+            .unwrap_or(false);
+        if !registered {
+            errors.push(
+                "no certified non-authority service provider is registered for this runtime"
+                    .to_owned(),
+            );
+        }
     }
     if config.retry_budget > limits.max_retry_budget {
         errors.push("retry_budget exceeds the hard policy maximum".to_owned());
