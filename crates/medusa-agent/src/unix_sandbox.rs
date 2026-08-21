@@ -170,6 +170,12 @@ fn macos_profile(root: &Path, read_only_roots: &[PathBuf]) -> String {
     profile.push_str(
         "(allow sysctl-read\n  (sysctl-name \"hw.activecpu\")\n  (sysctl-name \"hw.byteorder\")\n  (sysctl-name \"hw.cacheconfig\")\n  (sysctl-name \"hw.cachelinesize\")\n  (sysctl-name \"hw.cachelinesize_compat\")\n  (sysctl-name \"hw.cpufamily\")\n  (sysctl-name \"hw.cputype\")\n  (sysctl-name \"hw.logicalcpu_max\")\n  (sysctl-name \"hw.machine\")\n  (sysctl-name \"hw.ncpu\")\n  (sysctl-name \"hw.pagesize\")\n  (sysctl-name \"hw.pagesize_compat\")\n  (sysctl-name \"hw.physicalcpu_max\")\n  (sysctl-name \"kern.hostname\")\n  (sysctl-name \"kern.maxfilesperproc\")\n  (sysctl-name \"kern.osrelease\")\n  (sysctl-name \"kern.ostype\")\n  (sysctl-name \"kern.osversion\")\n  (sysctl-name \"kern.version\"))\n",
     );
+    // libc resolves the current user through this service on macOS. Keep the
+    // allowance to that single read-only identity lookup rather than granting
+    // wildcard Mach access to the analysis process.
+    profile.push_str(
+        "(allow mach-lookup\n  (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n",
+    );
     profile.push_str(
         "(allow file-read* file-write-data file-ioctl\n  (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n(allow file-read* file-ioctl\n  (require-all (literal \"/dev/zero\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/random\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/urandom\") (vnode-type CHARACTER-DEVICE)))\n",
     );
@@ -355,9 +361,12 @@ mod tests {
         assert!(profile.contains("(allow process-info* (target same-sandbox))"));
         assert!(profile.contains("(sysctl-name \"hw.ncpu\")"));
         assert!(profile.contains("(literal \"/dev/urandom\")"));
+        assert!(profile.contains(
+            "(global-name \"com.apple.system.opendirectoryd.libinfo\")"
+        ));
+        assert_eq!(profile.matches("(global-name ").count(), 1);
         assert!(profile.contains("(deny network*)"));
         assert!(!profile.contains("(allow network"));
-        assert!(!profile.contains("(allow mach-lookup"));
     }
 
     #[test]
