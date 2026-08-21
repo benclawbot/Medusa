@@ -34,6 +34,7 @@ impl DraftStore {
 
     pub fn load(&self, key: &str) -> io::Result<Option<PromptDraft>> {
         if key == "current" {
+            self.inner.delete(key)?;
             return Ok(None);
         }
         self.inner.load(key)
@@ -65,6 +66,11 @@ mod wrapper_tests {
 
         let reopened = DraftStore::for_repo(repository.path());
         assert_eq!(reopened.load("current").expect("load current"), None);
+        assert_eq!(
+            reopened.inner.load("current").expect("inspect persisted current"),
+            None,
+            "discarded current draft must also be removed from durable storage"
+        );
     }
 
     #[test]
