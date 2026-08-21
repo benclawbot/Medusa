@@ -1,0 +1,82 @@
+name: Publish Rolling Main CLI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rolling-main-cli
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build rolling CLI (${{ runner.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Build Medusa CLI
+        run: cargo build --release --locked --bin medusa
+      - name: Package exact-revision rolling asset
+        run: >-
+          python scripts/package-main-update.py
+          --revision ${{ github.sha }}
+          --binary ${{ runner.os == 'Windows' && 'target/release/medusa.exe' || 'target/release/medusa' }}
+          --output release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rolling-main-${{ runner.os }}-${{ runner.arch }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish rolling main assets
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: rolling-main-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish binaries before revision manifests
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view main-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create main-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Medusa rolling main CLI" \
+              --notes "Mutable prebuilt CLI transport for the latest main commit. Stable releases remain immutable and separately signed."
+          fi
+
+          mapfile -d '' archives < <(find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print0)
+          test "${#archives[@]}" -gt 0
+          gh release upload main-latest "${archives[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
+          mapfile -d '' manifests < <(find release-assets -type f -name '*.json' -print0)
+          test "${#manifests[@]}" -gt 0
+          gh release upload main-latest "${manifests[@]}" --clobber --repo "$GITHUB_REPOSITORY"
