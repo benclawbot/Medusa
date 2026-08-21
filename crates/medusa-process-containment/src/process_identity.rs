@@ -239,7 +239,18 @@ fn platform_process_start_marker(pid: u32) -> io::Result<Option<NativeProcessSta
     if written == 0 {
         let error = io::Error::last_os_error();
         return match error.raw_os_error() {
-            Some(3) => Ok(None), // ESRCH
+            Some(libc::ESRCH) => Ok(None),
+            Some(libc::EPERM) => {
+                // On macOS, libproc can report EPERM for a child that has already been reaped.
+                // Confirm absence with the non-destructive signal-0 probe before treating the
+                // ownership identity as missing; a live but inaccessible PID remains fail-closed.
+                let probe = unsafe { libc::kill(pid as c_int, 0) };
+                if probe == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
             _ => Err(error),
         };
     }
@@ -337,6 +348,25 @@ mod tests {
         fields.push("987654".to_owned());
         let stat = format!("123 (worker name) with ) parens) {}", fields.join(" "));
         assert_eq!(parse_linux_start_ticks(&stat).expect("start ticks"), 987654);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reaped_child_is_reported_missing_instead_of_identity_unavailable() {
+        use std::process::Command;
+
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn macOS child");
+        let receipt = ProcessOwnershipReceipt::capture(child.id()).expect("capture child identity");
+        child.kill().expect("terminate macOS child");
+        child.wait().expect("reap macOS child");
+        assert_eq!(
+            receipt.verify(),
+            ProcessOwnershipVerification::ProcessMissing,
+            "a reaped child must not surface libproc EPERM as identity unavailable"
+        );
     }
 
     #[test]

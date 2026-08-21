@@ -42,3 +42,14 @@ fn image_and_tool_capabilities_are_model_metadata() {
     assert!(!minimax.image_input);
     assert!(minimax.tool_calling);
 }
+
+#[test]
+fn minimax_m3_exposes_medusa_effort_bands() {
+    let minimax = model_capabilities("minimax", "MiniMax-M3");
+
+    assert!(minimax.reasoning);
+    assert_eq!(
+        minimax.reasoning_effort_levels,
+        vec!["low", "medium", "high"]
+    );
+}

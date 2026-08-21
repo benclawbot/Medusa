@@ -1470,6 +1470,9 @@ mod settings_tests {
         );
 
         let modal = ModelModal::new(Some("minimax / MiniMax-M3"), Some("effort:high"), false);
-        assert_eq!(modal.effort_options(), vec![Effort::Auto]);
+        assert_eq!(
+            modal.effort_options(),
+            vec![Effort::Low, Effort::Medium, Effort::High]
+        );
     }
 }
