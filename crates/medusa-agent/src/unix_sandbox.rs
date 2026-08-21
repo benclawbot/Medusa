@@ -184,6 +184,14 @@ fn macos_profile(
         profile.push_str(
             "(allow mach-lookup\n  (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n",
         );
+        // Python's startup resolves its deep temporary working directory.  Seatbelt needs
+        // metadata access through each parent (and the root vnode itself) before the workspace
+        // subpath rule can be applied; keep both permissions scoped to analysis Python only.
+        profile.push_str(&format!(
+            "(allow file-read* file-test-existence (literal \"/\"))\n\
+(allow file-read-metadata file-test-existence (path-ancestors \"{}\"))\n",
+            profile_path(root)
+        ));
     }
     profile.push_str(
         "(allow file-read* file-write-data file-ioctl\n  (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n(allow file-read* file-ioctl\n  (require-all (literal \"/dev/zero\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/random\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/urandom\") (vnode-type CHARACTER-DEVICE)))\n",
@@ -410,6 +418,8 @@ mod tests {
         let profile = macos_profile(Path::new("/tmp/workspace"), &[], true);
         assert!(profile.contains("(global-name \"com.apple.system.opendirectoryd.libinfo\")"));
         assert_eq!(profile.matches("(global-name ").count(), 1);
+        assert!(profile.contains("(literal \"/\")"));
+        assert!(profile.contains("(path-ancestors \"/tmp/workspace\")"));
         assert!(profile.contains("(deny network*)"));
         assert!(!profile.contains("(allow network"));
     }
