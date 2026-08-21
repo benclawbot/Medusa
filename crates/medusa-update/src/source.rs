@@ -243,18 +243,15 @@ impl RollingMainArtifact {
 
 fn rolling_asset_name(platform: Platform, revision: &str) -> MedusaResult<String> {
     validate_revision(revision)?;
-    let os = match platform.os {
-        OperatingSystem::Linux => "linux",
-        OperatingSystem::Macos => "macos",
-        OperatingSystem::Windows => "windows",
-    };
-    let architecture = match platform.architecture {
-        Architecture::X86_64 => "x86_64",
-        Architecture::Aarch64 => "aarch64",
-    };
-    let extension = match platform.os {
-        OperatingSystem::Windows => "zip",
-        OperatingSystem::Linux | OperatingSystem::Macos => "tar.gz",
+    let (os, architecture, extension) = match (platform.os, platform.architecture) {
+        (OperatingSystem::Linux, Architecture::X86_64) => ("linux", "x86_64", "tar.gz"),
+        (OperatingSystem::Macos, Architecture::Aarch64) => ("macos", "aarch64", "tar.gz"),
+        (OperatingSystem::Windows, Architecture::X86_64) => ("windows", "x86_64", "zip"),
+        _ => {
+            return Err(invalid(
+                "rolling main prebuilt updates are not published for this OS/architecture",
+            ));
+        }
     };
     Ok(format!("medusa-main-{os}-{architecture}.{extension}"))
 }
@@ -373,7 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn rolling_asset_selection_is_platform_specific() {
+    fn rolling_asset_selection_matches_published_platforms() {
+        let linux = Platform {
+            os: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+        };
+        assert_eq!(
+            rolling_asset_name(linux, REVISION).expect("asset"),
+            "medusa-main-linux-x86_64.tar.gz"
+        );
+
         let windows = Platform {
             os: OperatingSystem::Windows,
             architecture: Architecture::X86_64,
@@ -391,6 +397,27 @@ mod tests {
             rolling_asset_name(macos_arm, REVISION).expect("asset"),
             "medusa-main-macos-aarch64.tar.gz"
         );
+    }
+
+    #[test]
+    fn rolling_asset_selection_rejects_unpublished_platforms_without_polling() {
+        for platform in [
+            Platform {
+                os: OperatingSystem::Linux,
+                architecture: Architecture::Aarch64,
+            },
+            Platform {
+                os: OperatingSystem::Macos,
+                architecture: Architecture::X86_64,
+            },
+            Platform {
+                os: OperatingSystem::Windows,
+                architecture: Architecture::Aarch64,
+            },
+        ] {
+            let error = rolling_asset_name(platform, REVISION).expect_err("unsupported platform");
+            assert_eq!(error.code(), ErrorCode::InvalidConfiguration);
+        }
     }
 
     #[test]
