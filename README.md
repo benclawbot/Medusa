@@ -393,6 +393,7 @@ The 10 capabilities below are recorded as `production` maturity in [`docs/CAPABI
 - transactional per-agent scopes with explicit prepare/publish/stop lifecycle and resource ownership;
 - durable worker/team instructions admitted through session delivery semantics rather than a separate model-context mailbox authority;
 - effective model-request manifests persisted before provider calls, including request/provider/scope fingerprints, source-event linkage, delivered session actions, compaction provenance, and tool-schema fingerprints;
+- versioned request-assembly source records and a fresh deterministic reconstruction audit that compares independently rebuilt model-visible content with the frozen provider artifact, failing closed on source or artifact drift;
 - bounded speculative implementation for eligible resolved-scope work, where isolated preparation may overlap upstream review but promotion still fails closed on exact assumptions, repository/scope/policy/dependency evidence, cancellation, and recovery state;
 - shared semantic execution reporting that derives progress, completion, verification, blockers, recovery, implementation scope, and final results from canonical journal evidence for consistent frontend projections;
 - durable worker leases, epochs, task evidence, child acceptance, aggregate barriers, and cleanup;

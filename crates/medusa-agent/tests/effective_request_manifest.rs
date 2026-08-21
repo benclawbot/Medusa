@@ -105,8 +105,13 @@ fn effective_request_is_persisted_before_start_and_auditable_after_restart() {
     assert!(audit["canonical_request"]["system"].is_string());
     assert!(audit["canonical_request"]["messages"].is_array());
     assert!(audit["canonical_request"]["tools"].is_array());
-    assert_eq!(audit["reconstruction"]["status"], "source_bound");
+    assert_eq!(audit["reconstruction"]["status"], "source_reconstructed");
+    assert!(audit["reconstruction"]["source_inputs_ref"].is_string());
     assert!(audit["reconstruction"]["source_events_fingerprint"].is_string());
+    assert_eq!(
+        audit["assembly_provenance"]["request_assembler_version"],
+        "effective-request-reconstructor-v1"
+    );
     assert_eq!(audit["reconstruction_receipt"]["schema_version"], 1);
     assert_eq!(
         audit["reconstruction_receipt"]["assembler_version"],
@@ -115,8 +120,47 @@ fn effective_request_is_persisted_before_start_and_auditable_after_restart() {
     assert_eq!(audit["reconstruction_receipt"]["content_match"], true);
     assert_eq!(
         audit["reconstruction_receipt"]["source_status"],
-        "source_bound"
+        "source_reconstructed"
     );
+}
+
+#[test]
+fn fresh_request_reconstruction_rejects_source_input_drift() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    );
+    let mut session = engine
+        .create_session(directory.path(), "reconstruct independently".to_owned())
+        .expect("create session");
+    engine.step(&mut session).expect("model step");
+    let manifest_ref = request_manifests(&session)[0].1.clone();
+    let audit =
+        inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest_ref)
+            .expect("baseline audit");
+    let source_ref = audit["reconstruction"]["source_inputs_ref"]
+        .as_str()
+        .expect("source inputs reference");
+    let source_path = request_source_path(directory.path(), &session, source_ref);
+    let mut source: serde_json::Value =
+        serde_json::from_slice(&fs::read(&source_path).expect("read source inputs"))
+            .expect("source inputs json");
+    source["system"] = serde_json::json!("tampered source system");
+    fs::write(
+        &source_path,
+        serde_json::to_vec_pretty(&source).expect("tampered source json"),
+    )
+    .expect("write tampered source inputs");
+
+    let error =
+        inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest_ref)
+            .expect_err("source drift must fail closed");
+    assert!(format!("{error:?}").contains("fresh request reconstruction"));
 }
 
 #[test]
@@ -364,6 +408,20 @@ fn request_artifact_path(
         .expect("request content reference");
     repo.join(".medusa")
         .join("request-artifacts")
+        .join(session.id.as_str())
+        .join(format!("{hash}.json"))
+}
+
+fn request_source_path(
+    repo: &std::path::Path,
+    session: &AgentSession,
+    reference: &str,
+) -> std::path::PathBuf {
+    let hash = reference
+        .strip_prefix("request-source:sha256:")
+        .expect("request source reference");
+    repo.join(".medusa")
+        .join("request-sources")
         .join(session.id.as_str())
         .join(format!("{hash}.json"))
 }
