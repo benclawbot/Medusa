@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build and publish rolling CLI (${{ runner.os }})
+    name: Build and publish rolling CLI (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:

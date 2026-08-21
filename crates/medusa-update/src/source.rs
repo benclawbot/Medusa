@@ -222,7 +222,8 @@ impl RollingMainArtifact {
                     "prebuilt main artifact is for revision {}, but main is {}",
                     self.revision, expected_revision
                 ),
-            ));
+            )
+            .with_retryable(true));
         }
         if self.name != expected_name {
             return Err(invalid(
@@ -274,6 +275,7 @@ fn publish_timeout(revision: &str) -> MedusaError {
             ROLLING_PUBLISH_WAIT.as_secs()
         ),
     )
+    .with_retryable(true)
 }
 
 fn http_error(error: impl std::fmt::Display) -> MedusaError {
@@ -282,6 +284,7 @@ fn http_error(error: impl std::fmt::Display) -> MedusaError {
         ErrorCategory::Transient,
         format!("GitHub main branch request failed: {error}"),
     )
+    .with_retryable(true)
 }
 
 fn asset_error(error: impl std::fmt::Display) -> MedusaError {
@@ -290,6 +293,7 @@ fn asset_error(error: impl std::fmt::Display) -> MedusaError {
         ErrorCategory::Transient,
         format!("GitHub rolling main artifact request failed: {error}"),
     )
+    .with_retryable(true)
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {
@@ -434,14 +438,23 @@ mod tests {
                 .validate(REVISION, "medusa-main-windows-x86_64.zip")
                 .is_ok()
         );
-        assert!(
-            manifest
-                .validate(
-                    "1123456789abcdef0123456789abcdef01234567",
-                    "medusa-main-windows-x86_64.zip"
-                )
-                .is_err()
-        );
+        let error = manifest
+            .validate(
+                "1123456789abcdef0123456789abcdef01234567",
+                "medusa-main-windows-x86_64.zip",
+            )
+            .expect_err("stale manifest");
+        assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+        assert_eq!(error.category, ErrorCategory::Transient);
+        assert!(error.retryable);
+    }
+
+    #[test]
+    fn rolling_publish_timeout_is_retryable() {
+        let error = publish_timeout(REVISION);
+        assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+        assert_eq!(error.category, ErrorCategory::Transient);
+        assert!(error.retryable);
     }
 
     #[test]
