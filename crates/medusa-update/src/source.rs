@@ -1,12 +1,12 @@
 use std::{path::Path, sync::Mutex};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::{blocking::Client, StatusCode};
+use reqwest::{StatusCode, blocking::Client};
 use serde::Deserialize;
 
 use crate::{
-    copy_with_progress, verify_artifact, Architecture, AtomicInstaller, OperatingSystem, Platform,
-    Restart, ScheduledUpdate,
+    Architecture, AtomicInstaller, OperatingSystem, Platform, Restart, ScheduledUpdate,
+    copy_with_progress, verify_artifact,
 };
 
 const GITHUB_API: &str = "https://api.github.com";
