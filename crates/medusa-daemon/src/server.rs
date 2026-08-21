@@ -153,7 +153,7 @@ fn frontend_request_is_retryable(request: &Request) -> bool {
         return false;
     };
     !matches!(
-        envelope.command,
+        &envelope.command,
         FrontendCommand::ListSessions
             | FrontendCommand::Replay { .. }
             | FrontendCommand::PollTransient
