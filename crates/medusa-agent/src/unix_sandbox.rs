@@ -138,7 +138,11 @@ pub(crate) fn macos_command(
     profile_path: &Path,
 ) -> io::Result<Command> {
     let inputs = inputs(program)?;
-    let profile = macos_profile(root, &inputs.read_only_roots);
+    let profile = macos_profile(
+        root,
+        &inputs.read_only_roots,
+        macos_analysis_python(root, &inputs.executable),
+    );
     std::fs::write(profile_path, profile)?;
 
     let mut command = Command::new("sandbox-exec");
@@ -163,19 +167,24 @@ pub(crate) fn macos_command(
 }
 
 #[cfg(target_os = "macos")]
-fn macos_profile(root: &Path, read_only_roots: &[PathBuf]) -> String {
+fn macos_profile(
+    root: &Path,
+    read_only_roots: &[PathBuf],
+    allow_directory_identity_lookup: bool,
+) -> String {
     let mut profile = String::from(
         "(version 1)\n(deny default)\n(allow process-exec* process-fork)\n(allow signal (target same-sandbox))\n(allow process-info* (target same-sandbox))\n",
     );
     profile.push_str(
         "(allow sysctl-read\n  (sysctl-name \"hw.activecpu\")\n  (sysctl-name \"hw.byteorder\")\n  (sysctl-name \"hw.cacheconfig\")\n  (sysctl-name \"hw.cachelinesize\")\n  (sysctl-name \"hw.cachelinesize_compat\")\n  (sysctl-name \"hw.cpufamily\")\n  (sysctl-name \"hw.cputype\")\n  (sysctl-name \"hw.logicalcpu_max\")\n  (sysctl-name \"hw.machine\")\n  (sysctl-name \"hw.ncpu\")\n  (sysctl-name \"hw.pagesize\")\n  (sysctl-name \"hw.pagesize_compat\")\n  (sysctl-name \"hw.physicalcpu_max\")\n  (sysctl-name \"kern.hostname\")\n  (sysctl-name \"kern.maxfilesperproc\")\n  (sysctl-name \"kern.osrelease\")\n  (sysctl-name \"kern.ostype\")\n  (sysctl-name \"kern.osversion\")\n  (sysctl-name \"kern.version\"))\n",
     );
-    // libc resolves the current user through this service on macOS. Keep the
-    // allowance to that single read-only identity lookup rather than granting
-    // wildcard Mach access to the analysis process.
-    profile.push_str(
-        "(allow mach-lookup\n  (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n",
-    );
+    if allow_directory_identity_lookup {
+        // The fixed analysis Python reducer may need libc's current-user lookup during startup.
+        // Keep the exception out of ordinary shell-run profiles and limit it to this one service.
+        profile.push_str(
+            "(allow mach-lookup\n  (global-name \"com.apple.system.opendirectoryd.libinfo\"))\n",
+        );
+    }
     profile.push_str(
         "(allow file-read* file-write-data file-ioctl\n  (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n(allow file-read* file-ioctl\n  (require-all (literal \"/dev/zero\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/random\") (vnode-type CHARACTER-DEVICE))\n  (require-all (literal \"/dev/urandom\") (vnode-type CHARACTER-DEVICE)))\n",
     );
@@ -198,6 +207,23 @@ fn profile_path(path: &Path) -> String {
     path.to_string_lossy()
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+}
+
+#[cfg(target_os = "macos")]
+fn macos_analysis_python(root: &Path, executable: &Path) -> bool {
+    if macos_python_runtime_root(executable).is_none() {
+        return false;
+    }
+    let mut components = root.components().rev();
+    let Some(_) = components.next() else {
+        return false;
+    };
+    components
+        .next()
+        .is_some_and(|component| component.as_os_str().to_str() == Some("analysis-workspace-v1"))
+        && components
+            .next()
+            .is_some_and(|component| component.as_os_str().to_str() == Some(".medusa"))
 }
 
 #[cfg(target_os = "macos")]
@@ -355,15 +381,34 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_profile_allows_only_minimal_runtime_primitives() {
-        let profile = macos_profile(Path::new("/tmp/workspace"), &[]);
+    fn macos_analysis_identity_lookup_requires_analysis_python() {
+        let root = Path::new("/tmp/repo/.medusa/analysis-workspace-v1/session");
+        assert!(macos_analysis_python(root, Path::new("/usr/bin/python3")));
+        assert!(!macos_analysis_python(
+            Path::new("/tmp/repo"),
+            Path::new("/usr/bin/python3")
+        ));
+        assert!(!macos_analysis_python(root, Path::new("/usr/bin/node")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_profile_keeps_directory_identity_lookup_out_of_shell_runs() {
+        let profile = macos_profile(Path::new("/tmp/workspace"), &[], false);
         assert!(profile.contains("(allow signal (target same-sandbox))"));
         assert!(profile.contains("(allow process-info* (target same-sandbox))"));
         assert!(profile.contains("(sysctl-name \"hw.ncpu\")"));
         assert!(profile.contains("(literal \"/dev/urandom\")"));
-        assert!(profile.contains(
-            "(global-name \"com.apple.system.opendirectoryd.libinfo\")"
-        ));
+        assert!(!profile.contains("(allow mach-lookup"));
+        assert!(profile.contains("(deny network*)"));
+        assert!(!profile.contains("(allow network"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_analysis_profile_allows_only_libinfo_identity_lookup() {
+        let profile = macos_profile(Path::new("/tmp/workspace"), &[], true);
+        assert!(profile.contains("(global-name \"com.apple.system.opendirectoryd.libinfo\")"));
         assert_eq!(profile.matches("(global-name ").count(), 1);
         assert!(profile.contains("(deny network*)"));
         assert!(!profile.contains("(allow network"));
