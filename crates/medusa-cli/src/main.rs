@@ -35,6 +35,7 @@ use medusa_hardening::{
 use headless_approval::{ApprovalMatch, HeadlessApprovalPolicy};
 use medusa_protocol::frontend::{FrontendEvent, FrontendKind};
 use medusa_runtime::{
+    behavioral_health::{build_behavioral_health_snapshot, BehavioralHealthStatus},
     frontend::CanonicalFrontendEventStream, prompt::PromptDraft, RuntimeController, RuntimeEvent,
 };
 use medusa_tui::{TuiOptions, run as run_tui};
@@ -654,6 +655,25 @@ fn health(
             "provider route is configured but live readiness was not probed"
         },
         Some("use `medusa config doctor` for redacted configuration checks; live provider work requires an explicit run".to_owned()),
+    )?);
+
+    let behavioral_health =
+        build_behavioral_health_snapshot(None, &[], None, None, None, None, None, None);
+    let behavioral_health_status = match behavioral_health.status {
+        BehavioralHealthStatus::Healthy => HealthStatus::HealthyReady,
+        BehavioralHealthStatus::Degraded => HealthStatus::DegradedSafe,
+        BehavioralHealthStatus::InsufficientEvidence | BehavioralHealthStatus::Rebuilding => {
+            HealthStatus::OptionalUnavailable
+        }
+    };
+    components.push(HealthComponent::new(
+        "behavioral_health",
+        behavioral_health_status,
+        format!(
+            "shared behavioral-health projection is {:?}; verified cohort evidence is not inferred by this bounded check",
+            behavioral_health.status
+        ),
+        None,
     )?);
 
     for (id, summary) in [

@@ -23,6 +23,18 @@ fn health_is_bounded_truthful_and_json_stable() {
     assert_eq!(report["safe_to_continue"], true);
     assert_eq!(report["components"][0]["id"], "analysis_workspace");
     assert_eq!(report["components"][0]["status"], "optional_unavailable");
+    let behavioral_health = report["components"]
+        .as_array()
+        .expect("components")
+        .iter()
+        .find(|component| component["id"] == "behavioral_health")
+        .expect("shared behavioral health component");
+    assert_eq!(behavioral_health["status"], "optional_unavailable");
+    assert!(
+        behavioral_health["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.contains("InsufficientEvidence"))
+    );
     assert!(report["components"].as_array().expect("components").len() <= 32);
 }
 
