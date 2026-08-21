@@ -633,7 +633,7 @@ fn repository_defined_checks(repo: &Path) -> Result<Vec<VerificationCheck>> {
     if repo.join("verify.sh").is_file() {
         checks.push(VerificationCheck::command(
             VerificationCheckKind::RepositoryDefined,
-            "bash",
+            "sh",
             &["verify.sh"],
             ".",
             "repository verification script",
