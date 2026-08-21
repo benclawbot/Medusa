@@ -8,9 +8,10 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_protocol::EventPayload;
+use medusa_protocol::{EventEnvelope, EventPayload};
 use medusa_provider::{
-    ModelRequest, ProviderAttemptDescriptor, ProviderCapabilities, ProviderExecutionPhase,
+    Message, ModelRequest, ProviderAttemptDescriptor, ProviderCapabilities, ProviderExecutionPhase,
+    ToolDefinition,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -19,6 +20,8 @@ use sha2::{Digest, Sha256};
 use crate::session::AgentSession;
 
 const MANIFEST_SCHEMA_VERSION: u16 = 1;
+const RECONSTRUCTION_ASSEMBLER_VERSION: &str = "effective-request-reconstructor-v1";
+const REQUEST_SOURCE_SCHEMA_VERSION: u16 = 1;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -73,6 +76,82 @@ struct ProviderAttemptManifestV1 {
     request_id: String,
     request_fingerprint: String,
     descriptor: ProviderAttemptDescriptor,
+}
+
+/// Durable inputs for the independent request assembler.
+///
+/// This is intentionally separate from the immutable request artifact. The artifact records what
+/// crossed the provider boundary; this record captures the versioned inputs that a fresh,
+/// deterministic assembler uses to rebuild that request during audit.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RequestAssemblySourceV1 {
+    schema_version: u16,
+    session_id: String,
+    source_event_sequences: Vec<u64>,
+    source_events_fingerprint: String,
+    system: String,
+    messages: Vec<Message>,
+    tools: Vec<ToolDefinition>,
+    max_tokens: u32,
+    temperature_milli: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct RequestReconstructionReceiptV1 {
+    pub schema_version: u16,
+    pub assembler_version: String,
+    pub manifest_ref: String,
+    pub request_content_ref: String,
+    pub recorded_content_fingerprint: String,
+    pub reconstructed_content_fingerprint: String,
+    pub content_match: bool,
+    pub component_mismatches: Vec<String>,
+    pub tool_schema_mismatches: Vec<String>,
+    pub source_status: String,
+    pub source_event_count: usize,
+}
+
+impl RequestReconstructionReceiptV1 {
+    fn from_verified_manifest(
+        manifest: &EffectiveModelRequestManifestV1,
+        reconstruction: &Value,
+        reconstructed_content_fingerprint: String,
+        component_mismatches: Vec<String>,
+        tool_schema_mismatches: Vec<String>,
+    ) -> Self {
+        let content_match =
+            manifest.request_content_fingerprint == reconstructed_content_fingerprint;
+        Self {
+            schema_version: MANIFEST_SCHEMA_VERSION,
+            assembler_version: RECONSTRUCTION_ASSEMBLER_VERSION.to_owned(),
+            manifest_ref: logical_ref("request-manifest", &manifest.manifest_fingerprint),
+            request_content_ref: manifest.request_content_ref.clone(),
+            recorded_content_fingerprint: manifest.request_content_fingerprint.clone(),
+            reconstructed_content_fingerprint,
+            content_match,
+            component_mismatches,
+            tool_schema_mismatches,
+            source_status: reconstruction
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned(),
+            source_event_count: reconstruction
+                .get("source_event_count")
+                .and_then(Value::as_u64)
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or_default(),
+        }
+    }
+
+    fn healthy(&self) -> bool {
+        self.content_match
+            && matches!(
+                self.source_status.as_str(),
+                "source_bound" | "source_reconstructed"
+            )
+    }
 }
 
 #[derive(Serialize)]
@@ -138,6 +217,7 @@ pub(crate) fn persist_before_provider_call(
         assembly_provenance,
         previous,
     } = input;
+    let mut assembly_provenance = assembly_provenance;
     let scope = crate::agent_scope::load_published_scope_ref(&session.repo, session.id.as_str())?;
     let preceding_event_sequence = session.events.last().map_or(0, |event| event.sequence);
     let started_event_sequence = preceding_event_sequence.saturating_add(1);
@@ -148,6 +228,55 @@ pub(crate) fn persist_before_provider_call(
     let canonical_request = canonicalize_value(serde_json::to_value(request).map_err(json_error)?);
     let request_content_fingerprint = fingerprint_value(&canonical_request)?;
     let request_content_ref = logical_ref("request-content", &request_content_fingerprint);
+
+    let previous_started_sequence = session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| {
+            matches!(event.payload, EventPayload::ModelRequestStarted { .. })
+                .then_some(event.sequence)
+        })
+        .unwrap_or(0);
+    let source_event_sequences = session
+        .events
+        .iter()
+        .filter(|event| event.sequence <= preceding_event_sequence)
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
+    let source_events_fingerprint =
+        source_events_fingerprint(&session.events, &source_event_sequences)?;
+    let source = RequestAssemblySourceV1 {
+        schema_version: REQUEST_SOURCE_SCHEMA_VERSION,
+        session_id: session.id.to_string(),
+        source_event_sequences: source_event_sequences.clone(),
+        source_events_fingerprint: source_events_fingerprint.clone(),
+        system: request.system.clone(),
+        messages: request.messages.clone(),
+        tools: request.tools.clone(),
+        max_tokens: request.max_tokens,
+        temperature_milli: request.temperature_milli,
+    };
+    let source_value = canonicalize_value(serde_json::to_value(&source).map_err(json_error)?);
+    let source_fingerprint = fingerprint_value(&source_value)?;
+    let source_inputs_ref = logical_ref("request-source", &source_fingerprint);
+    assembly_provenance.insert(
+        "request_assembler_version".to_owned(),
+        RECONSTRUCTION_ASSEMBLER_VERSION.to_owned(),
+    );
+    persist_immutable(
+        &session.repo,
+        "request-sources",
+        session.id.as_str(),
+        &source_fingerprint,
+        &serde_json::to_vec_pretty(&source_value).map_err(json_error)?,
+    )?;
+    assembly_provenance.insert("source_inputs_ref".to_owned(), source_inputs_ref);
+    assembly_provenance.insert("source_inputs_fingerprint".to_owned(), source_fingerprint);
+    assembly_provenance.insert(
+        "source_events_fingerprint".to_owned(),
+        source_events_fingerprint,
+    );
     persist_immutable(
         &session.repo,
         "request-artifacts",
@@ -178,21 +307,6 @@ pub(crate) fn persist_before_provider_call(
         })
         .collect::<MedusaResult<BTreeMap<_, _>>>()?;
 
-    let previous_started_sequence = session
-        .events
-        .iter()
-        .rev()
-        .find_map(|event| {
-            matches!(event.payload, EventPayload::ModelRequestStarted { .. })
-                .then_some(event.sequence)
-        })
-        .unwrap_or(0);
-    let source_event_sequences = session
-        .events
-        .iter()
-        .filter(|event| event.sequence <= preceding_event_sequence)
-        .map(|event| event.sequence)
-        .collect::<Vec<_>>();
     let already_linked = session
         .events
         .iter()
@@ -427,6 +541,94 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
             manifest.manifest_fingerprint
         )));
     }
+    let (fresh_reconstructed, reconstruction) = if let Some(source_ref) =
+        manifest.assembly_provenance.get("source_inputs_ref")
+    {
+        let source_fingerprint = parse_logical_ref("request-source", source_ref)?;
+        let source_bytes = read_immutable(repo, "request-sources", session_id, source_fingerprint)
+            .map_err(|_| {
+                audit_error(format!(
+                    "request assembly source is unavailable or redacted: {source_ref}"
+                ))
+            })?;
+        let source: RequestAssemblySourceV1 =
+            serde_json::from_slice(&source_bytes).map_err(json_error)?;
+        if source.schema_version != REQUEST_SOURCE_SCHEMA_VERSION {
+            return Err(audit_error(format!(
+                "unsupported request assembly source schema: {}",
+                source.schema_version
+            )));
+        }
+        if source.session_id != manifest.session_id
+            || source.source_event_sequences != manifest.source_event_sequences
+        {
+            return Err(audit_error(
+                "request assembly source does not match its manifest provenance",
+            ));
+        }
+        let fresh_request = assemble_request_from_source(&source);
+        let fresh_request =
+            canonicalize_value(serde_json::to_value(&fresh_request).map_err(json_error)?);
+        let fresh_content_fingerprint = fingerprint_value(&fresh_request)?;
+        let fresh_components = component_fingerprints_from_value(&fresh_request)?;
+        let fresh_component_mismatches =
+            component_mismatches(&manifest.component_fingerprints, &fresh_components);
+        let fresh_tool_schemas = tool_schema_fingerprints_from_value(&fresh_request)?;
+        let fresh_tool_schema_mismatches =
+            component_mismatches(&manifest.tool_schema_fingerprints, &fresh_tool_schemas);
+        if fresh_content_fingerprint != manifest.request_content_fingerprint
+            || !fresh_component_mismatches.is_empty()
+            || !fresh_tool_schema_mismatches.is_empty()
+        {
+            let mut error =
+                audit_error("fresh request reconstruction does not match its durable manifest");
+            error.context.insert(
+                "mismatched_components".to_owned(),
+                json!(fresh_component_mismatches),
+            );
+            error.context.insert(
+                "mismatched_tool_schemas".to_owned(),
+                json!(fresh_tool_schema_mismatches),
+            );
+            error.context.insert(
+                "recorded_content_fingerprint".to_owned(),
+                json!(manifest.request_content_fingerprint),
+            );
+            error.context.insert(
+                "reconstructed_content_fingerprint".to_owned(),
+                json!(fresh_content_fingerprint),
+            );
+            return Err(error);
+        }
+        let source_value = canonicalize_value(serde_json::to_value(&source).map_err(json_error)?);
+        let rebuilt_source_fingerprint = fingerprint_value(&source_value)?;
+        if rebuilt_source_fingerprint != source_fingerprint
+            || manifest
+                .assembly_provenance
+                .get("source_inputs_fingerprint")
+                != Some(&rebuilt_source_fingerprint)
+        {
+            return Err(audit_error(
+                "request assembly source fingerprint does not match its manifest",
+            ));
+        }
+        let source_events = verify_source_events(repo, session_id, &manifest)?;
+        (
+            Some((
+                fresh_content_fingerprint,
+                fresh_components,
+                fresh_tool_schemas,
+            )),
+            json!({
+                "status": "source_reconstructed",
+                "source_inputs_ref": source_ref,
+                "source_event_count": source.source_event_sequences.len(),
+                "source_events_fingerprint": source_events["source_events_fingerprint"],
+            }),
+        )
+    } else {
+        (None, verify_source_events(repo, session_id, &manifest)?)
+    };
     let content_fingerprint = parse_logical_ref("request-content", &manifest.request_content_ref)?;
     let content_bytes = read_immutable(repo, "request-artifacts", session_id, content_fingerprint)
         .map_err(|_| {
@@ -468,6 +670,24 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         );
         return Err(error);
     }
+    let (reconstructed_content_fingerprint, reconstructed_components, reconstructed_tool_schemas) =
+        fresh_reconstructed.unwrap_or_else(|| {
+            (
+                manifest.request_content_fingerprint.clone(),
+                manifest.component_fingerprints.clone(),
+                manifest.tool_schema_fingerprints.clone(),
+            )
+        });
+    let reconstruction_receipt = RequestReconstructionReceiptV1::from_verified_manifest(
+        &manifest,
+        &reconstruction,
+        reconstructed_content_fingerprint,
+        component_mismatches(&manifest.component_fingerprints, &reconstructed_components),
+        component_mismatches(
+            &manifest.tool_schema_fingerprints,
+            &reconstructed_tool_schemas,
+        ),
+    );
     let request_material = RequestFingerprintMaterial {
         schema_version: manifest.schema_version,
         execution_phase: manifest.execution_phase,
@@ -532,7 +752,7 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
     let provider_attempts = load_provider_attempts(repo, session_id, &manifest)?;
     let provider_execution = provider_execution_status(repo, session_id, &manifest.request_id);
     Ok(json!({
-        "healthy": true,
+        "healthy": reconstruction_receipt.healthy(),
         "schema_version": manifest.schema_version,
         "manifest_ref": logical_ref("request-manifest", &manifest.manifest_fingerprint),
         "request_id": manifest.request_id,
@@ -553,6 +773,8 @@ pub(crate) fn inspect(repo: &Path, session_id: &str, manifest_ref: &str) -> Medu
         "execution_policy_fingerprint": manifest.execution_policy_fingerprint,
         "execution_policy": manifest.execution_policy,
         "assembly_provenance": manifest.assembly_provenance,
+        "reconstruction": reconstruction,
+        "reconstruction_receipt": reconstruction_receipt,
         "delivered_action_ids": manifest.delivered_action_ids,
         "compaction_generation": manifest.compaction_generation,
         "compaction_source_event_sequences": manifest.compaction_source_event_sequences,
@@ -590,6 +812,16 @@ fn request_component_fingerprints(
             })))?,
         ),
     ]))
+}
+
+fn assemble_request_from_source(source: &RequestAssemblySourceV1) -> ModelRequest {
+    ModelRequest {
+        system: source.system.clone(),
+        messages: source.messages.clone(),
+        tools: source.tools.clone(),
+        max_tokens: source.max_tokens,
+        temperature_milli: source.temperature_milli,
+    }
 }
 
 fn component_fingerprints_from_value(request: &Value) -> MedusaResult<BTreeMap<String, String>> {
@@ -638,6 +870,70 @@ fn tool_schema_fingerprints_from_value(request: &Value) -> MedusaResult<BTreeMap
 
 pub(crate) fn fragment_fingerprint(text: &str) -> String {
     sha256(text.as_bytes())
+}
+
+fn source_events_fingerprint(events: &[EventEnvelope], sequences: &[u64]) -> MedusaResult<String> {
+    let material = sequences
+        .iter()
+        .map(|sequence| {
+            let event = events
+                .iter()
+                .find(|event| event.sequence == *sequence)
+                .ok_or_else(|| {
+                    audit_error(format!(
+                        "effective request source event is unavailable: {sequence}"
+                    ))
+                })?;
+            let value = canonicalize_value(serde_json::to_value(event).map_err(json_error)?);
+            Ok((*sequence, fingerprint_value(&value)?))
+        })
+        .collect::<MedusaResult<BTreeMap<_, _>>>()?;
+    fingerprint_value(&serde_json::to_value(material).map_err(json_error)?)
+}
+
+fn verify_source_events(
+    repo: &Path,
+    session_id: &str,
+    manifest: &EffectiveModelRequestManifestV1,
+) -> MedusaResult<Value> {
+    let Some(recorded) = manifest
+        .assembly_provenance
+        .get("source_events_fingerprint")
+    else {
+        return Ok(json!({
+            "status": "legacy_artifact_only",
+            "source_event_count": manifest.source_event_sequences.len(),
+        }));
+    };
+    let session = crate::session::load(repo, session_id).map_err(|error| {
+        audit_error(format!(
+            "effective request source session is unavailable for reconstruction: {error}"
+        ))
+    })?;
+    if session.id.as_str() != manifest.session_id {
+        return Err(audit_error(
+            "effective request source session identity does not match its manifest",
+        ));
+    }
+    let reconstructed =
+        source_events_fingerprint(&session.events, &manifest.source_event_sequences)?;
+    if &reconstructed != recorded {
+        let mut error = audit_error("effective request source events do not match their manifest");
+        error.context.insert(
+            "recorded_source_events_fingerprint".to_owned(),
+            json!(recorded),
+        );
+        error.context.insert(
+            "reconstructed_source_events_fingerprint".to_owned(),
+            json!(reconstructed),
+        );
+        return Err(error);
+    }
+    Ok(json!({
+        "status": "source_bound",
+        "source_event_count": manifest.source_event_sequences.len(),
+        "source_events_fingerprint": reconstructed,
+    }))
 }
 
 fn component_mismatches(

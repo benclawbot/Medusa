@@ -17,7 +17,12 @@ pub use crate::workspace_worker_manager::{
 include!("lib.rs");
 
 pub mod behavioral_outcome;
+pub mod behavioral_health {
+    //! Runtime-facing re-export of the canonical cross-surface behavioral health contract.
+    pub use medusa_improvement::behavioral_health::*;
+}
 pub mod runtime_config;
+pub mod service_provider;
 
 #[rustfmt::skip]
 mod parent_reviewer;

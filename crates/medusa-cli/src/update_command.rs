@@ -1,4 +1,8 @@
-use std::{fs, io::IsTerminal, path::Path};
+use std::{
+    fs,
+    io::{self, IsTerminal, Write},
+    path::Path,
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_update::{
@@ -71,29 +75,13 @@ fn release_channel(
         )));
     }
 
-    match UpdateCheck::compare(env!("CARGO_PKG_VERSION"), release.version.clone()) {
-        UpdateCheck::UpToDate { current } if !allow_downgrade => {
-            println!(
-                "Medusa {current} is current. Verified rollout sequence {} signed by {}.",
-                release.rollout_sequence, release.signing_key_id
-            );
-            return Ok(());
-        }
-        UpdateCheck::Available { current, latest } => {
-            println!(
-                "Verified Medusa release available: {current} -> {latest} (sequence {}, key {}).",
-                release.rollout_sequence, release.signing_key_id
-            );
-        }
-        UpdateCheck::CurrentBuildUnparseable { current, latest } => {
-            println!("Verified Medusa release available: {current} -> {latest}.");
-        }
-        UpdateCheck::UpToDate { current } => {
-            println!(
-                "Explicit rollback selected: {current} -> {} (sequence {}).",
-                release.version, release.rollout_sequence
-            );
-        }
+    if matches!(
+        UpdateCheck::compare(env!("CARGO_PKG_VERSION"), release.version.clone()),
+        UpdateCheck::UpToDate { .. }
+    ) && !allow_downgrade
+    {
+        println!("Medusa is up to date.");
+        return Ok(());
     }
 
     if !rollout_eligible(repo, release.rollout_percentage) {
@@ -104,6 +92,7 @@ fn release_channel(
         return Ok(());
     }
     if check_only {
+        println!("Verified Medusa release {} is available.", release.version);
         return Ok(());
     }
     require_automatic_for_unattended(automatic)?;
@@ -124,22 +113,14 @@ fn release_channel(
         .prefix("verified-release-")
         .tempdir_in(&update_root)?;
     let archive = workspace.path().join(&artifact.name);
+    let mut progress = UpdateProgress::new();
+    progress.set(2);
 
-    println!(
-        "Downloading {} bytes for {:?}/{:?}; the running session stays active until verification and staging finish.",
-        artifact.bytes, platform.os, platform.architecture
-    );
     let download_timer = diagnostics.phase(UpdatePhase::Download);
-    let mut last_reported = 0_u64;
     let report = client.download(artifact, &archive, |downloaded, total| {
-        let threshold = 4 * 1024 * 1024;
-        if downloaded == total.unwrap_or(0) || downloaded.saturating_sub(last_reported) >= threshold {
-            last_reported = downloaded;
-            if let Some(total) = total {
-                eprintln!("update download: {downloaded}/{total} bytes");
-            }
-        }
+        progress.download(downloaded, total, 4, 88);
     })?;
+    progress.set(90);
     download_timer.finish("downloaded-and-verified", Some(report.bytes), Some(report.retries))?;
     diagnostics
         .phase(UpdatePhase::ArtifactVerification)
@@ -149,6 +130,7 @@ fn release_channel(
     let extraction_timer = diagnostics.phase(UpdatePhase::Extraction);
     let candidate = installer.extract_archive(&archive, &workspace.path().join("extract"))?;
     extraction_timer.finish("confined", None, None)?;
+    progress.set(95);
 
     let staging_timer = diagnostics.phase(UpdatePhase::Staging);
     let restart = Restart {
@@ -160,17 +142,14 @@ fn release_channel(
         sequence_file: Some(repo.join(".medusa/update-sequence")),
         rollout_sequence: Some(release.rollout_sequence),
     };
-    let scheduled = installer.schedule_replace(&candidate, &restart, std::process::id())?;
+    installer.schedule_replace(&candidate, &restart, std::process::id())?;
     staging_timer.finish("atomic-handoff-staged", Some(artifact.bytes), None)?;
+    progress.set(98);
     super::request_daemon_shutdown(repo);
     diagnostics
         .phase(UpdatePhase::RestartHandoff)
         .finish("health-check-pending", None, None)?;
-    println!(
-        "Verified release {} is staged. After this process exits, Medusa will restart the session, require a health handshake, and roll back automatically on failure. State: {}",
-        release.version,
-        scheduled.state.display()
-    );
+    progress.finish();
     Ok(())
 }
 
@@ -178,18 +157,19 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
     let policy = UpdatePolicy::from_environment();
     let check_only = check_only || policy == UpdatePolicy::Check;
     let automatic = automatic || policy == UpdatePolicy::Automatic;
-    eprintln!(
-        "Updating from the latest Medusa main branch. This path invokes Cargo and compiles locally; use `medusa update --release` for a verified prebuilt release."
-    );
     let updater = MainBranchUpdater::public()?;
     let latest = updater.latest_main()?;
     let current = env!("MEDUSA_BUILD_COMMIT");
     if current == latest.sha {
-        println!("Medusa is already running main commit {current}.");
+        println!("Medusa is up to date.");
         return Ok(());
     }
-    println!("Medusa main update available: {current} -> {}", latest.sha);
     if check_only {
+        println!(
+            "Medusa main update available: {} -> {}.",
+            short_revision(current),
+            short_revision(&latest.sha)
+        );
         return Ok(());
     }
     require_automatic_for_unattended(automatic)?;
@@ -198,10 +178,89 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
         println!("This Medusa binary is managed by {manager}. Update it with: {command}");
         return Ok(());
     }
+
+    let mut progress = UpdateProgress::new();
+    progress.set(2);
+    updater.schedule_main_install(
+        &location.executable,
+        repo,
+        std::process::id(),
+        |downloaded, total| progress.download(downloaded, total, 4, 92),
+    )?;
+    progress.set(98);
     super::request_daemon_shutdown(repo);
-    updater.schedule_main_install(&location.executable, std::process::id())?;
-    println!("The latest main-branch source build is scheduled after this process exits.");
+    progress.finish();
     Ok(())
+}
+
+fn short_revision(revision: &str) -> &str {
+    revision.get(..12).unwrap_or(revision)
+}
+
+struct UpdateProgress {
+    enabled: bool,
+    started: bool,
+    finished: bool,
+    last_percent: u8,
+}
+
+impl UpdateProgress {
+    fn new() -> Self {
+        Self {
+            enabled: io::stderr().is_terminal(),
+            started: false,
+            finished: false,
+            last_percent: u8::MAX,
+        }
+    }
+
+    fn download(&mut self, downloaded: u64, total: Option<u64>, start: u8, end: u8) {
+        let Some(total) = total.filter(|total| *total > 0) else {
+            self.set(start);
+            return;
+        };
+        let span = u64::from(end.saturating_sub(start));
+        let fraction = downloaded.min(total).saturating_mul(span) / total;
+        self.set(start.saturating_add(fraction as u8));
+    }
+
+    fn set(&mut self, percent: u8) {
+        if !self.enabled {
+            return;
+        }
+        let percent = percent.min(100);
+        if self.last_percent == percent {
+            return;
+        }
+        self.started = true;
+        self.last_percent = percent;
+        const WIDTH: usize = 28;
+        let filled = usize::from(percent) * WIDTH / 100;
+        let mut stderr = io::stderr().lock();
+        let _ = write!(
+            stderr,
+            "\rUpdating Medusa [{}{}] {percent:3}%",
+            "=".repeat(filled),
+            " ".repeat(WIDTH.saturating_sub(filled))
+        );
+        let _ = stderr.flush();
+    }
+
+    fn finish(&mut self) {
+        self.set(100);
+        if self.enabled {
+            eprintln!();
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for UpdateProgress {
+    fn drop(&mut self) {
+        if self.enabled && self.started && !self.finished {
+            eprintln!();
+        }
+    }
 }
 
 fn require_automatic_for_unattended(automatic: bool) -> MedusaResult<()> {
@@ -250,5 +309,11 @@ mod tests {
         let repo = Path::new("/stable/repository");
         assert_eq!(rollout_eligible(repo, 50), rollout_eligible(repo, 50));
         assert!(rollout_eligible(repo, 100));
+    }
+
+    #[test]
+    fn short_revision_is_bounded() {
+        assert_eq!(short_revision("0123456789abcdef"), "0123456789ab");
+        assert_eq!(short_revision("short"), "short");
     }
 }

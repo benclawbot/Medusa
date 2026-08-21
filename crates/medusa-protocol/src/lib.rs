@@ -188,6 +188,12 @@ pub enum EventPayload {
     SessionCreated {
         objective: String,
     },
+    /// Immutable, redacted runtime configuration bound to a session generation.
+    RuntimeConfigurationBound {
+        schema_version: u16,
+        fingerprint: String,
+        snapshot: Value,
+    },
     SessionStateChanged {
         from: SessionState,
         to: SessionState,

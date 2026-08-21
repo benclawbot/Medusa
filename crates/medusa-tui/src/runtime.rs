@@ -527,7 +527,7 @@ impl DaemonRuntimeState {
             ));
         }
 
-        if effort != Effort::Auto {
+        if effort != Effort::Auto && self.session_id.is_some() {
             let acknowledgement = self.dispatch(FrontendCommand::RunCommand {
                 input: format!("/config set reasoning {effort_label}"),
             })?;
@@ -1000,6 +1000,7 @@ fn slash_command_input(command: &SlashCommand) -> String {
         },
         SlashCommand::Config(command) => match command {
             ConfigCommand::Show => "/config show".to_owned(),
+            ConfigCommand::Explain => "/config explain".to_owned(),
             ConfigCommand::Profiles => "/config profiles".to_owned(),
             ConfigCommand::UseProfile { name } => format!("/config use {name}"),
             ConfigCommand::Set { key, value } => format!("/config set {key} {value}"),
@@ -1485,6 +1486,10 @@ mod tests {
                 value: "MiniMax-M3".to_owned(),
             })),
             "/config set model.name MiniMax-M3"
+        );
+        assert_eq!(
+            slash_command_input(&SlashCommand::Config(ConfigCommand::Explain)),
+            "/config explain"
         );
         assert_eq!(
             slash_command_input(&SlashCommand::Learning {

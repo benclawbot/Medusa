@@ -561,6 +561,7 @@ fn adapt_event(
             None,
         ),
         EventPayload::SessionCreated { .. }
+        | EventPayload::RuntimeConfigurationBound { .. }
         | EventPayload::SessionStateChanged { .. }
         | EventPayload::GoalUpdated { .. }
         | EventPayload::ConversationCompacted { .. }

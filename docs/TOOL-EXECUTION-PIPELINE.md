@@ -18,6 +18,13 @@ Every certified invocation traverses these stages exactly once, in order:
 
 Malformed, skipped, repeated, or reordered required stages fail closed. Once a guard denies a call, all later guard decisions remain denied. Approved retries re-enter the certified pipeline and re-evaluate guards.
 
+`finalize` produces one `CanonicalToolResultV1` with a stable result fingerprint. Consumers receive
+explicit projections: complete machine/Code Mode data, bounded and optionally redacted model data,
+audit-safe durable evidence, or frontend presentation. Projection metadata records the schema,
+original/projected size, omission reason, redaction, and expansion availability; a model-visible
+artifact handle is only a reference and must be revalidated against the repository's
+`.medusa/artifacts` boundary before reading.
+
 ## Fixed authorities
 
 Middleware may attach only at certified seams. It must not replace or weaken:

@@ -9,6 +9,58 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 pub const CANONICAL_TOOL_RESULT_SCHEMA_VERSION: u16 = 1;
+pub const TOOL_PROJECTION_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ToolProjectionPolicy {
+    pub max_chars: usize,
+    #[serde(default)]
+    pub redactions: Vec<String>,
+    pub expansion_handle: Option<String>,
+}
+
+impl ToolProjectionPolicy {
+    #[must_use]
+    pub fn bounded(max_chars: usize) -> Self {
+        Self {
+            max_chars,
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn with_redactions<I, S>(mut self, redactions: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.redactions = redactions
+            .into_iter()
+            .map(Into::into)
+            .filter(|value| !value.is_empty())
+            .collect();
+        self.redactions
+            .sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
+        self.redactions.dedup();
+        self
+    }
+
+    #[must_use]
+    pub fn with_expansion_handle(mut self, handle: impl Into<String>) -> Self {
+        self.expansion_handle = Some(handle.into());
+        self
+    }
+}
+
+impl Default for ToolProjectionPolicy {
+    fn default() -> Self {
+        Self {
+            max_chars: 8 * 1024,
+            redactions: Vec::new(),
+            expansion_handle: None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -120,8 +172,10 @@ impl CanonicalToolResultV1 {
     pub fn durable_evidence_projection(&self) -> Value {
         json!({
             "schema_version": self.schema_version,
+            "projection_schema_version": TOOL_PROJECTION_SCHEMA_VERSION,
             "outcome": self.outcome,
             "source_fingerprint": self.source_fingerprint,
+            "canonical_size_bytes": serde_json::to_vec(self).map_or(0, |bytes| bytes.len()),
             "artifact_refs": self.artifact_refs,
             "evidence_refs": self.evidence_refs,
         })
@@ -129,25 +183,87 @@ impl CanonicalToolResultV1 {
 
     #[must_use]
     pub fn model_projection(&self, maximum_chars: usize) -> Value {
+        self.model_projection_with_policy(&ToolProjectionPolicy::bounded(maximum_chars))
+    }
+
+    #[must_use]
+    pub fn model_projection_with_policy(&self, policy: &ToolProjectionPolicy) -> Value {
         let mut projection = self.machine_projection();
-        let text = projection
+        let mut redacted = false;
+        if let Some(value) = projection.get_mut("value") {
+            redact_value(value, &policy.redactions, &mut redacted);
+        }
+        let original_bytes = serde_json::to_vec(&projection).map_or(0, |bytes| bytes.len());
+        let mut omitted = false;
+        if let Some(text) = projection
             .get("value")
             .and_then(|value| value.get("text"))
             .and_then(Value::as_str)
-            .map(str::to_owned);
-        if let Some(text) = text {
-            let bounded = text.chars().take(maximum_chars).collect::<String>();
-            projection["value"]["text"] = Value::String(bounded);
-            projection["value"]["truncated"] = Value::Bool(text.chars().count() > maximum_chars);
+            .map(str::to_owned)
+        {
+            let bounded = truncate_chars(&text, policy.max_chars);
+            omitted = text.chars().count() > bounded.chars().count();
+            if let Some(value) = projection.get_mut("value") {
+                value["text"] = Value::String(bounded);
+                if omitted {
+                    value["truncated"] = Value::Bool(true);
+                }
+            }
         }
+        let mut metadata = json!({
+            "schema_version": TOOL_PROJECTION_SCHEMA_VERSION,
+            "original_bytes": original_bytes,
+            "projected_bytes": 0,
+            "omitted": omitted,
+            "omission_reason": omitted.then_some("maximum_characters"),
+            "expansion_available": policy.expansion_handle.is_some(),
+            "expansion_handle": policy.expansion_handle.clone(),
+            "redacted": redacted,
+        });
+        projection["projection"] = metadata.clone();
+        let projected_bytes = serde_json::to_vec(&projection).map_or(0, |bytes| bytes.len());
+        metadata["projected_bytes"] = serde_json::json!(projected_bytes);
+        projection["projection"] = metadata;
         projection
     }
 
     #[must_use]
     pub fn frontend_projection(&self, maximum_chars: usize) -> Value {
-        let mut projection = self.model_projection(maximum_chars);
+        self.frontend_projection_with_policy(&ToolProjectionPolicy::bounded(maximum_chars))
+    }
+
+    #[must_use]
+    pub fn frontend_projection_with_policy(&self, policy: &ToolProjectionPolicy) -> Value {
+        let mut projection = self.model_projection_with_policy(policy);
+        projection["presentation"] = Value::String("frontend".to_owned());
         projection["source_fingerprint"] = Value::String(self.source_fingerprint.clone());
         projection
+    }
+}
+
+fn truncate_chars(text: &str, maximum_chars: usize) -> String {
+    text.chars().take(maximum_chars).collect()
+}
+
+fn redact_value(value: &mut Value, redactions: &[String], redacted: &mut bool) {
+    match value {
+        Value::String(text) => {
+            let mut replacement = text.clone();
+            for secret in redactions {
+                if replacement.contains(secret) {
+                    replacement = replacement.replace(secret, "[REDACTED]");
+                    *redacted = true;
+                }
+            }
+            *text = replacement;
+        }
+        Value::Array(values) => values
+            .iter_mut()
+            .for_each(|value| redact_value(value, redactions, redacted)),
+        Value::Object(values) => values
+            .values_mut()
+            .for_each(|value| redact_value(value, redactions, redacted)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 
@@ -206,5 +322,58 @@ mod tests {
         let canonical = CanonicalToolResultV1::from_receipt(&receipt, &Err(error));
         assert_eq!(canonical.outcome, CanonicalToolOutcome::Failed);
         assert_eq!(canonical.machine_projection()["outcome"], "failed");
+    }
+
+    #[test]
+    fn model_projection_redacts_and_records_bounded_output() {
+        let receipt = json!({"outcome": "success"});
+        let canonical = CanonicalToolResultV1::from_receipt(
+            &receipt,
+            &Ok("prefix SECRET_TOKEN suffix and a long tail".to_owned()),
+        );
+        let policy = ToolProjectionPolicy::bounded(12)
+            .with_redactions(["SECRET_TOKEN"])
+            .with_expansion_handle("artifact://shell_run/1");
+
+        let projection = canonical.model_projection_with_policy(&policy);
+        assert_eq!(projection["value"]["text"], "prefix [REDA");
+        assert_eq!(projection["projection"]["redacted"], true);
+        assert_eq!(projection["projection"]["omitted"], true);
+        assert_eq!(
+            projection["projection"]["expansion_handle"],
+            "artifact://shell_run/1"
+        );
+        assert!(
+            !canonical
+                .machine_projection()
+                .to_string()
+                .contains("projection")
+        );
+        assert!(
+            !canonical
+                .durable_evidence_projection()
+                .to_string()
+                .contains("SECRET_TOKEN")
+        );
+    }
+
+    #[test]
+    fn structured_values_are_preserved_for_machine_consumers_and_fingerprint_is_projection_stable()
+    {
+        let receipt = json!({"outcome": "success"});
+        let canonical = CanonicalToolResultV1::from_receipt(
+            &receipt,
+            &Ok(r#"{"count":3,"items":["a","b"]}"#.to_owned()),
+        );
+        assert_eq!(
+            canonical.machine_projection()["value"]["kind"],
+            "structured"
+        );
+        assert_eq!(canonical.machine_projection()["value"]["value"]["count"], 3);
+        let fingerprint = canonical.source_fingerprint.clone();
+        let first = canonical.frontend_projection(4);
+        let second = canonical.frontend_projection(40_000);
+        assert_eq!(first["source_fingerprint"], second["source_fingerprint"]);
+        assert_eq!(fingerprint, canonical.source_fingerprint);
     }
 }

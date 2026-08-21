@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    process::Command,
     sync::mpsc,
     thread,
     time::Duration,
@@ -13,6 +14,26 @@ use medusa_provider::{
 use serde_json::{Value, json};
 
 const IMAGE_DATA: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+
+fn with_insecure_loopback_for_test(test_name: &str, test: impl FnOnce()) {
+    if std::env::var_os("MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP").is_some() {
+        test();
+        return;
+    }
+
+    // The recorder is deliberately local and plaintext. Run the body in a
+    // child process with the explicit opt-in instead of mutating this test
+    // process's environment while other tests may be running.
+    let status = Command::new(std::env::current_exe().expect("multimodal test executable"))
+        .env("MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP", "1")
+        .args(["--exact", test_name, "--nocapture"])
+        .status()
+        .expect("spawn opted-in multimodal test");
+    assert!(
+        status.success(),
+        "opted-in multimodal test failed: {status}"
+    );
+}
 
 fn request(blocks: Vec<MessageBlock>) -> ModelRequest {
     ModelRequest {
@@ -112,80 +133,99 @@ fn spawn_recording_server() -> (String, mpsc::Receiver<Value>) {
 
 #[test]
 fn mixed_text_and_image_reach_the_recording_provider() {
-    let (base_url, recorded) = spawn_recording_server();
-    let provider =
-        OpenAiProvider::from_config_with_api_key(&provider_config("openai", base_url), None)
+    with_insecure_loopback_for_test(
+        stringify!(mixed_text_and_image_reach_the_recording_provider),
+        || {
+            let (base_url, recorded) = spawn_recording_server();
+            let provider = OpenAiProvider::from_config_with_api_key(
+                &provider_config("openai", base_url),
+                None,
+            )
             .expect("openai provider");
 
-    provider
-        .complete(&request(vec![
-            MessageBlock::Text {
-                text: "What is shown?".to_owned(),
-            },
-            image_block(),
-        ]))
-        .expect("recording provider response");
+            provider
+                .complete(&request(vec![
+                    MessageBlock::Text {
+                        text: "What is shown?".to_owned(),
+                    },
+                    image_block(),
+                ]))
+                .expect("recording provider response");
 
-    let payload = recorded
-        .recv_timeout(Duration::from_secs(5))
-        .expect("recorded request");
-    let content = payload["messages"][1]["content"]
-        .as_array()
-        .expect("multimodal content array");
-    assert_eq!(
-        content[0],
-        json!({"type": "text", "text": "What is shown?"})
-    );
-    assert_eq!(content[1]["type"], "image_url");
-    assert_eq!(
-        content[1]["image_url"]["url"],
-        format!("data:image/png;base64,{IMAGE_DATA}")
+            let payload = recorded
+                .recv_timeout(Duration::from_secs(5))
+                .expect("recorded request");
+            let content = payload["messages"][1]["content"]
+                .as_array()
+                .expect("multimodal content array");
+            assert_eq!(
+                content[0],
+                json!({"type": "text", "text": "What is shown?"})
+            );
+            assert_eq!(content[1]["type"], "image_url");
+            assert_eq!(
+                content[1]["image_url"]["url"],
+                format!("data:image/png;base64,{IMAGE_DATA}")
+            );
+        },
     );
 }
 
 #[test]
 fn image_only_prompt_reaches_the_recording_provider() {
-    let (base_url, recorded) = spawn_recording_server();
-    let provider =
-        OpenAiProvider::from_config_with_api_key(&provider_config("openai", base_url), None)
+    with_insecure_loopback_for_test(
+        stringify!(image_only_prompt_reaches_the_recording_provider),
+        || {
+            let (base_url, recorded) = spawn_recording_server();
+            let provider = OpenAiProvider::from_config_with_api_key(
+                &provider_config("openai", base_url),
+                None,
+            )
             .expect("openai provider");
 
-    provider
-        .complete(&request(vec![image_block()]))
-        .expect("recording provider response");
+            provider
+                .complete(&request(vec![image_block()]))
+                .expect("recording provider response");
 
-    let payload = recorded
-        .recv_timeout(Duration::from_secs(5))
-        .expect("recorded request");
-    let content = payload["messages"][1]["content"]
-        .as_array()
-        .expect("image-only content array");
-    assert_eq!(content.len(), 1);
-    assert_eq!(content[0]["type"], "image_url");
+            let payload = recorded
+                .recv_timeout(Duration::from_secs(5))
+                .expect("recorded request");
+            let content = payload["messages"][1]["content"]
+                .as_array()
+                .expect("image-only content array");
+            assert_eq!(content.len(), 1);
+            assert_eq!(content[0]["type"], "image_url");
+        },
+    );
 }
 
 #[test]
 fn unsupported_route_fails_before_any_http_request() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind rejection observer");
-    listener
-        .set_nonblocking(true)
-        .expect("set rejection observer nonblocking");
-    let address = listener.local_addr().expect("observer address");
-    let provider = OpenAiProvider::from_config_with_api_key(
-        &provider_config("minimax", format!("http://{address}/v1")),
-        None,
-    )
-    .expect("text-only compatible provider");
+    with_insecure_loopback_for_test(
+        stringify!(unsupported_route_fails_before_any_http_request),
+        || {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind rejection observer");
+            listener
+                .set_nonblocking(true)
+                .expect("set rejection observer nonblocking");
+            let address = listener.local_addr().expect("observer address");
+            let provider = OpenAiProvider::from_config_with_api_key(
+                &provider_config("minimax", format!("http://{address}/v1")),
+                None,
+            )
+            .expect("text-only compatible provider");
 
-    let error = provider
-        .complete(&request(vec![image_block()]))
-        .expect_err("unsupported image route must fail");
+            let error = provider
+                .complete(&request(vec![image_block()]))
+                .expect_err("unsupported image route must fail");
 
-    assert_eq!(error.context["content_type"], "image");
-    assert!(!error.to_string().contains(IMAGE_DATA));
-    thread::sleep(Duration::from_millis(100));
-    assert!(
-        listener.accept().is_err(),
-        "unsupported image request unexpectedly reached the network"
+            assert_eq!(error.context["content_type"], "image");
+            assert!(!error.to_string().contains(IMAGE_DATA));
+            thread::sleep(Duration::from_millis(100));
+            assert!(
+                listener.accept().is_err(),
+                "unsupported image request unexpectedly reached the network"
+            );
+        },
     );
 }

@@ -17,7 +17,11 @@ impl ModelProvider for StatusProvider {
                 name: "fs_read".to_owned(),
                 input: json!({"path": "."}),
             }],
-            usage: Usage::default(),
+            usage: Usage {
+                cache_read_input_tokens: 12,
+                cache_creation_input_tokens: 3,
+                ..Usage::default()
+            },
         })
     }
 
@@ -78,6 +82,17 @@ fn provider_execution_event_is_observed_ordered_and_durable() {
 
     assert!(response_index < execution_index);
     assert!(execution_index < tool_index);
+    assert!(session.events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::ModelResponseReceived { usage, .. }
+                if usage["provenance"] == json!("provider_reported")
+                    && usage["model_experience_measurement"]["cache"]["status"]
+                        == json!("observed")
+                    && usage["model_experience_measurement"]["cache"]["read_tokens"]
+                        == json!(12)
+        )
+    }));
     assert!(session.events.iter().any(|event| {
         matches!(
             &event.payload,

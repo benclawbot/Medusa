@@ -145,7 +145,8 @@ mod tests {
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
     use medusa_protocol::EventPayload;
     use medusa_provider::{
-        Message, ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Role, Usage,
+        Message, MessageBlock, ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Role,
+        Usage,
     };
     use serde_json::json;
 
@@ -314,6 +315,45 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("verified-value-42"))
         );
+    }
+
+    #[test]
+    fn model_tool_results_use_the_canonical_projection() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("value.txt"), "canonical-value\n").expect("fixture");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "read-1".into(),
+                    name: "fs_read".into(),
+                    input: json!({"path": "value.txt"}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "read the fixture".into())
+            .expect("session");
+        assert_eq!(
+            engine.step(&mut session).expect("tool step"),
+            StepOutcome::Continue
+        );
+        let content = session
+            .messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .find_map(|block| match block {
+                MessageBlock::ToolResult { content, .. } => Some(content),
+                _ => None,
+            })
+            .expect("tool result message");
+        let projection: serde_json::Value =
+            serde_json::from_str(content).expect("canonical model projection JSON");
+        assert_eq!(projection["schema_version"], 1);
+        assert_eq!(projection["outcome"], "success");
+        assert_eq!(projection["value"]["kind"], "text");
+        assert_eq!(projection["value"]["text"], "canonical-value\n");
     }
 
     #[test]

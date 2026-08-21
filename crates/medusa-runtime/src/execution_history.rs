@@ -460,6 +460,7 @@ fn continuity_health(
 fn payload_kind(payload: &EventPayload) -> &'static str {
     match payload {
         EventPayload::SessionCreated { .. } => "session_created",
+        EventPayload::RuntimeConfigurationBound { .. } => "runtime_configuration_bound",
         EventPayload::SessionStateChanged { .. } => "session_state_changed",
         EventPayload::SessionActionAccepted { .. } => "session_action_accepted",
         EventPayload::SessionActionRejected { .. } => "session_action_rejected",

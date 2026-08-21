@@ -362,7 +362,7 @@ function Restore-Previous([object]$Child) {{
   if (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}
   Set-Content -LiteralPath $state -Value 'rolled-back' -Encoding ascii
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
-  Start-Process -FilePath $target -ArgumentList @({arguments})
+  Start-Process -FilePath $target -ArgumentList @({arguments}) -NoNewWindow
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
   exit 1
 }}
@@ -381,7 +381,7 @@ try {{
 $child = $null
 try {{
   $env:{health_env} = $health
-  $child = Start-Process -FilePath $target -ArgumentList @({arguments}) -PassThru
+  $child = Start-Process -FilePath $target -ArgumentList @({arguments}) -PassThru -NoNewWindow
   Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
   for ($i = 0; $i -lt 100; $i++) {{
     if (Test-Path -LiteralPath $health) {{
@@ -413,6 +413,7 @@ Restore-Previous $child
         health_env = HEALTH_FILE_ENV,
     )
 }
+
 fn extract_zip(archive: &Path, workspace: &Path) -> MedusaResult<PathBuf> {
     let file = fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file).map_err(zip_error)?;
@@ -667,6 +668,8 @@ mod tests {
         assert!(windows.contains(HEALTH_FILE_ENV));
         assert!(windows.contains("rolled-back"));
         assert!(windows.contains("Start-Process"));
+        assert!(windows.contains("-NoNewWindow"));
+        assert!(windows.matches("-NoNewWindow").count() >= 2);
         assert!(windows.contains("Restore-Previous"));
         assert!(windows.contains("sequence file"));
         assert!(windows.contains("42"));

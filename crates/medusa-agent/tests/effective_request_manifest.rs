@@ -105,6 +105,130 @@ fn effective_request_is_persisted_before_start_and_auditable_after_restart() {
     assert!(audit["canonical_request"]["system"].is_string());
     assert!(audit["canonical_request"]["messages"].is_array());
     assert!(audit["canonical_request"]["tools"].is_array());
+    assert_eq!(audit["reconstruction"]["status"], "source_reconstructed");
+    assert!(audit["reconstruction"]["source_inputs_ref"].is_string());
+    assert!(audit["reconstruction"]["source_events_fingerprint"].is_string());
+    assert_eq!(
+        audit["assembly_provenance"]["request_assembler_version"],
+        "effective-request-reconstructor-v1"
+    );
+    assert_eq!(audit["reconstruction_receipt"]["schema_version"], 1);
+    assert_eq!(
+        audit["reconstruction_receipt"]["assembler_version"],
+        "effective-request-reconstructor-v1"
+    );
+    assert_eq!(audit["reconstruction_receipt"]["content_match"], true);
+    assert_eq!(
+        audit["reconstruction_receipt"]["source_status"],
+        "source_reconstructed"
+    );
+}
+
+#[test]
+fn fresh_request_reconstruction_rejects_source_input_drift() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    );
+    let mut session = engine
+        .create_session(directory.path(), "reconstruct independently".to_owned())
+        .expect("create session");
+    engine.step(&mut session).expect("model step");
+    let manifest_ref = request_manifests(&session)[0].1.clone();
+    let audit =
+        inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest_ref)
+            .expect("baseline audit");
+    let source_ref = audit["reconstruction"]["source_inputs_ref"]
+        .as_str()
+        .expect("source inputs reference");
+    let source_path = request_source_path(directory.path(), &session, source_ref);
+    let mut source: serde_json::Value =
+        serde_json::from_slice(&fs::read(&source_path).expect("read source inputs"))
+            .expect("source inputs json");
+    source["system"] = serde_json::json!("tampered source system");
+    fs::write(
+        &source_path,
+        serde_json::to_vec_pretty(&source).expect("tampered source json"),
+    )
+    .expect("write tampered source inputs");
+
+    let error =
+        inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest_ref)
+            .expect_err("source drift must fail closed");
+    assert!(format!("{error:?}").contains("fresh request reconstruction"));
+}
+
+#[test]
+fn session_persists_runtime_configuration_binding_for_resume() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let binding = serde_json::json!({
+        "schema_version": 1,
+        "fingerprint": "runtime-config-session-fingerprint",
+        "config": {"provider": "test", "model": "test-model"}
+    });
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    )
+    .with_runtime_config_binding(1, "runtime-config-session-fingerprint", binding.clone());
+
+    let session = engine
+        .create_session(directory.path(), "persist the runtime binding".to_owned())
+        .expect("create session");
+    let recorded = session
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::RuntimeConfigurationBound {
+                schema_version,
+                fingerprint,
+                snapshot,
+            } => Some((*schema_version, fingerprint.clone(), snapshot.clone())),
+            _ => None,
+        })
+        .expect("runtime configuration binding event");
+    assert_eq!(recorded.0, 1);
+    assert_eq!(recorded.1, "runtime-config-session-fingerprint");
+    assert_eq!(recorded.2, binding);
+
+    let loaded = engine
+        .load_session(directory.path(), session.id.as_str())
+        .expect("load session");
+    assert!(loaded.events.iter().any(|event| {
+        matches!(
+            event.payload,
+            EventPayload::RuntimeConfigurationBound { .. }
+        )
+    }));
+}
+
+#[test]
+fn invalid_runtime_configuration_binding_fails_before_session_bootstrap() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    )
+    .with_runtime_config_binding(0, "", serde_json::Value::Null);
+
+    let error = engine
+        .create_session(directory.path(), "reject invalid binding".to_owned())
+        .expect_err("invalid binding must fail closed");
+    assert_eq!(error.code, medusa_core::ErrorCode::InvalidConfiguration);
+    assert!(!directory.path().join(".medusa/sessions").exists());
 }
 
 #[test]
@@ -183,6 +307,82 @@ fn execution_policy_and_ambient_config_are_bound_without_replay_drift() {
     );
 }
 
+#[test]
+fn runtime_configuration_fingerprint_is_bound_to_effective_request_evidence() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::clone(&calls),
+        },
+        config,
+    )
+    .with_runtime_config_fingerprint("runtime-config-test-fingerprint");
+    let mut session = engine
+        .create_session(directory.path(), "inspect the repository".to_owned())
+        .expect("create session");
+    engine.step(&mut session).expect("model step");
+
+    let manifest = session
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted {
+                manifest_ref: Some(reference),
+                ..
+            } => Some(reference.clone()),
+            _ => None,
+        })
+        .expect("request manifest");
+    let audit = inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest)
+        .expect("inspect request");
+    assert_eq!(
+        audit["assembly_provenance"]["runtime_config_fingerprint"],
+        "runtime-config-test-fingerprint"
+    );
+}
+
+#[test]
+fn model_experience_contract_is_bound_to_effective_request_evidence() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let mut config = Config::default();
+    config.agent.mode = Mode::ReadOnly;
+    let engine = AgentEngine::new(
+        CountingProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        config,
+    );
+    let mut session = engine
+        .create_session(directory.path(), "inspect the repository".to_owned())
+        .expect("create session");
+    engine.step(&mut session).expect("model step");
+
+    let manifest = session
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted {
+                manifest_ref: Some(reference),
+                ..
+            } => Some(reference.clone()),
+            _ => None,
+        })
+        .expect("request manifest");
+    let audit = inspect_effective_model_request(directory.path(), session.id.as_str(), &manifest)
+        .expect("inspect request");
+    let provenance = &audit["assembly_provenance"];
+    assert!(provenance["model_experience_contract"].is_string());
+    assert!(provenance["model_experience_component:system"].is_string());
+    assert!(provenance["model_experience_component:tools"].is_string());
+    assert!(provenance["model_experience_estimated_tokens"].is_string());
+    assert!(provenance["model_experience_total_bytes"].is_string());
+    assert!(provenance["model_experience_stable_prefix_bytes"].is_string());
+    assert_eq!(provenance["model_experience_cache"], "unknown");
+}
+
 fn request_manifests(session: &AgentSession) -> Vec<(String, String)> {
     session
         .events
@@ -208,6 +408,20 @@ fn request_artifact_path(
         .expect("request content reference");
     repo.join(".medusa")
         .join("request-artifacts")
+        .join(session.id.as_str())
+        .join(format!("{hash}.json"))
+}
+
+fn request_source_path(
+    repo: &std::path::Path,
+    session: &AgentSession,
+    reference: &str,
+) -> std::path::PathBuf {
+    let hash = reference
+        .strip_prefix("request-source:sha256:")
+        .expect("request source reference");
+    repo.join(".medusa")
+        .join("request-sources")
         .join(session.id.as_str())
         .join(format!("{hash}.json"))
 }

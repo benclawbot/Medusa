@@ -53,7 +53,11 @@ use crate::{
     engine_support::*,
     evidence::append_event,
     identity_guard::validate_provider_text,
-    output_envelope::{OutputFormat, wrap as wrap_envelope},
+    model_experience::{
+        CacheObservationV1, ComponentStability, ModelExperienceComponentV1,
+        ModelExperienceContractV1, PrivacyClass,
+    },
+    output_envelope::{OutputFormat, validate_expansion_handle, wrap as wrap_envelope},
     policy::validate_shell_command_hard_denials,
     session::{
         AgentPlanStep, AgentQuestion, AgentQuestionItem, AgentQuestionOption, AgentSession,
@@ -174,6 +178,8 @@ pub struct AgentEngine<P> {
     desktop_commander: Mutex<Option<DesktopCommanderClient>>,
     cancellation: Arc<AtomicBool>,
     execution_policy: AgentExecutionPolicy,
+    runtime_config_fingerprint: Option<String>,
+    runtime_config_binding: Option<(u16, String, serde_json::Value)>,
     team_context: Option<TeamMemberContext>,
     analysis_host: Option<Arc<dyn AnalysisWorkspaceHost>>,
 }
@@ -405,6 +411,183 @@ fn duration_ns(duration: std::time::Duration) -> u64 {
     duration.as_nanos().min(u128::from(u64::MAX)) as u64
 }
 
+fn model_experience_component(
+    id: &str,
+    order: u32,
+    location: &str,
+    stability: ComponentStability,
+    value: &impl serde::Serialize,
+    privacy_class: PrivacyClass,
+    max_bytes: Option<u64>,
+) -> ModelExperienceComponentV1 {
+    let serialized = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = u64::try_from(serialized.len()).unwrap_or(u64::MAX);
+    ModelExperienceComponentV1 {
+        id: id.to_owned(),
+        version: "1".to_owned(),
+        insertion_order: order,
+        location: location.to_owned(),
+        stability,
+        estimated_tokens: Some(bytes.saturating_add(3) / 4),
+        actual_tokens: None,
+        estimated_bytes: Some(bytes),
+        actual_bytes: Some(bytes),
+        cache_eligible: Some(matches!(
+            stability,
+            ComponentStability::Static | ComponentStability::SessionStable
+        )),
+        cache_breaking_dimensions: match stability {
+            ComponentStability::Static | ComponentStability::SessionStable => {
+                vec!["authority_state".to_owned(), "tool_schema".to_owned()]
+            }
+            ComponentStability::TurnStable | ComponentStability::RequestDynamic => {
+                vec!["turn".to_owned(), "request_content".to_owned()]
+            }
+        },
+        privacy_class,
+        max_bytes,
+        fingerprint: effective_request::fragment_fingerprint(&String::from_utf8_lossy(&serialized)),
+    }
+}
+
+fn model_experience_contract(
+    phase: ProviderExecutionPhase,
+    request: &ModelRequest,
+) -> ModelExperienceContractV1 {
+    let components = vec![
+        model_experience_component(
+            "system",
+            0,
+            "system",
+            ComponentStability::SessionStable,
+            &request.system,
+            PrivacyClass::SecretExcluded,
+            Some(256 * 1024),
+        ),
+        model_experience_component(
+            "messages",
+            1,
+            "conversation",
+            ComponentStability::RequestDynamic,
+            &request.messages,
+            PrivacyClass::UserContent,
+            Some(2 * 1024 * 1024),
+        ),
+        model_experience_component(
+            "tools",
+            2,
+            "tool_schema",
+            ComponentStability::SessionStable,
+            &request.tools,
+            PrivacyClass::Public,
+            Some(512 * 1024),
+        ),
+        model_experience_component(
+            "response_budget",
+            3,
+            "request_parameters",
+            ComponentStability::TurnStable,
+            &(&request.max_tokens, &request.temperature_milli),
+            PrivacyClass::Public,
+            None,
+        ),
+    ];
+    let tool_schema_fingerprint = effective_request::fragment_fingerprint(
+        &serde_json::to_string(&request.tools).unwrap_or_default(),
+    );
+    ModelExperienceContractV1::new(format!("{phase:?}"), components, tool_schema_fingerprint)
+}
+
+fn attach_model_experience_measurement(
+    mut usage: serde_json::Value,
+    contract: &ModelExperienceContractV1,
+) -> serde_json::Value {
+    let cache = if usage.get("provenance").and_then(serde_json::Value::as_str)
+        == Some("provider_reported")
+    {
+        let read_tokens = usage
+            .get("cache_read_input_tokens")
+            .and_then(serde_json::Value::as_u64);
+        let write_tokens = usage
+            .get("cache_creation_input_tokens")
+            .and_then(serde_json::Value::as_u64);
+        CacheObservationV1::Observed {
+            read_tokens,
+            write_tokens,
+            hit: read_tokens.map(|tokens| tokens > 0),
+        }
+    } else {
+        CacheObservationV1::Unknown
+    };
+    let measurement = contract.measurement(cache);
+    if let Some(fields) = usage.as_object_mut() {
+        fields.insert(
+            "model_experience_measurement".to_owned(),
+            serde_json::to_value(measurement).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "schema_version": crate::model_experience::MODEL_EXPERIENCE_SCHEMA_VERSION
+                })
+            }),
+        );
+    }
+    usage
+}
+
+#[cfg(test)]
+mod model_experience_usage_tests {
+    use super::*;
+
+    fn contract() -> ModelExperienceContractV1 {
+        model_experience_contract(
+            ProviderExecutionPhase::Default,
+            &ModelRequest {
+                system: "system".to_owned(),
+                messages: Vec::new(),
+                tools: Vec::new(),
+                max_tokens: 128,
+                temperature_milli: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn provider_usage_records_observed_cache_measurement() {
+        let usage = attach_model_experience_measurement(
+            serde_json::json!({
+                "provenance": "provider_reported",
+                "cache_read_input_tokens": 120,
+                "cache_creation_input_tokens": 8,
+            }),
+            &contract(),
+        );
+        assert_eq!(
+            usage["model_experience_measurement"]["cache"]["status"],
+            "observed"
+        );
+        assert_eq!(
+            usage["model_experience_measurement"]["cache"]["read_tokens"],
+            120
+        );
+        assert_eq!(usage["model_experience_measurement"]["cache"]["hit"], true);
+    }
+
+    #[test]
+    fn estimated_usage_keeps_cache_unknown() {
+        let usage = attach_model_experience_measurement(
+            serde_json::json!({
+                "provenance": "estimated",
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }),
+            &contract(),
+        );
+        assert_eq!(
+            usage["model_experience_measurement"]["cache"]["status"],
+            "unknown"
+        );
+    }
+}
+
 impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn new(provider: P, config: Config) -> Self {
@@ -415,6 +598,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             desktop_commander: Mutex::new(None),
             cancellation: Arc::new(AtomicBool::new(false)),
             execution_policy: AgentExecutionPolicy::unrestricted(),
+            runtime_config_fingerprint: None,
+            runtime_config_binding: None,
             team_context: None,
             analysis_host: None,
         }
@@ -433,6 +618,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             desktop_commander: Mutex::new(None),
             cancellation,
             execution_policy: AgentExecutionPolicy::unrestricted(),
+            runtime_config_fingerprint: None,
+            runtime_config_binding: None,
             team_context: None,
             analysis_host: None,
         }
@@ -441,6 +628,33 @@ impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn with_execution_policy(mut self, policy: AgentExecutionPolicy) -> Self {
         self.execution_policy = policy;
+        self
+    }
+
+    /// Binds the versioned runtime-loop configuration to every effective request manifest.
+    ///
+    /// The runtime owns compilation and validation of this fingerprint; the agent only records
+    /// it as assembly provenance so replay/audit can distinguish configuration generations.
+    #[must_use]
+    pub fn with_runtime_config_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
+        self.runtime_config_fingerprint = Some(fingerprint.into());
+        self
+    }
+
+    /// Binds a redacted, versioned effective runtime configuration to new sessions.
+    ///
+    /// The binding is persisted in the canonical session journal and is intentionally separate
+    /// from secrets or process-local provider credentials.
+    #[must_use]
+    pub fn with_runtime_config_binding(
+        mut self,
+        schema_version: u16,
+        fingerprint: impl Into<String>,
+        snapshot: serde_json::Value,
+    ) -> Self {
+        let fingerprint = fingerprint.into();
+        self.runtime_config_fingerprint = Some(fingerprint.clone());
+        self.runtime_config_binding = Some((schema_version, fingerprint, snapshot));
         self
     }
 
@@ -458,6 +672,19 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     fn scope_provider_profile(&self) -> MedusaResult<serde_json::Value> {
         serde_json::to_value(&self.config.model).map_err(json_error)
+    }
+
+    fn bind_runtime_config_provenance(&self, provenance: &mut BTreeMap<String, String>) {
+        if let Some(fingerprint) = self
+            .runtime_config_fingerprint
+            .as_deref()
+            .filter(|fingerprint| !fingerprint.trim().is_empty())
+        {
+            provenance.insert(
+                "runtime_config_fingerprint".to_owned(),
+                fingerprint.to_owned(),
+            );
+        }
     }
 
     fn scope_effective_tools(&self, repo: &Path) -> MedusaResult<Vec<String>> {
@@ -622,6 +849,37 @@ impl<P: ModelProvider> AgentEngine<P> {
     ) -> MedusaResult<AgentSession> {
         let content = content_with_session_goal(content, &objective);
         validate_user_content(&content, &self.provider.capabilities())?;
+        if let Some((schema_version, fingerprint, snapshot)) = &self.runtime_config_binding {
+            if *schema_version == 0 || fingerprint.trim().is_empty() {
+                return Err(MedusaError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorCategory::Validation,
+                    "runtime configuration binding requires a schema version and fingerprint",
+                ));
+            }
+            if snapshot.is_null() {
+                return Err(MedusaError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorCategory::Validation,
+                    "runtime configuration binding requires a redacted snapshot",
+                ));
+            }
+            let snapshot_schema = snapshot
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64);
+            let snapshot_fingerprint = snapshot
+                .get("fingerprint")
+                .and_then(serde_json::Value::as_str);
+            if snapshot_schema != Some(u64::from(*schema_version))
+                || snapshot_fingerprint != Some(fingerprint.as_str())
+            {
+                return Err(MedusaError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorCategory::Validation,
+                    "runtime configuration binding snapshot does not match its identity",
+                ));
+            }
+        }
         bootstrap(repo)?;
         medusa_intelligence::recover_patch_transactions(repo)?;
         let effective_tools = self.scope_effective_tools(repo)?;
@@ -682,6 +940,20 @@ impl<P: ModelProvider> AgentEngine<P> {
         ) {
             let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
             return Err(error);
+        }
+        if let Some((schema_version, fingerprint, snapshot)) = &self.runtime_config_binding {
+            if let Err(error) = append_event(
+                &mut session,
+                Actor::Coordinator,
+                EventPayload::RuntimeConfigurationBound {
+                    schema_version: *schema_version,
+                    fingerprint: fingerprint.clone(),
+                    snapshot: snapshot.clone(),
+                },
+            ) {
+                let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
+                return Err(error);
+            }
         }
         if let Err(error) = persist(&session) {
             let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
@@ -962,6 +1234,8 @@ impl<P: ModelProvider> AgentEngine<P> {
         focus: Option<&str>,
     ) -> MedusaResult<()> {
         let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
+        let summary_model_experience =
+            model_experience_contract(ProviderExecutionPhase::Summarization, &summary_request);
         let summary_provenance = BTreeMap::from([
             (
                 "compaction_v2_system".to_owned(),
@@ -972,6 +1246,20 @@ impl<P: ModelProvider> AgentEngine<P> {
                 effective_request::fragment_fingerprint(focus.unwrap_or_default()),
             ),
         ]);
+        let mut summary_provenance = summary_provenance;
+        self.bind_runtime_config_provenance(&mut summary_provenance);
+        summary_provenance.insert(
+            "model_experience_contract".to_owned(),
+            summary_model_experience.fingerprint(),
+        );
+        summary_provenance.insert(
+            "model_experience_total_bytes".to_owned(),
+            summary_model_experience
+                .measurement(CacheObservationV1::Unknown)
+                .total_bytes
+                .map_or_else(|| "unknown".to_owned(), |bytes| bytes.to_string()),
+        );
+        summary_provenance.insert("model_experience_cache".to_owned(), "unknown".to_owned());
         let execution_policy = self.execution_policy.audit_projection();
         let capabilities = self.provider.capabilities();
         let manifest = effective_request::persist_before_provider_call(
@@ -1029,7 +1317,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                     effective_request::response_event(
                         &manifest,
                         response.response_id.clone(),
-                        serde_json::to_value(turn_usage).map_err(json_error)?,
+                        attach_model_experience_measurement(
+                            serde_json::to_value(turn_usage).map_err(json_error)?,
+                            &summary_model_experience,
+                        ),
                     ),
                 )?;
                 session.updated_at = OffsetDateTime::now_utc();
@@ -1195,6 +1486,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             });
         }
         let mut assembly_provenance = BTreeMap::new();
+        self.bind_runtime_config_provenance(&mut assembly_provenance);
         if let Some(context) = additional_system_context.filter(|text| !text.trim().is_empty()) {
             assembly_provenance.insert(
                 "additional_system_context".to_owned(),
@@ -1316,6 +1608,35 @@ impl<P: ModelProvider> AgentEngine<P> {
             max_tokens: max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
+        let model_experience = model_experience_contract(phase, &request);
+        assembly_provenance.insert(
+            "model_experience_contract".to_owned(),
+            model_experience.fingerprint(),
+        );
+        assembly_provenance.insert(
+            "model_experience_estimated_tokens".to_owned(),
+            model_experience
+                .estimated_total_tokens
+                .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string()),
+        );
+        let model_experience_measurement =
+            model_experience.measurement(CacheObservationV1::Unknown);
+        assembly_provenance.insert(
+            "model_experience_total_bytes".to_owned(),
+            model_experience_measurement
+                .total_bytes
+                .map_or_else(|| "unknown".to_owned(), |bytes| bytes.to_string()),
+        );
+        assembly_provenance.insert(
+            "model_experience_stable_prefix_bytes".to_owned(),
+            model_experience_measurement
+                .stable_prefix_bytes
+                .map_or_else(|| "unknown".to_owned(), |bytes| bytes.to_string()),
+        );
+        assembly_provenance.insert("model_experience_cache".to_owned(), "unknown".to_owned());
+        for (id, fingerprint) in model_experience.component_fingerprints() {
+            assembly_provenance.insert(format!("model_experience_component:{id}"), fingerprint);
+        }
         let execution_policy = self.execution_policy.audit_projection();
         let capabilities = self.provider.capabilities();
         let mut active_manifest = effective_request::persist_before_provider_call(
@@ -1506,7 +1827,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             effective_request::response_event(
                 &active_manifest,
                 response.response_id.clone(),
-                serde_json::to_value(turn_usage).map_err(json_error)?,
+                attach_model_experience_measurement(
+                    serde_json::to_value(turn_usage).map_err(json_error)?,
+                    &model_experience,
+                ),
             ),
             &mut observer,
         )?;
@@ -1704,6 +2028,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                             input,
                             execution.result,
                             Some(execution.receipt),
+                            execution.canonical,
                             timing,
                             None,
                         ))
@@ -1964,6 +2289,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     input,
                     execution.result,
                     Some(execution.receipt),
+                    execution.canonical,
                     timing,
                     post_action,
                 )]
@@ -1971,7 +2297,7 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let repository_revision_after_mutation = executed
                 .iter()
-                .any(|(_, name, input, result, _, _, _)| {
+                .any(|(_, name, input, result, _, _, _, _)| {
                     result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
                 })
                 .then(|| refreshed_repository_revision(&session.repo))
@@ -1979,10 +2305,10 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let verification_mutation_paths = executed
                 .iter()
-                .filter(|(_, name, input, result, _, _, _)| {
+                .filter(|(_, name, input, result, _, _, _, _)| {
                     result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
                 })
-                .filter_map(|(_, name, input, _, _, _, _)| {
+                .filter_map(|(_, name, input, _, _, _, _, _)| {
                     matches!(name.as_str(), "fs_write" | "fs_create_dir")
                         .then(|| input.get("path").and_then(serde_json::Value::as_str))
                         .flatten()
@@ -2001,7 +2327,7 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let failed_dependencies = executed
                 .iter()
-                .filter_map(|(_, name, input, result, _, _, _)| {
+                .filter_map(|(_, name, input, result, _, _, _, _)| {
                     let error = result.as_ref().err()?;
                     let awaiting_approval = error.code == ErrorCode::PolicyDenied
                         && self.config.agent.mode != Mode::ReadOnly
@@ -2028,6 +2354,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     input,
                     execution.result,
                     Some(execution.receipt),
+                    execution.canonical,
                     None,
                     None,
                 ));
@@ -2050,13 +2377,15 @@ impl<P: ModelProvider> AgentEngine<P> {
                         input,
                         execution.result,
                         Some(execution.receipt),
+                        execution.canonical,
                         None,
                         None,
                     ));
                 }
             }
 
-            for (id, name, input, result, receipt, timing, post_action) in executed {
+            for (id, name, input, result, receipt, canonical, timing, post_action) in executed {
+                let canonical_model_projection = Some(canonical.model_projection(8 * 1024));
                 if let Some(receipt) = receipt {
                     journal_certified_tool_execution(
                         session,
@@ -2210,11 +2539,33 @@ impl<P: ModelProvider> AgentEngine<P> {
                 ) {
                     Ok(env) => {
                         let compact = compact_envelope_for_model(&env);
-                        // Persist the artifact path on the session for later
-                        // reference (cleanup, replay). Currently unused by
-                        // downstream consumers — Task 7 wires SessionBrowser on top.
+                        // Persist the artifact path on the session for later reference (cleanup,
+                        // replay, and explicit model expansion).
                         session.tool_artifacts.push(env.path.clone());
-                        if is_error {
+                        if let Some(mut projection) = canonical_model_projection {
+                            projection["rendered"] = serde_json::Value::String(if is_error {
+                                format!("[error]\n{compact}")
+                            } else {
+                                compact.clone()
+                            });
+                            let expansion_handle =
+                                validate_expansion_handle(&session.repo, &env.path)
+                                    .ok()
+                                    .map(|path| path.display().to_string());
+                            projection["rendering"] = serde_json::json!({
+                                "line_count": env.line_count,
+                                "byte_count": env.byte_count,
+                                "expansion_available": expansion_handle.is_some(),
+                                "expansion_handle": expansion_handle,
+                            });
+                            serde_json::to_string(&projection).unwrap_or_else(|_| {
+                                if is_error {
+                                    format!("[error]\n{compact}")
+                                } else {
+                                    compact
+                                }
+                            })
+                        } else if is_error {
                             format!("[error]\n{compact}")
                         } else {
                             compact

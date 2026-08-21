@@ -19,6 +19,7 @@ mod route_metrics_store;
 mod streaming;
 mod streaming_tool_calls;
 mod verification_bridge;
+mod verified_routing;
 
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
@@ -53,6 +54,11 @@ pub use streaming_tool_calls::StreamingToolCallAssembler;
 pub use verification_bridge::{
     clear_pending_route_verification, mark_pending_route_mutation,
     record_pending_route_verification,
+};
+pub use verified_routing::{
+    ExcludedVerifiedRoute, RouteSelectionReceipt, VerifiedRouteContext, VerifiedRouteDecision,
+    VerifiedRouteEvidence, VerifiedRoutingObjective, VerifiedRoutingPolicy, select_verified_route,
+    select_verified_route_with_latency_policy,
 };
 
 pub(crate) use http::{

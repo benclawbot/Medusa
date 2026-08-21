@@ -214,6 +214,12 @@ Persisted schedule or role labels alone must not be rendered as proof of dispatc
 
 Schema field names such as `prepared_commit` and `prepared_tree` remain stable for durable compatibility. In directory workspaces those fields contain content-addressed snapshot and tree identifiers, not Git object IDs.
 
+### Behavioral learning and improvement authority
+
+Canonical runtime evidence produces versioned behavioral outcomes, task-aware cohort reports, and drift reports. These are rebuildable projections: they may be discarded and reconstructed from durable evidence, and they do not replace execution, verification, approval, capability, or integration authority. The shared behavioral-health snapshot is presentation-neutral so CLI, TUI, Desktop, daemon, and remote frontends consume the same success, latency, repair, cost-coverage, drift, and missing-data values instead of recalculating them.
+
+The improvement controller accepts source-linked drift triggers and emits deterministic candidate and evaluation receipts. Automatic promotion is limited to runtime-safe refinement targets after independent frozen-oracle evidence, comparable control coverage, practical-effect and correctness guardrails, and an exact predecessor are present. Safety, privacy, integrity, evaluator, metric, permission, capability, or protected-boundary changes are escalated to the engineering lane. Canary rollback restores that exact predecessor; replayed experiment receipts are idempotent. Unknown cost, sparse cohorts, corrupt projections, and insufficient evidence remain explicitly unknown or degraded rather than being rendered as healthy zeros.
+
 ## Capability evidence and drift control
 
 Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Git multi-implementer behavior is additionally certified by the cross-platform Parallel Mutation Certification workflow. Directory workspace mutation has cross-platform workspace-backend tests for isolation, immutable candidate preparation, independent materialization, drift rejection, integration, and cleanup. Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. Experimental, design-only, or prerequisite-limited behavior must be labelled where it appears.

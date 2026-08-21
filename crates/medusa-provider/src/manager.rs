@@ -24,7 +24,9 @@ use crate::{
     HedgePolicy, ModelProvider, ModelRequest, ModelResponse, ProviderAttemptDescriptor,
     ProviderAttemptKind, ProviderCapabilities, ProviderContinuationCapabilities,
     ProviderExecutionPhase, ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent,
-    RouteLatencyPolicy, RouteLatencyStats, hedge_decision, latency_aware_route_order,
+    RouteLatencyPolicy, RouteLatencyStats, RouteSelectionReceipt, VerifiedRouteContext,
+    VerifiedRouteEvidence, VerifiedRoutingPolicy, hedge_decision, latency_aware_route_order,
+    select_verified_route_with_latency_policy,
 };
 
 /// Observable health state for a configured provider position.
@@ -105,6 +107,12 @@ pub struct ProviderManager<P> {
     state: ProviderHealthStore,
     latency: ProviderRouteLatencyStore,
     latency_policy: RouteLatencyPolicy,
+    verified_routing: Option<(
+        VerifiedRouteContext,
+        Vec<VerifiedRouteEvidence>,
+        VerifiedRoutingPolicy,
+    )>,
+    last_route_selection_receipt: Mutex<Option<RouteSelectionReceipt>>,
     hedge_policy: HedgePolicy,
     sleeper: fn(Duration),
 }
@@ -151,6 +159,8 @@ impl<P> ProviderManager<P> {
             state,
             latency,
             latency_policy: RouteLatencyPolicy::default(),
+            verified_routing: None,
+            last_route_selection_receipt: Mutex::new(None),
             hedge_policy: HedgePolicy::default(),
             sleeper: thread::sleep,
         }
@@ -161,6 +171,20 @@ impl<P> ProviderManager<P> {
         for profile in &mut self.profiles {
             profile.retry.max_retries = retries_per_provider;
         }
+        self
+    }
+
+    /// Enables task-aware verified-efficiency ordering for this manager instance. The supplied
+    /// cohort evidence is observational; capability checks, pinned role routes, and provider
+    /// fallback remain owned by the existing manager authority.
+    #[must_use]
+    pub fn with_verified_routing(
+        mut self,
+        context: VerifiedRouteContext,
+        evidence: Vec<VerifiedRouteEvidence>,
+        policy: VerifiedRoutingPolicy,
+    ) -> Self {
+        self.verified_routing = Some((context, evidence, policy));
         self
     }
 
@@ -216,6 +240,16 @@ impl<P> ProviderManager<P> {
     #[must_use]
     pub fn route_latency(&self) -> Vec<RouteLatencyStats> {
         self.latency.stats().unwrap_or_default()
+    }
+
+    /// Returns the receipt for the most recent route-order decision, when task-aware routing is
+    /// enabled. Callers may persist this alongside the durable request manifest.
+    #[must_use]
+    pub fn last_route_selection_receipt(&self) -> Option<RouteSelectionReceipt> {
+        self.last_route_selection_receipt
+            .lock()
+            .ok()
+            .and_then(|receipt| receipt.clone())
     }
 
     /// Returns the configured provider position that completed the latest uncached request.
@@ -724,6 +758,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
 
         let stats = self.latency.stats()?;
         let phase_latency_policy = self.latency_policy.for_phase(phase);
+        let pinned_index = self.pinned_route_for_phase(phase);
         let mut route_order = latency_aware_route_order(
             &self.profiles,
             &stats,
@@ -731,8 +766,21 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
             false,
             phase_latency_policy,
         );
-        let pinned_index = self.pinned_route_for_phase(phase);
-        if let Some(pinned_index) = pinned_index {
+        if let Some((context, evidence, policy)) = &self.verified_routing {
+            let decision = select_verified_route_with_latency_policy(
+                &self.profiles,
+                &stats,
+                evidence,
+                context,
+                policy,
+                phase_latency_policy,
+                pinned_index,
+            );
+            route_order = decision.ordered_indices;
+            if let Ok(mut receipt) = self.last_route_selection_receipt.lock() {
+                *receipt = Some(decision.receipt);
+            }
+        } else if let Some(pinned_index) = pinned_index {
             route_order.retain(|index| *index != pinned_index);
             route_order.insert(0, pinned_index);
         }

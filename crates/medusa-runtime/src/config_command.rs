@@ -38,6 +38,39 @@ fn execute_with_catalog(
                 ),
             );
         }
+        ConfigCommand::Explain => {
+            let binding = state.runtime_config_binding.clone().or_else(|| {
+                crate::runtime_config_binding_for_repo(&state.repo, &state.config).ok()
+            });
+            let details = binding.map_or_else(
+                || vec!["Effective runtime configuration is unavailable".to_owned()],
+                |(schema_version, fingerprint, snapshot)| {
+                    let provenance = snapshot
+                        .get("provenance")
+                        .and_then(serde_json::Value::as_object)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .map(|(key, value)| format!("{key}: {value}"))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let canonical = serde_json::to_string(&snapshot)
+                        .unwrap_or_else(|_| "<unavailable>".to_owned());
+                    let mut details = vec![
+                        format!("Schema version: {schema_version}"),
+                        format!("Execution fingerprint: {fingerprint}"),
+                        "Frozen for active session: true".to_owned(),
+                        format!("Canonical redacted snapshot: {canonical}"),
+                    ];
+                    if !provenance.is_empty() {
+                        details.push(format!("Value provenance: {}", provenance.join(", ")));
+                    }
+                    details
+                },
+            );
+            send_notice(events, "Effective runtime configuration", details);
+        }
         ConfigCommand::Profiles => {
             let revision = catalog.revision().map_err(RuntimeError::agent)?;
             let profiles = catalog.list().map_err(RuntimeError::agent)?;
@@ -66,7 +99,7 @@ fn execute_with_catalog(
             let (_, change) = catalog
                 .use_profile_at_revision(&name, revision, ConfigurationChangeOrigin::Tui)
                 .map_err(RuntimeError::agent)?;
-            apply_effective_model(state, effective);
+            apply_effective_model(state, effective)?;
             let _ = events.send(RuntimeEvent::ConfigurationChanged(change.clone()));
             let _ = events.send(state.settings_event());
             send_notice(
@@ -99,7 +132,7 @@ fn execute_with_catalog(
                     ConfigurationApplyTiming::Immediate,
                 )
                 .map_err(RuntimeError::agent)?;
-            apply_effective_model(state, effective);
+            apply_effective_model(state, effective)?;
             let _ = events.send(RuntimeEvent::ConfigurationChanged(change.clone()));
             let _ = events.send(state.settings_event());
             send_notice(
@@ -133,7 +166,7 @@ fn execute_with_catalog(
                     ConfigurationApplyTiming::Immediate,
                 )
                 .map_err(RuntimeError::agent)?;
-            apply_effective_model(state, effective);
+            apply_effective_model(state, effective)?;
             let _ = events.send(RuntimeEvent::ConfigurationChanged(change.clone()));
             let _ = events.send(state.settings_event());
             send_notice(
@@ -194,9 +227,19 @@ fn effective_config(
     .map_err(RuntimeError::agent)
 }
 
-fn apply_effective_model(state: &mut RuntimeState, effective: Config) {
+fn apply_effective_model(state: &mut RuntimeState, effective: Config) -> Result<(), RuntimeError> {
     state.base_config.model = effective.model.clone();
     state.config.model = effective.model;
+    let binding = crate::runtime_config_binding_for_repo(&state.repo, &state.config)?;
+    let effective_runtime = serde_json::from_value::<
+        crate::runtime_config::EffectiveRuntimeConfigV1,
+    >(binding.2.clone())
+    .map_err(RuntimeError::agent)?;
+    crate::apply_runtime_route(&mut state.config, &effective_runtime)?;
+    state.base_config.model = state.config.model.clone();
+    state.runtime_config_fingerprint = Some(binding.1.clone());
+    state.runtime_config_binding = Some(binding);
+    Ok(())
 }
 
 fn status_details(

@@ -143,6 +143,9 @@ pub struct CodeModeChildResultV1 {
     pub tool: String,
     pub receipt: Value,
     pub canonical: CanonicalToolResultV1,
+    /// Deterministic parent aggregate identity for cross-tool attribution.
+    #[serde(default)]
+    pub parent_execution_fingerprint: Option<String>,
 }
 
 impl CodeModeChildResultV1 {
@@ -158,6 +161,7 @@ impl CodeModeChildResultV1 {
             tool: tool.to_owned(),
             receipt,
             canonical,
+            parent_execution_fingerprint: None,
         }
     }
 }
@@ -173,7 +177,7 @@ pub struct CodeModeExecutionV1 {
 
 impl CodeModeExecutionV1 {
     #[must_use]
-    pub fn from_children(children: Vec<CodeModeChildResultV1>) -> Self {
+    pub fn from_children(mut children: Vec<CodeModeChildResultV1>) -> Self {
         let outcome = if children
             .iter()
             .all(|child| child.canonical.outcome == CanonicalToolOutcome::Success)
@@ -192,6 +196,24 @@ impl CodeModeExecutionV1 {
         } else {
             CanonicalToolOutcome::Failed
         };
+        let material = serde_json::to_vec(
+            &children
+                .iter()
+                .map(|child| {
+                    (
+                        child.ordinal,
+                        child.tool.as_str(),
+                        &child.canonical.outcome,
+                        child.canonical.source_fingerprint.as_str(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default();
+        let execution_fingerprint = digest(&material);
+        for child in &mut children {
+            child.parent_execution_fingerprint = Some(execution_fingerprint.clone());
+        }
         let model_projection = json!({
             "schema_version": CODE_MODE_SCHEMA_VERSION,
             "outcome": outcome,
@@ -200,9 +222,9 @@ impl CodeModeExecutionV1 {
                 "tool": child.tool,
                 "outcome": child.canonical.outcome,
                 "source_fingerprint": child.canonical.source_fingerprint,
+                "parent_execution_fingerprint": child.parent_execution_fingerprint,
             })).collect::<Vec<_>>(),
         });
-        let material = serde_json::to_vec(&children).unwrap_or_default();
         Self {
             schema_version: CODE_MODE_SCHEMA_VERSION,
             outcome,
