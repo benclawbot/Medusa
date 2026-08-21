@@ -1,6 +1,11 @@
 use std::{fs, thread, time::Duration};
 
-use medusa_tui::runtime::{RuntimeController, RuntimeEvent};
+use medusa_config::Config;
+use medusa_daemon::{DaemonClient, DaemonPaths, Request, Response, spawn_with_config};
+use medusa_tui::{
+    commands::{Effort, ModelConfiguration},
+    runtime::{RuntimeController, RuntimeEvent},
+};
 use tempfile::tempdir;
 
 fn configured_effort(max_turns: u32) -> String {
@@ -24,8 +29,42 @@ fn configured_effort(max_turns: u32) -> String {
     panic!("runtime did not emit settings event");
 }
 
+fn wait_for_daemon(paths: &DaemonPaths) {
+    let client = DaemonClient::new(&paths.socket);
+    for _ in 0..200 {
+        if matches!(client.request(Request::Ping), Ok(Response::Pong)) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("daemon did not become ready: {}", paths.socket.display());
+}
+
 #[test]
 fn configured_turn_budgets_cover_low_and_medium_effort_bands() {
     assert_eq!(configured_effort(64), "effort:low");
     assert_eq!(configured_effort(200), "effort:medium");
+}
+
+#[test]
+fn model_effort_can_be_configured_before_first_session() {
+    let directory = tempdir().expect("temporary directory");
+    let paths = DaemonPaths::for_repo(directory.path());
+    let (handle, server) =
+        spawn_with_config(paths.clone(), Config::default()).expect("spawn daemon");
+    wait_for_daemon(&paths);
+
+    let runtime = RuntimeController::start(directory.path().to_path_buf());
+    runtime
+        .configure_model(ModelConfiguration {
+            provider: "minimax".to_owned(),
+            model: "MiniMax-M3".to_owned(),
+            effort: Effort::High,
+            api_key: None,
+        })
+        .expect("pre-session model configuration must not require a session id");
+
+    drop(runtime);
+    handle.shutdown();
+    server.join().expect("join daemon").expect("daemon result");
 }
