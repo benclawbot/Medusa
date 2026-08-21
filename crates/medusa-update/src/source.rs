@@ -1,4 +1,9 @@
-use std::{path::Path, sync::Mutex};
+use std::{
+    path::Path,
+    sync::Mutex,
+    thread,
+    time::{Duration, Instant},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{StatusCode, blocking::Client};
@@ -15,6 +20,8 @@ const BRANCH: &str = "main";
 const ROLLING_ASSET_BASE: &str =
     "https://github.com/benclawbot/Medusa/releases/download/main-latest";
 const ROLLING_MANIFEST_SCHEMA: &str = "medusa-main-artifact-v1";
+const ROLLING_PUBLISH_WAIT: Duration = Duration::from_secs(180);
+const ROLLING_PUBLISH_POLL: Duration = Duration::from_secs(2);
 const SHA1_HEX_LENGTH: usize = 40;
 const SHA256_HEX_LENGTH: usize = 64;
 
@@ -137,12 +144,22 @@ impl MainBranchUpdater {
         revision: &str,
     ) -> MedusaResult<RollingMainArtifact> {
         let manifest_name = format!("{asset_name}.json");
-        let manifest: RollingMainArtifact = self
-            .asset_response(&manifest_name, revision)?
-            .json()
-            .map_err(asset_error)?;
-        manifest.validate(revision, asset_name)?;
-        Ok(manifest)
+        let deadline = Instant::now() + ROLLING_PUBLISH_WAIT;
+        loop {
+            let manifest: RollingMainArtifact = self
+                .asset_response_until(&manifest_name, revision, deadline)?
+                .json()
+                .map_err(asset_error)?;
+            validate_revision(&manifest.revision)?;
+            if manifest.revision == revision {
+                manifest.validate(revision, asset_name)?;
+                return Ok(manifest);
+            }
+            if Instant::now() >= deadline {
+                return Err(publish_timeout(revision));
+            }
+            thread::sleep(ROLLING_PUBLISH_POLL);
+        }
     }
 
     fn asset_response(
@@ -150,18 +167,26 @@ impl MainBranchUpdater {
         asset_name: &str,
         revision: &str,
     ) -> MedusaResult<reqwest::blocking::Response> {
+        self.asset_response_until(asset_name, revision, Instant::now() + ROLLING_PUBLISH_WAIT)
+    }
+
+    fn asset_response_until(
+        &self,
+        asset_name: &str,
+        revision: &str,
+        deadline: Instant,
+    ) -> MedusaResult<reqwest::blocking::Response> {
         let url = format!("{}/{}", self.asset_base, asset_name);
-        let response = self.client.get(url).send().map_err(asset_error)?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Err(MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Transient,
-                format!(
-                    "prebuilt main artifact for revision {revision} is still publishing; retry shortly"
-                ),
-            ));
+        loop {
+            let response = self.client.get(&url).send().map_err(asset_error)?;
+            if response.status() != StatusCode::NOT_FOUND {
+                return response.error_for_status().map_err(asset_error);
+            }
+            if Instant::now() >= deadline {
+                return Err(publish_timeout(revision));
+            }
+            thread::sleep(ROLLING_PUBLISH_POLL);
         }
-        response.error_for_status().map_err(asset_error)
     }
 }
 
@@ -194,7 +219,7 @@ impl RollingMainArtifact {
                 ErrorCode::DependencyUnavailable,
                 ErrorCategory::Transient,
                 format!(
-                    "prebuilt main artifact is for revision {}, but main is {}; retry shortly",
+                    "prebuilt main artifact is for revision {}, but main is {}",
                     self.revision, expected_revision
                 ),
             ));
@@ -218,18 +243,15 @@ impl RollingMainArtifact {
 
 fn rolling_asset_name(platform: Platform, revision: &str) -> MedusaResult<String> {
     validate_revision(revision)?;
-    let os = match platform.os {
-        OperatingSystem::Linux => "linux",
-        OperatingSystem::Macos => "macos",
-        OperatingSystem::Windows => "windows",
-    };
-    let architecture = match platform.architecture {
-        Architecture::X86_64 => "x86_64",
-        Architecture::Aarch64 => "aarch64",
-    };
-    let extension = match platform.os {
-        OperatingSystem::Windows => "zip",
-        OperatingSystem::Linux | OperatingSystem::Macos => "tar.gz",
+    let (os, architecture, extension) = match (platform.os, platform.architecture) {
+        (OperatingSystem::Linux, Architecture::X86_64) => ("linux", "x86_64", "tar.gz"),
+        (OperatingSystem::Macos, Architecture::Aarch64) => ("macos", "aarch64", "tar.gz"),
+        (OperatingSystem::Windows, Architecture::X86_64) => ("windows", "x86_64", "zip"),
+        _ => {
+            return Err(invalid(
+                "rolling main prebuilt updates are not published for this OS/architecture",
+            ));
+        }
     };
     Ok(format!("medusa-main-{os}-{architecture}.{extension}"))
 }
@@ -241,6 +263,17 @@ fn validate_revision(revision: &str) -> MedusaResult<()> {
         return Err(invalid("GitHub returned an invalid immutable revision"));
     }
     Ok(())
+}
+
+fn publish_timeout(revision: &str) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        format!(
+            "prebuilt main artifact for revision {revision} was not published within {} seconds",
+            ROLLING_PUBLISH_WAIT.as_secs()
+        ),
+    )
 }
 
 fn http_error(error: impl std::fmt::Display) -> MedusaError {
@@ -337,7 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn rolling_asset_selection_is_platform_specific() {
+    fn rolling_asset_selection_matches_published_platforms() {
+        let linux = Platform {
+            os: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+        };
+        assert_eq!(
+            rolling_asset_name(linux, REVISION).expect("asset"),
+            "medusa-main-linux-x86_64.tar.gz"
+        );
+
         let windows = Platform {
             os: OperatingSystem::Windows,
             architecture: Architecture::X86_64,
@@ -355,6 +397,27 @@ mod tests {
             rolling_asset_name(macos_arm, REVISION).expect("asset"),
             "medusa-main-macos-aarch64.tar.gz"
         );
+    }
+
+    #[test]
+    fn rolling_asset_selection_rejects_unpublished_platforms_without_polling() {
+        for platform in [
+            Platform {
+                os: OperatingSystem::Linux,
+                architecture: Architecture::Aarch64,
+            },
+            Platform {
+                os: OperatingSystem::Macos,
+                architecture: Architecture::X86_64,
+            },
+            Platform {
+                os: OperatingSystem::Windows,
+                architecture: Architecture::Aarch64,
+            },
+        ] {
+            let error = rolling_asset_name(platform, REVISION).expect_err("unsupported platform");
+            assert_eq!(error.code, ErrorCode::InvalidConfiguration);
+        }
     }
 
     #[test]

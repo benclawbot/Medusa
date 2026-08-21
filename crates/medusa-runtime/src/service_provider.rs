@@ -440,7 +440,7 @@ impl ServiceProviderResponse {
             generation,
             &output,
         ))
-        .expect("service provider response material is serializable");
+        .unwrap_or_default();
         let evidence_fingerprint = Sha256::digest(material)
             .iter()
             .map(|byte| format!("{byte:02x}"))
