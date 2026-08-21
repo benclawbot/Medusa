@@ -30,7 +30,7 @@ use std::{path::PathBuf, thread, time::Duration};
 #[cfg(not(test))]
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 #[cfg(not(test))]
-use medusa_protocol::frontend::FrontendCommandEnvelope;
+use medusa_protocol::frontend::{FrontendCommand, FrontendCommandEnvelope};
 
 #[cfg(not(test))]
 use crate::{
@@ -61,7 +61,7 @@ impl DaemonClient {
     }
 
     pub fn request(&self, request: Request) -> MedusaResult<Response> {
-        let attempts = if matches!(&request, Request::Frontend { .. }) {
+        let attempts = if frontend_request_is_retryable(&request) {
             FRONTEND_REQUEST_ATTEMPTS
         } else {
             1
@@ -145,6 +145,21 @@ impl DaemonClient {
             )),
         }
     }
+}
+
+#[cfg(not(test))]
+fn frontend_request_is_retryable(request: &Request) -> bool {
+    let Request::Frontend { envelope } = request else {
+        return false;
+    };
+    !matches!(
+        envelope.command,
+        FrontendCommand::ListSessions
+            | FrontendCommand::Replay { .. }
+            | FrontendCommand::PollTransient
+            | FrontendCommand::ShowSessionActions
+            | FrontendCommand::ShowStatus
+    )
 }
 
 #[cfg(not(test))]
