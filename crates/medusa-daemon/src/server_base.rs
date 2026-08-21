@@ -41,12 +41,47 @@ use crate::{
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
+const FRONTEND_REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECTION_WORKERS: usize = 8;
 const CONNECTION_QUEUE_CAPACITY: usize = 128;
 const MAX_BLOCKING_FRONTEND_CONNECTIONS: usize = CONNECTION_WORKERS / 2;
 const SHUTDOWN_NONE: u8 = 0;
 const SHUTDOWN_GRACEFUL: u8 = 1;
 const SHUTDOWN_IMMEDIATE: u8 = 2;
+
+#[cfg(test)]
+mod request_timeout_tests {
+    use medusa_protocol::frontend::{
+        FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
+    };
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    #[test]
+    fn frontend_session_requests_get_extended_io_timeout() {
+        let request = Request::Frontend {
+            envelope: FrontendCommandEnvelope {
+                protocol_version: FRONTEND_PROTOCOL_VERSION,
+                command_id: "timeout-test".to_owned(),
+                idempotency_key: "timeout-test".to_owned(),
+                frontend: FrontendKind::Tui,
+                client_id: "timeout-test-client".to_owned(),
+                session_id: None,
+                turn_id: None,
+                timestamp: OffsetDateTime::now_utc(),
+                command: FrontendCommand::CreateSession {
+                    repository_profile: "default".to_owned(),
+                    objective: Some("exercise the session startup path".to_owned()),
+                    attachment_ids: Vec::new(),
+                },
+            },
+        };
+
+        assert_eq!(request_io_timeout(&request), FRONTEND_REQUEST_IO_TIMEOUT);
+        assert_eq!(request_io_timeout(&Request::Ping), REQUEST_IO_TIMEOUT);
+    }
+}
 
 #[cfg(test)]
 static FRONTEND_LOCK_PROBE_TARGET: AtomicUsize = AtomicUsize::new(0);
@@ -89,11 +124,12 @@ impl DaemonClient {
 
     pub fn request(&self, request: Request) -> MedusaResult<Response> {
         let mut stream = connect(&self.socket).map_err(transport_error)?;
+        let io_timeout = request_io_timeout(&request);
         stream
-            .set_read_timeout(Some(REQUEST_IO_TIMEOUT))
+            .set_read_timeout(Some(io_timeout))
             .map_err(transport_error)?;
         stream
-            .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
+            .set_write_timeout(Some(io_timeout))
             .map_err(transport_error)?;
         let envelope = RequestEnvelope {
             version: DAEMON_PROTOCOL_VERSION,
@@ -498,6 +534,9 @@ fn run_loop(
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
                 }
+                Err(error) if is_transient_listener_error(&error) => {
+                    thread::sleep(Duration::from_millis(20));
+                }
                 Err(error) => return Err(transport_error(error)),
             }
         }
@@ -550,6 +589,14 @@ fn request_uses_frontend_serialization(request: &Request) -> bool {
             | Request::FrontendArtifactExport { .. }
             | Request::FrontendCredential { .. }
     )
+}
+
+fn request_io_timeout(request: &Request) -> Duration {
+    if request_uses_frontend_serialization(request) {
+        FRONTEND_REQUEST_IO_TIMEOUT
+    } else {
+        REQUEST_IO_TIMEOUT
+    }
 }
 
 struct FrontendConnectionPermit<'a> {
@@ -628,6 +675,13 @@ fn handle_connection(mut stream: LocalStream, context: &ConnectionContext) -> Me
             },
         );
     }
+    let request_timeout = request_io_timeout(&envelope.request);
+    stream
+        .set_read_timeout(Some(request_timeout))
+        .map_err(transport_error)?;
+    stream
+        .set_write_timeout(Some(request_timeout))
+        .map_err(transport_error)?;
     let _frontend_permit = if request_uses_frontend_serialization(&envelope.request) {
         match FrontendConnectionPermit::try_acquire(context.frontend_in_flight.as_ref()) {
             Some(permit) => Some(permit),
@@ -1083,6 +1137,19 @@ fn transport_error(error: impl std::fmt::Display) -> MedusaError {
     )
 }
 
+fn is_transient_listener_error(error: &std::io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        error.kind() == std::io::ErrorKind::ConnectionReset
+            || error.raw_os_error() == Some(10054)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = error;
+        false
+    }
+}
+
 struct Ownership {
     path: PathBuf,
     _file: File,
@@ -1261,6 +1328,20 @@ mod connection_concurrency_tests {
             Response::Ack
         ));
         server.join().expect("join server").expect("server result");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod listener_error_tests {
+    use std::io;
+
+    use super::is_transient_listener_error;
+
+    #[test]
+    fn windows_connection_reset_is_transient_for_listener_loop() {
+        let error = io::Error::from_raw_os_error(10054);
+
+        assert!(is_transient_listener_error(&error));
     }
 }
 
