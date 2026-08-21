@@ -167,11 +167,7 @@ impl MainBranchUpdater {
         asset_name: &str,
         revision: &str,
     ) -> MedusaResult<reqwest::blocking::Response> {
-        self.asset_response_until(
-            asset_name,
-            revision,
-            Instant::now() + ROLLING_PUBLISH_WAIT,
-        )
+        self.asset_response_until(asset_name, revision, Instant::now() + ROLLING_PUBLISH_WAIT)
     }
 
     fn asset_response_until(
