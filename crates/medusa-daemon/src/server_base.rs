@@ -6,10 +6,14 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, Ordering},
+        mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
     time::Duration,
 };
+
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 
 #[cfg(unix)]
 use std::process::Command;
@@ -40,9 +44,16 @@ use crate::{
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECTION_WORKERS: usize = 8;
+const CONNECTION_QUEUE_CAPACITY: usize = 32;
 const SHUTDOWN_NONE: u8 = 0;
 const SHUTDOWN_GRACEFUL: u8 = 1;
 const SHUTDOWN_IMMEDIATE: u8 = 2;
+
+#[cfg(test)]
+static FRONTEND_LOCK_PROBE_TARGET: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static FRONTEND_LOCK_PROBE_HITS: AtomicUsize = AtomicUsize::new(0);
 
 /// Handle used to request daemon shutdown from tests or embedding code.
 pub struct ServerHandle {
@@ -345,6 +356,134 @@ fn start_scheduler(
     JobScheduler::start(limits, runner)
 }
 
+type SharedJobScheduler = Arc<Mutex<JobScheduler>>;
+
+struct ConnectionWorkerPool {
+    sender: Option<SyncSender<LocalStream>>,
+    workers: Vec<thread::JoinHandle<()>>,
+}
+
+impl ConnectionWorkerPool {
+    fn start(
+        paths: DaemonPaths,
+        jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
+        processes: Arc<ProcessRegistry>,
+        frontend: Arc<Mutex<FrontendControlPlane>>,
+        shutdown: Arc<AtomicU8>,
+        scheduler: SharedJobScheduler,
+    ) -> MedusaResult<Self> {
+        let (sender, receiver) = mpsc::sync_channel(CONNECTION_QUEUE_CAPACITY);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut pool = Self {
+            sender: Some(sender),
+            workers: Vec::with_capacity(CONNECTION_WORKERS),
+        };
+
+        for index in 0..CONNECTION_WORKERS {
+            let worker_receiver = Arc::clone(&receiver);
+            let worker_paths = paths.clone();
+            let worker_jobs = Arc::clone(&jobs);
+            let worker_processes = Arc::clone(&processes);
+            let worker_frontend = Arc::clone(&frontend);
+            let worker_shutdown = Arc::clone(&shutdown);
+            let worker_scheduler = Arc::clone(&scheduler);
+            match thread::Builder::new()
+                .name(format!("medusa-connection-worker-{index}"))
+                .spawn(move || {
+                    connection_worker_loop(
+                        worker_receiver,
+                        worker_paths,
+                        worker_jobs,
+                        worker_processes,
+                        worker_frontend,
+                        worker_shutdown,
+                        worker_scheduler,
+                    );
+                })
+            {
+                Ok(worker) => pool.workers.push(worker),
+                Err(error) => {
+                    let _ = pool.shutdown();
+                    return Err(MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Environment,
+                        format!("failed to spawn daemon connection worker {index}: {error}"),
+                    ));
+                }
+            }
+        }
+        Ok(pool)
+    }
+
+    fn enqueue(&self, stream: LocalStream) -> Result<(), LocalStream> {
+        let Some(sender) = self.sender.as_ref() else {
+            return Err(stream);
+        };
+        match sender.try_send(stream) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(stream) | TrySendError::Disconnected(stream)) => Err(stream),
+        }
+    }
+
+    fn shutdown(&mut self) -> MedusaResult<()> {
+        self.sender.take();
+        let mut first_error = None;
+        for worker in self.workers.drain(..) {
+            if worker.join().is_err() && first_error.is_none() {
+                first_error = Some(MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Internal,
+                    "daemon connection worker terminated unexpectedly",
+                ));
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+impl Drop for ConnectionWorkerPool {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
+fn connection_worker_loop(
+    receiver: Arc<Mutex<Receiver<LocalStream>>>,
+    paths: DaemonPaths,
+    jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: Arc<ProcessRegistry>,
+    frontend: Arc<Mutex<FrontendControlPlane>>,
+    shutdown: Arc<AtomicU8>,
+    scheduler: SharedJobScheduler,
+) {
+    loop {
+        if shutdown.load(Ordering::SeqCst) != SHUTDOWN_NONE {
+            return;
+        }
+        let stream = {
+            let receiver = receiver
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match receiver.recv() {
+                Ok(stream) => stream,
+                Err(_) => return,
+            }
+        };
+        if shutdown.load(Ordering::SeqCst) != SHUTDOWN_NONE {
+            return;
+        }
+        let _ = handle_connection(
+            stream,
+            &paths,
+            &jobs,
+            &processes,
+            &frontend,
+            &shutdown,
+            &scheduler,
+        );
+    }
+}
+
 fn run_loop(
     listener: LocalListener,
     paths: DaemonPaths,
@@ -352,15 +491,31 @@ fn run_loop(
     processes: Arc<ProcessRegistry>,
     frontend: Arc<Mutex<FrontendControlPlane>>,
     shutdown: Arc<AtomicU8>,
-    mut scheduler: JobScheduler,
+    scheduler: JobScheduler,
 ) -> MedusaResult<()> {
+    let scheduler = Arc::new(Mutex::new(scheduler));
+    let mut connections = match ConnectionWorkerPool::start(
+        paths.clone(),
+        Arc::clone(&jobs),
+        Arc::clone(&processes),
+        Arc::clone(&frontend),
+        Arc::clone(&shutdown),
+        Arc::clone(&scheduler),
+    ) {
+        Ok(connections) => connections,
+        Err(error) => {
+            listener.cleanup();
+            return Err(error);
+        }
+    };
+
     let result = (|| {
         while shutdown.load(Ordering::SeqCst) == SHUTDOWN_NONE {
             match listener.accept() {
                 Ok(stream) => {
-                    let _ = handle_connection(
-                        stream, &paths, &jobs, &processes, &frontend, &shutdown, &scheduler,
-                    );
+                    if let Err(stream) = connections.enqueue(stream) {
+                        reject_busy_connection(stream);
+                    }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -370,17 +525,43 @@ fn run_loop(
         }
         Ok(())
     })();
-    let cancellation_result = if shutdown.load(Ordering::SeqCst) == SHUTDOWN_IMMEDIATE {
-        cancel_all_jobs(&paths, &jobs, &processes, &scheduler)
-    } else {
-        Ok(())
+    let connection_result = connections.shutdown();
+    let (cancellation_result, scheduler_result) = match lock_scheduler(&scheduler) {
+        Ok(mut scheduler) => {
+            let cancellation_result = if shutdown.load(Ordering::SeqCst) == SHUTDOWN_IMMEDIATE {
+                cancel_all_jobs(&paths, &jobs, &processes, &scheduler)
+            } else {
+                Ok(())
+            };
+            let scheduler_result = scheduler.shutdown();
+            (cancellation_result, scheduler_result)
+        }
+        Err(error) => (Err(error), Ok(())),
     };
-    let scheduler_result = scheduler.shutdown();
     listener.cleanup();
-    match (result, cancellation_result, scheduler_result) {
-        (Err(error), _, _) | (Ok(()), Err(error), _) | (Ok(()), Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(()), Ok(())) => Ok(()),
+    match (
+        result,
+        connection_result,
+        cancellation_result,
+        scheduler_result,
+    ) {
+        (Err(error), _, _, _)
+        | (Ok(()), Err(error), _, _)
+        | (Ok(()), Ok(()), Err(error), _)
+        | (Ok(()), Ok(()), Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(()), Ok(()), Ok(())) => Ok(()),
     }
+}
+
+fn reject_busy_connection(mut stream: LocalStream) {
+    let _ = stream.set_write_timeout(Some(REQUEST_IO_TIMEOUT));
+    let _ = write_response(
+        &mut stream,
+        Response::Error {
+            code: "daemon_busy".to_owned(),
+            message: "daemon connection queue is at capacity; retry later".to_owned(),
+        },
+    );
 }
 
 fn handle_connection(
@@ -390,7 +571,7 @@ fn handle_connection(
     processes: &Arc<ProcessRegistry>,
     frontend: &Arc<Mutex<FrontendControlPlane>>,
     shutdown: &Arc<AtomicU8>,
-    scheduler: &JobScheduler,
+    scheduler: &SharedJobScheduler,
 ) -> MedusaResult<()> {
     stream
         .set_read_timeout(Some(REQUEST_IO_TIMEOUT))
@@ -467,7 +648,7 @@ fn dispatch(
     processes: &Arc<ProcessRegistry>,
     frontend: &Arc<Mutex<FrontendControlPlane>>,
     shutdown: &Arc<AtomicU8>,
-    scheduler: &JobScheduler,
+    scheduler: &SharedJobScheduler,
 ) -> MedusaResult<Response> {
     match request {
         Request::Ping => Ok(Response::Pong),
@@ -496,6 +677,7 @@ fn dispatch(
                     return Err(error);
                 }
             }
+            let scheduler = lock_scheduler(scheduler)?;
             match scheduler.enqueue(job.id.clone()) {
                 Ok(()) => Ok(Response::Submitted { job }),
                 Err(SubmitError::Busy) => {
@@ -520,7 +702,10 @@ fn dispatch(
                 job: locked.get(&job_id).cloned(),
             })
         }
-        Request::Cancel { job_id } => cancel_job(paths, jobs, processes, scheduler, &job_id),
+        Request::Cancel { job_id } => {
+            let scheduler = lock_scheduler(scheduler)?;
+            cancel_job(paths, jobs, processes, &scheduler, &job_id)
+        }
         Request::List => {
             let locked = lock_jobs(jobs)?;
             Ok(Response::Jobs {
@@ -821,11 +1006,30 @@ fn validate_program(program: &str) -> MedusaResult<()> {
 fn lock_frontend(
     frontend: &Arc<Mutex<FrontendControlPlane>>,
 ) -> MedusaResult<std::sync::MutexGuard<'_, FrontendControlPlane>> {
+    #[cfg(test)]
+    {
+        let target = FRONTEND_LOCK_PROBE_TARGET.load(Ordering::SeqCst);
+        if target != 0 && Arc::as_ptr(frontend) as usize == target {
+            FRONTEND_LOCK_PROBE_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
     frontend.lock().map_err(|_| {
         MedusaError::new(
             ErrorCode::InternalInvariant,
             ErrorCategory::Internal,
             "daemon frontend control lock was poisoned",
+        )
+    })
+}
+
+fn lock_scheduler(
+    scheduler: &SharedJobScheduler,
+) -> MedusaResult<std::sync::MutexGuard<'_, JobScheduler>> {
+    scheduler.lock().map_err(|_| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            "daemon job scheduler lock was poisoned",
         )
     })
 }
@@ -919,6 +1123,106 @@ fn process_is_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn process_is_alive(pid: u32) -> bool {
     medusa_process_containment::process_is_alive(pid)
+}
+
+#[cfg(test)]
+mod connection_concurrency_tests {
+    use std::time::Instant;
+
+    use medusa_protocol::frontend::{
+        FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
+    };
+
+    use super::*;
+
+    struct ProbeReset;
+
+    impl Drop for ProbeReset {
+        fn drop(&mut self) {
+            FRONTEND_LOCK_PROBE_TARGET.store(0, Ordering::SeqCst);
+            FRONTEND_LOCK_PROBE_HITS.store(0, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn health_ping_remains_responsive_while_frontend_dispatch_is_blocked() {
+        let _probe_reset = ProbeReset;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonPaths::for_repo(directory.path());
+        fs::create_dir_all(&paths.directory).expect("daemon directory");
+        let jobs = Arc::new(Mutex::new(BTreeMap::new()));
+        let processes = Arc::new(ProcessRegistry::default());
+        let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+            paths.repo.clone(),
+            Config::default(),
+        )));
+        let listener = LocalListener::bind(&paths.socket).expect("bind daemon listener");
+        let scheduler = start_scheduler(&paths, &jobs, &processes, DaemonLimits::default())
+            .expect("start scheduler");
+        let shutdown = Arc::new(AtomicU8::new(SHUTDOWN_NONE));
+        let frontend_guard = frontend.lock().expect("hold frontend lock");
+        FRONTEND_LOCK_PROBE_TARGET.store(Arc::as_ptr(&frontend) as usize, Ordering::SeqCst);
+        FRONTEND_LOCK_PROBE_HITS.store(0, Ordering::SeqCst);
+
+        let server = {
+            let paths = paths.clone();
+            let jobs = Arc::clone(&jobs);
+            let processes = Arc::clone(&processes);
+            let frontend = Arc::clone(&frontend);
+            let shutdown = Arc::clone(&shutdown);
+            thread::spawn(move || {
+                run_loop(
+                    listener, paths, jobs, processes, frontend, shutdown, scheduler,
+                )
+            })
+        };
+
+        let envelope = FrontendCommandEnvelope {
+            protocol_version: FRONTEND_PROTOCOL_VERSION,
+            command_id: "blocked-frontend".to_owned(),
+            idempotency_key: "blocked-frontend".to_owned(),
+            frontend: FrontendKind::Tui,
+            client_id: "blocked-frontend-client".to_owned(),
+            session_id: None,
+            turn_id: None,
+            timestamp: OffsetDateTime::now_utc(),
+            command: FrontendCommand::ListSessions,
+        };
+        let blocked_client = DaemonClient::new(&paths.socket);
+        let blocked_request = thread::spawn(move || blocked_client.frontend(envelope));
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while FRONTEND_LOCK_PROBE_HITS.load(Ordering::SeqCst) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "frontend request did not reach the blocked control-plane lock"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let started = Instant::now();
+        let response = DaemonClient::new(&paths.socket)
+            .request(Request::Ping)
+            .expect("health ping while frontend request is blocked");
+        assert!(matches!(response, Response::Pong));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "health ping waited behind a blocked frontend request"
+        );
+
+        drop(frontend_guard);
+        blocked_request
+            .join()
+            .expect("join blocked request")
+            .expect("blocked frontend request completes");
+        assert!(matches!(
+            DaemonClient::new(&paths.socket)
+                .request(Request::Shutdown)
+                .expect("shutdown daemon"),
+            Response::Ack
+        ));
+        server.join().expect("join server").expect("server result");
+    }
 }
 
 #[cfg(test)]
