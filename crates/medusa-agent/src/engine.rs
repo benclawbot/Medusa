@@ -2028,6 +2028,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                             input,
                             execution.result,
                             Some(execution.receipt),
+                            execution.canonical,
                             timing,
                             None,
                         ))
@@ -2288,6 +2289,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     input,
                     execution.result,
                     Some(execution.receipt),
+                    execution.canonical,
                     timing,
                     post_action,
                 )]
@@ -2295,7 +2297,7 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let repository_revision_after_mutation = executed
                 .iter()
-                .any(|(_, name, input, result, _, _, _)| {
+                .any(|(_, name, input, result, _, _, _, _)| {
                     result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
                 })
                 .then(|| refreshed_repository_revision(&session.repo))
@@ -2303,10 +2305,10 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let verification_mutation_paths = executed
                 .iter()
-                .filter(|(_, name, input, result, _, _, _)| {
+                .filter(|(_, name, input, result, _, _, _, _)| {
                     result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
                 })
-                .filter_map(|(_, name, input, _, _, _, _)| {
+                .filter_map(|(_, name, input, _, _, _, _, _)| {
                     matches!(name.as_str(), "fs_write" | "fs_create_dir")
                         .then(|| input.get("path").and_then(serde_json::Value::as_str))
                         .flatten()
@@ -2325,7 +2327,7 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let failed_dependencies = executed
                 .iter()
-                .filter_map(|(_, name, input, result, _, _, _)| {
+                .filter_map(|(_, name, input, result, _, _, _, _)| {
                     let error = result.as_ref().err()?;
                     let awaiting_approval = error.code == ErrorCode::PolicyDenied
                         && self.config.agent.mode != Mode::ReadOnly
@@ -2352,6 +2354,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     input,
                     execution.result,
                     Some(execution.receipt),
+                    execution.canonical,
                     None,
                     None,
                 ));
@@ -2374,17 +2377,15 @@ impl<P: ModelProvider> AgentEngine<P> {
                         input,
                         execution.result,
                         Some(execution.receipt),
+                        execution.canonical,
                         None,
                         None,
                     ));
                 }
             }
 
-            for (id, name, input, result, receipt, timing, post_action) in executed {
-                let canonical_model_projection = receipt.as_ref().map(|receipt| {
-                    crate::tool_result::CanonicalToolResultV1::from_receipt(receipt, &result)
-                        .model_projection(8 * 1024)
-                });
+            for (id, name, input, result, receipt, canonical, timing, post_action) in executed {
+                let canonical_model_projection = Some(canonical.model_projection(8 * 1024));
                 if let Some(receipt) = receipt {
                     journal_certified_tool_execution(
                         session,
