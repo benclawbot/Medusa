@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::path::Path;
 
 pub const CANONICAL_TOOL_RESULT_SCHEMA_VERSION: u16 = 1;
 pub const TOOL_PROJECTION_SCHEMA_VERSION: u16 = 1;
@@ -129,7 +130,7 @@ impl CanonicalToolResultV1 {
                 message: error.message.clone(),
             },
         };
-        let artifact_refs = receipt
+        let mut artifact_refs: Vec<String> = receipt
             .get("artifact_refs")
             .and_then(Value::as_array)
             .map(|values| {
@@ -140,6 +141,13 @@ impl CanonicalToolResultV1 {
                     .collect()
             })
             .unwrap_or_default();
+        if let Ok(text) = result {
+            for artifact_ref in output_artifact_refs(text) {
+                if !artifact_refs.contains(&artifact_ref) {
+                    artifact_refs.push(artifact_ref);
+                }
+            }
+        }
         let evidence_refs = receipt
             .get("evidence_refs")
             .and_then(Value::as_array)
@@ -243,6 +251,20 @@ impl CanonicalToolResultV1 {
 
 fn truncate_chars(text: &str, maximum_chars: usize) -> String {
     text.chars().take(maximum_chars).collect()
+}
+
+fn output_artifact_refs(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("[output-expansion path="))
+        .filter_map(|value| value.split_once(']').map(|(path, _)| path))
+        .map(|path| path.replace('\\', "/"))
+        .filter(|path| {
+            path.starts_with(".medusa/artifacts/")
+                && !Path::new(path)
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+        })
+        .collect()
 }
 
 fn redact_value(value: &mut Value, redactions: &[String], redacted: &mut bool) {
@@ -375,5 +397,31 @@ mod tests {
         let second = canonical.frontend_projection(40_000);
         assert_eq!(first["source_fingerprint"], second["source_fingerprint"]);
         assert_eq!(fingerprint, canonical.source_fingerprint);
+    }
+
+    #[test]
+    fn shell_expansion_is_a_canonical_artifact_without_becoming_unbounded_model_text() {
+        let result = "first line\nsecond line\n[output-expansion path=.medusa/artifacts/shell_run_deadbeef.txt]";
+        let canonical = CanonicalToolResultV1::from_receipt(
+            &json!({"outcome": "success"}),
+            &Ok(result.to_owned()),
+        );
+        assert_eq!(
+            canonical.artifact_refs,
+            vec![".medusa/artifacts/shell_run_deadbeef.txt"]
+        );
+        let projection = canonical.model_projection_with_policy(
+            &ToolProjectionPolicy::bounded(5)
+                .with_expansion_handle(".medusa/artifacts/shell_run_deadbeef.txt"),
+        );
+        assert_eq!(projection["value"]["text"], "first");
+        assert_eq!(projection["projection"]["omitted"], true);
+        assert_eq!(projection["projection"]["expansion_available"], true);
+    }
+
+    #[test]
+    fn output_artifact_refs_reject_paths_outside_the_artifact_boundary() {
+        let text = "[output-expansion path=../../secret.txt]\n[output-expansion path=.medusa/output-expansions/legacy.txt]";
+        assert!(output_artifact_refs(text).is_empty());
     }
 }

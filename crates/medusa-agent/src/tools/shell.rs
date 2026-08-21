@@ -1,4 +1,10 @@
-use std::{fs, path::Path, sync::atomic::AtomicBool, time::Instant};
+use std::{
+    fs,
+    io::{ErrorKind, Write},
+    path::Path,
+    sync::atomic::AtomicBool,
+    time::Instant,
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde_json::json;
@@ -202,14 +208,29 @@ fn persist_expansion(repo: &Path, raw: &str) -> MedusaResult<std::path::PathBuf>
     let redacted = tool_telemetry::redact_text(raw);
     let digest = Sha256::digest(format!("shell_run\0{redacted}").as_bytes());
     let relative = Path::new(".medusa")
-        .join("output-expansions")
-        .join(format!("{}.txt", hex::encode(&digest[..8])));
+        .join("artifacts")
+        .join(format!("shell_run_{}.txt", hex::encode(digest)));
     let absolute = repo.join(&relative);
     if let Some(parent) = absolute.parent() {
         fs::create_dir_all(parent)?;
     }
-    if !absolute.exists() {
-        fs::write(&absolute, redacted)?;
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&absolute)
+    {
+        Ok(mut file) => file.write_all(redacted.as_bytes())?,
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let existing = fs::read_to_string(&absolute)?;
+            if existing != redacted {
+                return Err(MedusaError::new(
+                    ErrorCode::PersistenceFailed,
+                    ErrorCategory::Execution,
+                    "content-addressed shell artifact already contains different content",
+                ));
+            }
+        }
+        Err(error) => return Err(error.into()),
     }
     Ok(relative)
 }
@@ -232,11 +253,31 @@ mod tests {
         )
         .expect("persist expansion again");
         assert_eq!(first, second);
-        assert!(first.starts_with(".medusa/output-expansions"));
+        assert!(first.starts_with(".medusa/artifacts"));
         assert_eq!(
             fs::read_to_string(directory.path().join(first)).expect("read expansion"),
             "command=cargo test\nstdout:\nok\nstderr:\n"
         );
+    }
+
+    #[test]
+    fn expansion_path_is_content_addressed() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let first = persist_expansion(directory.path(), "first").expect("first expansion");
+        let second = persist_expansion(directory.path(), "second").expect("second expansion");
+        assert_ne!(first, second);
+        assert!(first.starts_with(".medusa/artifacts"));
+        assert!(second.starts_with(".medusa/artifacts"));
+    }
+
+    #[test]
+    fn content_addressed_expansion_rejects_tampered_existing_content() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let path = persist_expansion(directory.path(), "original").expect("first expansion");
+        fs::write(directory.path().join(&path), "tampered").expect("tamper artifact");
+        let error = persist_expansion(directory.path(), "original")
+            .expect_err("tampered content must not be accepted");
+        assert_eq!(error.code, ErrorCode::PersistenceFailed);
     }
 
     #[test]
