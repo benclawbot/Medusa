@@ -21,6 +21,8 @@ pub use base::{
     ServerHandle, serve, serve_with_config, serve_with_limits, spawn, spawn_with_config,
     spawn_with_limits,
 };
+#[cfg(not(test))]
+pub(crate) use base::{lock_jobs, persist_jobs};
 
 #[cfg(not(test))]
 use std::{path::PathBuf, thread, time::Duration};
