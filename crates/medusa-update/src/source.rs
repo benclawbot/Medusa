@@ -1,12 +1,12 @@
 use std::{path::Path, sync::Mutex};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::{StatusCode, blocking::Client};
+use reqwest::{blocking::Client, StatusCode};
 use serde::Deserialize;
 
 use crate::{
-    AtomicInstaller, Architecture, OperatingSystem, Platform, Restart, ScheduledUpdate,
-    copy_with_progress, verify_artifact,
+    copy_with_progress, verify_artifact, Architecture, AtomicInstaller, OperatingSystem, Platform,
+    Restart, ScheduledUpdate,
 };
 
 const GITHUB_API: &str = "https://api.github.com";
@@ -100,12 +100,7 @@ impl MainBranchUpdater {
             .tempdir()?;
         let archive = workspace.path().join(&asset_name);
         let mut response = self.asset_response(&asset_name, &revision)?;
-        copy_with_progress(
-            &mut response,
-            &archive,
-            Some(manifest.bytes),
-            progress,
-        )?;
+        copy_with_progress(&mut response, &archive, Some(manifest.bytes), progress)?;
         verify_artifact(&archive, manifest.bytes, &manifest.sha256)?;
 
         let installer = AtomicInstaller::new(executable.to_path_buf());
@@ -205,7 +200,9 @@ impl RollingMainArtifact {
             ));
         }
         if self.name != expected_name {
-            return Err(invalid("rolling main artifact manifest name does not match platform"));
+            return Err(invalid(
+                "rolling main artifact manifest name does not match platform",
+            ));
         }
         if self.bytes == 0 {
             return Err(invalid("rolling main artifact has an empty byte count"));
