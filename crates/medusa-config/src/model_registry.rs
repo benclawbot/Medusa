@@ -281,7 +281,12 @@ fn curated_model(provider_id: &str, profile_provider: &str, model: &str) -> Mode
     let is_openai = provider_id == "openai" || provider_id == "openai-oauth";
     let is_anthropic = provider_id == "anthropic" || provider_id == "anthropic-compatible";
     let is_minimax = provider_id == "minimax";
-    let reasoning = is_openai || normalized.contains("opus") || normalized.contains("sonnet");
+    // MiniMax-M3 exposes adaptive thinking; Medusa maps that capability to its standard
+    // low/medium/high effort bands for the shared model configuration surface.
+    let reasoning = is_openai
+        || (is_minimax && normalized == "minimax-m3")
+        || normalized.contains("opus")
+        || normalized.contains("sonnet");
     let image_input = is_openai || is_anthropic;
     ModelMetadata {
         id: model.to_owned(),

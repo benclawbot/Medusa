@@ -290,7 +290,7 @@ fn model_form_requires_explicit_apply_and_updates_session_key_with_capability_ef
     };
     assert_eq!(configuration.provider, "minimax");
     assert_eq!(configuration.model, "MiniMax-M3");
-    assert_eq!(configuration.effort, Effort::Auto);
+    assert_eq!(configuration.effort, Effort::Medium);
     assert_eq!(configuration.api_key.as_deref(), Some("replacement-key"));
     assert!(!format!("{configuration:?}").contains("replacement-key"));
     assert!(app.transcript.is_empty());
