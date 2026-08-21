@@ -527,7 +527,7 @@ impl DaemonRuntimeState {
             ));
         }
 
-        if effort != Effort::Auto {
+        if effort != Effort::Auto && self.session_id.is_some() {
             let acknowledgement = self.dispatch(FrontendCommand::RunCommand {
                 input: format!("/config set reasoning {effort_label}"),
             })?;
