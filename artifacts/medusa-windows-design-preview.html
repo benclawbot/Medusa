@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Medusa Windows design preview</title>
+  <style>
+    :root {
+      --canvas: #f7f7f8;
+      --panel: #fff;
+      --panel-soft: #fbfbfc;
+      --border: #e7e7eb;
+      --border-strong: #d8d8df;
+      --ink: #17171a;
+      --muted: #71717a;
+      --accent: #6d4aff;
+      --accent-soft: #f0edff;
+      --success: #138a5b;
+      --warning: #b7791f;
+      --danger: #c2413a;
+      --shadow: 0 18px 55px rgba(24, 24, 27, .08);
+      --radius-sm: 10px;
+      --radius-md: 16px;
+      --radius-lg: 24px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    }
+    button { font: inherit; }
+    button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+    .rail { padding: 24px 14px; border-right: 1px solid var(--border); background: rgba(250,250,251,.94); }
+    .brand { display: flex; align-items: center; gap: 10px; margin: 0 8px 24px; }
+    .brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: var(--accent); background: linear-gradient(145deg,#f5f2ff,#e9e2ff); font-weight: 800; }
+    .brand strong { display: block; font-size: 15px; }
+    .brand small { color: var(--muted); }
+    .rail-label { margin: 18px 8px 8px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .nav { display: grid; gap: 4px; }
+    .nav button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 9px 11px; border: 1px solid transparent; border-radius: 10px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
+    .nav button:hover { color: var(--ink); background: #fff; }
+    .nav button[aria-current="page"] { color: var(--ink); border-color: var(--border); background: #fff; box-shadow: 0 4px 14px rgba(24,24,27,.04); }
+    .nav .icon { width: 20px; color: var(--accent); text-align: center; }
+    .scope { margin-top: 26px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: rgba(255,255,255,.72); }
+    .scope small { color: var(--muted); }
+    .scope strong { display: block; margin-top: 4px; }
+    .content { min-width: 0; padding: 36px clamp(20px, 4vw, 64px) 64px; background: radial-gradient(circle at 50% -10%, rgba(109,74,255,.08), transparent 30%), var(--panel); }
+    .hero { display: flex; justify-content: space-between; gap: 24px; align-items: end; max-width: 1140px; margin: 0 auto 28px; }
+    .eyebrow { margin: 0 0 5px; color: var(--muted); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 720px; font-size: clamp(28px, 4vw, 48px); letter-spacing: -.045em; line-height: 1.04; }
+    .hero p { max-width: 660px; margin: 12px 0 0; color: var(--muted); font-size: 16px; }
+    .badge { display: inline-flex; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid #ded6ff; border-radius: 999px; color: #5136c6; background: var(--accent-soft); white-space: nowrap; }
+    .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+    .screen { max-width: 1140px; margin: 0 auto 28px; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: rgba(255,255,255,.9); box-shadow: var(--shadow); scroll-margin-top: 24px; }
+    .screen[hidden] { display: none; }
+    .screen-head { display: flex; justify-content: space-between; gap: 18px; align-items: start; margin-bottom: 20px; }
+    .screen h2 { margin: 0; font-size: 23px; letter-spacing: -.025em; }
+    .screen-head p { margin: 5px 0 0; color: var(--muted); }
+    .screen-index { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .compare { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 16px; }
+    .pane { min-height: 260px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--panel-soft); }
+    .pane.proposed { border-color: #dcd3ff; background: linear-gradient(180deg,#fff,#faf8ff); }
+    .pane-title { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+    .pane.proposed .pane-title { color: #563bca; }
+    .window { overflow: hidden; border: 1px solid var(--border-strong); border-radius: 12px; background: #fff; }
+    .window-bar { display: flex; gap: 6px; align-items: center; min-height: 31px; padding: 0 10px; border-bottom: 1px solid var(--border); background: #fafafa; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #d4d4d8; }
+    .window-body { display: grid; grid-template-columns: 82px minmax(0,1fr); min-height: 170px; }
+    .mini-rail { padding: 10px 7px; border-right: 1px solid var(--border); background: #fafafa; }
+    .mini-rail i { display: block; height: 9px; margin: 0 0 10px; border-radius: 4px; background: #e4e4e7; }
+    .mini-rail i.active { background: var(--accent); }
+    .mini-main { padding: 14px; }
+    .line { height: 8px; margin: 0 0 9px; border-radius: 4px; background: #e4e4e7; }
+    .line.short { width: 52%; }
+    .line.accent { width: 74%; background: #ded6ff; }
+    .card { margin-top: 14px; padding: 11px; border: 1px solid var(--border); border-radius: 9px; }
+    .card strong { display: block; margin-bottom: 7px; font-size: 12px; }
+    .card small { color: var(--muted); }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+    .chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border-radius: 999px; color: var(--muted); background: #f0f0f2; font-size: 11px; }
+    .chip.success { color: #116f4d; background: #e6f6ef; }
+    .chip.warn { color: #8a5b15; background: #fff4da; }
+    .chip.accent { color: #563bca; background: var(--accent-soft); }
+    .metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+    .metric { padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: #fff; }
+    .metric b { display: block; font-size: 16px; }
+    .metric small { color: var(--muted); }
+    .note { margin: 15px 0 0; padding: 12px 14px; border-left: 3px solid var(--accent); color: var(--muted); background: #faf9ff; }
+    .note strong { color: var(--ink); }
+    .settings-form { display: grid; gap: 10px; }
+    .settings-form label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .settings-form input, .settings-form select { width: 100%; min-height: 37px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; color: var(--ink); background: #fff; }
+    .fake-button { display: inline-flex; justify-content: center; min-height: 37px; padding: 9px 12px; border-radius: 9px; color: #fff; background: var(--ink); font-weight: 700; }
+    .timeline { display: grid; gap: 10px; }
+    .timeline-row { display: grid; grid-template-columns: 16px minmax(0,1fr) auto; gap: 9px; align-items: start; padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: #fff; }
+    .timeline-row .state { width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; background: var(--accent); }
+    .timeline-row.done .state { background: var(--success); }
+    .timeline-row small { color: var(--muted); }
+    .timeline-row time { color: var(--muted); font-size: 11px; }
+    .approval { padding: 14px; border: 1px solid #f0dba9; border-radius: 12px; background: #fff9e9; }
+    .approval strong { display: block; margin-bottom: 4px; }
+    .approval p { margin: 0; color: var(--muted); }
+    .footer { max-width: 1140px; margin: 10px auto 0; color: var(--muted); font-size: 12px; }
+    @media (max-width: 860px) { .shell { grid-template-columns: 1fr; } .rail { position: sticky; top: 0; z-index: 5; padding: 10px 14px; border-right: 0; border-bottom: 1px solid var(--border); } .brand { margin: 0 0 10px; } .rail-label, .scope { display: none; } .nav { grid-template-columns: repeat(6, minmax(0,1fr)); } .nav button { justify-content: center; padding: 8px; } .nav button span:last-child { display: none; } .hero { align-items: start; flex-direction: column; } }
+    @media (max-width: 620px) { .content { padding: 24px 14px 40px; } .screen { padding: 16px; border-radius: 18px; } .compare { grid-template-columns: 1fr; } .window-body { grid-template-columns: 58px minmax(0,1fr); } .screen-head { flex-direction: column; } .metric-row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="Design preview navigation">
+      <div class="brand"><span class="brand-mark">M</span><div><strong>Medusa</strong><small>Windows design preview</small></div></div>
+      <p class="rail-label">Screens</p>
+      <nav class="nav" aria-label="Preview screens">
+        <button type="button" data-target="overview" aria-current="page"><span class="icon">⌂</span><span>Overview</span></button>
+        <button type="button" data-target="timeline"><span class="icon">◷</span><span>Timeline</span></button>
+        <button type="button" data-target="plan"><span class="icon">✓</span><span>Plan &amp; approvals</span></button>
+        <button type="button" data-target="settings"><span class="icon">⚙</span><span>Settings</span></button>
+        <button type="button" data-target="review"><span class="icon">⇄</span><span>Review &amp; learning</span></button>
+        <button type="button" data-target="voice"><span class="icon">◉</span><span>Voice</span></button>
+      </nav>
+      <div class="scope"><small>Source context</small><strong>apps/medusa-desktop/src</strong><small>Static fallback preview; no runtime calls.</small></div>
+    </aside>
+    <main class="content">
+      <header class="hero">
+        <div><p class="eyebrow">Activity-first desktop visual system</p><h1>A calmer command center for every Medusa session.</h1><p>Before/after directions grounded in the current session rail, execution timeline, plan, model settings, review, learning, attachment, and voice surfaces.</p></div>
+        <span class="badge">Source-grounded fallback</span>
+      </header>
+
+      <article class="screen" id="overview" data-screen>
+        <div class="screen-head"><div><p class="eyebrow">Screen 01</p><h2>Session overview &amp; navigation</h2><p>Make the current repo, runtime state, and next action legible at a glance.</p></div><span class="screen-index">01 / 06</span></div>
+        <div class="compare">
+          <section class="pane"><div class="pane-title"><span>Current pattern</span><span>Observed</span></div><div class="window"><div class="window-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="window-body"><div class="mini-rail"><i class="active"></i><i></i><i></i><i></i><i></i></div><div class="mini-main"><div class="line short"></div><div class="line"></div><div class="card"><strong>What should Medusa build?</strong><small>Conversation-first composer and session details.</small></div></div></div></div></section>
+          <section class="pane proposed"><div class="pane-title"><span>Proposed direction</span><span class="chip accent">Focus</span></div><div class="window"><div class="window-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="window-body"><div class="mini-rail"><i class="active"></i><i></i><i></i><i></i><i></i></div><div class="mini-main"><div class="line accent"></div><div class="chip-row"><span class="chip success">● Ready</span><span class="chip">minimax / MiniMax-M3</span></div><div class="metric-row"><div class="metric"><b>3</b><small>steps complete</small></div><div class="metric"><b>1.2k</b><small>tokens</small></div><div class="metric"><b>Full</b><small>mode</small></div></div><div class="card"><strong>Next best action</strong><small>Review the prepared change before applying it.</small></div></div></div></div></section>
+        </div><p class="note"><strong>Why:</strong> Keep the existing session rail and “New session” affordance, but surface runtime readiness and the next safe action in the first viewport.</p>
+      </article>
+
+      <article class="screen" id="timeline" data-screen hidden>
+        <div class="screen-head"><div><p class="eyebrow">Screen 02</p><h2>Execution timeline &amp; activity</h2><p>Turn low-level events into a compact, trustworthy narrative.</p></div><span class="screen-index">02 / 06</span></div>
+        <div class="compare">
+          <section class="pane"><div class="pane-title"><span>Current pattern</span><span>Observed</span></div><div class="window"><div class="window-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="window-body"><div class="mini-main" style="grid-column:1/-1"><div class="line short"></div><div class="line"></div><div class="line"></div><div class="line short"></div><div class="card"><strong>Activity</strong><small>Working / Done / Error rows are visible in the conversation flow.</small></div></div></div></div></section>
+          <section class="pane proposed"><div class="pane-title"><span>Proposed direction</span><span class="chip success">Live</span></div><div class="timeline"><div class="timeline-row done"><span class="state"></span><div><strong>Plan accepted</strong><br><small>Scope frozen · 3 steps</small></div><time>09:41</time></div><div class="timeline-row done"><span class="state"></span><div><strong>Repository inspected</strong><br><small>12 files read · no writes</small></div><time>09:42</time></div><div class="timeline-row"><span class="state"></span><div><strong>Waiting for approval</strong><br><small>Review the proposed diff</small></div><time>now</time></div></div></section>
+        </div><p class="note"><strong>Why:</strong> Preserve the existing Activity summary and structured runtime events, but group them by phase so users can understand what is waiting, verified, or blocked.</p>
+      </article>
+
+      <article class="screen" id="plan" data-screen hidden>
+        <div class="screen-head"><div><p class="eyebrow">Screen 03</p><h2>Plan, approvals &amp; recovery</h2><p>Make authority boundaries visible before a mutation is accepted.</p></div><span class="screen-index">03 / 06</span></div>
+        <div class="compare">
+          <section class="pane"><div class="pane-title"><span>Current pattern</span><span>Observed</span></div><div class="window"><div class="window-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="window-body"><div class="mini-rail"><i></i><i class="active"></i><i></i><i></i></div><div class="mini-main"><div class="line short"></div><div class="card"><strong>Execution plan</strong><small>Live plan state from medusa-runtime.</small><div class="chip-row"><span class="chip success">✓ Done</span><span class="chip warn">Waiting</span></div></div></div></div></div></section>
+          <section class="pane proposed"><div class="pane-title"><span>Proposed direction</span><span class="chip warn">Approval gate</span></div><div class="approval"><strong>Apply prepared change?</strong><p>Creates <code>design-preview.html</code> only. Verification: offline HTML checks.</p><div class="chip-row"><span class="chip success">Scope: 1 file</span><span class="chip">Rollback: delete artifact</span></div><div class="chip-row"><span class="fake-button">Review diff</span><span class="chip">Ask a question</span></div></div><div class="card"><strong>Recovery checkpoint</strong><small>Resume from the last durable evidence without rewriting a failed run as success.</small></div></section>
+        </div><p class="note"><strong>Why:</strong> Pair the existing plan panel and ApprovalCard with an explicit scope, rollback, and verification summary before the primary action.</p>
+      </article>
+
+      <article class="screen" id="settings" data-screen hidden>
+        <div class="screen-head"><div><p class="eyebrow">Screen 04</p><h2>Provider, model &amp; readiness</h2><p>Keep credentials private while making route readiness actionable.</p></div><span class="screen-index">04 / 06</span></div>
+        <div class="compare">
+          <section class="pane"><div class="pane-title"><span>Current pattern</span><span>Observed</span></div><div class="window"><div class="window-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="window-body"><div class="mini-main" style="grid-column:1/-1"><div class="line short"></div><div class="card"><strong>Model settings</strong><small>Shared profile · revision 0</small><div class="chip-row"><span class="chip">Provider</span><span class="chip">Model</span><span class="chip">API key</span></div></div></div></div></div></section>
+          <section class="pane proposed"><div class="pane-title"><span>Proposed direction</span><span class="chip success">Configured</span></div><div class="settings-form"><label>Provider<select aria-label="Provider"><option>MiniMax</option></select></label><label>Model<select aria-label="Model"><option>MiniMax-M3</option></select></label><label>API key<input type="password" value="••••••••••••" readonly aria-label="Saved API key masked"></label><div class="chip-row"><span class="chip success">Credential present</span><span class="chip accent">Route verified</span></div><span class="fake-button">Apply configuration</span></div></section>
+        </div><p class="note"><strong>Why:</strong> Use the existing Provider / Model / API key controls, but separate “configured” from “ready” and keep the actual key out of the visible artifact.</p>
+      </article>
+
+      <article class="screen" id="review" data-screen hidden>
+        <div class="screen-head"><div><p class="eyebrow">Screen 05</p><h2>Attachments, review &amp; learning</h2><p>Connect context, prepared diffs, and durable lessons without hiding provenance.</p></div><span class="screen-index">05 / 06</span></div>
+        <div class="compare">
+          <section class="pane"><div class="pane-title"><span>Current pattern</span><span>Observed</span></div><div class="window"><div class="window-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="window-body"><div class="mini-main" style="grid-column:1/-1"><div class="line short"></div><div class="card"><strong>Attached context</strong><small>Files and images appear above the composer.</small><div class="chip-row"><span class="chip">src/App.tsx</span><span class="chip">screenshot.png</span></div></div></div></div></div></section>
+          <section class="pane proposed"><div class="pane-title"><span>Proposed direction</span><span class="chip accent">Traceable</span></div><div class="card"><strong>Prepared change</strong><small>design-preview.html · 1 file · generated in an isolated scope</small><div class="metric-row"><div class="metric"><b>+1</b><small>added</small></div><div class="metric"><b>0</b><small>deleted</small></div><div class="metric"><b>✓</b><small>offline</small></div></div></div><div class="card"><strong>Learning note</strong><small>“Keep activity grouped by authority phase.” · evidence attached</small></div></section>
+        </div><p class="note"><strong>Why:</strong> Treat attachment chips, review changes, and Learning as one provenance story: what was supplied, what changed, and what should be remembered.</p>
+      </article>
+
+      <article class="screen" id="voice" data-screen hidden>
+        <div class="screen-head"><div><p class="eyebrow">Screen 06</p><h2>Voice controls with honest readiness</h2><p>Expose the control surface while clearly distinguishing foundation from live acceptance.</p></div><span class="screen-index">06 / 06</span></div>
+        <div class="compare">
+          <section class="pane"><div class="pane-title"><span>Current pattern</span><span>Observed</span></div><div class="window"><div class="window-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div><div class="window-body"><div class="mini-main" style="grid-column:1/-1"><div class="line short"></div><div class="card"><strong>Voice controls</strong><small>Realtime controls sit alongside the session workflow.</small><div class="chip-row"><span class="chip">Input</span><span class="chip">Output</span><span class="chip">Barge-in</span></div></div></div></div></div></section>
+          <section class="pane proposed"><div class="pane-title"><span>Proposed direction</span><span class="chip warn">Acceptance pending</span></div><div class="card"><strong>Voice session</strong><small>Controls are available, but live hardware/account acceptance is not yet certified.</small><div class="chip-row"><span class="chip success">Input ready</span><span class="chip warn">Live route pending</span></div><div class="chip-row"><span class="fake-button">Start voice</span><span class="chip">Stop output</span></div></div><div class="card"><strong>Safe expectation</strong><small>Voice can interrupt spoken output without cancelling the coding task.</small></div></section>
+        </div><p class="note"><strong>Why:</strong> Keep the existing full-duplex controls, but label readiness explicitly so a polished preview never implies unsupported production acceptance.</p>
+      </article>
+
+      <p class="footer">Static, offline design artifact. It does not connect to Medusa, read credentials, or claim that the proposed screens are implemented.</p>
+    </main>
+  </div>
+  <script>
+    const buttons = [...document.querySelectorAll('[data-target]')];
+    const screens = [...document.querySelectorAll('[data-screen]')];
+    function show(target) {
+      screens.forEach((screen) => { screen.hidden = screen.id !== target; });
+      buttons.forEach((button) => { button.setAttribute('aria-current', button.dataset.target === target ? 'page' : 'false'); });
+      document.getElementById(target)?.scrollIntoView({ block: 'start' });
+    }
+    buttons.forEach((button) => button.addEventListener('click', () => show(button.dataset.target)));
+  </script>
+</body>
+</html>
