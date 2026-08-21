@@ -2,11 +2,14 @@
 // Frontend commands are idempotent by protocol, so a bounded retry can recover a Windows
 // read-timeout after the daemon has already accepted and durably created the session.
 
-// Keep the external test module visible to repository reachability checks. The actual test build
+// Keep the external test modules visible to repository reachability checks. The actual test build
 // includes `server_base.rs` below, where the original `mod tests;` remains authoritative.
 #[cfg(any())]
 #[path = "server/tests.rs"]
 mod architecture_tests_reference;
+#[cfg(any())]
+#[path = "tests.rs"]
+mod included_server_tests_reference;
 
 #[cfg(test)]
 include!("server_base.rs");
