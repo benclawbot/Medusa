@@ -2,11 +2,13 @@ extern crate self as hex;
 
 mod implementation;
 
+pub mod behavioral_health;
 pub mod behavioral_metrics;
 pub mod behavioral_outcome;
 pub mod correction_loop;
 #[allow(clippy::obfuscated_if_else)]
 pub mod correction_signals;
+pub mod improvement_controller;
 pub mod learning;
 pub mod learning_admission;
 #[path = "learning_monitor_v2.rs"]
