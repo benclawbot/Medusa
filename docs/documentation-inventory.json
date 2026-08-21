@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "6c2d235d58a24777254d76688a51f65911aac7731a0723f533f5eac88dc21316"
+      "sha256": "310545bb2b0a701139bc324c2fdf98c9d90c53422d28a23f23c2d17200e6c853"
     },
     {
       "path": "SECURITY.md",
@@ -86,7 +86,7 @@
     {
       "path": "docs/ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "d79862e0748ee644833f58c20c2fad7ecf02fbf9262b722684fe69c48a7e0d18"
+      "sha256": "d77b955bcd8fa0feb5540c78f5bdbb1964c10d81869ef7a915bed327584a4cb9"
     },
     {
       "path": "docs/AUTOMATIC-LESSON-EXTRACTION.md",
@@ -366,7 +366,7 @@
     {
       "path": "docs/TOOL-EXECUTION-PIPELINE.md",
       "disposition": "current",
-      "sha256": "e04928c1774c318f61c328f425b6696b9518e46447a5560d834e43ff315a9dff"
+      "sha256": "c9db0328beaf9d5e1a19f523fc2f641d4eee96d62e3c1dd31e1fd5f20acd593d"
     },
     {
       "path": "docs/TRANSACTIONAL-PATCH-RECOVERY.md",
@@ -462,6 +462,11 @@
       "path": "docs/architecture/decisions/0009-browser-preview-certification.md",
       "disposition": "current",
       "sha256": "d251aa949c7060aeb88c6724b49343f2588f8503c1bbe0ba76b7869938fc3b88"
+    },
+    {
+      "path": "docs/architecture/decisions/0010-typed-non-authority-service-providers.md",
+      "disposition": "current",
+      "sha256": "da729b18ff2b49828e619ff0dc24774aba704146801f6f2bce88974a3004f25c"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",
