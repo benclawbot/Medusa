@@ -781,13 +781,20 @@ export function App() {
       text: clean || suppliedAttachments.map((attachment) => attachment.kind === "file" ? basename(attachment.path) : attachment.name).join(", ") || "Attached context",
       status: "Sent",
     });
+    const userMessageId = nextMessageId();
+    setMessages((current) => [
+      ...current,
+      {
+        id: userMessageId,
+        role: "user",
+        text: text || "Attached context",
+        createdAt: Date.now(),
+        attachments: suppliedAttachments,
+      },
+    ]);
     try {
       if (clean.startsWith("/") && suppliedAttachments.length === 0) {
         await runRuntimeCommand(runtimeId, clean);
-        setMessages((current) => [
-          ...current,
-          { id: nextMessageId(), role: "user", text: clean, createdAt: Date.now() },
-        ]);
       } else {
         const disposition = await submitRuntime(runtimeId, {
           text,
@@ -796,15 +803,9 @@ export function App() {
         });
         setLastRequest({ text, attachments: suppliedAttachments });
         setMessages((current) => [
-          ...current,
-          {
-            id: nextMessageId(),
-            role: "user",
-            text: text || "Attached context",
-            createdAt: Date.now(),
-            attachments: suppliedAttachments,
-            queued: disposition === "queued",
-          },
+          ...current.map((message) => message.id === userMessageId
+            ? { ...message, queued: disposition === "queued" }
+            : message),
         ]);
       }
       setPrompt("");
@@ -1264,6 +1265,7 @@ export function App() {
                   )}
                 </article>
               ))}
+              <div className="timeline-anchor" aria-live="polite" />
               <ApprovalCard
                 prompts={questions}
                 plan={plan}

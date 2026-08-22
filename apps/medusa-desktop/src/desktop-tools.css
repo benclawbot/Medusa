@@ -241,7 +241,7 @@
   color: var(--medusa-muted);
   box-shadow: 0 4px 12px rgba(25, 30, 40, 0.08);
   opacity: 0;
-  pointer-events: none;
+  pointer-events: auto;
   transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
 }
 
@@ -253,13 +253,15 @@
 }
 
 .message-copy-button:hover {
+  opacity: 1;
   background: var(--medusa-surface-raised);
   color: var(--medusa-ink);
 }
 
 .message.user .message-copy-button {
   right: auto;
-  left: -36px;
+  left: 0;
+  transform: translateX(-100%);
 }
 
 .message.assistant .message-copy-button {
@@ -271,8 +273,9 @@
 }
 
 .message.user {
-  width: min(50%, 720px);
-  max-width: 50%;
+  width: fit-content;
+  max-width: min(50%, 720px);
+  min-width: 0;
   margin-left: auto;
   margin-right: 0;
   align-self: flex-end;
@@ -455,7 +458,7 @@
 
 @media (max-width: 700px) {
   .message.user {
-    width: 86%;
+    width: fit-content;
     max-width: 86%;
   }
 }

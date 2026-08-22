@@ -1234,7 +1234,8 @@ fn run_prompt(
         events.clone(),
         Arc::clone(cancel),
     ));
-    let mut engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
+    let mut engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel))
+        .with_general_chat(general_chat);
     if let Some((_, fingerprint, _)) = session_binding {
         engine = engine.with_runtime_config_fingerprint(fingerprint);
     } else if let Some((schema_version, fingerprint, snapshot)) = state.runtime_config_binding.clone() {

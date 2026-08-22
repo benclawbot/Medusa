@@ -80,6 +80,7 @@ pub struct ModelConfig {
     pub base_url: Option<String>,
     pub auth: String,
     pub tool_calling: bool,
+    #[serde(default = "default_true")]
     pub streaming: bool,
     pub max_retries: u8,
     pub retry_base_delay_ms: u64,
@@ -98,7 +99,7 @@ pub struct FallbackProviderConfig {
     pub auth: String,
     #[serde(default = "default_true")]
     pub tool_calling: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub streaming: bool,
     #[serde(default = "default_max_retries")]
     pub max_retries: u8,
@@ -516,6 +517,21 @@ mod tests {
         assert!(config.memory.enabled);
         assert_eq!(config.memory.format, "markdown");
         assert!(config.verification.required);
+    }
+
+    #[test]
+    fn omitted_streaming_settings_keep_openai_routes_streaming() {
+        let config = Config::from_toml(
+            "version = 1\n[model]\nprovider = 'minimax'\nname = 'MiniMax-M3'\nprotocol = 'openai'\nauth = 'api-key'\n",
+        )
+        .expect("partial provider configuration");
+        assert!(config.model.streaming);
+
+        let fallback = Config::from_toml(
+            "version = 1\n[model]\nfallback_providers = [{ provider = 'openai', name = 'gpt-test', protocol = 'openai', auth = 'api-key' }]\n",
+        )
+        .expect("fallback provider configuration");
+        assert!(fallback.model.fallback_providers[0].streaming);
     }
 
     #[test]

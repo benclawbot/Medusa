@@ -2,7 +2,6 @@ import {
   Activity,
   CheckCircle2,
   ChevronDown,
-  ChevronUp,
   Circle,
   OctagonX,
   Play,
@@ -43,6 +42,26 @@ function useTranscriptTarget(): HTMLElement | null {
       const transcript = document.querySelector<HTMLElement>(".transcript");
       if (transcript) {
         setTarget(transcript);
+        return;
+      }
+      frame = window.requestAnimationFrame(resolve);
+    };
+    resolve();
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  return target;
+}
+
+function useTimelineTarget(): HTMLElement | null {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    let frame = 0;
+    const resolve = () => {
+      const anchor = document.querySelector<HTMLElement>(".timeline-anchor");
+      if (anchor) {
+        setTarget(anchor);
         return;
       }
       frame = window.requestAnimationFrame(resolve);
@@ -104,13 +123,14 @@ function toStructuredEvents(plan: PlanStep[], activities: RuntimeActivity[], bus
 }
 
 export function DesktopTimelineBridge() {
-  const target = useTranscriptTarget();
+  const transcript = useTranscriptTarget();
+  const target = useTimelineTarget();
   const legacySnapshot = useSyncExternalStore(subscribeTimeline, getTimelineSnapshot, getTimelineSnapshot);
   const structured = useMemo(
     () => toStructuredEvents(legacySnapshot.plan, legacySnapshot.activities, legacySnapshot.busy),
     [legacySnapshot.plan, legacySnapshot.activities, legacySnapshot.busy],
   );
-  const { following, jumpToLatest } = useScrollGuard(target, structured.revision);
+  const { following, jumpToLatest } = useScrollGuard(transcript, structured.revision);
 
   const visibleEvents = useMemo(
     () => (structured.events ?? []).slice(-18),
@@ -157,9 +177,6 @@ export function DesktopTimelineBridge() {
         <button type="button" className="timeline-jump-latest" onClick={jumpToLatest}>
           <ChevronDown size={15} /> New activity below
         </button>
-      )}
-      {following && structured.busy && (
-        <span className="timeline-following" aria-hidden="true"><ChevronUp size={12} /> following live activity</span>
       )}
     </>,
     target,

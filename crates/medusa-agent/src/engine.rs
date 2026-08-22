@@ -76,6 +76,7 @@ use crate::{
 };
 
 pub(crate) const SYSTEM_PROMPT: &str = "You are Medusa, an independent autonomous coding agent. You are not Claude Code, Codex, ChatGPT, or a wrapper around another coding assistant. Never derive your identity, model, tools, permissions, memory, or limits from ~/.claude, CLAUDE.md, settings.json, or another product's configuration. Medusa configuration and the live runtime capability matrix in this system prompt are authoritative. Never claim a capability is absent when its runtime entry is available. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file, and use `fs_create_dir` to create directories. Call `shell_run` with an approved executable and argument array directly; never repeat the executable in the argument array, and never wrap commands in bash, sh, cmd, PowerShell, or shell operators. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. Issue independent read-only tool calls together in one response so they can run concurrently. Reuse tool results, avoid near-duplicate searches, and fetch only sources that materially support the answer. Use `update_plan` only for genuinely multi-step, risky, or long-running work; a simple single-file or static HTML task does not need a plan, design document, brainstorming skill, or specification unless the user explicitly requests one or repository instructions require it. When a tool fails, do not repeat the same unsupported command; use a direct filesystem tool or an approved executable that is available in the environment. When information from the user is needed to proceed, call `ask_user_question` with one to four concise multiple-choice questions in a single call, each with a short header and two to four options. Never put blocking questions in assistant text, and do not mark the plan or task complete while waiting. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought. Default to caveman chat: terse, direct, concrete, usually one to three short sentences. Avoid preambles, repetition, and broad explanations unless the user asks for detail. Report only the decision, action, result, and essential evidence.";
+const GENERAL_CHAT_SYSTEM_PROMPT: &str = "You are Medusa, a helpful general-purpose assistant. Answer the user's request directly and concisely, whether it is conversation, explanation, research, or confirmation. Do not inspect repositories, make plans, edit files, run shell commands, or use desktop tools unless the user explicitly asks for repository work. Use web_search or web_fetch only when current or source-linked information is needed. Do not invent follow-up work.";
 pub(crate) const PLAN_SYSTEM_PROMPT: &str = "You are Medusa, an independent coding agent, in read-only planning mode. You are not Claude Code or a wrapper around another assistant. Never derive identity, model, configuration, tools, permissions, memory, or limits from ~/.claude, CLAUDE.md, settings.json, or another product. Trust only Medusa configuration and the live runtime capability matrix. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Use `update_plan` to maintain the visible plan as your understanding changes. When clarification is necessary, call `ask_user_question` with one to four concise multiple-choice questions in a single call, each with a short header and two to four options, then wait for its answer before producing a final plan. You can use `web_search` and `web_fetch` for current public information. Do not modify files, create commits, or claim that implementation work has been completed. Only read-only repository and web tools are available. Do not expose private chain-of-thought. Use terse, direct language and an ordered plan without commentary or repetition.";
 
 /// Result of one durable model/tool step.
@@ -182,6 +183,7 @@ pub struct AgentEngine<P> {
     runtime_config_binding: Option<(u16, String, serde_json::Value)>,
     team_context: Option<TeamMemberContext>,
     analysis_host: Option<Arc<dyn AnalysisWorkspaceHost>>,
+    general_chat: bool,
 }
 
 fn refreshed_repository_revision(repo: &Path) -> Option<String> {
@@ -602,6 +604,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             runtime_config_binding: None,
             team_context: None,
             analysis_host: None,
+            general_chat: false,
         }
     }
 
@@ -622,6 +625,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             runtime_config_binding: None,
             team_context: None,
             analysis_host: None,
+            general_chat: false,
         }
     }
 
@@ -667,6 +671,13 @@ impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn with_analysis_workspace_host(mut self, host: Arc<dyn AnalysisWorkspaceHost>) -> Self {
         self.analysis_host = Some(host);
+        self
+    }
+
+    /// Uses the small, tool-limited request path for ordinary conversation.
+    #[must_use]
+    pub fn with_general_chat(mut self, enabled: bool) -> Self {
+        self.general_chat = enabled;
         self
     }
 
@@ -1478,7 +1489,9 @@ impl<P: ModelProvider> AgentEngine<P> {
         }
         validate_messages(&session.messages, &self.provider.capabilities())?;
         session.turn = session.turn.saturating_add(1);
-        if let Some(refresh) = repository_index::refresh(&session.repo)? {
+        if !self.general_chat
+            && let Some(refresh) = repository_index::refresh(&session.repo)?
+        {
             observer(&AgentUpdate::ToolOutput {
                 tool: "code_index".to_owned(),
                 output: repository_index::summary(&refresh),
@@ -1499,14 +1512,18 @@ impl<P: ModelProvider> AgentEngine<P> {
                 effective_request::fragment_fingerprint(instruction),
             );
         }
-        let mut system = coding_policy::apply(
-            system_prompt_with_context(
+        let mut system = if self.general_chat {
+            GENERAL_CHAT_SYSTEM_PROMPT.to_owned()
+        } else {
+            coding_policy::apply(
+                system_prompt_with_context(
+                    self.config.agent.mode,
+                    &session.repo,
+                    additional_system_context,
+                ),
                 self.config.agent.mode,
-                &session.repo,
-                additional_system_context,
-            ),
-            self.config.agent.mode,
-        );
+            )
+        };
         assembly_provenance.insert(
             "base_system_projection".to_owned(),
             effective_request::fragment_fingerprint(&system),
@@ -1539,6 +1556,9 @@ impl<P: ModelProvider> AgentEngine<P> {
         if self.analysis_host.is_some() {
             tools.push(crate::analysis_host::tool_definition());
         }
+        if self.general_chat {
+            tools.retain(|tool| matches!(tool.name.as_str(), "web_search" | "web_fetch"));
+        }
         tools.retain(|tool| self.execution_policy.allows(&tool.name));
         let current_tool_names = tools
             .iter()
@@ -1564,11 +1584,13 @@ impl<P: ModelProvider> AgentEngine<P> {
         let repository_capacity = budget
             .compaction_threshold_tokens
             .saturating_sub(budget.estimated_total_tokens);
-        if let Some(retrieval) = repository_index::retrieve_context(
-            &session.repo,
-            &session.objective,
-            repository_capacity,
-        )? {
+        if !self.general_chat
+            && let Some(retrieval) = repository_index::retrieve_context(
+                &session.repo,
+                &session.objective,
+                repository_capacity,
+            )?
+        {
             assembly_provenance.insert(
                 "repository_context".to_owned(),
                 effective_request::fragment_fingerprint(&retrieval.system_fragment),
