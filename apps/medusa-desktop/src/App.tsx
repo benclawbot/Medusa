@@ -4,8 +4,10 @@ import {
   Bot,
   Brain,
   CheckCircle2,
+  Check,
   ChevronRight,
   Circle,
+  Copy,
   FilePlus2,
   FolderOpen,
   Gauge,
@@ -138,6 +140,28 @@ function formatTimestamp(timestamp: number): string {
   }).format(timestamp);
 }
 
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const fallback = document.createElement("textarea");
+  fallback.value = text;
+  fallback.setAttribute("readonly", "true");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  document.body.appendChild(fallback);
+  fallback.select();
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("The clipboard is unavailable.");
+    }
+  } finally {
+    fallback.remove();
+  }
+}
+
 function readImage(file: File): Promise<DesktopAttachment> {
   return new Promise((resolve, reject) => {
     if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
@@ -237,6 +261,7 @@ export function App() {
   const [previewImage, setPreviewImage] = useState<Extract<DesktopAttachment, { kind: "image" }>>();
   const [draggingImage, setDraggingImage] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<number>();
   const [pendingSubmit, setPendingSubmit] = useState(false);
   const [turn, setTurn] = useState(0);
   const [error, setError] = useState<string>();
@@ -310,6 +335,18 @@ export function App() {
       ...current,
       { id: nextMessageId(), role: "assistant", text, createdAt: Date.now() },
     ]);
+  }, []);
+
+  const copyMessage = useCallback(async (message: ConversationMessage) => {
+    try {
+      await copyTextToClipboard(message.text);
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedMessageId((current) => current === message.id ? undefined : current);
+      }, 1600);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
@@ -1198,6 +1235,17 @@ export function App() {
               )}
               {messages.map((message) => (
                 <article className={`message ${message.role}`} key={message.id}>
+                  {!!message.text.trim() && (
+                    <button
+                      type="button"
+                      className="message-copy-button"
+                      aria-label={copiedMessageId === message.id ? "Copied message" : "Copy message"}
+                      title={copiedMessageId === message.id ? "Copied" : "Copy message"}
+                      onClick={() => void copyMessage(message)}
+                    >
+                      {copiedMessageId === message.id ? <Check size={15} /> : <Copy size={15} />}
+                    </button>
+                  )}
                   <div className="message-heading">
                     <span>{message.role === "user" ? "You" : "Medusa"}</span>
                     <time dateTime={new Date(message.createdAt).toISOString()}>{formatTimestamp(message.createdAt)}</time>

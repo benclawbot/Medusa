@@ -1,14 +1,14 @@
 .conversation-timeline {
   display: grid;
-  gap: 12px;
-  width: min(100%, 780px);
-  margin: 4px auto 14px;
-  border: 1px solid rgba(90, 56, 222, 0.16);
+  gap: 6px;
+  width: 100%;
+  margin: 4px 0 14px;
+  border: 0;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 18px 48px rgba(16, 24, 40, 0.08);
-  padding: 14px;
-  backdrop-filter: blur(18px);
+  background: transparent;
+  box-shadow: none;
+  padding: 0 8px;
+  color: #8a8a8a;
 }
 
 .timeline-header,
@@ -110,7 +110,54 @@
 
 .timeline-activity {
   display: grid;
-  gap: 7px;
+  gap: 2px;
+}
+
+.timeline-activity-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+  min-height: 24px;
+  color: #8a8a8a;
+  font-size: 0.82rem;
+}
+
+.timeline-activity-row.failed {
+  color: #a86666;
+}
+
+.timeline-activity-row.running .timeline-activity-icon {
+  color: #8a8a8a;
+}
+
+.timeline-activity-row .timeline-activity-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  color: #969696;
+  background: transparent;
+}
+
+.timeline-activity-row .timeline-activity-title {
+  flex: 0 0 auto;
+  min-width: 0;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.timeline-activity-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: #a0a0a0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.76rem;
 }
 
 .timeline-activity-card {
@@ -194,6 +241,13 @@
   height: 3px;
   border-radius: 99px;
   background: var(--purple-soft);
+}
+
+/* Tool details remain available in the Work panel; the transcript keeps the
+   Codex-style activity trail deliberately one line per call. */
+.conversation-timeline .timeline-plan,
+.conversation-timeline .timeline-progress {
+  display: none;
 }
 
 .timeline-progress span {

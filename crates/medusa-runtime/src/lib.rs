@@ -1162,6 +1162,26 @@ fn bound_model(snapshot: &serde_json::Value) -> Option<(&str, &str)> {
     ))
 }
 
+const GENERAL_CHAT_TURN_INSTRUCTION: &str = "General conversation mode: answer the user's request directly in this turn. Do not inspect the repository, create a plan, or call coding, file, shell, or desktop tools unless the user explicitly asks for repository work. Use web tools only when current or source-linked information is actually needed. A clear text answer is complete; do not invent follow-up work.";
+
+fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
+    if attachment_count != 0 {
+        return false;
+    }
+    let normalized = text.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    [
+        "implement", "fix", "modify", "refactor", "edit", "write code", "codebase",
+        "repository", "repo", "file", "src/", "test", "bug", "crash", "compile",
+        "build a website", "webpage", "component", "function", "pull request", "commit",
+        "push changes",
+    ]
+    .iter()
+    .all(|marker| !normalized.contains(marker))
+}
+
 fn run_prompt(
     state: &mut RuntimeState,
     draft: PromptDraft,
@@ -1202,6 +1222,8 @@ fn run_prompt(
     let execution_plan =
         crate::production_orchestrator::plan_for_repository(&state.repo, &draft)
             .map_err(RuntimeError::agent)?;
+    let general_chat = is_general_chat_request(&draft.text, draft.attachments.len());
+    let turn_instruction = general_chat.then_some(GENERAL_CHAT_TURN_INSTRUCTION);
     let coordinated =
         execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated;
     let analysis_host = Arc::new(crate::analysis_tool::RuntimeAnalysisHost::new(
@@ -1575,7 +1597,9 @@ fn run_prompt(
     let session_id = state.session.as_ref().map(|session| session.id.as_str());
     let learning_context =
         crate::learning_retrieval::select(&state.repo, &draft, session_id, events);
-    let trajectory_context = {
+    let trajectory_context = if general_chat {
+        String::new()
+    } else {
         let session = state.session.as_ref().ok_or_else(|| {
             RuntimeError::agent("runtime session disappeared before trajectory projection")
         })?;
@@ -1678,23 +1702,27 @@ fn run_prompt(
                     ],
                 }));
                 let provider_started_at = std::time::Instant::now();
-                let trajectory_context = crate::coding_trajectory::sync_and_render(
-                    &state.repo,
-                    &session,
-                    None,
-                )?;
-                let repository_context = crate::repository_context::assemble_and_render(
-                    &state.repo,
-                    &session,
-                    &draft.text,
-                )?;
+                let trajectory_context = if general_chat {
+                    String::new()
+                } else {
+                    crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?
+                };
+                let repository_context = if general_chat {
+                    String::new()
+                } else {
+                    crate::repository_context::assemble_and_render(
+                        &state.repo,
+                        &session,
+                        &draft.text,
+                    )?
+                };
                 let turn_context = format!(
                     "{skill_context}\n\n{trajectory_context}\n\n{repository_context}"
                 );
                 match engine.step_with_observer_and_context_and_turn_instruction_for_phase(
                     &mut session,
                     Some(turn_context.as_str()),
-                    None,
+                    turn_instruction,
                     provider_phase,
                     |update| {
                         forward_update(update, events, &mut updates);
@@ -1752,7 +1780,9 @@ fn run_prompt(
                 }
             };
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
-            let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;
+            if !general_chat {
+                let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;
+            }
 
             if matches!(outcome, StepOutcome::Continue | StepOutcome::TurnComplete)
                 && should_auto_compact(

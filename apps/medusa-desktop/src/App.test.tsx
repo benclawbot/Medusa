@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DESKTOP_TOOL_EVENT, type DesktopTool } from "./desktop-tools";
@@ -268,6 +268,30 @@ it("gives the icon-only send button an accessible name", async () => {
 
   fireEvent.change(composer, { target: { value: "Hello" } });
   expect(sendButton).toBeEnabled();
+});
+
+it("copies a conversation message from its hover control", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Hello from the user" } });
+  fireEvent.keyDown(composer, { key: "Enter", shiftKey: false });
+
+  await waitFor(() => expect(document.querySelector(".message.user")).toBeTruthy());
+  const message = document.querySelector(".message.user") as HTMLElement;
+  const copyButton = within(message).getByRole("button", { name: "Copy message" });
+  fireEvent.mouseEnter(message);
+  fireEvent.click(copyButton);
+
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("Hello from the user"));
+  expect(screen.getByRole("button", { name: "Copied message" })).toBeInTheDocument();
 });
 
 it("switches to the stop button while Enter submission is still in flight", async () => {

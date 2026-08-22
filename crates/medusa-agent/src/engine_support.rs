@@ -59,6 +59,7 @@ pub(crate) fn system_prompt_with_context(
         SYSTEM_PROMPT
     };
     let mut prompt = format!("{base}\n\nWorkspace: {}", repo.display());
+    prompt.push_str("\n\nGENERAL CONVERSATION RULE — If the user asks casual conversation, a factual explanation, a confirmation, or research rather than repository work, answer directly in one turn. Do not inspect the repository, make a plan, or call coding/file/shell tools unless the request actually requires them. Use web tools only when current or source-linked information is needed. A clear text answer is complete; do not invent follow-up work.");
     match CapabilityRegistry::discover(repo) {
         Ok(registry) => {
             prompt.push_str("\n\nRuntime capabilities (shared with every Medusa frontend):\n");

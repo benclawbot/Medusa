@@ -191,6 +191,14 @@
   box-shadow: none;
 }
 
+/* The composer card provides the stable container affordance; do not draw a
+   second focus rectangle around the editable line itself while typing. */
+.composer-line textarea:focus-visible {
+  outline: 0 !important;
+  outline-offset: 0 !important;
+  box-shadow: none !important;
+}
+
 /* Conversation content follows the same reading rhythm as Codex: user turns
    stay compact on the right while model answers can use the full transcript
    width for prose, tables, and code. */
@@ -206,10 +214,56 @@
    user turns are right-side bubbles, and model output reads as full-width
    document content on the left. */
 .transcript .message {
+  position: relative;
   max-width: none;
   border: 0;
   background: transparent;
   padding: 0;
+}
+
+/* Keep copying available without adding permanent chrome to the transcript.
+   The user bubble follows Codex's left-edge affordance; long model answers
+   keep the control in the opposite corner so it cannot cover their text. */
+.message-copy-button {
+  position: absolute;
+  top: 10px;
+  right: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--medusa-border);
+  border-radius: 8px;
+  background: var(--medusa-surface);
+  color: var(--medusa-muted);
+  box-shadow: 0 4px 12px rgba(25, 30, 40, 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.message:hover .message-copy-button,
+.message:focus-within .message-copy-button,
+.message-copy-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.message-copy-button:hover {
+  background: var(--medusa-surface-raised);
+  color: var(--medusa-ink);
+}
+
+.message.user .message-copy-button {
+  right: auto;
+  left: -36px;
+}
+
+.message.assistant .message-copy-button {
+  right: 6px;
 }
 
 .transcript .message-heading {
@@ -230,6 +284,7 @@
   background: #f1f1f1;
   padding: 15px 20px;
   color: var(--medusa-ink);
+  text-align: right;
 }
 
 .message.assistant {
@@ -242,6 +297,7 @@
 
 .message.assistant .message-body {
   padding: 0;
+  color: var(--medusa-ink);
 }
 
 .message.user .message-attachments {

@@ -184,7 +184,11 @@ impl Default for ModelConfig {
             base_url: None,
             auth: "api-key".into(),
             tool_calling: true,
-            streaming: false,
+            // OpenAI-compatible routes advertise streaming and should expose the
+            // first response tokens immediately instead of buffering the whole turn.
+            // Providers that do not support streaming still fail closed through
+            // their capability contract.
+            streaming: true,
             max_retries: default_max_retries(),
             retry_base_delay_ms: default_retry_base_delay_ms(),
             retry_max_delay_ms: default_retry_max_delay_ms(),
@@ -504,6 +508,7 @@ mod tests {
         assert_eq!(config.model.provider, "minimax");
         assert!(config.model.role_routes.is_empty());
         assert_eq!(config.model.name, "MiniMax-M3");
+        assert!(config.model.streaming);
         assert_eq!(config.model.temperature_milli, 200);
         assert_eq!(config.model.max_output_tokens, 32_768);
         assert_eq!(config.model.context_window_tokens, 1_000_000);

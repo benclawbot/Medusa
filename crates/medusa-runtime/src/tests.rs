@@ -17,6 +17,14 @@ use super::support::{
 use super::*;
 
 #[test]
+fn general_chat_requests_skip_repository_work_but_attachments_stay_explicit() {
+    assert!(is_general_chat_request("hey", 0));
+    assert!(is_general_chat_request("what can you do?", 0));
+    assert!(!is_general_chat_request("fix the login bug", 0));
+    assert!(!is_general_chat_request("hey", 1));
+}
+
+#[test]
 fn command_processing_does_not_wait_for_capability_discovery() {
     use std::{
         sync::{Arc, Mutex, mpsc},
