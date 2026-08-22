@@ -210,7 +210,7 @@ function finishActivities(
 ): RuntimeActivity[] {
   return current.map((item) => {
     if (item.kind === "done" || item.kind === "error") return item;
-    return { ...item, kind, details: [...item.details, detail] };
+    return { ...item, kind, details: [...(item.details ?? []), detail] };
   });
 }
 
@@ -363,46 +363,46 @@ export function App() {
       case "assistantText":
         appendAssistantMessage(event.text);
         break;
-      case "activity":
+      case "activity": {
+        const activity = { ...event.activity, details: event.activity.details ?? [] };
         setActivities((current) => {
-          if (!event.activity.id) return [...current, event.activity];
-          const index = current.findIndex((item) => item.id === event.activity.id);
-          if (index < 0) return [...current, event.activity];
+          if (!activity.id) return [...current, activity];
+          const index = current.findIndex((item) => item.id === activity.id);
+          if (index < 0) return [...current, activity];
           const next = [...current];
-          next[index] = event.activity;
+          next[index] = activity;
           return next;
         });
-        {
-          const timestamp = Date.now();
-          const activityId = event.activity.id;
-          const newEntryId = nextWorkEntryId();
-          const status = event.activity.kind === "done"
-            ? "Done"
-            : event.activity.kind === "error"
-              ? "Error"
-              : event.activity.kind === "tool" || event.activity.kind === "progress" || event.activity.kind === "verification"
-                ? "Working"
-                : "Recorded";
-          setWorkLog((current) => {
-            const index = activityId
-              ? current.findIndex((item) => item.kind === "activity" && item.activityId === activityId)
-              : -1;
-            const entry: WorkLogEntry = {
-              id: index >= 0 ? current[index].id : newEntryId,
-              kind: "activity",
-              activityId,
-              text: event.activity.title,
-              details: event.activity.details,
-              status,
-              timestamp,
-            };
-            if (index < 0) return [...current, entry];
-            const next = [...current];
-            next[index] = entry;
-            return next;
-          });
-        }
+        const timestamp = Date.now();
+        const activityId = activity.id;
+        const newEntryId = nextWorkEntryId();
+        const status = activity.kind === "done"
+          ? "Done"
+          : activity.kind === "error"
+            ? "Error"
+            : activity.kind === "tool" || activity.kind === "progress" || activity.kind === "verification"
+              ? "Working"
+              : "Recorded";
+        setWorkLog((current) => {
+          const index = activityId
+            ? current.findIndex((item) => item.kind === "activity" && item.activityId === activityId)
+            : -1;
+          const entry: WorkLogEntry = {
+            id: index >= 0 ? current[index].id : newEntryId,
+            kind: "activity",
+            activityId,
+            text: activity.title,
+            details: activity.details,
+            status,
+            timestamp,
+          };
+          if (index < 0) return [...current, entry];
+          const next = [...current];
+          next[index] = entry;
+          return next;
+        });
         break;
+      }
       case "plan":
         setPlan(event.steps);
         break;

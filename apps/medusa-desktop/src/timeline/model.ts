@@ -111,7 +111,7 @@ export function projectRuntimeEvent(
         status: activityStatus(event.activity),
         attention: event.activity.kind === "error" ? "required" : "none",
         title: event.activity.title,
-        details: event.activity.details,
+        details: event.activity.details ?? [],
       };
     }
     case "notice":
