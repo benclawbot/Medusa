@@ -107,9 +107,11 @@ impl RuntimeSessionAttachment {
         };
         let outcome = match store.acknowledge_cursor(request(self.continuity.revision)) {
             Ok(outcome) => outcome,
-            Err(ContinuityError::StaleRevision { expected, actual })
-                if expected.checked_add(1) == Some(actual) =>
-            {
+            Err(ContinuityError::StaleRevision { .. }) => {
+                // Cursor acknowledgements are read-progress updates. Another attached
+                // client may have advanced the continuity metadata several times before
+                // this request reaches the store, so refresh the local view and retry
+                // once against the latest authoritative revision.
                 self.refresh_continuity()?;
                 store
                     .acknowledge_cursor(request(self.continuity.revision))
@@ -506,7 +508,7 @@ mod continuity_command_tests {
     }
 
     #[test]
-    fn cursor_acknowledgement_refreshes_one_revision_frontend_race() {
+    fn cursor_acknowledgement_refreshes_multiple_revision_frontend_race() {
         let repository = tempfile::tempdir().expect("repository");
         let session = AgentEngine::new(UnusedProvider, Config::default())
             .create_session(repository.path(), "Cursor race".to_owned())
@@ -526,7 +528,7 @@ mod continuity_command_tests {
         )
         .expect("owner");
         let stale_revision = owner.continuity.revision;
-        let _observer = RuntimeSessionAttachment::attach(
+        let observer = RuntimeSessionAttachment::attach(
             repository.path().to_path_buf(),
             request(
                 &session_id,
@@ -539,14 +541,27 @@ mod continuity_command_tests {
             ),
         )
         .expect("observer");
+        let _second_observer = RuntimeSessionAttachment::attach(
+            repository.path().to_path_buf(),
+            request(
+                &session_id,
+                "telegram-observer",
+                ClientKind::Telegram,
+                AttachmentMode::ReadOnly,
+                observer.continuity.revision,
+                0,
+                "attach-telegram-observer",
+            ),
+        )
+        .expect("second observer");
         let authoritative_before_ack = continuity_store(repository.path(), &session_id)
             .load()
             .expect("continuity");
-        assert_eq!(authoritative_before_ack.revision, stale_revision + 1);
+        assert_eq!(authoritative_before_ack.revision, stale_revision + 2);
 
         owner
             .acknowledge_cursor(1, 19_000, "ack-after-observer")
-            .expect("stale cursor acknowledgement should refresh once");
+            .expect("stale cursor acknowledgement should refresh against the latest revision");
 
         assert_eq!(owner.mode(), AttachmentMode::Owner);
         assert_eq!(
@@ -559,7 +574,7 @@ mod continuity_command_tests {
                 .journal_cursor,
             1
         );
-        assert_eq!(owner.continuity.revision, stale_revision + 2);
+        assert_eq!(owner.continuity.revision, stale_revision + 3);
     }
 
     #[test]

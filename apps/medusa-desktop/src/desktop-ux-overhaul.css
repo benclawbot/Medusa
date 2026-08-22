@@ -242,14 +242,18 @@ body {
 }
 
 .composer-card:focus-within {
-  border-color: rgba(109, 74, 255, 0.48);
-  box-shadow: 0 18px 52px rgba(24, 24, 27, 0.09), 0 0 0 3px rgba(109, 74, 255, 0.08);
+  border-color: var(--medusa-border-strong);
+  box-shadow: var(--medusa-shadow);
 }
 
 .composer-card textarea {
-  min-height: 82px;
-  padding: 16px 17px 8px;
+  height: auto;
+  min-height: 38px;
+  max-height: 160px;
+  padding: 8px 17px 6px;
   font-size: 0.96rem;
+  line-height: 1.5;
+  overflow-y: hidden;
 }
 
 .composer-bottom {

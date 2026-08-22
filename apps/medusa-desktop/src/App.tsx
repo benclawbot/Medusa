@@ -31,10 +31,13 @@ import {
   X,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ApprovalCard } from "./ApprovalCard";
 import { RecoveryDock } from "./RecoveryDock";
 import { DesktopOnboarding } from "./DesktopOnboarding";
+import { requestDesktopTool, type DesktopTool } from "./desktop-tools";
+import { MarkdownMessage } from "./MarkdownMessage";
 import "./approval-card.css";
 import {
   loadProviderCatalog,
@@ -109,6 +112,7 @@ const nextMessageId = () => ++messageCounter;
 let workEntryCounter = 0;
 const nextWorkEntryId = () => `work-${++workEntryCounter}`;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_COMPOSER_HEIGHT = 160;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 function formatBytes(bytes?: number): string {
@@ -175,37 +179,6 @@ function planIcon(status: PlanStep["status"]) {
   return <Circle size={13} />;
 }
 
-function ConversationText({ text }: { text: string }) {
-  const safeText = typeof text === "string" ? text : String(text ?? "");
-  const urlPattern = /https?:\/\/[^\s]+/g;
-  const parts: React.ReactNode[] = [];
-  let cursor = 0;
-  for (const match of safeText.matchAll(urlPattern)) {
-    const start = match.index ?? 0;
-    const raw = typeof match[0] === "string" ? match[0] : "";
-    const url = raw.replace(/[.,;:!?\)\]\}]+$/, "");
-    parts.push(safeText.slice(cursor, start));
-    parts.push(
-      <a
-        key={`${start}-${url}`}
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        title="Ctrl+click to open"
-        onClick={(event) => {
-          if (!event.ctrlKey) event.preventDefault();
-        }}
-      >
-        {url}
-      </a>,
-    );
-    parts.push(raw.slice(url.length));
-    cursor = start + raw.length;
-  }
-  parts.push(safeText.slice(cursor));
-  return <>{parts}</>;
-}
-
 async function configureStartedRuntime(
   started: Awaited<ReturnType<typeof startRuntime>>,
   configuration: {
@@ -264,6 +237,7 @@ export function App() {
   const [previewImage, setPreviewImage] = useState<Extract<DesktopAttachment, { kind: "image" }>>();
   const [draggingImage, setDraggingImage] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pendingSubmit, setPendingSubmit] = useState(false);
   const [turn, setTurn] = useState(0);
   const [error, setError] = useState<string>();
   const [provider, setProvider] = useState("");
@@ -279,6 +253,7 @@ export function App() {
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [sidePanelView, setSidePanelView] = useState<SidePanelView | undefined>("work");
+  const [sidePanelHost, setSidePanelHost] = useState<HTMLDivElement | null>(null);
   const [sidePanelWidth, setSidePanelWidth] = useState(320);
   const [sidePanelResizing, setSidePanelResizing] = useState(false);
   const sidePanelResizeStart = useRef<{ x: number; width: number }>();
@@ -286,10 +261,33 @@ export function App() {
   const [partialResult, setPartialResult] = useState(false);
   const assistantResponseInTurn = useRef(false);
   const lastTransportError = useRef<string>();
+  const transportFailureCount = useRef(0);
+  const transportErrorVisible = useRef(false);
   const pollBusy = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const resizeComposer = useCallback(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+
+    composer.style.height = "auto";
+    if (composer.scrollHeight > 0) {
+      composer.style.height = `${Math.min(composer.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
+      composer.style.overflowY = composer.scrollHeight > MAX_COMPOSER_HEIGHT ? "auto" : "hidden";
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    resizeComposer();
+  }, [prompt, resizeComposer]);
+
+  useEffect(() => {
+    if (!runtimeId || activePanel !== "chat") return;
+    const frame = window.requestAnimationFrame(() => composerRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [runtimeId, activePanel]);
 
   const appendWorkLog = useCallback((entry: Omit<WorkLogEntry, "id" | "timestamp"> & { timestamp?: number }) => {
     const id = nextWorkEntryId();
@@ -508,6 +506,12 @@ export function App() {
       pollBusy.current = true;
       try {
         const events = await pollRuntime(runtimeId);
+        transportFailureCount.current = 0;
+        if (transportErrorVisible.current) {
+          transportErrorVisible.current = false;
+          lastTransportError.current = undefined;
+          setError((current) => current?.startsWith("dependency unavailable: daemon") || current?.startsWith("daemon transport error:") ? undefined : current);
+        }
         events.forEach(applyEvent);
         const terminalEvent = events.find((event) => event.type === "completed" || event.type === "turnFinished" || event.type === "failed" || event.type === "cancelled");
         if (terminalEvent) {
@@ -515,8 +519,14 @@ export function App() {
         }
       } catch (cause) {
         if (active) {
+          transportFailureCount.current += 1;
+          // A single local IPC reset is recoverable: the daemon request is retried
+          // below and the next poll normally resumes from the durable cursor. Keep
+          // transient socket noise out of the transcript unless it persists.
+          if (transportFailureCount.current < 3) return;
           const message = String(cause);
           setError(message);
+          transportErrorVisible.current = true;
           if (lastTransportError.current !== message) {
             lastTransportError.current = message;
             appendAssistantMessage(`The runtime could not finish the request because communication with Medusa failed:\n\n${message}`);
@@ -715,7 +725,10 @@ export function App() {
     // Mark the turn as active before the IPC round-trip. Creating a session can include
     // capability probes and daemon startup, so waiting for `runtime_submit` to resolve
     // left the UI looking idle precisely while the background work was already running.
-    if (submitsTurn) setBusy(true);
+    if (submitsTurn) {
+      setBusy(true);
+      setPendingSubmit(true);
+    }
     if (submitsTurn) {
       assistantResponseInTurn.current = false;
       lastTransportError.current = undefined;
@@ -756,8 +769,12 @@ export function App() {
       }
       setPrompt("");
       setAttachments([]);
+      if (submitsTurn) setPendingSubmit(false);
     } catch (cause) {
-      if (submitsTurn) setBusy(false);
+      if (submitsTurn) {
+        setBusy(false);
+        setPendingSubmit(false);
+      }
       const message = String(cause);
       setError(message);
       if (submitsTurn) {
@@ -880,6 +897,7 @@ export function App() {
     // Release the composer immediately so the user can decide what to do next;
     // the runtime cancellation remains authoritative and is still awaited below.
     setBusy(false);
+    setPendingSubmit(false);
     try {
       await cancelRuntime(runtimeId);
     } catch (cause) {
@@ -926,9 +944,7 @@ export function App() {
     && (selectedProvider?.authMethods.every((method) => method === "none") ?? false);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.input + usage.output;
-  const openDesktopTool = (selector: string) => {
-    document.querySelector<HTMLButtonElement>(selector)?.click();
-  };
+  const openDesktopTool = (tool: DesktopTool) => requestDesktopTool(tool);
   const activeWorkEntry = [...workLog].reverse().find((entry) => entry.kind === "activity" && entry.status === "Working");
   const hasPartialResult = partialResult && Boolean(webArtifact);
 
@@ -1013,11 +1029,11 @@ export function App() {
         </section>
         <section className="rail-tools">
           <p className="section-label rail-label">Tools</p>
-          <button className="nav-item" onClick={() => openDesktopTool(".session-dock-trigger")} title="Sessions"><History size={17} /><span className="rail-label">Sessions</span></button>
-          <button className="nav-item" onClick={() => openDesktopTool(".diff-dock-trigger")} title="Review changes"><GitCompareArrows size={17} /><span className="rail-label">Review changes</span></button>
-          <button className="nav-item" onClick={() => openDesktopTool(".memory-dock-trigger")} title="Memory"><Brain size={17} /><span className="rail-label">Memory</span></button>
-          <button className="nav-item" onClick={() => openDesktopTool(".learning-launcher")} title="Learning"><GraduationCap size={17} /><span className="rail-label">Learning</span></button>
-          <button className="nav-item" onClick={() => openDesktopTool(".engineering-menu-button")} title="Engineering"><BarChart3 size={17} /><span className="rail-label">Engineering</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool("sessions")} title="Sessions"><History size={17} /><span className="rail-label">Sessions</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool("review")} title="Review changes"><GitCompareArrows size={17} /><span className="rail-label">Review changes</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool("memory")} title="Memory"><Brain size={17} /><span className="rail-label">Memory</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool("learning")} title="Learning"><GraduationCap size={17} /><span className="rail-label">Learning</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool("engineering")} title="Engineering"><BarChart3 size={17} /><span className="rail-label">Engineering</span></button>
         </section>
         <div className="sidebar-spacer" />
         <div className="security-note"><ShieldCheck size={15} /><span className="rail-label">Medusa policy remains authoritative</span></div>
@@ -1058,7 +1074,7 @@ export function App() {
           </div>
         </header>
 
-        {sidePanelView && (
+        {sidePanelView && sidePanelHost && createPortal((
           <aside
             id="side-panel"
             className={`work-panel side-panel ${sidePanelResizing ? "resizing" : ""}`}
@@ -1165,7 +1181,7 @@ export function App() {
               </>
             )}
           </aside>
-        )}
+        ), sidePanelHost)}
 
         {activePanel === "chat" && (
           <>
@@ -1177,12 +1193,6 @@ export function App() {
                   <p>Preparing a general chat. You can attach a project whenever the task needs repository access.</p>
                 </div>
               )}
-              {runtimeId && messages.length === 0 && (
-                <div className="empty-state compact">
-                  <h2>{repo ? "What should Medusa build?" : "How can Medusa help?"}</h2>
-                  <p>{repo ? "Describe a coding task, paste a screenshot, attach repository files, or use a slash command." : "Ask a question, paste a screenshot, or open a project when you want Medusa to work on files."}</p>
-                </div>
-              )}
               {messages.map((message) => (
                 <article className={`message ${message.role}`} key={message.id}>
                   <div className="message-heading">
@@ -1190,7 +1200,7 @@ export function App() {
                     <time dateTime={new Date(message.createdAt).toISOString()}>{formatTimestamp(message.createdAt)}</time>
                     {message.queued && <small>queued for next turn</small>}
                   </div>
-                  <div className="message-body"><ConversationText text={message.text} /></div>
+                  <div className="message-body"><MarkdownMessage text={message.text} /></div>
                   {!!message.attachments?.length && (
                     <div className="message-attachments">
                       {message.attachments.map((attachment, index) => (
@@ -1274,29 +1284,28 @@ export function App() {
                     ))}
                   </div>
                 )}
-                <textarea
-                  ref={composerRef}
-                  value={prompt}
-                  disabled={!runtimeId}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  onPaste={onPaste}
-                  onKeyDown={(event) => {
-                    if (slashSuggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); const direction = event.key === "ArrowDown" ? 1 : -1; setSlashSelection((current) => (current + direction + slashSuggestions.length) % slashSuggestions.length); return; }
-                    if (slashSuggestions.length && event.key === "Tab" && !event.shiftKey) { event.preventDefault(); selectSlashSuggestion(slashSuggestions[slashSelection]); return; }
-                    if (slashSuggestions.length && event.key === "Enter" && !event.shiftKey) { const selected = slashSuggestions[slashSelection]; const exact = prompt.trim() === `/${selected.name}`; if (!exact || prompt.trim() === "/skills") { event.preventDefault(); selectSlashSuggestion(selected); return; } }
-                    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
-                  }}
-                  placeholder={runtimeId ? busy ? "Add guidance for the next turn…" : repo ? "Describe a coding task…" : "Ask Medusa anything…" : "Starting Medusa…"}
-                  rows={3}
-                />
-                <div className="composer-bottom">
+                <div className="composer-line">
                   <div className="composer-tools">
                     <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void addImages(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
                     <button className="composer-icon-button" onClick={() => imageInputRef.current?.click()} disabled={!runtimeId} title="Add image" aria-label="Add image"><Plus size={21} /></button>
-                    <span className="composer-hint">Shift+Enter for a new line</span>
                   </div>
+                  <textarea
+                    ref={composerRef}
+                    value={prompt}
+                    disabled={!runtimeId}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    onPaste={onPaste}
+                    onKeyDown={(event) => {
+                      if (slashSuggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); const direction = event.key === "ArrowDown" ? 1 : -1; setSlashSelection((current) => (current + direction + slashSuggestions.length) % slashSuggestions.length); return; }
+                      if (slashSuggestions.length && event.key === "Tab" && !event.shiftKey) { event.preventDefault(); selectSlashSuggestion(slashSuggestions[slashSelection]); return; }
+                      if (slashSuggestions.length && event.key === "Enter" && !event.shiftKey) { const selected = slashSuggestions[slashSelection]; const exact = prompt.trim() === `/${selected.name}`; if (!exact || prompt.trim() === "/skills") { event.preventDefault(); selectSlashSuggestion(selected); return; } }
+                      if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
+                    }}
+                    placeholder={runtimeId ? busy ? "Add guidance for the next turn…" : repo ? "Describe a coding task…" : "Ask Medusa anything…" : "Starting Medusa…"}
+                    rows={1}
+                  />
                   <div className="composer-actions">
-                    {busy && !prompt.trim() && attachments.length === 0 ? (
+                    {busy && (pendingSubmit || (!prompt.trim() && attachments.length === 0)) ? (
                       <button className="send-button stop-button" onClick={() => void cancel()} aria-label="Stop active turn" title="Stop active turn"><Square size={15} /></button>
                     ) : (
                       <button className="send-button" onClick={() => void submit()} disabled={!runtimeId || (!prompt.trim() && attachments.length === 0)} aria-label="Send" title="Send"><Send size={18} /></button>
@@ -1338,6 +1347,8 @@ export function App() {
           </div>
         )}
       </section>
+
+      <div ref={setSidePanelHost} className="side-panel-slot" aria-hidden={!sidePanelView} />
 
     </main>
       {previewImage && (

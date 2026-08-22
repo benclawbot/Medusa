@@ -9,7 +9,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listRuntimeSessions,
   readRuntimeSession,
@@ -17,6 +17,8 @@ import {
   type SessionDetail,
   type SessionSummary,
 } from "./runtime";
+import { useDesktopToolRequest } from "./desktop-tools";
+import { useDialogFocus } from "./useDialogFocus";
 import "./session-dock.css";
 
 function currentRepo(): string {
@@ -50,6 +52,11 @@ export function SessionDock() {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const dialogRef = useRef<HTMLElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const openFromRail = useCallback(() => setOpen(true), []);
+  useDesktopToolRequest("sessions", openFromRail);
+  useDialogFocus(open, dialogRef, close);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -102,23 +109,10 @@ export function SessionDock() {
     if (open) void refresh();
   }, [open, refresh]);
 
-  if (!repo) return null;
-
   return (
-    <div className={`session-dock${open ? " open" : ""}`}>
-      <button
-        className="session-dock-trigger"
-        type="button"
-        aria-label="Open recent sessions"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <History size={16} />
-        <span>Sessions</span>
-      </button>
-
-      {open && (
-        <section className="session-dock-panel" aria-label="Recent Medusa sessions">
+    open ? (
+      <div className="session-dock open">
+        <section ref={dialogRef} className="session-dock-panel" role="dialog" aria-modal="true" aria-label="Recent Medusa sessions" tabIndex={-1}>
           <header>
             <div>
               <small>{selected ? "Saved conversation" : "Current project"}</small>
@@ -203,7 +197,7 @@ export function SessionDock() {
             )}
           </footer>
         </section>
-      )}
-    </div>
+      </div>
+    ) : null
   );
 }

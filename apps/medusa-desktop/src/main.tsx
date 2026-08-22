@@ -24,6 +24,7 @@ import "./desktop-update.css";
 import "./codex-experience.css";
 import "./neutral-light.css";
 import "./mobile-navigation.css";
+import "./desktop-tools.css";
 
 const liveEvidenceEnabled =
   import.meta.env.VITE_MEDUSA_OPENAI_REALTIME_EVIDENCE === "1" ||

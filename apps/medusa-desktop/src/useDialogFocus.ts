@@ -1,4 +1,4 @@
-import { type RefObject, useEffect } from "react";
+import { type RefObject, useLayoutEffect } from "react";
 
 const focusableSelector = [
   "a[href]",
@@ -14,7 +14,7 @@ export function useDialogFocus(
   container: RefObject<HTMLElement | null>,
   close: () => void,
 ): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open || !container.current) return;
 
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
@@ -46,9 +46,15 @@ export function useDialogFocus(
       }
     };
 
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Node) || !root.contains(event.target)) close();
+    };
+
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
       previous?.focus();
     };
   }, [close, container, open]);
