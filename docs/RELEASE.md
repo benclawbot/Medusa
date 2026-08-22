@@ -4,7 +4,7 @@
 
 Normal installation uses prebuilt release artifacts; Rust and Cargo are not required to install a stable Medusa build. Update behavior has two explicit paths:
 
-- `medusa update` follows the latest `main` commit and compiles locally, so this path requires the supported Rust/Cargo toolchain;
+- `medusa update` follows the latest `main` commit through an immutable commit-scoped rolling prebuilt, so it waits for that exact platform artifact to be published;
 - `medusa update --release` installs the latest eligible verified prebuilt release and does not require Rust or Cargo.
 
 Source installation remains available for contributors:
@@ -63,7 +63,7 @@ Build and install the latest `main` content:
 medusa update
 ```
 
-This path resolves the moving `main` branch, invokes Cargo, and compiles locally. It never falls back to a release if source discovery or compilation fails.
+This path resolves the moving `main` branch and downloads only the immutable rolling release tagged for that exact commit. The rolling release is published only after all platform builds and manifest/hash validation succeed; it never falls back to a stable release if the exact rolling artifact is unavailable.
 
 For unattended managed execution, approval must be explicit:
 

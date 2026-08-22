@@ -283,7 +283,7 @@ medusa migrate
 medusa update --check
 ```
 
-`medusa update --check` is read-only. Source-installed binaries can update from a verified immutable commit on `main`; package-managed installations are not overwritten and instead report the relevant package-manager command.
+`medusa update --check` is read-only. Source-installed binaries can update from a verified immutable commit-scoped prebuilt on `main`; the updater waits for that exact artifact instead of consuming a mutable cross-platform asset. Package-managed installations are not overwritten and instead report the relevant package-manager command.
 
 ## Workspace modes
 

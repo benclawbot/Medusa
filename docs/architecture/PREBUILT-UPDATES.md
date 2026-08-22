@@ -2,7 +2,7 @@
 
 ## Authority
 
-`medusa update --release` uses the stable GitHub release channel. The default `medusa update` path follows the latest `main` commit through the source updater instead; the two paths are explicit and neither is a fallback for the other.
+`medusa update --release` uses the stable GitHub release channel. The default `medusa update` path follows the latest `main` commit through the commit-scoped rolling prebuilt channel; the two paths are explicit and neither is a fallback for the other.
 
 A release is eligible only when it contains:
 
@@ -82,7 +82,7 @@ The signed manifest contains a monotonically increasing rollout sequence and a r
 
 Key rotation uses explicitly bounded sequence windows in `release/keys/keyring.json`. A replacement key must be embedded and active before a release uses it. Revoked keys are rejected even when the signature is cryptographically valid. The policy and CI require independently referenced primary and recovery authorities with at least two overlapping release sequences before either active authority may be retired.
 
-## Main-branch source path
+## Main-branch rolling prebuilt path
 
 The default updater path is:
 
@@ -90,7 +90,7 @@ The default updater path is:
 medusa update
 ```
 
-It resolves the latest `main` commit, invokes Cargo, and compiles locally. `medusa update --check` checks that moving target without modifying the installation. This path does not inspect release manifests and is never selected as a fallback after a failed `medusa update --release`.
+It resolves the latest `main` commit and requests the immutable rolling release tagged `main-<commit-sha>`. The rolling workflow builds every supported platform, validates each archive and exact-revision manifest as one bundle, uploads them to a draft release, and publishes that release only after all uploads succeed. A current client never reads the mutable `main-latest` alias, so an older platform asset cannot be mistaken for the newly resolved commit. The workflow retains that alias only for older clients and uploads each archive before its matching manifest; those clients still reject stale revisions and verify the digest before staging. If the exact release or platform asset is still being published, the updater waits for the bounded publication window and leaves the current binary untouched on timeout. `medusa update --check` checks the moving target without modifying the installation.
 
 The stable verified prebuilt path is selected only with:
 

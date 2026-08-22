@@ -17,8 +17,7 @@ use crate::{
 const GITHUB_API: &str = "https://api.github.com";
 const REPOSITORY: &str = "benclawbot/Medusa";
 const BRANCH: &str = "main";
-const ROLLING_ASSET_BASE: &str =
-    "https://github.com/benclawbot/Medusa/releases/download/main-latest";
+const ROLLING_ASSET_BASE: &str = "https://github.com/benclawbot/Medusa/releases/download";
 const ROLLING_MANIFEST_SCHEMA: &str = "medusa-main-artifact-v1";
 const ROLLING_PUBLISH_WAIT: Duration = Duration::from_secs(180);
 const ROLLING_PUBLISH_POLL: Duration = Duration::from_secs(2);
@@ -176,7 +175,8 @@ impl MainBranchUpdater {
         revision: &str,
         deadline: Instant,
     ) -> MedusaResult<reqwest::blocking::Response> {
-        let url = format!("{}/{}", self.asset_base, asset_name);
+        let release_tag = rolling_release_tag(revision)?;
+        let url = format!("{}/{}/{}", self.asset_base, release_tag, asset_name);
         loop {
             let response = self.client.get(&url).send().map_err(asset_error)?;
             if response.status() != StatusCode::NOT_FOUND {
@@ -188,6 +188,11 @@ impl MainBranchUpdater {
             thread::sleep(ROLLING_PUBLISH_POLL);
         }
     }
+}
+
+fn rolling_release_tag(revision: &str) -> MedusaResult<String> {
+    validate_revision(revision)?;
+    Ok(format!("main-{revision}"))
 }
 
 #[derive(Deserialize)]
@@ -401,6 +406,45 @@ mod tests {
             rolling_asset_name(macos_arm, REVISION).expect("asset"),
             "medusa-main-macos-aarch64.tar.gz"
         );
+    }
+
+    #[test]
+    fn rolling_release_tag_is_revision_scoped() {
+        assert_eq!(
+            rolling_release_tag(REVISION).expect("release tag"),
+            format!("main-{REVISION}")
+        );
+    }
+
+    #[test]
+    fn rolling_asset_requests_revision_scoped_release() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0_u8; 2048];
+            let bytes = stream.read(&mut request).expect("read request");
+            let request = String::from_utf8_lossy(&request[..bytes]);
+            assert!(request.starts_with(&format!(
+                "GET /main-{REVISION}/medusa-main-windows-x86_64.zip HTTP/1.1"
+            )));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 5\r\nConnection: close\r\n\r\nasset"
+            )
+            .expect("response");
+        });
+        let updater =
+            MainBranchUpdater::with_asset_base("http://api.invalid", base).expect("client");
+        let response = updater
+            .asset_response_until(
+                "medusa-main-windows-x86_64.zip",
+                REVISION,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .expect("asset response");
+        assert_eq!(response.status(), StatusCode::OK);
+        worker.join().expect("server");
     }
 
     #[test]

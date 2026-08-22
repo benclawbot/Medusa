@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "310545bb2b0a701139bc324c2fdf98c9d90c53422d28a23f23c2d17200e6c853"
+      "sha256": "69660b8f5e2d26971396c4093b23d4595982083039aaf8a5ace262787b863efa"
     },
     {
       "path": "SECURITY.md",
@@ -276,7 +276,7 @@
     {
       "path": "docs/RELEASE.md",
       "disposition": "current",
-      "sha256": "b23eb0d1a653585a2e6915a8c0211ec35faf799f4ef787761d52b1a77b2891a4"
+      "sha256": "c2ce347884be824ac3639b7234eb9935b775871d596e955f58ed0d55786ca921"
     },
     {
       "path": "docs/SAFETY-RECOVERY-PROOF.md",
@@ -406,7 +406,7 @@
     {
       "path": "docs/architecture/PREBUILT-UPDATES.md",
       "disposition": "current",
-      "sha256": "ce9303d59f7edb845f4c588da814d700f19a4462c99d42bd7ee3297606f8df7b"
+      "sha256": "18edeccdebb74014858dc70a48783e018f0f8d4a62b1ccd23083a3b5a62230d4"
     },
     {
       "path": "docs/architecture/RELEASE-POLICY.md",
