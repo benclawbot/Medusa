@@ -1,5 +1,5 @@
 import { Check, ChevronDown, PencilLine, ShieldAlert, ShieldCheck, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { PlanStep, QuestionPrompt } from "./runtime";
 
 interface ApprovalCardProps {
@@ -31,6 +31,26 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
   const otherPrompts = useMemo(() => prompts.filter((prompt) => !isApprovalPrompt(prompt)), [prompts]);
   const completed = plan.filter((step) => step.status === "completed").length;
 
+  useEffect(() => {
+    if (!expanded || !approvalPrompts.length) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+      const prompt = approvalPrompts[0];
+      const shortcut = event.key.toLowerCase();
+      const option = shortcut === "y"
+        ? prompt.options.find((item) => optionKind(item.label) === "approve")
+        : shortcut === "n"
+          ? prompt.options.find((item) => optionKind(item.label) === "reject")
+          : undefined;
+      if (!option) return;
+      event.preventDefault();
+      onRespond(option.label);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [approvalPrompts, expanded, onRespond]);
+
   if (!prompts.length) return null;
 
   return (
@@ -49,10 +69,13 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
       {expanded && (
         <div className="approval-details">
           {!!plan.length && (
-            <div className="approval-plan">
-              <div className="approval-plan-heading"><span>Execution plan</span><small>{completed}/{plan.length} complete</small></div>
-              {plan.map((step) => <div key={step.title} className={`approval-plan-step ${step.status}`}><span>{step.title}</span><small>{step.status.replace("inProgress", "in progress")}</small></div>)}
-            </div>
+            <details className="approval-plan-details">
+              <summary>Execution plan <small>{completed}/{plan.length} complete</small></summary>
+              <div className="approval-plan">
+                <div className="approval-plan-heading"><span>Execution plan</span><small>{completed}/{plan.length} complete</small></div>
+                {plan.map((step) => <div key={step.title} className={`approval-plan-step ${step.status}`}><span>{step.title}</span><small>{step.status.replace("inProgress", "in progress")}</small></div>)}
+              </div>
+            </details>
           )}
 
           {approvalPrompts.map((prompt) => (
@@ -65,7 +88,7 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
                     return <button key={option.label} className="approval-action edit" onClick={onEditPlan}><PencilLine size={15} /><span>{option.label}</span><small>{option.description}</small></button>;
                   }
                   const Icon = kind === "reject" ? X : kind === "approveClass" ? ShieldCheck : Check;
-                  return <button key={option.label} className={`approval-action ${kind}`} onClick={() => onRespond(option.label)} autoFocus={kind === "approve"}><Icon size={15} /><span>{option.label}</span><small>{option.description}</small></button>;
+                  return <button key={option.label} className={`approval-action ${kind}`} onClick={() => onRespond(option.label)} autoFocus={kind === "approve"} aria-keyshortcuts={kind === "approve" ? "Y" : kind === "reject" ? "N" : undefined}><Icon size={15} /><span>{option.label}</span><small>{option.description}</small></button>;
                 })}
               </div>
             </div>

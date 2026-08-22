@@ -105,7 +105,7 @@ export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
 
       <div className="recovery-actions">
         <button onClick={() => run("inspect")} disabled={busy || !actionByOperation.get("inspect")?.enabled}><Search size={15} />Inspect</button>
-        <button onClick={() => run("resume")} disabled={busy || !actionByOperation.get("resume")?.enabled}>Resume</button>
+        <button className="primary" onClick={() => run("resume")} disabled={busy || !actionByOperation.get("resume")?.enabled}>Resume</button>
         <button onClick={() => run("retryVerification")} disabled={busy || !actionByOperation.get("retryVerification")?.enabled}>Retry verification</button>
         <button className="danger" onClick={() => run("restoreCheckpoint")} disabled={busy || !restore?.enabled || !checkpointId || (restoreNeedsConfirmation && !confirmed)}><RotateCcw size={15} />Restore</button>
         <button onClick={() => run("abandon")} disabled={busy || !actionByOperation.get("abandon")?.enabled}>Abandon</button>

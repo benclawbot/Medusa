@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Medusa Windows app — current vs. minimal UX</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161922;
+    --panel-2: #1c2030;
+    --line: #262b3a;
+    --ink: #e7eaf2;
+    --ink-dim: #aab1c3;
+    --muted: #7a8197;
+    --accent: #7aa2ff;
+    --warn: #f0b95a;
+    --bad:  #e87272;
+    --ok:   #6dd3a4;
+    --tool: #c39bff;
+    --radius: 10px;
+    --shadow: 0 1px 0 rgba(255,255,255,0.03), 0 8px 24px rgba(0,0,0,0.35);
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "JetBrains Mono", monospace;
+    --sans: ui-sans-serif, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --panel-2: #f1f3fa;
+      --line: #e3e6ef;
+      --ink: #161922;
+      --ink-dim: #4b5063;
+      --muted: #7a8197;
+      --accent: #2854d6;
+      --shadow: 0 1px 0 rgba(0,0,0,0.02), 0 8px 22px rgba(20,24,40,0.08);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font: 15px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 40px 28px 96px;
+  }
+
+  header.page {
+    margin-bottom: 28px;
+  }
+  header.page h1 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+  }
+  header.page p {
+    margin: 0;
+    color: var(--ink-dim);
+    max-width: 64ch;
+  }
+
+  /* Tabs */
+  nav.tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 22px 0 8px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 10px;
+  }
+  nav.tabs a {
+    color: var(--ink-dim);
+    text-decoration: none;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  nav.tabs a:focus-visible,
+  nav.tabs a:hover { color: var(--ink); background: var(--panel-2); outline: none; }
+  nav.tabs a[aria-current="true"] {
+    color: var(--ink);
+    background: var(--panel-2);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+
+  /* Section */
+  section.screen {
+    margin-top: 36px;
+    scroll-margin-top: 24px;
+  }
+  section.screen > header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+  section.screen h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.005em;
+  }
+  section.screen .badge {
+    font: 11px/1 var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 4px 8px;
+  }
+  section.screen .rationale {
+    margin: 0 0 18px;
+    color: var(--ink-dim);
+    max-width: 70ch;
+  }
+
+  /* Compare grid */
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  @media (max-width: 820px) { .compare { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .panel > header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    font-size: 12px;
+    color: var(--ink-dim);
+  }
+  .panel > header strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .panel .canvas {
+    padding: 18px;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Window chrome */
+  .win {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    overflow: hidden;
+  }
+  .win .titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    font: 12px/1 var(--mono);
+    color: var(--ink-dim);
+  }
+  .win .titlebar .dots { display: inline-flex; gap: 6px; }
+  .win .titlebar .dots i {
+    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--muted); opacity: 0.55;
+  }
+  .win .body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* Message bubbles */
+  .msg {
+    max-width: 88%;
+    padding: 8px 11px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.45;
+    border: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .msg.user { align-self: flex-end; background: var(--panel-2); }
+  .msg.assistant { align-self: flex-start; }
+  .msg small { color: var(--muted); display: block; margin-top: 4px; font: 11px/1.3 var(--mono); }
+
+  /* Pill / chip */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: 11px/1 var(--mono);
+    color: var(--ink-dim);
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    border-radius: 999px;
+    padding: 4px 8px;
+  }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  .pill.warn .dot { background: var(--warn); }
+  .pill.bad  .dot { background: var(--bad); }
+  .pill.ok   .dot { background: var(--ok); }
+  .pill.tool .dot { background: var(--tool); }
+
+  /* Composer */
+  .composer {
+    display: flex;
+    align-items: end;
+    gap: 8px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  .composer textarea {
+    flex: 1; resize: none; min-height: 28px; max-height: 120px;
+    background: transparent; color: var(--ink); border: 0; outline: none;
+    font: 13px/1.4 var(--sans);
+  }
+  .btn {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font: 12px/1 var(--sans);
+    cursor: pointer;
+  }
+  .btn:hover { background: var(--panel-2); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: #0b1020;
+    font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; }
+
+  /* Tool block */
+  .tool {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel-2);
+    padding: 8px 10px;
+    font: 12px/1.4 var(--mono);
+  }
+  .tool header {
+    display: flex; justify-content: space-between; align-items: center;
+    color: var(--ink-dim); margin-bottom: 6px;
+  }
+  .tool header strong { color: var(--ink); font-weight: 600; }
+  .tool pre {
+    margin: 0; padding: 8px;
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: 6px; color: var(--ink-dim); overflow: auto;
+    font: 11.5px/1.45 var(--mono);
+    max-height: 110px;
+  }
+  .bar {
+    height: 4px; background: var(--line); border-radius: 99px; overflow: hidden;
+  }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 62%; }
+
+  /* Approval */
+  .approve {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--warn);
+    border-radius: 8px;
+    background: var(--panel-2);
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .approve h3 { margin: 0 0 4px; font-size: 13px; }
+  .approve p { margin: 0 0 10px; color: var(--ink-dim); }
+  .approve .row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Error */
+  .error {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--bad);
+    border-radius: 8px;
+    background: var(--panel-2);
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .error h3 { margin: 0 0 4px; font-size: 13px; color: var(--bad); }
+  .error pre {
+    margin: 8px 0 0; padding: 8px;
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: 6px; color: var(--ink-dim);
+    font: 11.5px/1.4 var(--mono);
+    max-height: 90px; overflow: auto;
+  }
+
+  /* Stack of tiny rows for "cluttered" current views */
+  .clutter { display: flex; flex-direction: column; gap: 4px; }
+  .clutter .row {
+    display: flex; gap: 8px; align-items: center;
+    padding: 4px 8px; border-radius: 6px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    font: 11px/1.3 var(--mono); color: var(--ink-dim);
+  }
+  .clutter .row b { color: var(--ink); font-weight: 600; }
+
+  /* Mini visual example */
+  .example {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+    color: var(--ink-dim);
+    font-size: 13px;
+  }
+  .example b { color: var(--ink); }
+
+  /* Side rail for current chat (cluttered) */
+  .rail {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 8px;
+  }
+  .rail .side {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel-2);
+    padding: 8px;
+    font: 11px/1.35 var(--mono);
+    color: var(--ink-dim);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .rail .side b { color: var(--ink); }
+  .rail .side .crumb {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 6px; border-radius: 4px;
+  }
+  .rail .side .crumb.active { background: var(--panel); color: var(--ink); }
+  .rail .side .crumb .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .rail .side .crumb.active .dot { background: var(--accent); }
+
+  /* Footer note */
+  footer.note {
+    margin-top: 40px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* Tiny utility */
+  .sr {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+<a class="sr" href="#main">Skip to content</a>
+<div class="wrap" id="main">
+
+<header class="page">
+  <h1>Medusa Windows app — current view vs. minimal UX</h1>
+  <p>
+    Five screens, side by side. Left is a faithful sketch of the current
+    view; right is the same task with hierarchy, calm spacing, and one
+    primary action. Each section also has a short rationale and a tiny
+    visual example.
+  </p>
+</header>
+
+<nav class="tabs" aria-label="Screens">
+  <a href="#chat">Normal chat</a>
+  <a href="#tool">Active tool work</a>
+  <a href="#approval">Approval</a>
+  <a href="#error">Error</a>
+  <a href="#resume">Interrupted / resume</a>
+</nav>
+
+<!-- ============================================================ -->
+<section class="screen" id="chat" aria-labelledby="chat-h">
+  <header>
+    <h2 id="chat-h">Normal chat</h2>
+    <span class="badge">idle, no tools running</span>
+  </header>
+  <p class="rationale">
+    The current view mixes the sidebar, an active-session pill, two
+    timestamps, and a four-button toolbar in the composer. The minimal
+    view keeps one primary send button, drops the redundant timestamp
+    on the bubble, and reserves the rail for context that earns space.
+  </p>
+
+  <div class="compare">
+    <!-- CURRENT -->
+    <div class="panel" aria-label="Current chat view">
+      <header><strong>Current</strong><span>faithful sketch</span></header>
+      <div class="canvas">
+        <div class="win" role="img" aria-label="Medusa window, current chat layout">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa — repo: medusa-tui · branch worker-implement · session 8e07…3a7b
+          </div>
+          <div class="body">
+            <div class="rail">
+              <aside class="side" aria-label="Sidebar">
+                <b>Sessions</b>
+                <span class="crumb"><i class="dot"></i> implement</span>
+                <span class="crumb active"><i class="dot"></i> analyze</span>
+                <span class="crumb"><i class="dot"></i> risk-review</span>
+                <span class="crumb"><i class="dot"></i> old · 12:04</span>
+                <span class="crumb"><i class="dot"></i> old · 11:51</span>
+                <span class="crumb"><i class="dot"></i> old · yesterday</span>
+              </aside>
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <div class="pill"><i class="dot"></i> session active · 2m</div>
+                <div class="msg assistant">
+                  Working on the comparison HTML. <small>14:02:11 · model: minimax-m3</small>
+                </div>
+                <div class="msg user">Make it calm and accessible.</div>
+                <div class="msg assistant">
+                  Sure. I'll batch reads and skip the sidebar chrome. <small>14:02:47</small>
+                </div>
+                <div class="clutter" aria-label="Extra chrome">
+                  <div class="row"><b>Tip:</b> press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to send</div>
+                  <div class="row"><b>Mode:</b> balanced · tokens 1.2k · ctx 8%</div>
+                  <div class="row"><b>Attach:</b> drag files here</div>
+                </div>
+                <div class="composer" aria-label="Composer">
+                  <textarea aria-label="Message" placeholder="Message Medusa…">Make the composer calmer.</textarea>
+                  <button class="btn ghost" aria-label="Attach file">📎</button>
+                  <button class="btn ghost" aria-label="Insert command">⌘</button>
+                  <button class="btn ghost" aria-label="Voice">🎙</button>
+                  <button class="btn primary" aria-label="Send">Send</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MINIMAL -->
+    <div class="panel" aria-label="Minimal chat view">
+      <header><strong>Minimal</strong><span>simplified</span></header>
+      <div class="canvas">
+        <div class="win" role="img" aria-label="Medusa window, minimal chat layout">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa
+          </div>
+          <div class="body">
+            <div class="msg assistant">Working on the comparison HTML.</div>
+            <div class="msg user">Make it calm and accessible.</div>
+            <div class="msg assistant">Sure. I'll batch reads and skip the sidebar chrome.</div>
+            <div class="composer" aria-label="Composer">
+              <textarea aria-label="Message" placeholder="Message Medusa…">Make the composer calmer.</textarea>
+              <button class="btn primary" aria-label="Send">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="example">
+    <b>Why this works:</b> one primary action (Send), accessible label on
+    every control, no duplicate timestamps, and the sidebar only shows when
+    a user opens it. The rail above is the "what stays" baseline; below is
+    the empty-state of the minimal view.
+    <span class="pill ok" style="margin-left:8px;"><i class="dot"></i> 1 primary · 4 ghost</span>
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section class="screen" id="tool" aria-labelledby="tool-h">
+  <header>
+    <h2 id="tool-h">Active tool work</h2>
+    <span class="badge">tool running</span>
+  </header>
+  <p class="rationale">
+    Today the running tool dumps raw output above an unsorted log and a
+    spinner. The minimal view shows what the tool is, what it touched, and
+    a single progress bar — output is collapsed by default and expanded on
+    request.
+  </p>
+
+  <div class="compare">
+    <!-- CURRENT -->
+    <div class="panel" aria-label="Current tool work view">
+      <header><strong>Current</strong><span>faithful sketch</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa — tool: shell_run
+          </div>
+          <div class="body">
+            <div class="clutter" aria-label="Raw output">
+              <div class="row"><b>[14:03:01]</b> cwd: C:\…\worker-implement</div>
+              <div class="row"><b>[14:03:01]</b> argv: shell_run --p npm --args test</div>
+              <div class="row"><b>[14:03:02]</b> &gt; npm test</div>
+              <div class="row"><b>[14:03:02]</b> PASS src/foo.test.ts</div>
+              <div class="row"><b>[14:03:02]</b> PASS src/bar.test.ts</div>
+              <div class="row"><b>[14:03:03]</b> …running</div>
+              <div class="row"><b>[14:03:03]</b> …running</div>
+              <div class="row"><b>[14:03:03]</b> …running</div>
+            </div>
+            <div class="pill tool"><i class="dot"></i> shell_run · running 4s</div>
+            <div class="bar" aria-label="Progress"><i style="width:42%"></i></div>
+            <div class="clutter" aria-label="Verbose log">
+              <div class="row">detected 4 tests · 2 files</div>
+              <div class="row">cwd verified · sha ok</div>
+              <div class="row">stdout redirected to pane 3</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MINIMAL -->
+    <div class="panel" aria-label="Minimal tool work view">
+      <header><strong>Minimal</strong><span>simplified</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa
+          </div>
+          <div class="body">
+            <div class="msg assistant" aria-live="polite">
+              Running <span class="pill tool"><i class="dot"></i> shell · npm test</span>
+              on <code>src/</code>. 4s elapsed, 2/5 tests done.
+              <div class="bar" aria-label="Progress" style="margin-top:8px;"><i style="width:42%"></i></div>
+            </div>
+            <details class="tool" open>
+              <header><strong>Last lines</strong><span>2 of 14</span></header>
+              <pre>PASS src/foo.test.ts
+PASS src/bar.test.ts
+…</pre>
+            </details>
+            <div class="composer" aria-label="Composer while tool runs">
+              <textarea aria-label="Message" placeholder="Steer or interrupt…" disabled>Steer the running tool…</textarea>
+              <button class="btn primary" aria-label="Send" disabled>Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="example">
+    <b>Visual example — progress states:</b>
+    <span class="pill"><i class="dot"></i> queued</span>
+    <span class="pill warn"><i class="dot"></i> running</span>
+    <span class="pill ok"><i class="dot"></i> done</span>
+    <span class="pill bad"><i class="dot"></i> failed</span>
+    — one color per state, one bar for length, no raw timestamps on
+    every line.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section class="screen" id="approval" aria-labelledby="approval-h">
+  <header>
+    <h2 id="approval-h">Approval</h2>
+    <span class="badge">write or side-effect pending</span>
+  </header>
+  <p class="rationale">
+    Approvals today bundle a long diff and four buttons in the same
+    color, so users hesitate or guess. The minimal card names the
+    action, scopes it, and shows one primary <em>Approve</em> next to a
+    plain <em>Decline</em>. A keyboard shortcut is the same color as
+    the action.
+  </p>
+
+  <div class="compare">
+    <!-- CURRENT -->
+    <div class="panel" aria-label="Current approval view">
+      <header><strong>Current</strong><span>faithful sketch</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa — permission
+          </div>
+          <div class="body">
+            <div class="approve" style="border-left-color: var(--accent);">
+              <h3>Tool wants to write 1 file</h3>
+              <p>
+                <code>fs_write</code> on
+                <code>artifacts/minimax-minimal-ux-comparison.html</code>
+                (1 file, ~12 KB). See diff in pane.
+              </p>
+              <div class="clutter" aria-label="Diff preview">
+                <div class="row">@@ header @@ +&lt;style&gt;…</div>
+                <div class="row">+ .panel { background: … }</div>
+                <div class="row">+ &lt;section class="screen"&gt;…</div>
+                <div class="row">+ /* end */</div>
+              </div>
+              <div class="row" style="margin-top:8px;">
+                <button class="btn">Allow once</button>
+                <button class="btn">Allow for session</button>
+                <button class="btn">Always allow</button>
+                <button class="btn">Deny</button>
+                <button class="btn">View diff</button>
+              </div>
+              <small style="color:var(--muted); display:block; margin-top:6px;">
+                Shortcuts: Y / N / S / D
+              </small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MINIMAL -->
+    <div class="panel" aria-label="Minimal approval view">
+      <header><strong>Minimal</strong><span>simplified</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa
+          </div>
+          <div class="body">
+            <div class="msg assistant" style="border-left:3px solid var(--warn); padding-left:10px;">
+              I'd like to write one file. Here's what changes:
+              <span class="pill warn" style="margin-top:6px;"><i class="dot"></i> write · 1 file · 12 KB</span>
+            </div>
+            <div class="approve" role="group" aria-label="Approval">
+              <h3>Write <code>artifacts/minimax-minimal-ux-comparison.html</code>?</h3>
+              <p>One self-contained HTML. No other files change.</p>
+              <div class="row">
+                <button class="btn primary" aria-keyshortcuts="Y" aria-label="Approve (Y)">Approve</button>
+                <button class="btn" aria-keyshortcuts="N" aria-label="Decline (N)">Decline</button>
+                <button class="btn ghost" aria-label="Show diff">Show diff</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="example">
+    <b>Keyboard parity:</b> Approve = <kbd>Y</kbd>, Decline = <kbd>N</kbd>,
+    and the same letters are announced by screen readers via
+    <code>aria-keyshortcuts</code>. Diff stays one click away but is not
+    required to decide.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section class="screen" id="error" aria-labelledby="error-h">
+  <header>
+    <h2 id="error-h">Error</h2>
+    <span class="badge">tool failed</span>
+  </header>
+  <p class="rationale">
+    Today's error pane repeats the same stack three times and buries the
+    fix under logs. The minimal view keeps the message human, hides the
+    stack behind a single <em>Show details</em>, and offers one action:
+    retry.
+  </p>
+
+  <div class="compare">
+    <!-- CURRENT -->
+    <div class="panel" aria-label="Current error view">
+      <header><strong>Current</strong><span>faithful sketch</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa — failure
+          </div>
+          <div class="body">
+            <div class="error" role="alert">
+              <h3>Error 0x0042 — operation failed</h3>
+              <pre>
+Error: EACCES: permission denied, open '…/out.bin'
+    at Object.openSync (node:fs:585:3)
+    at Object.writeFileSync (node:fs:2155:6)
+    at Worker.run (…/worker.js:88:14)
+    at process.processTicksAndRejections
+code: EACCES
+errno: -13
+syscall: open
+path: …/out.bin
+stack: at Object.openSync…
+              </pre>
+              <div class="row" style="margin-top:8px;">
+                <button class="btn">Retry</button>
+                <button class="btn">Copy stack</button>
+                <button class="btn">Open logs</button>
+                <button class="btn">Report bug</button>
+                <button class="btn">Dismiss</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MINIMAL -->
+    <div class="panel" aria-label="Minimal error view">
+      <header><strong>Minimal</strong><span>simplified</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa
+          </div>
+          <div class="body">
+            <div class="msg assistant" role="alert" style="border-left:3px solid var(--bad); padding-left:10px;">
+              I couldn't write <code>out.bin</code> — the file is read-only.
+            </div>
+            <details class="tool">
+              <header><strong>Details</strong><span>1 line</span></header>
+              <pre>EACCES: permission denied · path …/out.bin</pre>
+            </details>
+            <div class="row">
+              <button class="btn primary" aria-label="Retry the failed step">Retry</button>
+              <button class="btn ghost" aria-label="Show full details">Show details</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="example">
+    <b>Rule of thumb:</b> one sentence the user can act on, one button to
+    act, details hidden until asked. The full trace is still one click
+    away for engineers.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section class="screen" id="resume" aria-labelledby="resume-h">
+  <header>
+    <h2 id="resume-h">Interrupted / resume</h2>
+    <span class="badge">session paused</span>
+  </header>
+  <p class="rationale">
+    When a session is interrupted, the current view asks two questions
+    at once and offers four choices. The minimal view states where we
+    stopped, what is queued, and offers one primary action:
+    <em>Resume</em>.
+  </p>
+
+  <div class="compare">
+    <!-- CURRENT -->
+    <div class="panel" aria-label="Current resume view">
+      <header><strong>Current</strong><span>faithful sketch</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa — session paused
+          </div>
+          <div class="body">
+            <div class="msg assistant">
+              Session was interrupted at step 3 of 5.
+              <small>14:09:22 · model: minimax-m3 · tokens 4.1k</small>
+            </div>
+            <div class="clutter" aria-label="Queued work">
+              <div class="row"><b>Queued:</b> fs_write 1 file · 12 KB</div>
+              <div class="row"><b>Then:</b> shell_run verify · 2s</div>
+              <div class="row"><b>Then:</b> git_checkpoint</div>
+            </div>
+            <div class="row" style="margin-top:4px;">
+              <button class="btn">Resume</button>
+              <button class="btn">Resume from here</button>
+              <button class="btn">Restart task</button>
+              <button class="btn">Abandon</button>
+              <button class="btn">Export log</button>
+            </div>
+            <small style="color:var(--muted);">Where do you want to continue?</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MINIMAL -->
+    <div class="panel" aria-label="Minimal resume view">
+      <header><strong>Minimal</strong><span>simplified</span></header>
+      <div class="canvas">
+        <div class="win">
+          <div class="titlebar">
+            <span class="dots"><i></i><i></i><i></i></span>
+            Medusa
+          </div>
+          <div class="body">
+            <div class="msg assistant">
+              Paused at step 3 of 5. Next: write the HTML, then verify.
+              <span class="pill warn" style="margin-top:6px;"><i class="dot"></i> 1 step queued</span>
+            </div>
+            <div class="row">
+              <button class="btn primary" aria-label="Resume">Resume</button>
+              <button class="btn ghost" aria-label="Restart from the beginning">Restart</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="example">
+    <b>Visual example — resume banner:</b>
+    <span class="pill warn"><i class="dot"></i> paused · 1 step left</span>
+    — small, top-aligned, and only on the screens where it matters. The
+    session picks up exactly where it stopped.
+  </p>
+</section>
+
+<footer class="note">
+  Comparison is illustrative; copy and code shapes follow the Medusa
+  Windows app's current behavior. All controls include accessible labels
+  and follow the calm-spacing, one-primary-action rule.
+</footer>
+
+</div>
+
+<script>
+  // Lightweight: highlight current section in the tab bar on scroll,
+  // and let arrow keys move between tabs. No external deps.
+  (function () {
+    var tabs = document.querySelectorAll('nav.tabs a');
+    var map = {};
+    tabs.forEach(function (a) {
+      var id = a.getAttribute('href').slice(1);
+      map[id] = a;
+    });
+    var sections = document.querySelectorAll('section.screen');
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          tabs.forEach(function (t) { t.removeAttribute('aria-current'); });
+          var a = map[e.target.id];
+          if (a) a.setAttribute('aria-current', 'true');
+        }
+      });
+    }, { rootMargin: '-40% 0px -55% 0px', threshold: 0 });
+    sections.forEach(function (s) { io.observe(s); });
+
+    tabs.forEach(function (a, i) {
+      a.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+        ev.preventDefault();
+        var next = ev.key === 'ArrowRight'
+          ? tabs[(i + 1) % tabs.length]
+          : tabs[(i - 1 + tabs.length) % tabs.length];
+        next.focus();
+      });
+    });
+  })();
+</script>
+</body>
+</html>

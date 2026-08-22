@@ -224,6 +224,7 @@ export function App() {
     credentialConfigured: false,
   });
   const [prompt, setPrompt] = useState("");
+  const [lastRequest, setLastRequest] = useState<{ text: string; attachments: DesktopAttachment[] }>();
   const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
   const [slashSelection, setSlashSelection] = useState(0);
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
@@ -339,6 +340,7 @@ export function App() {
         setQuestions([]);
         setUsage(emptyUsage);
         setTurn(0);
+        setLastRequest(undefined);
         setBusy(false);
         break;
       case "compacted":
@@ -488,6 +490,7 @@ export function App() {
       setActivities([]);
       setPlan([]);
       setQuestions([]);
+      setLastRequest(undefined);
       setError(undefined);
       window.localStorage.setItem("medusa.desktop.repo", started.repo);
     } catch (cause) {
@@ -511,6 +514,7 @@ export function App() {
       setActivities([]);
       setPlan([]);
       setQuestions([]);
+      setLastRequest(undefined);
       setError(undefined);
       window.localStorage.removeItem("medusa.desktop.repo");
     } catch (cause) {
@@ -585,6 +589,7 @@ export function App() {
           attachments: suppliedAttachments,
           revision: Date.now(),
         });
+        setLastRequest({ text, attachments: suppliedAttachments });
         setMessages((current) => [
           ...current,
           {
@@ -605,6 +610,15 @@ export function App() {
   };
 
   const submit = async () => sendText(prompt);
+
+  const retryLastRequest = async () => {
+    setError(undefined);
+    if (!lastRequest) {
+      composerRef.current?.focus();
+      return;
+    }
+    await sendText(lastRequest.text, lastRequest.attachments);
+  };
 
   const selectSlashSuggestion = (suggestion: CommandSuggestion) => {
     setPrompt(`/${suggestion.name} `);
@@ -750,6 +764,10 @@ export function App() {
   const credentiallessProvider = !oauthProvider
     && (selectedProvider?.authMethods.every((method) => method === "none") ?? false);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
+  const activeActivity = useMemo(
+    () => [...activities].reverse().find((item) => item.kind === "tool" || item.kind === "progress" || item.kind === "verification"),
+    [activities],
+  );
   const totalTokens = usage.input + usage.output;
   const openDesktopTool = (selector: string) => {
     document.querySelector<HTMLButtonElement>(selector)?.click();
@@ -901,7 +919,7 @@ export function App() {
               ))}
               {!!activities.length && (
                 <section className="activity-summary" aria-label="Tool activity">
-                  <div className="activity-summary-heading"><span><Activity size={15} /> Activity</span><small>{activities.length} update{activities.length === 1 ? "" : "s"}</small></div>
+                  <div className="activity-summary-heading"><span><Activity size={15} /> Work</span><small>{activities.length} update{activities.length === 1 ? "" : "s"} · details collapsed</small></div>
                   {activities.slice(-4).map((item, index) => (
                     <details className={`activity-row ${item.kind}`} key={item.id ?? `${item.title}-${index}`}>
                       <summary><span>{item.kind === "error" ? <OctagonX size={14} /> : item.kind === "done" ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span><strong>{item.title}</strong><small>{item.kind === "done" ? "Done" : item.kind === "error" ? "Error" : "Working"}</small></summary>
@@ -919,11 +937,38 @@ export function App() {
                   composerRef.current?.focus();
                 }}
               />
-              {busy && <div className="thinking-row"><Activity size={15} /> Medusa is working…</div>}
+              {busy && (
+                <div
+                  className="working-summary"
+                  role="status"
+                  aria-live="polite"
+                  aria-label={activeActivity ? `Running ${activeActivity.title}` : "Medusa is working"}
+                >
+                  <span className="working-summary-icon"><Activity size={15} /></span>
+                  <span className="working-summary-copy">
+                    <strong>{activeActivity ? `Running ${activeActivity.title}` : "Medusa is working"}</strong>
+                    <small>{activities.length ? `${activities.length} updates · output is collapsed` : `Turn ${turn} in progress`}</small>
+                  </span>
+                  <progress className="working-progress" aria-label="Tool progress" />
+                </div>
+              )}
             </div>
 
             <footer className="composer-wrap">
-              {!!error && <div className="error-banner" role="alert"><OctagonX size={15} /><span>{error}</span><button className="retry-button" onClick={() => { setError(undefined); composerRef.current?.focus(); }}>Retry</button></div>}
+              {!!error && (
+                <div className="error-banner" role="alert">
+                  <OctagonX size={15} />
+                  <div className="error-copy">
+                    <strong>Medusa couldn’t complete that request.</strong>
+                    <span>Retry the last request or inspect the technical details.</span>
+                    <details>
+                      <summary>Show details</summary>
+                      <code>{error}</code>
+                    </details>
+                  </div>
+                  <button className="retry-button" onClick={() => void retryLastRequest()}>Retry</button>
+                </div>
+              )}
               {!!attachments.length && (
                 <>
                   <div className="attachment-strip" aria-label="Attached context">

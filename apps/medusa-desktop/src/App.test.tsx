@@ -10,6 +10,7 @@ import {
   pollRuntime,
   runRuntimeCommand,
   startRuntime,
+  submitRuntime,
 } from "./runtime";
 
 const providerCatalog = [
@@ -268,6 +269,8 @@ it("focuses Approve by default and renders conversation URLs as Ctrl-click links
 
   const approve = await screen.findByRole("button", { name: /Approve/i });
   expect(approve).toHaveFocus();
+  expect(approve).toHaveAttribute("aria-keyshortcuts", "Y");
+  expect(screen.getByRole("button", { name: /Deny/i })).toHaveAttribute("aria-keyshortcuts", "N");
   const link = await screen.findByRole("link", { name: "https://example.com/docs" });
   expect(link).toHaveAttribute("title", "Ctrl+click to open");
 });
@@ -312,4 +315,42 @@ it("renders tool work as collapsed activity rows", async () => {
   const row = summary.closest("details");
   expect(row).not.toHaveAttribute("open");
   expect(row).toContainElement(screen.getByText("private command output"));
+});
+
+it("summarizes active tool work before exposing collapsed details", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([
+      { type: "started" },
+      {
+        type: "activity",
+        activity: { id: "tool-1", kind: "tool", title: "Run focused tests", details: ["PASS src/App.test.tsx"] },
+      },
+    ])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  expect(await screen.findByRole("status", { name: /running run focused tests/i })).toBeInTheDocument();
+  expect(screen.getByLabelText("Tool progress")).toBeInTheDocument();
+});
+
+it("keeps technical error details behind disclosure and retries the last request", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{ type: "failed", message: "EACCES: permission denied" }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Write the sample HTML" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(screen.getByText("EACCES: permission denied")).toBeInTheDocument();
+  expect(screen.getByText("Show details")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(submitRuntime).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("textbox")).toHaveValue("");
 });
