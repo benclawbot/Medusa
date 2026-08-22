@@ -154,7 +154,7 @@ impl AtomicInstaller {
                 fs::remove_file(&staged)?;
             }
             fs::copy(candidate, &staged)?;
-            OpenOptions::new().read(true).open(&staged)?.sync_all()?;
+            sync_staged_copy(&staged)?;
             validate_candidate(&staged)?;
             #[cfg(unix)]
             set_executable(&staged)?;
@@ -566,6 +566,14 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
     Ok(())
 }
 
+fn sync_staged_copy(path: &Path) -> MedusaResult<()> {
+    // Windows rejects FlushFileBuffers on a handle opened only for reading
+    // (ERROR_ACCESS_DENIED), even though the file itself is writable. Open
+    // the staged copy with write access before asking the OS to make it durable.
+    OpenOptions::new().write(true).open(path)?.sync_all()?;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn set_executable(path: &Path) -> MedusaResult<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -630,6 +638,15 @@ mod tests {
                 .schedule_replace(&candidate, &Restart::default(), 1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn staged_copy_can_be_flushed_before_handoff() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let staged = directory.path().join("medusa.update-new.exe");
+        fs::write(&staged, b"staged binary").expect("staged binary");
+
+        sync_staged_copy(&staged).expect("flush staged copy");
     }
 
     #[test]
