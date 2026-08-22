@@ -41,7 +41,7 @@ use crate::{
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
-const FRONTEND_REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(120);
+const FRONTEND_REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(600);
 const CONNECTION_WORKERS: usize = 8;
 const CONNECTION_QUEUE_CAPACITY: usize = 128;
 const MAX_BLOCKING_FRONTEND_CONNECTIONS: usize = CONNECTION_WORKERS / 2;
@@ -78,7 +78,7 @@ mod request_timeout_tests {
             },
         };
 
-        assert_eq!(request_io_timeout(&request), FRONTEND_REQUEST_IO_TIMEOUT);
+        assert_eq!(request_io_timeout(&request), Duration::from_secs(600));
         assert_eq!(request_io_timeout(&Request::Ping), REQUEST_IO_TIMEOUT);
     }
 }
