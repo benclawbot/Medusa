@@ -195,37 +195,57 @@
    stay compact on the right while model answers can use the full transcript
    width for prose, tables, and code. */
 .transcript {
+  display: flex;
+  flex-direction: column;
   width: 100%;
   max-width: none;
   align-items: stretch;
 }
 
+/* Match Codex's conversation rhythm: the author row is intentionally quiet,
+   user turns are right-side bubbles, and model output reads as full-width
+   document content on the left. */
+.transcript .message {
+  max-width: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.transcript .message-heading {
+  display: none;
+}
+
 .message.user {
   width: min(50%, 720px);
   max-width: 50%;
+  margin-left: auto;
+  margin-right: 0;
   align-self: flex-end;
-}
-
-.message.user .message-heading {
-  justify-content: flex-end;
-}
-
-.message.user .message-heading time {
-  margin-left: 0;
 }
 
 .message.user .message-body {
   border: 0;
   border-radius: 24px 24px 8px 24px;
-  background: #e8f1ff;
+  background: #f1f1f1;
   padding: 15px 20px;
-  color: #163b6b;
+  color: var(--medusa-ink);
 }
 
 .message.assistant {
   width: 100%;
   max-width: none;
+  margin-left: 0;
+  margin-right: 0;
   align-self: flex-start;
+}
+
+.message.assistant .message-body {
+  padding: 0;
+}
+
+.message.user .message-attachments {
+  justify-content: flex-end;
 }
 
 .markdown-message {

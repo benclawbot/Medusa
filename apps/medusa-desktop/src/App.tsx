@@ -434,9 +434,12 @@ export function App() {
         void refreshConfiguration().catch((cause) => setError(String(cause)));
         break;
       case "notice":
-        appendWorkLog({ kind: "status", text: event.title, status: "Info", details: event.details });
-        if (event.title === "Completion report" && event.details.length && !assistantResponseInTurn.current) {
-          appendAssistantMessage(event.details.join("\n\n"));
+        {
+          const details = event.details ?? [];
+          appendWorkLog({ kind: "status", text: event.title, status: "Info", details });
+          if (event.title === "Completion report" && details.length && !assistantResponseInTurn.current) {
+            appendAssistantMessage(details.join("\n\n"));
+          }
         }
         break;
       case "newSession":

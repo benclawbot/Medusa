@@ -122,7 +122,7 @@ export function projectRuntimeEvent(
         status: "succeeded",
         attention: "info",
         title: event.title,
-        details: event.details,
+        details: event.details ?? [],
       };
     case "compacted":
       return {

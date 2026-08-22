@@ -461,6 +461,17 @@ it("renders tool work as collapsed activity rows", async () => {
   expect(row).toContainElement(screen.getByText("private command output"));
 });
 
+it("keeps an incomplete notice event from crashing the renderer", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{ type: "notice", title: "Runtime ready" }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  expect(await screen.findByText("Runtime ready")).toBeInTheDocument();
+  expect(screen.getByRole("textbox")).toBeInTheDocument();
+});
+
 it("summarizes active tool work before exposing collapsed details", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   vi.mocked(pollRuntime)

@@ -237,7 +237,9 @@ export type RuntimeEvent =
       credentialConfigured: boolean;
     }
   | ({ type: "configurationChanged" } & ConfigurationChanged)
-  | { type: "notice"; title: string; details: string[] }
+  // Details are optional at the IPC boundary because older runtimes and
+  // partially recovered sessions may omit an empty details field.
+  | { type: "notice"; title: string; details?: string[] }
   | { type: "newSession" }
   | { type: "compacted"; message: string }
   | { type: "completed"; sessionId: string }
