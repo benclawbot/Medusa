@@ -16,9 +16,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use medusa_config::{Config, Mode, credential_environment};
 use medusa_daemon::{
-    DaemonClient, DaemonLaunch, DaemonLifecycleState, DaemonSupervisor, FrontendArtifactKind,
-    FrontendArtifactUpload, FrontendCommandAcknowledgement, FrontendControlResult,
-    FrontendCredentialUpdate, FrontendTransientEvent, LiveSessionAttachmentView,
+    DaemonClient, DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor,
+    FrontendArtifactKind, FrontendArtifactUpload, FrontendCommandAcknowledgement,
+    FrontendControlResult, FrontendCredentialUpdate, FrontendTransientEvent,
+    LiveSessionAttachmentView,
 };
 use medusa_protocol::frontend::{
     FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendEvent,
@@ -229,10 +230,10 @@ impl DaemonRuntimeState {
         }
     }
 
-    fn ensure_daemon(&mut self) -> Result<(), RuntimeError> {
+    fn ensure_daemon(&mut self) -> Result<DaemonLifecycle, RuntimeError> {
         let lifecycle = self.supervisor.ensure_running().map_err(runtime_error)?;
         self.last_lifecycle = Some(lifecycle.state);
-        Ok(())
+        Ok(lifecycle)
     }
 
     fn client(&self) -> DaemonClient {
@@ -757,6 +758,25 @@ impl RuntimeController {
             event_sender,
             submission_in_flight: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Starts or reconnects the daemon before the presentation-only status monitor polls it.
+    ///
+    /// The event worker also performs this work, but doing one coordinated initialization here
+    /// prevents the first UI frame from reporting a transient missing endpoint while that worker
+    /// is still starting the daemon.
+    pub(crate) fn ensure_daemon(&self) -> Result<(), RuntimeError> {
+        let lifecycle = lock_state(&self.state).ensure_daemon()?;
+        if matches!(
+            lifecycle.state,
+            DaemonLifecycleState::Started | DaemonLifecycleState::Recovered
+        ) {
+            let _ = self.event_sender.send(RuntimeEvent::Notice {
+                title: format!("Background daemon {}", lifecycle.state.as_str()),
+                details: vec![lifecycle.detail],
+            });
+        }
+        Ok(())
     }
 
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
@@ -1390,10 +1410,37 @@ fn recovery_details(view: &medusa_recovery_coordinator::RecoveryView) -> Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use medusa_daemon::{DaemonClient, DaemonPaths, Request, Response, spawn};
     use medusa_protocol::frontend::{
         FRONTEND_PROTOCOL_VERSION, FrontendEvent, FrontendEventEnvelope, PresentationLifecycle,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn ensure_daemon_reuses_existing_daemon_before_status_poll() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonPaths::for_repo(directory.path());
+        let (handle, server) = spawn(paths.clone()).expect("spawn daemon");
+        let client = DaemonClient::new(paths.socket.clone());
+        let mut ready = false;
+        for _ in 0..100 {
+            if matches!(client.request(Request::Ping), Ok(Response::Pong)) {
+                ready = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready, "daemon did not become ready");
+
+        let runtime = RuntimeController::start(directory.path().to_path_buf());
+        runtime
+            .ensure_daemon()
+            .expect("existing daemon should be reusable");
+
+        drop(runtime);
+        handle.shutdown();
+        server.join().expect("join daemon").expect("daemon result");
+    }
 
     fn envelope(event: FrontendEvent) -> FrontendEventEnvelope {
         FrontendEventEnvelope {

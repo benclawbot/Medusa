@@ -8,10 +8,20 @@ use std::{
     thread,
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_evidence::{ChangeKind, ChangedComponent, normalize_components};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
+
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    command
+}
 
 /// Durable outcome of a delegated worker.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -572,24 +582,24 @@ impl WorkerManager {
     pub fn verify_combined(&self) -> MedusaResult<String> {
         #[cfg(windows)]
         let output = if self.repo.join("verify.ps1").is_file() {
-            Command::new("powershell.exe")
+            hidden_command("powershell.exe")
                 .args(["-NoProfile", "-File", "verify.ps1"])
                 .current_dir(&self.repo)
                 .output()?
         } else {
-            Command::new("cargo")
+            hidden_command("cargo")
                 .args(["test", "--workspace", "--all-features"])
                 .current_dir(&self.repo)
                 .output()?
         };
         #[cfg(not(windows))]
         let output = if self.repo.join("verify.sh").is_file() {
-            Command::new("sh")
+            hidden_command("sh")
                 .arg("verify.sh")
                 .current_dir(&self.repo)
                 .output()?
         } else {
-            Command::new("cargo")
+            hidden_command("cargo")
                 .args(["test", "--workspace", "--all-features"])
                 .current_dir(&self.repo)
                 .output()?
@@ -645,7 +655,7 @@ impl WorkerManager {
 
 fn execute_worker(mut worker: Worker, task: DelegatedTask) -> MedusaResult<Worker> {
     worker.state = WorkerState::Running;
-    let output = Command::new(&task.program)
+    let output = hidden_command(&task.program)
         .args(&task.args)
         .current_dir(&worker.worktree)
         .output()?;
@@ -812,7 +822,7 @@ fn branch_exists(repo: &Path, branch: &str) -> MedusaResult<bool> {
 }
 
 fn git_command(repo: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = hidden_command("git");
     command
         .args(["-c", "core.longPaths=true"])
         .current_dir(repo);

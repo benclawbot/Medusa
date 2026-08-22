@@ -5,6 +5,9 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_escalation::EscalationPacket;
 
@@ -113,8 +116,12 @@ fn open_chatgpt() -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     let status = Command::new("open").arg(CHATGPT_NEW_CHAT_URL).status()?;
     #[cfg(target_os = "windows")]
-    let status = Command::new("cmd")
-        .args(["/C", "start", "", CHATGPT_NEW_CHAT_URL])
+    let status = Command::new("explorer.exe")
+        .arg(CHATGPT_NEW_CHAT_URL)
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()?;
     #[cfg(all(unix, not(target_os = "macos")))]
     let status = Command::new("xdg-open")

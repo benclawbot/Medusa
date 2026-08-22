@@ -2,10 +2,9 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_evidence::{
     ArtifactId, ArtifactMetadata, ArtifactReadReceipt, ArtifactStore, ChangeKind, ChangedComponent,
     CommandReceipt, EvidenceBundle, EvidenceKind, EvidenceRecord, EvidenceSource,
@@ -733,7 +732,7 @@ fn hash_repository_state_entry(hasher: &mut Sha256, path: &[u8], kind: &[u8], pa
 
 fn repository_state_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
     if is_revisioned_git_repository_root(repo) {
-        let output = Command::new("git")
+        let output = hidden_command("git")
             .args([
                 "ls-files",
                 "-z",
@@ -1300,7 +1299,7 @@ fn media_type_for_path(path: &Path) -> &'static str {
 
 #[cfg(test)]
 fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(args)
         .current_dir(repo)
         .output()
@@ -1591,7 +1590,7 @@ mod tests {
     fn graph_selected_checks_and_public_api_risk_are_covered_by_authoritative_plan() {
         let directory = tempfile::tempdir().expect("repository");
         let git = |args: &[&str]| {
-            let status = Command::new("git")
+            let status = hidden_command("git")
                 .args(args)
                 .current_dir(directory.path())
                 .status()

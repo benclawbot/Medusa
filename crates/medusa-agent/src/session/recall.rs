@@ -1,6 +1,6 @@
-use std::{fs, io::Write, process::Command};
+use std::{fs, io::Write};
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, hidden_command};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -123,7 +123,7 @@ fn repository_fingerprint(repo: &std::path::Path) -> String {
 }
 
 fn git_output(repo: &std::path::Path, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(arguments)
         .current_dir(repo)
         .output()

@@ -1,4 +1,4 @@
-name: Publish Rolling Main CLI
+name: Publish Rolling Main
 
 on:
   push:
@@ -10,19 +10,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: rolling-main-cli
+  group: rolling-main
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build rolling CLI (${{ matrix.os }})
+    name: Build rolling CLI and desktop (${{ matrix.os }})
     if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -34,13 +34,34 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
       - name: Build Medusa CLI
         run: cargo build --release --locked --bin medusa
+      - name: Build Medusa Desktop frontend
+        working-directory: apps/medusa-desktop
+        run: npm ci && npm run build
+      - name: Build Medusa Desktop executable
+        run: >-
+          cargo build --release --locked --manifest-path
+          apps/medusa-desktop/src-tauri/Cargo.toml --bin medusa-desktop
       - name: Package exact-revision rolling asset
         run: >-
           python scripts/package-main-update.py
           --revision ${{ github.sha }}
           --binary ${{ runner.os == 'Windows' && 'target/release/medusa.exe' || 'target/release/medusa' }}
+          --output release-assets
+      - name: Package exact-revision desktop asset
+        run: >-
+          python scripts/package-main-desktop-update.py
+          --revision ${{ github.sha }}
+          --binary ${{ runner.os == 'Windows' && 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe' || 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop' }}
           --output release-assets
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -50,7 +71,7 @@ jobs:
           retention-days: 7
 
   publish:
-    name: Publish immutable rolling CLI
+    name: Publish immutable rolling CLI and desktop
     if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
@@ -96,8 +117,8 @@ jobs:
               --target "$GITHUB_SHA" \
               --draft \
               --prerelease \
-              --title "Medusa rolling main CLI $GITHUB_SHA" \
-              --notes "Immutable prebuilt CLI transport for main commit $GITHUB_SHA. Stable releases remain separately signed."
+              --title "Medusa rolling main $GITHUB_SHA" \
+              --notes "Immutable prebuilt CLI and desktop transport for main commit $GITHUB_SHA. Stable releases remain separately signed."
           fi
 
           # Draft release assets are not downloadable by updater clients. The
@@ -117,7 +138,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --prerelease \
-              --title "Medusa rolling main CLI (legacy alias)" \
+              --title "Medusa rolling main (legacy alias)" \
               --notes "Compatibility alias for clients older than the immutable main-<sha> updater protocol."
           fi
 
@@ -128,6 +149,14 @@ jobs:
             gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY" --clobber
           done
           for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do
+            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          for artifact in release-assets/medusa-desktop-main-*; do
+            if [[ "$artifact" != *.json ]]; then
+              gh release upload main-latest "$artifact" --repo "$GITHUB_REPOSITORY" --clobber
+            fi
+          done
+          for manifest in release-assets/medusa-desktop-main-*.json; do
             gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
           done
           if [[ "$(gh release view main-latest --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then

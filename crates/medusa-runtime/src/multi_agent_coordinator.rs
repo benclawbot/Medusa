@@ -8,7 +8,6 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -24,7 +23,7 @@ use medusa_agent::{
     DelegationContractStore, WorkerExecutionController, bind_session_to_delegation,
 };
 use medusa_config::{Config, Mode};
-use medusa_core::SessionId;
+use medusa_core::{SessionId, hidden_command};
 use medusa_multi_agent_scheduler::{ExecutionLane, Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerState};
@@ -1029,7 +1028,7 @@ pub(crate) fn repository_fingerprint(repo: &Path) -> Result<String, String> {
 }
 
 fn git_repository_paths(repo: &Path) -> Result<Vec<PathBuf>, String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args([
             "ls-files",
             "-z",

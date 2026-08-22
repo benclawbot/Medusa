@@ -4,8 +4,10 @@ import { App } from "./App";
 import { loadProviderCatalog } from "./providerCatalog";
 import {
   closeRuntime,
+  cancelRuntime,
   commandSuggestions,
   configureRuntime,
+  findWebArtifact,
   loadSharedConfiguration,
   pollRuntime,
   runRuntimeCommand,
@@ -94,6 +96,8 @@ vi.mock("./runtime", async () => {
     runRuntimeCommand: vi.fn(),
     cancelRuntime: vi.fn(),
     configureRuntime: vi.fn(),
+    findWebArtifact: vi.fn(),
+    webArtifactPreviewUrl: vi.fn((path: string) => path),
   };
 });
 
@@ -114,8 +118,11 @@ beforeEach(() => {
   vi.mocked(startRuntime).mockReset();
   vi.mocked(closeRuntime).mockReset().mockResolvedValue(undefined);
   vi.mocked(configureRuntime).mockReset().mockResolvedValue(undefined);
+  vi.mocked(findWebArtifact).mockReset().mockResolvedValue(undefined);
   vi.mocked(commandSuggestions).mockReset().mockResolvedValue([]);
   vi.mocked(runRuntimeCommand).mockReset();
+  vi.mocked(submitRuntime).mockReset();
+  vi.mocked(cancelRuntime).mockReset();
   vi.mocked(pollRuntime).mockReset().mockResolvedValue([]);
 });
 afterEach(() => {
@@ -177,6 +184,28 @@ it("gives the icon-only send button an accessible name", async () => {
 
   fireEvent.change(composer, { target: { value: "Hello" } });
   expect(sendButton).toBeEnabled();
+});
+
+it("uses a stop square while working and re-enables send for steering input", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{ type: "started" }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  expect(await screen.findByRole("button", { name: "Stop active turn" })).toBeInTheDocument();
+
+  fireEvent.change(composer, { target: { value: "Steer the current turn" } });
+  expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(submitRuntime).toHaveBeenCalled());
+  expect(screen.getByRole("button", { name: "Stop active turn" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Stop active turn" }));
+  await waitFor(() => expect(cancelRuntime).toHaveBeenCalledWith("runtime-general"));
+  expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 });
 
 it.each([
@@ -353,4 +382,60 @@ it("keeps technical error details behind disclosure and retries the last request
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(submitRuntime).toHaveBeenCalledTimes(2));
   expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
+it("adds a terminal error summary to the chat transcript", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{ type: "failed", message: "provider rejected the request" }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Build the sample page" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(await screen.findByText(/The request did not complete because the runtime reported an error:/)).toBeInTheDocument();
+  expect(screen.getByText("provider rejected the request")).toBeInTheDocument();
+});
+
+it("adds a fallback summary when a turn finishes without assistant text", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{ type: "turnFinished" }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Inspect the repository" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(await screen.findByText("The turn finished successfully, but Medusa did not return a chat summary. Check Work for the execution details.")).toBeInTheDocument();
+});
+
+it("shows a rendered result in the shared side panel when a turn reports a failed step", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{ type: "failed", message: "worker step failed" }])
+    .mockResolvedValue([]);
+  vi.mocked(findWebArtifact).mockResolvedValue({ path: "C:/work/index.html", title: "Rendered result" });
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Build the page" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(await screen.findByRole("complementary", { name: "Rendered webpage" })).toBeInTheDocument();
+  expect(screen.getByText("Medusa returned a partial result.")).toBeInTheDocument();
+  expect(screen.queryByText("Medusa couldn’t complete that request.")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Resize side panel" })).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Work/ }));
+  expect(screen.getByRole("complementary", { name: "Work" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Session details" }));
+  expect(screen.getByRole("complementary", { name: "Session details" })).toBeInTheDocument();
+  expect(screen.queryByRole("complementary", { name: "Work" })).not.toBeInTheDocument();
 });

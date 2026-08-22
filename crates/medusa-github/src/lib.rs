@@ -8,11 +8,11 @@
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     thread::{self, JoinHandle},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use serde::{Deserialize, Serialize};
 
 mod repository_creation;
@@ -66,7 +66,7 @@ impl CommandExecutor for SystemExecutor {
         arguments: &[String],
         directory: Option<&Path>,
     ) -> MedusaResult<CommandOutput> {
-        let mut command = Command::new(program);
+        let mut command = hidden_command(program);
         command.args(arguments);
         if let Some(directory) = directory {
             command.current_dir(directory);
@@ -87,7 +87,7 @@ impl CommandExecutor for SystemExecutor {
         stdout_limit: usize,
         stderr_limit: usize,
     ) -> MedusaResult<CommandOutput> {
-        let mut command = Command::new(program);
+        let mut command = hidden_command(program);
         command
             .args(arguments)
             .stdout(Stdio::piped())

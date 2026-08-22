@@ -58,6 +58,37 @@
   font-size: 0.84rem;
 }
 
+.desktop-update-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.desktop-update-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.84rem;
+}
+
+.desktop-update-progress-label strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.desktop-update-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.desktop-update-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #4f8cff;
+  transition: width 180ms ease-out;
+}
+
 .desktop-update-actions {
   display: flex;
   gap: 10px;

@@ -11,6 +11,7 @@ use medusa_review_model::{
     ReviewHistoryError, ReviewHunk, ReviewProvenance, ReviewSessionHistory, ReviewSnapshot,
     ReviewState, VerificationState, record_authorized_action,
 };
+use medusa_core::hidden_command;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -310,7 +311,7 @@ pub fn filtered_paths(workspace: &ReviewWorkspace, filter: &ReviewFilter) -> Vec
 }
 
 fn revert_file(repo: &Path, path: &str) -> Result<(), ReviewWorkflowError> {
-    let tracked = Command::new("git")
+    let tracked = hidden_command("git")
         .args(["ls-files", "--error-unmatch", "--", path])
         .current_dir(repo)
         .output()
@@ -319,14 +320,14 @@ fn revert_file(repo: &Path, path: &str) -> Result<(), ReviewWorkflowError> {
         .success();
     if tracked && git_has_head(repo) {
         return git_status(
-            Command::new("git")
+            hidden_command("git")
                 .args(["checkout", "HEAD", "--", path])
                 .current_dir(repo),
         );
     }
     if tracked {
         git_status(
-            Command::new("git")
+            hidden_command("git")
                 .args(["rm", "--cached", "--force", "--ignore-unmatch", "--", path])
                 .current_dir(repo),
         )?;
@@ -345,7 +346,7 @@ fn remove_worktree_path(repo: &Path, path: &str) -> Result<(), ReviewWorkflowErr
 }
 
 fn reverse_patch(repo: &Path, patch: &str) -> Result<(), ReviewWorkflowError> {
-    let mut child = Command::new("git")
+    let mut child = hidden_command("git")
         .args([
             "apply",
             "--reverse",
@@ -424,7 +425,7 @@ fn repository_fingerprint(repo: &Path) -> Result<String, ReviewWorkflowError> {
 
 fn changed_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
     let mut paths = if git_has_head(repo) {
-        let output = Command::new("git")
+        let output = hidden_command("git")
             .args(["diff", "--name-only", "HEAD", "--"])
             .current_dir(repo)
             .output()
@@ -451,7 +452,7 @@ fn changed_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
 fn git_diff(repo: &Path) -> Result<String, ReviewWorkflowError> {
     let has_head = git_has_head(repo);
     let mut source = if has_head {
-        let output = Command::new("git")
+        let output = hidden_command("git")
             .args([
                 "diff",
                 "--no-ext-diff",
@@ -491,7 +492,7 @@ fn append_added_file_diff(
     path: &str,
     source: &mut String,
 ) -> Result<(), ReviewWorkflowError> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args([
             "diff",
             "--no-index",
@@ -519,7 +520,7 @@ fn is_git_work_tree(repo: &Path) -> bool {
     let Ok(repo) = repo.canonicalize() else {
         return false;
     };
-    let Ok(output) = Command::new("git")
+    let Ok(output) = hidden_command("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(&repo)
         .output() else {
@@ -539,7 +540,7 @@ fn is_git_work_tree(repo: &Path) -> bool {
 }
 
 fn git_has_head(repo: &Path) -> bool {
-    Command::new("git")
+    hidden_command("git")
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(repo)
         .output()
@@ -547,7 +548,7 @@ fn git_has_head(repo: &Path) -> bool {
 }
 
 fn current_worktree_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .current_dir(repo)
         .output()
@@ -568,7 +569,7 @@ fn current_worktree_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowErro
 }
 
 fn untracked_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(["ls-files", "--others", "--exclude-standard"])
         .current_dir(repo)
         .output()

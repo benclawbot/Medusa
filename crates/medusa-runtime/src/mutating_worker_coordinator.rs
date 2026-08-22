@@ -18,7 +18,7 @@ use medusa_agent::{
     prepare_components_for_verification,
 };
 use medusa_config::{Config, Mode};
-use medusa_core::SessionId;
+use medusa_core::{SessionId, hidden_command};
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_multi_agent_scheduler::speculation::{
     InvalidationReason, PromotionCheck, SpeculationAssumptions, SpeculationHistory,
@@ -62,6 +62,46 @@ fn bounded_implementer_turns(configured: u32) -> u32 {
     configured.clamp(1, IMPLEMENTER_TURN_LIMIT)
 }
 
+/// Give a retry a bounded opportunity to recover from a stalled first pass.
+///
+/// The planner's budget remains the first-attempt budget. A retry may use one
+/// additional multiple of that budget, but never exceeds the runtime safety
+/// ceiling or the user configuration. This is immediate task feedback, not
+/// persistent model training.
+fn adaptive_implementer_turns(base: u32, attempt: u32, configured: u32) -> u32 {
+    let base = bounded_implementer_turns(base);
+    let configured = bounded_implementer_turns(configured);
+    base.saturating_mul(attempt.max(1)).min(configured)
+}
+
+fn create_implementation_controller(
+    controller_path: &Path,
+    execution_id: &str,
+    task: &Task,
+    worker: &Worker,
+) -> Result<WorkerExecutionController, String> {
+    WorkerExecutionController::create(
+        controller_path,
+        execution_id,
+        vec![Task {
+            // The implementation coordinator owns this single task after the
+            // read-only preflight has completed. Its parent DAG dependencies
+            // must not remain in the child scheduler or dispatch will wait for
+            // evidence that is already supplied by `preflight`.
+            dependencies: Vec::new(),
+            ..task.clone()
+        }],
+        vec![ScheduledWorker {
+            id: IMPLEMENTER_ID.to_owned(),
+            capabilities: vec!["coding".to_owned()],
+            healthy: true,
+            capacity: 1,
+        }],
+        vec![worker.clone()],
+        MAX_ATTEMPTS,
+    )
+}
+
 fn component_paths(components: &[ChangedComponent]) -> Vec<String> {
     let mut paths = components
         .iter()
@@ -80,7 +120,7 @@ fn has_in_scope_repository_changes(
     if allowed_write_paths.is_empty() {
         return Ok(false);
     }
-    let output = std::process::Command::new("git")
+    let output = hidden_command("git")
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--"])
         .args(allowed_write_paths)
         .current_dir(&worker.worktree)
@@ -181,6 +221,7 @@ struct ImplementationRequest {
     control: TeamControlPlane,
     events: Sender<RuntimeEvent>,
     max_model_turns: u32,
+    prior_failure: Option<String>,
     delegation: DelegationContract,
     attempt: DelegationAttemptBinding,
     session_id: SessionId,
@@ -584,7 +625,7 @@ fn update_speculation_history(
 }
 
 fn current_branch(repo: &Path) -> Result<String, String> {
-    let output = std::process::Command::new("git")
+    let output = hidden_command("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(repo)
         .output()
@@ -899,6 +940,26 @@ where
                 let _ = manager.cleanup(std::slice::from_ref(&state.worker));
                 let mut controller = WorkerExecutionController::load(&controller_path)?;
                 controller.recover_interrupted()?;
+                if controller.has_terminal_failure() {
+                    // A process can be interrupted after the child scheduler
+                    // records its final failed attempt but before the durable
+                    // implementation state reaches `Failed`. Treat that
+                    // combination as a resumable recovery boundary: start a
+                    // fresh bounded child schedule and pass the old failure
+                    // back to the implementer instead of dispatching a
+                    // terminal task and reporting "zero assignments".
+                    controller = create_implementation_controller(
+                        &controller_path,
+                        format!(
+                            "{}-implementation-recovery-{}",
+                            plan.fingerprint,
+                            now_ms()?
+                        )
+                        .as_str(),
+                        &task,
+                        &state.worker,
+                    )?;
+                }
                 return execute_attempts(
                     repo,
                     config,
@@ -917,6 +978,7 @@ where
                     state.base_head,
                     speculative,
                     None,
+                    state.last_error,
                 );
             }
             ImplementationStatus::Failed => {
@@ -944,21 +1006,11 @@ where
         controller.recover_interrupted()?;
         controller
     } else {
-        WorkerExecutionController::create(
+        create_implementation_controller(
             &controller_path,
-            format!("{}-implementation", plan.fingerprint),
-            vec![Task {
-                dependencies: Vec::new(),
-                ..task
-            }],
-            vec![ScheduledWorker {
-                id: IMPLEMENTER_ID.to_owned(),
-                capabilities: vec!["coding".to_owned()],
-                healthy: true,
-                capacity: 1,
-            }],
-            vec![worker.clone()],
-            MAX_ATTEMPTS,
+            format!("{}-implementation", plan.fingerprint).as_str(),
+            &task,
+            &worker,
         )?
     };
     execute_attempts(
@@ -979,6 +1031,7 @@ where
         base_head,
         speculative,
         Some(worker),
+        None,
     )
 }
 
@@ -1001,6 +1054,7 @@ fn execute_attempts<F>(
     base_head: String,
     speculative: Option<&SpeculativeExecutionContext>,
     mut initial_worker: Option<Worker>,
+    resume_failure: Option<String>,
 ) -> Result<ImplementationEvidence, String>
 where
     F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,
@@ -1015,7 +1069,18 @@ where
         }
         return Err("primary repository HEAD changed after implementation planning".to_owned());
     }
-    let mut last_error = None;
+    let mut last_error = resume_failure;
+    let base_delegated_turns = speculative.map_or_else(
+        || u32::from(plan.planning.model_turn_budget.successful_path_total),
+        |context| context.max_model_turns,
+    );
+    // Speculative work keeps its stricter policy budget. The authoritative
+    // implementation gets one bounded escalation opportunity on retry.
+    let max_attempt_turns = if speculative.is_some() {
+        bounded_implementer_turns(base_delegated_turns)
+    } else {
+        adaptive_implementer_turns(base_delegated_turns, MAX_ATTEMPTS, config.agent.max_turns)
+    };
     for attempt in 1..=MAX_ATTEMPTS {
         if cancel.load(Ordering::SeqCst) || control.is_cancelled(IMPLEMENTER_ID) {
             if let Some(worker) = initial_worker.as_ref() {
@@ -1044,10 +1109,11 @@ where
                 .map_err(|error| error.to_string())?,
         };
         let session_id = SessionId::new();
-        let delegated_turns = speculative.map_or_else(
-            || u32::from(plan.planning.model_turn_budget.successful_path_total),
-            |context| context.max_model_turns,
-        );
+        let attempt_turns = if speculative.is_some() {
+            bounded_implementer_turns(base_delegated_turns)
+        } else {
+            adaptive_implementer_turns(base_delegated_turns, attempt, config.agent.max_turns)
+        };
         let resolved = resolve_delegation(
             &mut controller,
             DelegationRequest {
@@ -1067,8 +1133,7 @@ where
                 config,
                 role: TeamRole::Implementer,
                 mode: Mode::Yolo,
-                max_turns: bounded_implementer_turns(config.agent.max_turns)
-                    .min(delegated_turns.max(1)),
+                max_turns: max_attempt_turns.max(1),
                 max_attempts: MAX_ATTEMPTS,
                 max_delegation_depth: contract.delegation.max_depth,
                 repository_identity: &preflight.repository_fingerprint,
@@ -1143,7 +1208,8 @@ where
             team_context,
             control: control.clone(),
             events: events.clone(),
-            max_model_turns: delegated_turns,
+            max_model_turns: attempt_turns,
+            prior_failure: last_error.clone(),
             delegation: resolved.contract,
             attempt: resolved.attempt,
             session_id,
@@ -1719,6 +1785,13 @@ fn execute_production_implementer(
         request.packet.fingerprint,
         serde_json::to_string_pretty(&request.packet).map_err(|error| error.to_string())?
     );
+    let system_context = if let Some(previous) = request.prior_failure.as_deref() {
+        format!(
+            "{system_context}\n\nPrevious implementation attempt feedback: {previous}\nThis is a bounded recovery attempt. Do not repeat the stalled approach: make an in-scope edit early, then spend the remaining turns on focused verification and a concise evidence summary."
+        )
+    } else {
+        system_context
+    };
     let mut summaries = Vec::new();
     let mut completed = false;
     if let Ok(snapshot) = request.control.start(

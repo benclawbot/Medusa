@@ -15,6 +15,7 @@ use medusa_improvement::{
     refinement_authority::{SelectionContext, SelectionResult},
     scoped_memory::RepositoryIdentity,
 };
+use medusa_core::hidden_command;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -211,7 +212,7 @@ fn repository_identity(repo: &Path) -> Option<RepositoryIdentity> {
 }
 
 fn repository_root_commit(repo: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
+    let output = hidden_command("git")
         .args(["rev-list", "--max-parents=0", "HEAD"])
         .current_dir(repo)
         .output()

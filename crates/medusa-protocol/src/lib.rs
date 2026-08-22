@@ -234,11 +234,11 @@ pub enum EventPayload {
     ConversationCompacted {
         original_messages: u32,
         retained_messages: u32,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
         generation: u32,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         source_event_sequences: Vec<u64>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         preserved_sections: Vec<String>,
     },
     AssumptionRecorded {
@@ -299,7 +299,7 @@ pub enum EventPayload {
         request_fingerprint: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         manifest_ref: Option<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
         attempt_ordinal: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_request_id: Option<String>,
@@ -372,6 +372,10 @@ pub enum EventPayload {
     SessionFailed {
         error: MedusaError,
     },
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Integrity-protected event envelope.
@@ -496,6 +500,23 @@ mod tests {
             let json = serde_json::to_string(&event).expect("serialize");
             prop_assert_eq!(serde_json::from_str::<EventEnvelope>(&json).expect("deserialize"), event);
         }
+    }
+
+    #[test]
+    fn legacy_default_event_fields_remain_omitted_from_checksum_material() {
+        let request = serde_json::to_value(EventPayload::ModelRequestStarted {
+            provider: "minimax".to_owned(), model: "MiniMax-M3".to_owned(),
+            request_id: None, request_fingerprint: None, manifest_ref: None,
+            attempt_ordinal: 0, parent_request_id: None,
+        }).expect("serialize request event");
+        assert!(request["data"].get("attempt_ordinal").is_none());
+        let compacted = serde_json::to_value(EventPayload::ConversationCompacted {
+            original_messages: 4, retained_messages: 2, generation: 0,
+            source_event_sequences: Vec::new(), preserved_sections: Vec::new(),
+        }).expect("serialize compaction event");
+        assert!(compacted["data"].get("generation").is_none());
+        assert!(compacted["data"].get("source_event_sequences").is_none());
+        assert!(compacted["data"].get("preserved_sections").is_none());
     }
 
     #[test]

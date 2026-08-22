@@ -3,10 +3,9 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_protocol::{EventEnvelope, EventPayload};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -473,7 +472,7 @@ fn collect_string_values(value: &serde_json::Value, target: &mut BTreeSet<String
 
 fn repository_identity(repo: &Path) -> BranchRepositoryIdentity {
     fn git(repo: &Path, args: &[&str]) -> Option<String> {
-        let output = Command::new("git")
+        let output = hidden_command("git")
             .args(["-C"])
             .arg(repo)
             .args(args)

@@ -195,7 +195,7 @@
     {
       "id": "release-artifacts",
       "description": "Release/updater changes require synchronized checkout versions, build evidence, and verified prebuilt evidence.",
-      "include": ["Cargo.lock", "crates/medusa-update/**", "crates/medusa-cli/**update**", "scripts/package-main-update.py", "scripts/verify-main-update-bundle.py", "scripts/test-main-update-bundle.py", "scripts/release-evidence.py", "scripts/check-desktop-version-sync.py", ".github/workflows/rolling-main-cli.yml", ".github/workflows/verified-prebuilt-update.yml", "apps/medusa-desktop/src-tauri/Cargo.toml", "apps/medusa-desktop/package.json", "apps/medusa-desktop/src-tauri/tauri.conf.json"],
+      "include": ["Cargo.lock", "crates/medusa-update/**", "crates/medusa-cli/**update**", "scripts/package-main-update.py", "scripts/package-main-desktop-update.py", "scripts/verify-main-update-bundle.py", "scripts/test-main-update-bundle.py", "scripts/release-evidence.py", "scripts/check-desktop-version-sync.py", ".github/workflows/rolling-main-cli.yml", ".github/workflows/verified-prebuilt-update.yml", "apps/medusa-desktop/src-tauri/Cargo.toml", "apps/medusa-desktop/src-tauri/src/desktop_update.rs", "apps/medusa-desktop/package.json", "apps/medusa-desktop/src/DesktopUpdateControl.tsx", "apps/medusa-desktop/src/desktop-update.css", "apps/medusa-desktop/src-tauri/tauri.conf.json"],
       "required_checks": ["release-evidence", "release-build-evidence", "verified-prebuilt-update"],
       "source_of_truth": ["release-version-authority"],
       "platforms": ["linux", "macos", "windows"],

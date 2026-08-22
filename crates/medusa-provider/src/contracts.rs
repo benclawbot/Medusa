@@ -9,6 +9,42 @@ use crate::{
     cancelled_provider_error,
 };
 
+/// Removes provider-emitted private reasoning wrappers from visible text.
+pub(crate) fn strip_hidden_reasoning(text: &str) -> String {
+    const OPEN_TAGS: [&str; 2] = ["<think", "<analysis"];
+    const CLOSE_TAGS: [&str; 2] = ["</think", "</analysis"];
+
+    let lower = text.to_ascii_lowercase();
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    loop {
+        let next_open = OPEN_TAGS
+            .iter()
+            .filter_map(|tag| lower[cursor..].find(tag).map(|offset| cursor + offset))
+            .min();
+        let Some(open_start) = next_open else {
+            output.push_str(&text[cursor..]);
+            break;
+        };
+        output.push_str(&text[cursor..open_start]);
+        let Some(open_end) = lower[open_start..].find('>').map(|offset| open_start + offset + 1) else {
+            break;
+        };
+        let next_close = CLOSE_TAGS
+            .iter()
+            .filter_map(|tag| lower[open_end..].find(tag).map(|offset| open_end + offset))
+            .min();
+        let Some(close_start) = next_close else {
+            break;
+        };
+        let Some(close_end) = lower[close_start..].find('>').map(|offset| close_start + offset + 1) else {
+            break;
+        };
+        cursor = close_end;
+    }
+    output.trim().to_owned()
+}
+
 /// Strict tool definition sent to the model.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ToolDefinition {
@@ -329,6 +365,13 @@ pub trait ModelProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_reasoning_tags_are_removed_without_losing_visible_text() {
+        assert_eq!(strip_hidden_reasoning("before <think>private</think> after"), "before  after");
+        assert_eq!(strip_hidden_reasoning("<analysis>private"), "");
+        assert_eq!(strip_hidden_reasoning("<THINK>private</THINK>answer"), "answer");
+    }
 
     #[test]
     fn image_block_serializes_as_structured_content() {

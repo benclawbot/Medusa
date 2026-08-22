@@ -6,6 +6,9 @@ use std::{
     process::Command,
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use flate2::read::GzDecoder;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
@@ -210,6 +213,8 @@ impl AtomicInstaller {
 
 fn helper_command(script: &Path) -> Command {
     if cfg!(windows) {
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let mut command = Command::new("powershell");
         command
             .args([
@@ -221,6 +226,8 @@ fn helper_command(script: &Path) -> Command {
                 "-File",
             ])
             .arg(script);
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW);
         command
     } else {
         let mut command = Command::new("sh");

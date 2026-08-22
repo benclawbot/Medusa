@@ -1,4 +1,6 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
+
+use medusa_core::hidden_command;
 
 /// Returns whether `repo` is the root of a Git worktree with a resolvable revision.
 ///
@@ -9,7 +11,7 @@ pub(crate) fn is_revisioned_git_repository_root(repo: &Path) -> bool {
     let Ok(expected) = repo.canonicalize() else {
         return false;
     };
-    let Ok(output) = Command::new("git")
+    let Ok(output) = hidden_command("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(repo)
         .output()
@@ -27,7 +29,7 @@ pub(crate) fn is_revisioned_git_repository_root(repo: &Path) -> bool {
         return false;
     }
 
-    Command::new("git")
+    hidden_command("git")
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(repo)
         .output()

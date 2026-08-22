@@ -18,6 +18,14 @@ EXPECTED_ARCHIVES = {
     "macos-aarch64": "medusa-main-macos-aarch64.tar.gz",
     "windows-x86_64": "medusa-main-windows-x86_64.zip",
 }
+EXPECTED_DESKTOP = {
+    "linux-x86_64": "medusa-desktop-main-linux-x86_64",
+    "macos-aarch64": "medusa-desktop-main-macos-aarch64",
+    "windows-x86_64": "medusa-desktop-main-windows-x86_64.exe",
+}
+EXPECTED_ARTIFACTS = {**EXPECTED_ARCHIVES, **{
+    f"desktop-{platform}": name for platform, name in EXPECTED_DESKTOP.items()
+}}
 MANIFEST_KEYS = {"bytes", "name", "revision", "schema", "sha256"}
 
 
@@ -36,8 +44,8 @@ def verify_bundle(bundle: Path, revision: str) -> tuple[str, ...]:
     if not root.is_dir():
         raise ValueError(f"bundle path is not a directory: {bundle}")
 
-    expected_archives = set(EXPECTED_ARCHIVES.values())
-    expected_files = expected_archives | {f"{name}.json" for name in expected_archives}
+    expected_artifacts = set(EXPECTED_ARTIFACTS.values())
+    expected_files = expected_artifacts | {f"{name}.json" for name in expected_artifacts}
     entries = {entry.name: entry for entry in root.iterdir()}
     if set(entries) != expected_files:
         missing = sorted(expected_files - set(entries))
@@ -49,7 +57,7 @@ def verify_bundle(bundle: Path, revision: str) -> tuple[str, ...]:
             details.append(f"unexpected {', '.join(extra)}")
         raise ValueError("bundle does not contain exactly the expected files: " + "; ".join(details))
 
-    for name in sorted(expected_archives):
+    for name in sorted(expected_artifacts):
         archive = entries[name]
         manifest_path = entries[f"{name}.json"]
         if archive.is_symlink() or not archive.is_file() or archive.stat().st_size == 0:
@@ -86,7 +94,7 @@ def verify_bundle(bundle: Path, revision: str) -> tuple[str, ...]:
             raise ValueError(
                 f"manifest digest mismatch for {name}: {digest} != {actual_digest}"
             )
-    return tuple(sorted(expected_archives))
+    return tuple(sorted(expected_artifacts))
 
 
 def main() -> int:

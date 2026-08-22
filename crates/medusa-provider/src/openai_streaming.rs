@@ -103,9 +103,10 @@ impl OpenAiStreamAccumulator {
             ));
         }
         let mut blocks = Vec::new();
-        if !self.text.is_empty() {
+        let visible_text = crate::strip_hidden_reasoning(&self.text);
+        if !visible_text.is_empty() {
             blocks.push(ResponseBlock::Text {
-                text: self.text.clone(),
+                text: visible_text,
             });
         }
         blocks.extend(self.tool_blocks.clone());

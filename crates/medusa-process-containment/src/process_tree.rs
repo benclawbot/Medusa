@@ -17,6 +17,8 @@ use crate::WindowsJob;
 
 #[cfg(windows)]
 const CREATE_SUSPENDED: u32 = 0x0000_0004;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Owns a spawned process and every descendant that remains in its platform containment group.
 ///
@@ -71,7 +73,10 @@ impl OwnedProcessTree {
         }
         #[cfg(windows)]
         {
-            command.creation_flags(CREATE_SUSPENDED);
+            // Process-tree ownership must also be non-interactive on Windows. Without
+            // CREATE_NO_WINDOW every verification/shell child can create a visible console, and
+            // repeated model turns leave a pile of windows behind while the job is still running.
+            command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
             let mut child = command.spawn()?;
             let ownership = match ProcessOwnershipReceipt::capture(child.id()) {
                 Ok(ownership) => ownership,

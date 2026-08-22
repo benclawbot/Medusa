@@ -2,12 +2,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use medusa_browser_client::verification_route::VerificationRoute;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_extensions::DesktopCommanderSettings;
 use medusa_provider::ToolDefinition;
 use serde::{Deserialize, Serialize};
@@ -248,7 +247,17 @@ pub struct SystemProbe;
 
 impl CommandProbe for SystemProbe {
     fn available(&self, program: &str, arguments: &[&str]) -> bool {
-        Command::new(program)
+        // A broken optional `gh.exe` can trigger a Windows loader dialog before the
+        // child has a chance to return an error. Do not probe it in the background
+        // unless the user explicitly opts in; GitHub actions still report as
+        // unavailable instead of interrupting the desktop with a modal window.
+        #[cfg(windows)]
+        if program.eq_ignore_ascii_case("gh")
+            && std::env::var_os("MEDUSA_ENABLE_GITHUB_PROBE").is_none()
+        {
+            return false;
+        }
+        hidden_command(program)
             .args(arguments)
             .output()
             .is_ok_and(|output| output.status.success())

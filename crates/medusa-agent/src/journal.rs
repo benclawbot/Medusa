@@ -723,7 +723,7 @@ fn validate_snapshot_identity(
             "journal snapshot belongs to another session",
         ));
     }
-    if session.repo != repo {
+    if normalized_repository_path(&session.repo) != normalized_repository_path(repo) {
         return Err(persistence_error(format!(
             "journal snapshot repository {} does not match {}",
             session.repo.display(),
@@ -731,6 +731,15 @@ fn validate_snapshot_identity(
         )));
     }
     Ok(())
+}
+
+fn normalized_repository_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    text.strip_prefix(r"\\?\")
+        .map_or_else(|| path.to_path_buf(), PathBuf::from)
 }
 
 fn truncate(path: &Path, length: usize) -> MedusaResult<()> {
@@ -1192,6 +1201,15 @@ mod tests {
         fs::write(&path, bytes).expect("tamper");
 
         assert!(load_or_migrate(directory.path(), &committed.id, Some(committed.clone())).is_err());
+    }
+
+    #[test]
+    fn verbatim_windows_repository_prefix_matches_plain_path() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut snapshot = session(directory.path());
+        snapshot.repo = PathBuf::from(r"\\?\C:\Users\thoma");
+        validate_snapshot_identity(Path::new(r"C:\Users\thoma"), &snapshot.id, &snapshot)
+            .expect("verbatim and plain repository paths are equivalent");
     }
 
     #[test]

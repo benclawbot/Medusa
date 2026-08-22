@@ -8,12 +8,11 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::Command,
     sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use crate::scoped_memory::RepositoryIdentity;
-use medusa_core::learning_policy::LearningAdmissionPolicy;
+use medusa_core::{hidden_command, learning_policy::LearningAdmissionPolicy};
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -718,7 +717,7 @@ fn bounded_label(value: &str) -> String {
 }
 
 fn git_output(repo: &Path, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(arguments)
         .current_dir(repo)
         .output()

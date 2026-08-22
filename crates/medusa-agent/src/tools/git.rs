@@ -1,6 +1,6 @@
-use std::{path::Path, process::Command};
+use std::path::Path;
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 
 use crate::tools::format_command_output;
 
@@ -11,7 +11,7 @@ pub(crate) fn checkpoint(repo: &Path, message: &str) -> MedusaResult<String> {
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = hidden_command("git").args(args).current_dir(repo).output()?;
     if output.status.success() {
         Ok(())
     } else {

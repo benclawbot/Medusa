@@ -187,7 +187,14 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         PlanningIntent::ReadOnly
     };
 
-    let requested = candidate_paths(&input.objective).collect::<BTreeSet<_>>();
+    let mut requested = candidate_paths(&input.objective).collect::<BTreeSet<_>>();
+    let default_web_artifact = mutation_requested && is_web_artifact_request(&lower);
+    if default_web_artifact && requested.is_empty() {
+        // A request to create a webpage is an explicit artifact request even when the user did
+        // not spell out a filename. Keep the authority narrow and predictable: one workspace
+        // relative index.html, never the repository as a whole.
+        requested.insert("index.html".to_owned());
+    }
     let broad_scope = mutation_requested
         && contains_phrase(
             &lower,
@@ -205,7 +212,10 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
     } else {
         requested
             .iter()
-            .filter(|candidate| path_exists(candidate, &input.repository_paths))
+            .filter(|candidate| {
+                path_exists(candidate, &input.repository_paths)
+                    || (default_web_artifact && *candidate == "index.html")
+            })
             .cloned()
             .collect::<Vec<_>>()
     };
@@ -256,11 +266,29 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
                 | "upgrade"
         )
     });
+    let multi_step_mutation_language = strategy == ExecutionStrategy::CoordinatedMutation
+        && words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "build"
+                    | "create"
+                    | "design"
+                    | "develop"
+                    | "generate"
+                    | "implement"
+                    | "page"
+                    | "responsive"
+                    | "website"
+                    | "webpage"
+            )
+        });
     let risk = if strategy == ExecutionStrategy::CoordinatedMutation
         && (broad_scope || scope.effective.len() > 2 || high_risk_language)
     {
         RiskLevel::High
-    } else if strategy == ExecutionStrategy::CoordinatedMutation && scope.effective.len() == 1 {
+    } else if strategy == ExecutionStrategy::CoordinatedMutation
+        && scope.effective.len() == 1
+    {
         RiskLevel::Low
     } else if strategy == ExecutionStrategy::CoordinatedMutation || repository_relevant {
         RiskLevel::Medium
@@ -282,7 +310,7 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         broad_scope,
         high_risk_language,
     );
-    let model_turn_budget = model_turn_budget(lane);
+    let model_turn_budget = model_turn_budget_for(lane, multi_step_mutation_language);
     let tasks = planned_tasks(strategy, &scope);
     let required_capabilities = tasks
         .iter()
@@ -404,7 +432,7 @@ impl PlanningResult {
                     || self.scope.effective.len() != 1
                     || self.risk != RiskLevel::Low
                     || self.model_turn_budget.before_first_edit > 1
-                    || self.model_turn_budget.successful_path_total > 2 =>
+                    || self.model_turn_budget.successful_path_total > 4 =>
             {
                 return Err("fast mutation requires one low-risk resolved write scope");
             }
@@ -553,6 +581,17 @@ const fn model_turn_budget(lane: ExecutionLane) -> ModelTurnBudget {
             repair_attempts: 3,
         },
     }
+}
+
+fn model_turn_budget_for(lane: ExecutionLane, multi_step_mutation: bool) -> ModelTurnBudget {
+    let mut budget = model_turn_budget(lane);
+    if lane == ExecutionLane::FastMutation && multi_step_mutation {
+        // Keep deterministic preflight for one-file work, but give generation tasks enough room
+        // to edit, inspect, and verify instead of failing after two model calls.
+        budget.successful_path_total = 4;
+        budget.repair_attempts = 2;
+    }
+    budget
 }
 
 fn apply_speculation_flags(result: &mut PlanningResult) {
@@ -730,6 +769,20 @@ fn contains_mutation_verb(words: &BTreeSet<String>) -> bool {
 
 fn contains_phrase(value: &str, phrases: &[&str]) -> bool {
     phrases.iter().any(|phrase| value.contains(phrase))
+}
+
+fn is_web_artifact_request(value: &str) -> bool {
+    contains_phrase(
+        value,
+        &[
+            "webpage",
+            "web page",
+            "website",
+            "landing page",
+            "static site",
+            "html page",
+        ],
+    )
 }
 
 fn candidate_paths(value: &str) -> impl Iterator<Item = String> + '_ {
@@ -1840,6 +1893,27 @@ mod tests {
         assert_eq!(planned.intent, PlanningIntent::ReadOnly);
         assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedReadOnly);
         assert!(planned.task(TaskKind::Implementation).is_none());
+    }
+
+    #[test]
+    fn typed_planner_defaults_new_web_artifact_to_index_html() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Build a beautiful photography webpage".to_owned(),
+            attachment_count: 0,
+            repository_paths: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(planned.intent, PlanningIntent::MutationRequested);
+        assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedMutation);
+        assert_eq!(planned.scope.resolution, ScopeResolution::Resolved);
+        assert_eq!(planned.scope.effective, vec!["index.html".to_owned()]);
+        assert_eq!(
+            planned.task(TaskKind::Implementation).unwrap().task.write_paths,
+            vec!["index.html".to_owned()]
+        );
+        assert_eq!(planned.lane, ExecutionLane::FastMutation);
+        assert_eq!(planned.model_turn_budget.successful_path_total, 4);
+        assert_eq!(planned.model_turn_budget.repair_attempts, 2);
     }
 
     #[test]

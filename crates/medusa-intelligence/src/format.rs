@@ -1,9 +1,6 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 
 /// Runs the canonical formatter for changed file types.
 pub fn format_changed(repo: &Path, changed_paths: &[PathBuf]) -> MedusaResult<Vec<String>> {
@@ -12,7 +9,7 @@ pub fn format_changed(repo: &Path, changed_paths: &[PathBuf]) -> MedusaResult<Ve
         .iter()
         .any(|path| path.extension().is_some_and(|ext| ext == "rs"))
     {
-        let output = Command::new("cargo")
+        let output = hidden_command("cargo")
             .args(["fmt", "--all"])
             .current_dir(repo)
             .output()?;

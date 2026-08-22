@@ -29,6 +29,18 @@ export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
     : undefined;
   const restore = actionByOperation.get("restoreCheckpoint");
   const restoreNeedsConfirmation = restore?.requiresConfirmation ?? false;
+  const durableStep = recovery.lastDurableStep?.trim() || "the last durable checkpoint";
+  const checkpointDate = selected ? new Date(selected.createdAtUnixMs) : undefined;
+  const checkpointDateLabel = checkpointDate && Number.isFinite(checkpointDate.getTime())
+    ? checkpointDate.toLocaleString()
+    : "Date unavailable";
+  const resume = actionByOperation.get("resume");
+  const retry = actionByOperation.get("retryVerification");
+  const nextStep = resume?.enabled
+    ? "Resume the interrupted task to let Medusa continue from its last safe checkpoint."
+    : retry?.enabled
+      ? "Retry verification so Medusa can confirm the result before continuing."
+      : "This interrupted task cannot be resumed automatically right now. Close this dialog and start a new session; your existing files are left untouched."
 
   const run = (operation: RecoveryOperation) => {
     const selectedCheckpoint = operation === "restoreCheckpoint" ? checkpointId : undefined;
@@ -42,9 +54,14 @@ export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
         <span className="recovery-health">{recovery.health}</span>
       </header>
       <p className="recovery-summary">
-        Session <strong>{recovery.sessionId}</strong> stopped after <strong>{recovery.lastDurableStep}</strong>
+        Session <strong>{recovery.sessionId || "the interrupted session"}</strong> stopped after <strong>{durableStep}</strong>
         {recovery.interruptedOperation ? ` while ${recovery.interruptedOperation} was active` : ""}.
       </p>
+
+      <section className="recovery-next-step" aria-label="Next step">
+        <strong>What to do next</strong>
+        <p>{nextStep}</p>
+      </section>
 
       <dl className="recovery-facts">
         <div><dt>Verification</dt><dd>{recovery.verification}</dd></div>
@@ -74,11 +91,14 @@ export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
       </label>
 
       {selected && (
-        <div className="checkpoint-card">
-          <div><strong>{selected.reason}</strong><small>{new Date(selected.createdAtUnixMs).toLocaleString()}</small></div>
-          <p>Provenance: {selected.provenance}</p>
-          <p>Repository: <code>{selected.repositoryFingerprint.slice(0, 12)}</code></p>
-        </div>
+        <details className="recovery-technical">
+          <summary>Show checkpoint details</summary>
+          <div className="checkpoint-card">
+            <div><strong>{selected.reason || "Recovery checkpoint"}</strong><small>{checkpointDateLabel}</small></div>
+              <p>Provenance: {selected.provenance || "unavailable"}</p>
+            <p>Repository: <code>{(selected.repositoryFingerprint ?? "").slice(0, 12) || "unavailable"}</code></p>
+          </div>
+        </details>
       )}
 
       {preview ? (

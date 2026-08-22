@@ -1,8 +1,11 @@
 .recovery-panel { margin: 0 auto 20px; max-width: 850px; padding: 20px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); box-shadow: 0 10px 28px rgba(20,27,45,.08); }
-.recovery-panel header { display: flex; justify-content: space-between; gap: 16px; }
+.recovery-panel header { display: flex; justify-content: space-between; gap: 16px; padding-right: 190px; }
 .recovery-panel h2 { margin: 0; }
 .recovery-health { font-size: .7rem; font-weight: 700; text-transform: uppercase; }
 .recovery-summary { line-height: 1.5; }
+.recovery-next-step { margin: 16px 0; border: 1px solid #dcd5ff; border-radius: 10px; background: var(--purple-soft); padding: 13px 14px; }
+.recovery-next-step strong { display: block; color: var(--text); }
+.recovery-next-step p { margin: 5px 0 0; line-height: 1.45; }
 .recovery-facts { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
 .recovery-facts div, .checkpoint-card, .recovery-preview { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .recovery-facts dt { font-size: .68rem; color: var(--muted); text-transform: uppercase; }
@@ -15,6 +18,9 @@
 .checkpoint-card p { margin-bottom: 0; }
 .recovery-preview code { margin-left: auto; overflow-wrap: anywhere; }
 .recovery-preview .risk { color: var(--danger); }
+.recovery-technical { margin: 14px 0; color: var(--muted); font-size: .78rem; }
+.recovery-technical summary { cursor: pointer; color: var(--text); font-weight: 650; }
+.recovery-technical[open] summary { margin-bottom: 8px; }
 .recovery-confirm { display: flex; gap: 8px; margin: 14px 0; }
 .recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .recovery-actions button { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line-strong); border-radius: 8px; background: white; padding: 8px 11px; }
@@ -23,5 +29,24 @@
 .recovery-dock { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; }
 .recovery-dock-backdrop { position: absolute; inset: 0; background: rgba(20,27,45,.48); backdrop-filter: blur(2px); }
 .recovery-dock-content { position: relative; width: min(920px, 100%); max-height: calc(100vh - 48px); overflow: auto; }
+.recovery-dismiss { position: absolute; z-index: 1; top: 12px; right: 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: rgba(255,255,255,.92); padding: 7px 10px; color: var(--muted); cursor: pointer; }
+.recovery-dismiss:hover { color: var(--text); border-color: var(--purple); }
+.recovery-new-session { position: absolute; z-index: 1; top: 12px; right: 88px; border: 1px solid #cfc5ff; border-radius: 8px; background: var(--purple-soft); padding: 7px 10px; color: var(--text); cursor: pointer; font-weight: 650; }
+.recovery-new-session:hover { border-color: var(--purple); }
+.recovery-new-session:disabled, .recovery-dismiss:disabled { cursor: wait; opacity: .6; }
 .recovery-error { max-width: 850px; margin: 0 auto 10px; border: 1px solid #fecaca; border-radius: 8px; background: #fff1f2; color: #b42318; padding: 10px 12px; }
 @media (max-width: 760px) { .recovery-facts { grid-template-columns: 1fr 1fr; } }
+
+.recovery-inline { display: flex; align-items: center; gap: 10px; width: min(850px, calc(100% - 32px)); margin: 14px auto 8px; padding: 11px 12px; border: 1px solid #e4ddff; border-radius: 10px; background: #faf9ff; color: var(--text); }
+.recovery-inline-mark { display: grid; flex: 0 0 22px; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #eeeaff; color: #5a43c7; font-weight: 800; }
+.recovery-inline-copy { display: grid; min-width: 0; gap: 2px; flex: 1; }
+.recovery-inline-copy strong { font-size: .82rem; }
+.recovery-inline-copy span { color: var(--muted); font-size: .78rem; line-height: 1.35; }
+.recovery-inline-copy small { color: var(--danger); overflow-wrap: anywhere; }
+.recovery-inline-action, .recovery-inline-dismiss { flex: 0 0 auto; border-radius: 7px; padding: 7px 10px; font-size: .76rem; cursor: pointer; }
+.recovery-inline-action { border: 1px solid #5a43c7; background: #5a43c7; color: #fff; font-weight: 700; }
+.recovery-inline-action:hover { background: #4935aa; }
+.recovery-inline-dismiss { border: 0; background: transparent; color: var(--muted); }
+.recovery-inline-dismiss:hover { color: var(--text); }
+.recovery-inline-action:disabled, .recovery-inline-dismiss:disabled { cursor: wait; opacity: .6; }
+@media (max-width: 760px) { .recovery-inline { align-items: flex-start; flex-wrap: wrap; } .recovery-inline-copy { flex-basis: calc(100% - 32px); } }

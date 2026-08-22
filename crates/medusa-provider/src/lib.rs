@@ -23,6 +23,7 @@ mod verified_routing;
 
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
+pub(crate) use contracts::strip_hidden_reasoning;
 pub use contracts::{
     ImageSource, Message, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
     ProviderAttemptDescriptor, ProviderAttemptKind, ProviderCapabilities, ProviderExecutionPhase,

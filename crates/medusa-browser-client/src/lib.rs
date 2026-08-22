@@ -11,6 +11,9 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 pub use protocol::{BrowserRequest, BrowserResponse, ElementRef, TabInfo};
@@ -33,6 +36,8 @@ impl BrowserClient {
         for (key, value) in environment {
             command_builder.env(key, value);
         }
+        #[cfg(target_os = "windows")]
+        command_builder.creation_flags(0x0800_0000);
         let mut child = command_builder
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -411,7 +411,10 @@ impl WireResponse {
             .content
             .into_iter()
             .filter_map(|block| match block {
-                WireBlock::Text { text } => Some(ResponseBlock::Text { text }),
+                WireBlock::Text { text } => {
+                    let text = crate::strip_hidden_reasoning(&text);
+                    (!text.is_empty()).then_some(ResponseBlock::Text { text })
+                }
                 WireBlock::ToolUse { id, name, input } => {
                     Some(ResponseBlock::ToolUse { id, name, input })
                 }

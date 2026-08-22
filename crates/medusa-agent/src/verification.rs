@@ -2,15 +2,17 @@ use std::{
     fs::{self, File},
     io::Read,
     path::Path,
-    process::{Command, ExitStatus, Stdio},
+    process::{ExitStatus, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
 
 use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_process_containment::OwnedProcessTree;
+
+mod static_verification_server;
 
 const VERIFICATION_TIMEOUT: Duration = Duration::from_secs(300);
 const VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -53,31 +55,78 @@ pub(crate) fn execute_verification_command_cancellable(
 }
 
 pub(crate) fn required_browser_verification(repo: &Path) -> MedusaResult<VerificationResult> {
-    let route = std::env::var("MEDUSA_BROWSER_VERIFY_URL").map_err(|_| {
-        MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Environment,
-            "UI changes require browser verification, but MEDUSA_BROWSER_VERIFY_URL is not set; start the application and provide a runnable route",
-        )
-    })?;
+    let automatic_server = if std::env::var_os("MEDUSA_BROWSER_VERIFY_URL").is_none() {
+        static_verification_server::StaticVerificationServer::start(repo)
+            .map_err(|error| {
+                MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Environment,
+                    format!("UI changes require automatic browser verification: {error}"),
+                )
+            })?
+    } else {
+        None
+    };
+    let automatic_route = automatic_server.as_ref().map(|server| server.route());
+    let route = match std::env::var("MEDUSA_BROWSER_VERIFY_URL") {
+        Ok(route) => route,
+        Err(_) => automatic_route.ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                "UI changes require browser verification, but MEDUSA_BROWSER_VERIFY_URL is not set and no generated index.html was found to serve automatically",
+            )
+        })?,
+    };
     let command = std::env::var("MEDUSA_BROWSERD").unwrap_or_else(|_| "medusa-browserd".into());
-    let mut client = BrowserClient::spawn_with_env(
+    let mut client = match BrowserClient::spawn_with_env(
         &command,
         &[("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route.as_str())],
-    )
-    .map_err(|error| {
-        MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Environment,
-            format!(
-                "UI changes require browser verification, but {command} could not start: {error}"
-            ),
-        )
-    })?;
+    ) {
+        Ok(client) => client,
+        Err(error) if automatic_server.is_some() => {
+            let server = automatic_server
+                .as_ref()
+                .expect("automatic server is present for static fallback");
+            let (status, body) = server.probe().map_err(|probe_error| {
+                MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Environment,
+                    format!(
+                        "UI changes require browser verification, but {command} could not start ({error}); automatic static verification also failed: {probe_error}"
+                    ),
+                )
+            })?;
+            return Ok(VerificationResult {
+                passed: status < 400 && !body.trim().is_empty(),
+                evidence: vec![
+                    format!("browser_requested_route={route}"),
+                    "browser_verification_mode=automatic_static_server_http_fallback".to_owned(),
+                    format!("browser_status={status}"),
+                    format!("browser_snapshot_nonempty={}", !body.trim().is_empty()),
+                    format!("browser_sidecar_unavailable={error}"),
+                ],
+            });
+        }
+        Err(error) => {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!(
+                    "UI changes require browser verification, but {command} could not start: {error}"
+                ),
+            ));
+        }
+    };
     let mut result = VerificationResult {
         passed: true,
         evidence: vec![format!("browser_requested_route={route}")],
     };
+    if automatic_server.is_some() {
+        result
+            .evidence
+            .push("browser_verification_mode=automatic_static_server".to_owned());
+    }
 
     match client.request(BrowserRequest::Navigate { url: route })? {
         BrowserResponse::Navigate { final_url, status } => {
@@ -238,7 +287,7 @@ fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
     let stdout_file = File::create(&stdout_path)?;
     let stderr_file = File::create(&stderr_path)?;
     let started = Instant::now();
-    let mut command = Command::new(program);
+    let mut command = hidden_command(program);
     command
         .args(args)
         .current_dir(repo)
@@ -423,5 +472,30 @@ mod tests {
     #[test]
     fn rejects_truncated_base64() {
         assert!(decode_base64("abc").is_err());
+    }
+
+    #[test]
+    fn automatic_browser_verification_serves_generated_index_without_environment() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            directory.path().join("index.html"),
+            "<!doctype html><title>Medusa test page</title>",
+        )
+        .expect("index");
+
+        let server = static_verification_server::StaticVerificationServer::start(
+            directory.path(),
+        )
+        .expect("server")
+        .expect("index should enable automatic verification");
+        assert!(server.route().starts_with("http://127.0.0.1:"));
+        assert_eq!(
+            static_verification_server::fetch_for_test(&server),
+            (200, "<!doctype html><title>Medusa test page</title>".to_owned())
+        );
+        assert_eq!(
+            server.probe().expect("static verification probe"),
+            (200, "<!doctype html><title>Medusa test page</title>".to_owned())
+        );
     }
 }

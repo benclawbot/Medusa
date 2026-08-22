@@ -266,7 +266,7 @@ export function VoiceControls({
           </div>
           {!!transcripts.length && (
             <div className="voice-transcripts">
-              {transcripts.slice(-4).map((item) => (
+              {(transcripts ?? []).slice(-4).map((item) => (
                 <div
                   key={item.id}
                   className={`${item.role}${item.final ? " final" : " partial"}`}

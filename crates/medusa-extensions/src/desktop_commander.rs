@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use serde_json::{Value, json};
 
 use crate::{
@@ -227,7 +227,7 @@ impl DesktopCommanderClient {
         let home = state.join("home");
         prepare_profile(&repo, &home)?;
 
-        let mut command = Command::new(settings.command());
+        let mut command = hidden_command(settings.command());
         command
             .args(settings.args())
             .current_dir(&repo)

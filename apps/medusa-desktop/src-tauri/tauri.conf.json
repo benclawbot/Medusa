@@ -31,9 +31,13 @@
         "style-src": "'self' 'unsafe-inline'",
         "font-src": "'self' data:",
         "object-src": "'none'",
-        "frame-src": "'none'",
+        "frame-src": "asset: http://asset.localhost",
         "base-uri": "'self'",
         "form-action": "'none'"
+      },
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**"]
       }
     }
   },

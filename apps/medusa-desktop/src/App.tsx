@@ -20,6 +20,8 @@ import {
   OctagonX,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Plus,
   Send,
@@ -31,6 +33,7 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApprovalCard } from "./ApprovalCard";
+import { RecoveryDock } from "./RecoveryDock";
 import { DesktopOnboarding } from "./DesktopOnboarding";
 import "./approval-card.css";
 import {
@@ -44,6 +47,8 @@ import {
   commandSuggestions,
   closeRuntime,
   configureRuntime,
+  dismissRecovery,
+  findWebArtifact,
   loadSharedConfiguration,
   pollRuntime,
   runRuntimeCommand,
@@ -57,14 +62,28 @@ import {
   type RuntimeActivity,
   type RuntimeEvent,
   type SharedConfiguration,
+  type WebArtifact,
+  webArtifactPreviewUrl,
+  visibleAssistantText,
 } from "./runtime";
 
 interface ConversationMessage {
   id: number;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant";
   text: string;
+  createdAt: number;
   attachments?: DesktopAttachment[];
   queued?: boolean;
+}
+
+interface WorkLogEntry {
+  id: string;
+  kind: "input" | "activity" | "status";
+  text: string;
+  timestamp: number;
+  status?: string;
+  details?: string[];
+  activityId?: string;
 }
 
 interface UsageState {
@@ -82,9 +101,13 @@ interface SettingsState {
   credentialConfigured: boolean;
 }
 
+type SidePanelView = "work" | "preview" | "details";
+
 const emptyUsage: UsageState = { input: 0, output: 0, cached: 0, cacheWrite: 0, elapsed: 0 };
 let messageCounter = 0;
 const nextMessageId = () => ++messageCounter;
+let workEntryCounter = 0;
+const nextWorkEntryId = () => `work-${++workEntryCounter}`;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
@@ -101,6 +124,14 @@ function isMacPlatform(): boolean {
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function formatTimestamp(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(timestamp);
 }
 
 function readImage(file: File): Promise<DesktopAttachment> {
@@ -145,14 +176,15 @@ function planIcon(status: PlanStep["status"]) {
 }
 
 function ConversationText({ text }: { text: string }) {
+  const safeText = typeof text === "string" ? text : String(text ?? "");
   const urlPattern = /https?:\/\/[^\s]+/g;
   const parts: React.ReactNode[] = [];
   let cursor = 0;
-  for (const match of text.matchAll(urlPattern)) {
+  for (const match of safeText.matchAll(urlPattern)) {
     const start = match.index ?? 0;
-    const raw = match[0];
+    const raw = typeof match[0] === "string" ? match[0] : "";
     const url = raw.replace(/[.,;:!?\)\]\}]+$/, "");
-    parts.push(text.slice(cursor, start));
+    parts.push(safeText.slice(cursor, start));
     parts.push(
       <a
         key={`${start}-${url}`}
@@ -170,7 +202,7 @@ function ConversationText({ text }: { text: string }) {
     parts.push(raw.slice(url.length));
     cursor = start + raw.length;
   }
-  parts.push(text.slice(cursor));
+  parts.push(safeText.slice(cursor));
   return <>{parts}</>;
 }
 
@@ -214,6 +246,7 @@ export function App() {
   const [repo, setRepo] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [activities, setActivities] = useState<RuntimeActivity[]>([]);
+  const [workLog, setWorkLog] = useState<WorkLogEntry[]>([]);
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [questions, setQuestions] = useState<QuestionPrompt[]>([]);
   const [usage, setUsage] = useState<UsageState>(emptyUsage);
@@ -245,11 +278,41 @@ export function App() {
   const [oauthAuthenticatedProvider, setOauthAuthenticatedProvider] = useState<string>();
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [sidePanelView, setSidePanelView] = useState<SidePanelView | undefined>("work");
+  const [sidePanelWidth, setSidePanelWidth] = useState(320);
+  const [sidePanelResizing, setSidePanelResizing] = useState(false);
+  const sidePanelResizeStart = useRef<{ x: number; width: number }>();
+  const [webArtifact, setWebArtifact] = useState<WebArtifact>();
+  const [partialResult, setPartialResult] = useState(false);
+  const assistantResponseInTurn = useRef(false);
+  const lastTransportError = useRef<string>();
   const pollBusy = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  const appendWorkLog = useCallback((entry: Omit<WorkLogEntry, "id" | "timestamp"> & { timestamp?: number }) => {
+    const id = nextWorkEntryId();
+    const timestamp = entry.timestamp ?? Date.now();
+    setWorkLog((current) => [
+      ...current,
+      {
+        ...entry,
+        id,
+        timestamp,
+      },
+    ]);
+  }, []);
+
+  const appendAssistantMessage = useCallback((value: string) => {
+    const text = visibleAssistantText(value);
+    if (!text) return;
+    assistantResponseInTurn.current = true;
+    setMessages((current) => [
+      ...current,
+      { id: nextMessageId(), role: "assistant", text, createdAt: Date.now() },
+    ]);
+  }, []);
 
   const refreshConfiguration = useCallback(async () => {
     const [configuration, catalog] = await Promise.all([
@@ -271,17 +334,31 @@ export function App() {
     return configuration;
   }, []);
 
+  const refreshWebArtifact = useCallback(async (id: string, failed = false) => {
+    try {
+      const artifact = await findWebArtifact(id);
+      if (artifact) {
+        setWebArtifact(artifact);
+        setPartialResult(failed);
+        setSidePanelView("preview");
+      }
+    } catch {
+      // Artifact discovery is a convenience after a turn; a discovery failure must not
+      // replace the runtime's own result or error in the conversation.
+    }
+  }, []);
+
   const applyEvent = useCallback((event: RuntimeEvent) => {
     switch (event.type) {
       case "started":
         setBusy(true);
         setError(undefined);
+        setPartialResult(false);
+        assistantResponseInTurn.current = false;
+        lastTransportError.current = undefined;
         break;
       case "assistantText":
-        setMessages((current) => [
-          ...current,
-          { id: nextMessageId(), role: "assistant", text: event.text },
-        ]);
+        appendAssistantMessage(event.text);
         break;
       case "activity":
         setActivities((current) => {
@@ -292,6 +369,36 @@ export function App() {
           next[index] = event.activity;
           return next;
         });
+        {
+          const timestamp = Date.now();
+          const activityId = event.activity.id;
+          const newEntryId = nextWorkEntryId();
+          const status = event.activity.kind === "done"
+            ? "Done"
+            : event.activity.kind === "error"
+              ? "Error"
+              : event.activity.kind === "tool" || event.activity.kind === "progress" || event.activity.kind === "verification"
+                ? "Working"
+                : "Recorded";
+          setWorkLog((current) => {
+            const index = activityId
+              ? current.findIndex((item) => item.kind === "activity" && item.activityId === activityId)
+              : -1;
+            const entry: WorkLogEntry = {
+              id: index >= 0 ? current[index].id : newEntryId,
+              kind: "activity",
+              activityId,
+              text: event.activity.title,
+              details: event.activity.details,
+              status,
+              timestamp,
+            };
+            if (index < 0) return [...current, entry];
+            const next = [...current];
+            next[index] = entry;
+            return next;
+          });
+        }
         break;
       case "plan":
         setPlan(event.steps);
@@ -324,62 +431,62 @@ export function App() {
         void refreshConfiguration().catch((cause) => setError(String(cause)));
         break;
       case "notice":
-        setMessages((current) => [
-          ...current,
-          {
-            id: nextMessageId(),
-            role: "system",
-            text: [event.title, ...event.details].join("\n"),
-          },
-        ]);
+        appendWorkLog({ kind: "status", text: event.title, status: "Info", details: event.details });
+        if (event.title === "Completion report" && event.details.length && !assistantResponseInTurn.current) {
+          appendAssistantMessage(event.details.join("\n\n"));
+        }
         break;
       case "newSession":
         setMessages([]);
         setActivities([]);
+        setWorkLog([]);
         setPlan([]);
         setQuestions([]);
         setUsage(emptyUsage);
         setTurn(0);
         setLastRequest(undefined);
+        setWebArtifact(undefined);
+        setPartialResult(false);
+        setSidePanelView("work");
+        assistantResponseInTurn.current = false;
+        lastTransportError.current = undefined;
         setBusy(false);
         break;
       case "compacted":
-        setMessages((current) => [
-          ...current,
-          { id: nextMessageId(), role: "system", text: event.message },
-        ]);
+        appendWorkLog({ kind: "status", text: event.message, status: "Context updated" });
         break;
       case "completed":
         setBusy(false);
         setActivities((current) => finishActivities(current, "done", "Turn completed."));
-        setMessages((current) => [
-          ...current,
-          { id: nextMessageId(), role: "system", text: `Session ${event.sessionId} completed.` },
-        ]);
+        appendWorkLog({ kind: "status", text: "Final response ready", status: "Done" });
+        if (!assistantResponseInTurn.current) {
+          appendAssistantMessage("The request completed successfully, but Medusa did not return a chat summary. Check Work for the execution details.");
+        }
         break;
       case "turnFinished":
         setBusy(false);
         setActivities((current) => finishActivities(current, "done", "Turn finished."));
+        appendWorkLog({ kind: "status", text: "Turn finished", status: "Done" });
+        if (!assistantResponseInTurn.current) {
+          appendAssistantMessage("The turn finished successfully, but Medusa did not return a chat summary. Check Work for the execution details.");
+        }
         break;
       case "cancelled":
         setBusy(false);
         setActivities((current) => finishActivities(current, "error", "Stopped because the turn was cancelled."));
-        setMessages((current) => [
-          ...current,
-          { id: nextMessageId(), role: "system", text: "The active turn was cancelled." },
-        ]);
+        appendWorkLog({ kind: "status", text: "Turn stopped", status: "Stopped" });
+        appendAssistantMessage("The turn was stopped before completion. You can retry the last request when you are ready.");
         break;
       case "failed":
         setBusy(false);
         setActivities((current) => finishActivities(current, "error", `Stopped because the runtime failed: ${event.message}`));
         setError(event.message);
-        setMessages((current) => [
-          ...current,
-          { id: nextMessageId(), role: "system", text: `Runtime failed: ${event.message}` },
-        ]);
+        setPartialResult(false);
+        appendWorkLog({ kind: "status", text: "Turn failed", status: "Error", details: [event.message] });
+        appendAssistantMessage(`The request did not complete because the runtime reported an error:\n\n${event.message}\n\nRetry the request or inspect Work for the failed execution step. If Preview is available, it contains the partial result that was produced before the failure.`);
         break;
     }
-  }, [refreshConfiguration]);
+  }, [appendAssistantMessage, appendWorkLog, refreshConfiguration]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -397,8 +504,19 @@ export function App() {
       try {
         const events = await pollRuntime(runtimeId);
         events.forEach(applyEvent);
+        const terminalEvent = events.find((event) => event.type === "completed" || event.type === "turnFinished" || event.type === "failed" || event.type === "cancelled");
+        if (terminalEvent) {
+          void refreshWebArtifact(runtimeId, terminalEvent.type === "failed");
+        }
       } catch (cause) {
-        if (active) setError(String(cause));
+        if (active) {
+          const message = String(cause);
+          setError(message);
+          if (lastTransportError.current !== message) {
+            lastTransportError.current = message;
+            appendAssistantMessage(`The runtime could not finish the request because communication with Medusa failed:\n\n${message}`);
+          }
+        }
       } finally {
         pollBusy.current = false;
       }
@@ -407,7 +525,7 @@ export function App() {
       active = false;
       window.clearInterval(interval);
     };
-  }, [runtimeId, applyEvent]);
+  }, [runtimeId, applyEvent, appendAssistantMessage, refreshWebArtifact]);
 
   useEffect(() => {
     if (!runtimeId || !prompt.trimStart().startsWith("/") || prompt.includes("\n")) {
@@ -488,9 +606,13 @@ export function App() {
       setRepo(started.repo);
       setMessages([]);
       setActivities([]);
+      setWorkLog([]);
       setPlan([]);
       setQuestions([]);
       setLastRequest(undefined);
+      setWebArtifact(undefined);
+      setPartialResult(false);
+      setSidePanelView("work");
       setError(undefined);
       window.localStorage.setItem("medusa.desktop.repo", started.repo);
     } catch (cause) {
@@ -512,9 +634,13 @@ export function App() {
       setRepo("");
       setMessages([]);
       setActivities([]);
+      setWorkLog([]);
       setPlan([]);
       setQuestions([]);
       setLastRequest(undefined);
+      setWebArtifact(undefined);
+      setPartialResult(false);
+      setSidePanelView("work");
       setError(undefined);
       window.localStorage.removeItem("medusa.desktop.repo");
     } catch (cause) {
@@ -574,14 +700,35 @@ export function App() {
       return;
     }
     const clean = text.trim();
+    const submitsTurn = !(clean.startsWith("/") && suppliedAttachments.length === 0);
     setError(undefined);
     setQuestions([]);
+    // A new user turn supersedes any persisted stop notice from an older run.
+    // The runtime still owns durable recovery state; this only keeps stale
+    // inline guidance from appearing alongside a live execution.
+    if (submitsTurn) dismissRecovery();
+    // Mark the turn as active before the IPC round-trip. Creating a session can include
+    // capability probes and daemon startup, so waiting for `runtime_submit` to resolve
+    // left the UI looking idle precisely while the background work was already running.
+    if (submitsTurn) setBusy(true);
+    if (submitsTurn) {
+      assistantResponseInTurn.current = false;
+      lastTransportError.current = undefined;
+      setWebArtifact(undefined);
+      setPartialResult(false);
+      setSidePanelView("work");
+    }
+    appendWorkLog({
+      kind: "input",
+      text: clean || suppliedAttachments.map((attachment) => attachment.kind === "file" ? basename(attachment.path) : attachment.name).join(", ") || "Attached context",
+      status: "Sent",
+    });
     try {
       if (clean.startsWith("/") && suppliedAttachments.length === 0) {
         await runRuntimeCommand(runtimeId, clean);
         setMessages((current) => [
           ...current,
-          { id: nextMessageId(), role: "user", text: clean },
+          { id: nextMessageId(), role: "user", text: clean, createdAt: Date.now() },
         ]);
       } else {
         const disposition = await submitRuntime(runtimeId, {
@@ -596,16 +743,21 @@ export function App() {
             id: nextMessageId(),
             role: "user",
             text: text || "Attached context",
+            createdAt: Date.now(),
             attachments: suppliedAttachments,
             queued: disposition === "queued",
           },
         ]);
-        setBusy(true);
       }
       setPrompt("");
       setAttachments([]);
     } catch (cause) {
-      setError(String(cause));
+      if (submitsTurn) setBusy(false);
+      const message = String(cause);
+      setError(message);
+      if (submitsTurn) {
+        appendAssistantMessage(`Medusa could not start the request:\n\n${message}`);
+      }
     }
   };
 
@@ -720,9 +872,13 @@ export function App() {
 
   const cancel = async () => {
     if (!runtimeId) return;
+    // Release the composer immediately so the user can decide what to do next;
+    // the runtime cancellation remains authoritative and is still awaited below.
+    setBusy(false);
     try {
       await cancelRuntime(runtimeId);
     } catch (cause) {
+      setBusy(true);
       setError(String(cause));
     }
   };
@@ -764,14 +920,42 @@ export function App() {
   const credentiallessProvider = !oauthProvider
     && (selectedProvider?.authMethods.every((method) => method === "none") ?? false);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
-  const activeActivity = useMemo(
-    () => [...activities].reverse().find((item) => item.kind === "tool" || item.kind === "progress" || item.kind === "verification"),
-    [activities],
-  );
   const totalTokens = usage.input + usage.output;
   const openDesktopTool = (selector: string) => {
     document.querySelector<HTMLButtonElement>(selector)?.click();
   };
+  const activeWorkEntry = [...workLog].reverse().find((entry) => entry.kind === "activity" && entry.status === "Working");
+  const hasPartialResult = partialResult && Boolean(webArtifact);
+
+  const beginSidePanelResize = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    sidePanelResizeStart.current = { x: event.clientX, width: sidePanelWidth };
+    setSidePanelResizing(true);
+  };
+
+  useEffect(() => {
+    if (!sidePanelResizing) return;
+    const onMove = (event: PointerEvent) => {
+      const start = sidePanelResizeStart.current;
+      if (!start) return;
+      const maxWidth = Math.max(420, Math.min(900, window.innerWidth * 0.72));
+      setSidePanelWidth(Math.max(280, Math.min(maxWidth, start.width + start.x - event.clientX)));
+    };
+    const onUp = () => {
+      sidePanelResizeStart.current = undefined;
+      setSidePanelResizing(false);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [sidePanelResizing]);
 
   if (!runtimeId && sharedConfiguration && !sharedConfiguration.configured) {
     return (
@@ -786,7 +970,10 @@ export function App() {
 
   return (
     <>
-    <main className={`app-shell medusa-shell${railCollapsed ? " rail-collapsed" : ""}`}>
+    <main
+      className={`app-shell medusa-shell${railCollapsed ? " rail-collapsed" : ""}${sidePanelView ? "" : " work-panel-collapsed"}`}
+      style={{ "--medusa-side-panel-width": `${sidePanelWidth}px` } as React.CSSProperties}
+    >
       <aside className="sidebar" aria-label="Session rail">
         <div className="window-dots" aria-hidden="true">
           <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
@@ -843,42 +1030,135 @@ export function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <button className="details-button" onClick={() => setDetailsOpen((current) => !current)} aria-expanded={detailsOpen} aria-controls="session-details-panel">
+            {webArtifact && (
+              <button
+                className="details-button"
+                onClick={() => setSidePanelView((current) => current === "preview" ? undefined : "preview")}
+                aria-expanded={sidePanelView === "preview"}
+                aria-controls="side-panel"
+              >
+                {sidePanelView === "preview" ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />} Rendered webpage
+              </button>
+            )}
+            <button className="details-button" onClick={() => setSidePanelView((current) => current === "details" ? undefined : "details")} aria-expanded={sidePanelView === "details"} aria-controls="side-panel">
               <Info size={16} /> Session details
             </button>
+            <button className="details-button work-panel-toggle" onClick={() => setSidePanelView((current) => current === "work" ? undefined : "work")} aria-expanded={sidePanelView === "work"} aria-controls="side-panel">
+              {sidePanelView === "work" ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />} Work{workLog.length ? ` · ${workLog.length}` : ""}
+            </button>
             <div className="runtime-state" role="status">
-              <span className={`status-dot ${busy ? "busy" : error ? "offline" : runtimeId ? "ready" : "offline"}`} />
-              {busy ? `Working · turn ${turn}` : error ? "Needs attention" : runtimeId ? "Ready" : "Starting"}
+              <span className={`status-dot ${busy ? "busy" : hasPartialResult ? "ready" : error ? "offline" : runtimeId ? "ready" : "offline"}`} />
+              {busy ? `Working · turn ${turn}` : hasPartialResult ? "Result available" : error ? "Needs attention" : runtimeId ? "Ready" : "Starting"}
             </div>
           </div>
         </header>
 
-        {detailsOpen && (
-          <aside id="session-details-panel" className="session-details-panel" role="complementary" aria-label="Session details">
-            <div className="session-details-heading"><div><p className="eyebrow">Progressive disclosure</p><h2>Session details</h2></div><button className="icon-button" onClick={() => setDetailsOpen(false)} aria-label="Close session details"><X size={17} /></button></div>
-            <section className="details-section">
-              <div className="panel-heading"><span><Gauge size={15} /> Runtime</span></div>
-              <dl className="metric-grid">
-                <div><dt>Model</dt><dd>{settings.model}</dd></div>
-                <div><dt>Effort</dt><dd>{settings.effort.replace("effort:", "")}</dd></div>
-                <div><dt>Mode</dt><dd>{settings.planMode ? "Plan" : "Full"}</dd></div>
-                <div><dt>Credential</dt><dd>{settings.credentialConfigured ? "Ready" : "Missing"}</dd></div>
-              </dl>
-            </section>
-            <section className="details-section">
-              <div className="panel-heading"><span><Activity size={15} /> Usage</span></div>
-              <dl className="metric-grid tokens">
-                <div><dt>Input</dt><dd>{usage.input.toLocaleString()}</dd></div>
-                <div><dt>Output</dt><dd>{usage.output.toLocaleString()}</dd></div>
-                <div><dt>Cached</dt><dd>{usage.cached.toLocaleString()}</dd></div>
-                <div><dt>Total</dt><dd>{totalTokens.toLocaleString()}</dd></div>
-              </dl>
-              <p className="metric-footnote">Model time: {(usage.elapsed / 1000).toFixed(1)}s</p>
-            </section>
-            <section className="details-section">
-              <div className="panel-heading"><span><ListChecks size={15} /> Plan</span><small>{plan.filter((step) => step.status === "completed").length}/{plan.length}</small></div>
-              <div className="mini-plan">{plan.length ? plan.map((step) => <div key={step.title} className={step.status}>{planIcon(step.status)}<span>{step.title}</span></div>) : <p>No active plan</p>}</div>
-            </section>
+        {sidePanelView && (
+          <aside
+            id="side-panel"
+            className={`work-panel side-panel ${sidePanelResizing ? "resizing" : ""}`}
+            role="complementary"
+            aria-label={sidePanelView === "preview" ? "Rendered webpage" : sidePanelView === "details" ? "Session details" : "Work"}
+          >
+            <button
+              className="side-panel-resize-handle"
+              type="button"
+              aria-label="Resize side panel"
+              title="Drag to resize"
+              onPointerDown={beginSidePanelResize}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft") setSidePanelWidth((current) => Math.min(900, current + 24));
+                if (event.key === "ArrowRight") setSidePanelWidth((current) => Math.max(280, current - 24));
+              }}
+            />
+
+            {sidePanelView === "details" ? (
+              <>
+                <div className="work-panel-heading"><div><p className="eyebrow">Progressive disclosure</p><h2>Session details</h2></div><button className="icon-button" onClick={() => setSidePanelView(undefined)} aria-label="Close session details"><X size={17} /></button></div>
+                <div className="side-panel-scroll">
+                  <section className="details-section">
+                    <div className="panel-heading"><span><Gauge size={15} /> Runtime</span></div>
+                    <dl className="metric-grid">
+                      <div><dt>Model</dt><dd>{settings.model}</dd></div>
+                      <div><dt>Effort</dt><dd>{settings.effort.replace("effort:", "")}</dd></div>
+                      <div><dt>Mode</dt><dd>{settings.planMode ? "Plan" : "Full"}</dd></div>
+                      <div><dt>Credential</dt><dd>{settings.credentialConfigured ? "Ready" : "Missing"}</dd></div>
+                    </dl>
+                  </section>
+                  <section className="details-section">
+                    <div className="panel-heading"><span><Activity size={15} /> Usage</span></div>
+                    <dl className="metric-grid tokens">
+                      <div><dt>Input</dt><dd>{usage.input.toLocaleString()}</dd></div>
+                      <div><dt>Output</dt><dd>{usage.output.toLocaleString()}</dd></div>
+                      <div><dt>Cached</dt><dd>{usage.cached.toLocaleString()}</dd></div>
+                      <div><dt>Total</dt><dd>{totalTokens.toLocaleString()}</dd></div>
+                    </dl>
+                    <p className="metric-footnote">Model time: {(usage.elapsed / 1000).toFixed(1)}s</p>
+                  </section>
+                  <section className="details-section">
+                    <div className="panel-heading"><span><ListChecks size={15} /> Plan</span><small>{plan.filter((step) => step.status === "completed").length}/{plan.length}</small></div>
+                    <div className="mini-plan">{plan.length ? plan.map((step) => <div key={step.title} className={step.status}>{planIcon(step.status)}<span>{step.title}</span></div>) : <p>No active plan</p>}</div>
+                  </section>
+                </div>
+              </>
+            ) : sidePanelView === "preview" && webArtifact ? (
+              <div className="side-panel-preview">
+                <div className="work-panel-heading"><div><p className="eyebrow">Live preview</p><h2>Rendered webpage</h2></div><button className="icon-button" onClick={() => setSidePanelView(undefined)} aria-label="Collapse rendered webpage panel"><X size={17} /></button></div>
+                <p className="web-artifact-title">{webArtifact.title}</p>
+                <p className="web-artifact-path" title={webArtifact.path}>{basename(webArtifact.path)}</p>
+                <p className="web-artifact-copy">This page is rendered directly in Medusa. Drag the panel edge to resize it, or switch views from the top bar.</p>
+                {hasPartialResult && <p className="web-artifact-status" role="status">The rendered result is available, but one execution step reported an error. Inspect Work for technical details.</p>}
+                <div className="web-artifact-preview" aria-label="Rendered webpage preview">
+                  <iframe
+                    key={webArtifact.path}
+                    title={webArtifact.title}
+                    src={webArtifactPreviewUrl(webArtifact.path)}
+                    sandbox="allow-forms allow-modals allow-popups allow-presentation allow-scripts"
+                  />
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="work-panel-heading">
+                  <div>
+                    <p className="eyebrow">Activity log</p>
+                    <h2>Work</h2>
+                  </div>
+                  <button className="icon-button" onClick={() => setSidePanelView(undefined)} aria-label="Collapse work panel" title="Collapse work panel">
+                    <PanelRightClose size={17} />
+                  </button>
+                </div>
+                <div className="work-log" aria-live="polite">
+                  {workLog.length === 0 ? (
+                    <p className="work-log-empty">Actions and your inputs will appear here while Medusa works.</p>
+                  ) : workLog.map((entry) => (
+                    entry.kind === "activity" ? (
+                      <details className={`work-log-row activity ${entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : ""}`} key={entry.id}>
+                        <summary>
+                          <span className="work-log-icon">{entry.status === "Error" ? <OctagonX size={14} /> : entry.status === "Done" ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span>
+                          <span className="work-log-text" title={entry.text}>{entry.text}</span>
+                          <time dateTime={new Date(entry.timestamp).toISOString()}>{formatTimestamp(entry.timestamp)}</time>
+                        </summary>
+                        {!!entry.details?.length && <div className="work-log-details">{entry.details.map((detail) => <p key={detail}>{detail}</p>)}</div>}
+                      </details>
+                    ) : (
+                      <div className={`work-log-row ${entry.kind}`} key={entry.id} title={entry.text}>
+                        <span className="work-log-icon">{entry.kind === "input" ? <MessageSquare size={14} /> : <CheckCircle2 size={14} />}</span>
+                        <span className="work-log-text"><strong>{entry.kind === "input" ? "You" : "Medusa"}</strong> {entry.text}</span>
+                        <time dateTime={new Date(entry.timestamp).toISOString()}>{formatTimestamp(entry.timestamp)}</time>
+                      </div>
+                    )
+                  ))}
+                </div>
+                {busy && (
+                  <div className="work-panel-status" role="status" aria-label={activeWorkEntry ? `Running ${activeWorkEntry.text}` : "Medusa is working"}>
+                    <span>{activeWorkEntry ? activeWorkEntry.text : "Medusa is working"}</span>
+                    <progress aria-label="Tool progress" />
+                  </div>
+                )}
+                <RecoveryDock />
+              </>
+            )}
           </aside>
         )}
 
@@ -901,7 +1181,8 @@ export function App() {
               {messages.map((message) => (
                 <article className={`message ${message.role}`} key={message.id}>
                   <div className="message-heading">
-                    <span>{message.role === "user" ? "You" : message.role === "assistant" ? "Medusa" : "Runtime"}</span>
+                    <span>{message.role === "user" ? "You" : "Medusa"}</span>
+                    <time dateTime={new Date(message.createdAt).toISOString()}>{formatTimestamp(message.createdAt)}</time>
                     {message.queued && <small>queued for next turn</small>}
                   </div>
                   <div className="message-body"><ConversationText text={message.text} /></div>
@@ -917,17 +1198,6 @@ export function App() {
                   )}
                 </article>
               ))}
-              {!!activities.length && (
-                <section className="activity-summary" aria-label="Tool activity">
-                  <div className="activity-summary-heading"><span><Activity size={15} /> Work</span><small>{activities.length} update{activities.length === 1 ? "" : "s"} · details collapsed</small></div>
-                  {activities.slice(-4).map((item, index) => (
-                    <details className={`activity-row ${item.kind}`} key={item.id ?? `${item.title}-${index}`}>
-                      <summary><span>{item.kind === "error" ? <OctagonX size={14} /> : item.kind === "done" ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span><strong>{item.title}</strong><small>{item.kind === "done" ? "Done" : item.kind === "error" ? "Error" : "Working"}</small></summary>
-                      {!!item.details.length && <div className="activity-details">{item.details.map((detail) => <p key={detail}>{detail}</p>)}</div>}
-                    </details>
-                  ))}
-                </section>
-              )}
               <ApprovalCard
                 prompts={questions}
                 plan={plan}
@@ -937,30 +1207,15 @@ export function App() {
                   composerRef.current?.focus();
                 }}
               />
-              {busy && (
-                <div
-                  className="working-summary"
-                  role="status"
-                  aria-live="polite"
-                  aria-label={activeActivity ? `Running ${activeActivity.title}` : "Medusa is working"}
-                >
-                  <span className="working-summary-icon"><Activity size={15} /></span>
-                  <span className="working-summary-copy">
-                    <strong>{activeActivity ? `Running ${activeActivity.title}` : "Medusa is working"}</strong>
-                    <small>{activities.length ? `${activities.length} updates · output is collapsed` : `Turn ${turn} in progress`}</small>
-                  </span>
-                  <progress className="working-progress" aria-label="Tool progress" />
-                </div>
-              )}
             </div>
 
             <footer className="composer-wrap">
               {!!error && (
-                <div className="error-banner" role="alert">
-                  <OctagonX size={15} />
+                <div className={`error-banner${hasPartialResult ? " partial" : ""}`} role={hasPartialResult ? "status" : "alert"}>
+                  {hasPartialResult ? <CheckCircle2 size={15} /> : <OctagonX size={15} />}
                   <div className="error-copy">
-                    <strong>Medusa couldn’t complete that request.</strong>
-                    <span>Retry the last request or inspect the technical details.</span>
+                    <strong>{hasPartialResult ? "Medusa returned a partial result." : "Medusa couldn’t complete that request."}</strong>
+                    <span>{hasPartialResult ? "The rendered result is available. Inspect Work for the failed execution step or retry the request." : "Retry the last request or inspect the technical details."}</span>
                     <details>
                       <summary>Show details</summary>
                       <code>{error}</code>
@@ -1033,12 +1288,14 @@ export function App() {
                   <div className="composer-tools">
                     <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void addImages(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
                     <button className="composer-icon-button" onClick={() => imageInputRef.current?.click()} disabled={!runtimeId} title="Add image" aria-label="Add image"><Plus size={21} /></button>
-                    <button className="composer-icon-button" onClick={addFiles} disabled={!runtimeId || !repo} title="Attach project files" aria-label="Attach project files"><FilePlus2 size={19} /></button>
                     <span className="composer-hint">Shift+Enter for a new line</span>
                   </div>
                   <div className="composer-actions">
-                    {busy && <button className="cancel-button" onClick={cancel} aria-label="Stop active turn"><Square size={13} /> Stop</button>}
-                    <button className="send-button" onClick={submit} disabled={!runtimeId || (!prompt.trim() && attachments.length === 0)} aria-label="Send"><Send size={18} /></button>
+                    {busy && !prompt.trim() && attachments.length === 0 ? (
+                      <button className="send-button stop-button" onClick={() => void cancel()} aria-label="Stop active turn" title="Stop active turn"><Square size={15} /></button>
+                    ) : (
+                      <button className="send-button" onClick={() => void submit()} disabled={!runtimeId || (!prompt.trim() && attachments.length === 0)} aria-label="Send" title="Send"><Send size={18} /></button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1076,6 +1333,7 @@ export function App() {
           </div>
         )}
       </section>
+
     </main>
       {previewImage && (
         <div className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Preview ${previewImage.name}`} onClick={() => setPreviewImage(undefined)}>

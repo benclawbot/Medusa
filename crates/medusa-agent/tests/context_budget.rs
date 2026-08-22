@@ -73,6 +73,14 @@ fn remaining_capacity_saturates_after_overflow() {
 }
 
 #[test]
+fn response_budget_leaves_a_provider_safety_margin() {
+    let budget = PromptBudget::for_request("", &[], &[], 1_000, 1_000);
+
+    assert_eq!(budget.response_token_budget(1_000), 486);
+    assert_eq!(budget.response_token_budget(128), 128);
+}
+
+#[test]
 fn provider_context_rejections_are_detected_without_matching_unrelated_errors() {
     for message in [
         "maximum context length exceeded",
@@ -93,5 +101,6 @@ fn provider_context_rejections_are_detected_without_matching_unrelated_errors() 
 
 #[test]
 fn configured_window_has_a_non_zero_default() {
-    assert!(context_budget::configured_context_window_tokens() > 0);
+    assert_eq!(context_budget::configured_context_window_tokens(42), 42);
+    assert!(context_budget::configured_context_window_tokens(0) > 0);
 }

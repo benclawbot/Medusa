@@ -489,7 +489,10 @@ impl OpenAiWireResponse {
         })?;
         let mut blocks = Vec::new();
         if let Some(text) = choice.message.content.filter(|value| !value.is_empty()) {
-            blocks.push(ResponseBlock::Text { text });
+            let text = crate::strip_hidden_reasoning(&text);
+            if !text.is_empty() {
+                blocks.push(ResponseBlock::Text { text });
+            }
         }
         for call in choice.message.tool_calls {
             let input =

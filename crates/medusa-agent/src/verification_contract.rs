@@ -2,10 +2,9 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_evidence::{
     ChangeKind, ChangedComponent, VerificationCheck, VerificationCheckKind, VerificationPlanner,
 };
@@ -483,7 +482,7 @@ pub(crate) fn workspace_changed_paths(repo: &Path) -> BTreeSet<String> {
         vec!["diff", "--name-only", "--relative", "HEAD", "--"],
         vec!["ls-files", "--others", "--exclude-standard"],
     ] {
-        let Ok(output) = Command::new("git").args(&args).current_dir(repo).output() else {
+        let Ok(output) = hidden_command("git").args(&args).current_dir(repo).output() else {
             continue;
         };
         if !output.status.success() {
@@ -638,7 +637,7 @@ fn repository_fingerprint(repo: &Path, head: &str) -> String {
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(args)
         .current_dir(repo)
         .output()
@@ -675,7 +674,7 @@ mod tests {
     use super::*;
 
     fn git(repo: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = hidden_command("git")
             .args(args)
             .current_dir(repo)
             .status()

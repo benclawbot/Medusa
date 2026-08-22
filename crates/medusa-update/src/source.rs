@@ -6,7 +6,10 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::{StatusCode, blocking::Client};
+use reqwest::{
+    StatusCode,
+    blocking::{Client, Response},
+};
 use serde::Deserialize;
 
 use crate::{
@@ -123,6 +126,56 @@ impl MainBranchUpdater {
         installer.schedule_replace(&candidate, &restart, parent_pid)
     }
 
+    /// Returns whether the exact desktop executable for a verified main revision has been
+    /// published and has a valid revision-bound manifest. This is intentionally a single
+    /// request: checking for an update must never wait for a CI publication race.
+    pub fn main_desktop_artifact_available(&self, revision: &str) -> MedusaResult<bool> {
+        validate_revision(revision)?;
+        let platform = Platform::current().map_err(|error| {
+            invalid(format!(
+                "cannot select rolling desktop artifact for this platform: {error}"
+            ))
+        })?;
+        let asset_name = rolling_desktop_asset_name(platform, revision)?;
+        self.artifact_manifest_available(&asset_name, revision)
+    }
+
+    /// Downloads, verifies, and stages the exact desktop executable for a verified main
+    /// revision. The final replacement is delegated to the same rollback-aware atomic
+    /// installer used by the CLI updater.
+    pub fn schedule_main_desktop_install(
+        &self,
+        executable: &Path,
+        restart: &Restart,
+        parent_pid: u32,
+        mut progress: impl FnMut(u64, Option<u64>),
+    ) -> MedusaResult<ScheduledUpdate> {
+        let revision = self.verified_revision()?;
+        let platform = Platform::current().map_err(|error| {
+            invalid(format!(
+                "cannot select rolling desktop artifact for this platform: {error}"
+            ))
+        })?;
+        let asset_name = rolling_desktop_asset_name(platform, &revision)?;
+        let manifest = self.fetch_artifact_manifest_once(&asset_name, &revision)?;
+
+        let workspace = tempfile::Builder::new()
+            .prefix("medusa-desktop-main-update-")
+            .tempdir()?;
+        let artifact = workspace.path().join(&asset_name);
+        let mut response = self.asset_response(&asset_name, &revision)?;
+        copy_with_progress(
+            &mut response,
+            &artifact,
+            Some(manifest.bytes),
+            &mut progress,
+        )?;
+        verify_artifact(&artifact, manifest.bytes, &manifest.sha256)?;
+
+        AtomicInstaller::new(executable.to_path_buf())
+            .schedule_replace(&artifact, restart, parent_pid)
+    }
+
     fn verified_revision(&self) -> MedusaResult<String> {
         self.verified_revision
             .lock()
@@ -161,6 +214,34 @@ impl MainBranchUpdater {
         }
     }
 
+    fn artifact_manifest_available(&self, asset_name: &str, revision: &str) -> MedusaResult<bool> {
+        let manifest_name = format!("{asset_name}.json");
+        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {
+            return Ok(false);
+        };
+        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;
+        validate_revision(&manifest.revision)?;
+        match manifest.validate(revision, asset_name) {
+            Ok(()) => Ok(true),
+            Err(error) if error.code == ErrorCode::DependencyUnavailable => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn fetch_artifact_manifest_once(
+        &self,
+        asset_name: &str,
+        revision: &str,
+    ) -> MedusaResult<RollingMainArtifact> {
+        let manifest_name = format!("{asset_name}.json");
+        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {
+            return Err(not_published(revision));
+        };
+        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;
+        manifest.validate(revision, asset_name)?;
+        Ok(manifest)
+    }
+
     fn asset_response(
         &self,
         asset_name: &str,
@@ -175,18 +256,29 @@ impl MainBranchUpdater {
         revision: &str,
         deadline: Instant,
     ) -> MedusaResult<reqwest::blocking::Response> {
-        let release_tag = rolling_release_tag(revision)?;
-        let url = format!("{}/{}/{}", self.asset_base, release_tag, asset_name);
         loop {
-            let response = self.client.get(&url).send().map_err(asset_error)?;
-            if response.status() != StatusCode::NOT_FOUND {
-                return response.error_for_status().map_err(asset_error);
+            if let Some(response) = self.asset_response_once(asset_name, revision)? {
+                return Ok(response);
             }
             if Instant::now() >= deadline {
                 return Err(publish_timeout(revision));
             }
             thread::sleep(ROLLING_PUBLISH_POLL);
         }
+    }
+
+    fn asset_response_once(
+        &self,
+        asset_name: &str,
+        revision: &str,
+    ) -> MedusaResult<Option<Response>> {
+        let release_tag = rolling_release_tag(revision)?;
+        let url = format!("{}/{}/{}", self.asset_base, release_tag, asset_name);
+        let response = self.client.get(&url).send().map_err(asset_error)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        response.error_for_status().map(Some).map_err(asset_error)
     }
 }
 
@@ -262,6 +354,23 @@ fn rolling_asset_name(platform: Platform, revision: &str) -> MedusaResult<String
     Ok(format!("medusa-main-{os}-{architecture}.{extension}"))
 }
 
+pub fn rolling_desktop_asset_name(platform: Platform, revision: &str) -> MedusaResult<String> {
+    validate_revision(revision)?;
+    let (os, architecture, extension) = match (platform.os, platform.architecture) {
+        (OperatingSystem::Linux, Architecture::X86_64) => ("linux", "x86_64", ""),
+        (OperatingSystem::Macos, Architecture::Aarch64) => ("macos", "aarch64", ""),
+        (OperatingSystem::Windows, Architecture::X86_64) => ("windows", "x86_64", ".exe"),
+        _ => {
+            return Err(invalid(
+                "rolling desktop prebuilt updates are not published for this OS/architecture",
+            ));
+        }
+    };
+    Ok(format!(
+        "medusa-desktop-main-{os}-{architecture}{extension}"
+    ))
+}
+
 fn validate_revision(revision: &str) -> MedusaResult<()> {
     if !matches!(revision.len(), SHA1_HEX_LENGTH | SHA256_HEX_LENGTH)
         || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -279,6 +388,15 @@ fn publish_timeout(revision: &str) -> MedusaError {
             "prebuilt main artifact for revision {revision} was not published within {} seconds",
             ROLLING_PUBLISH_WAIT.as_secs()
         ),
+    )
+    .with_retryable(true)
+}
+
+fn not_published(revision: &str) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        format!("prebuilt main artifact for revision {revision} is not published yet"),
     )
     .with_retryable(true)
 }
@@ -406,6 +524,11 @@ mod tests {
             rolling_asset_name(macos_arm, REVISION).expect("asset"),
             "medusa-main-macos-aarch64.tar.gz"
         );
+
+        assert_eq!(
+            rolling_desktop_asset_name(windows, REVISION).expect("desktop asset"),
+            "medusa-desktop-main-windows-x86_64.exe"
+        );
     }
 
     #[test]
@@ -444,6 +567,30 @@ mod tests {
             )
             .expect("asset response");
         assert_eq!(response.status(), StatusCode::OK);
+        worker.join().expect("server");
+    }
+
+    #[test]
+    fn desktop_artifact_status_rejects_an_unpublished_revision_without_polling() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0_u8; 2048];
+            let _ = stream.read(&mut request).expect("read request");
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("response");
+        });
+        let updater =
+            MainBranchUpdater::with_asset_base("http://api.invalid", base).expect("client");
+        assert!(
+            !updater
+                .artifact_manifest_available("medusa-desktop-main-windows-x86_64.exe", REVISION,)
+                .expect("artifact status")
+        );
         worker.join().expect("server");
     }
 

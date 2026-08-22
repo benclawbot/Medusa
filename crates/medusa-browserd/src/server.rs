@@ -2,6 +2,9 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use medusa_browser_client::{
     protocol::{
         BrowserRequest, BrowserResponse, BrowserRpcRequest, BrowserRpcResponse,
@@ -139,14 +142,17 @@ struct Bridge {
 
 fn spawn_bridge(proxy: &proxy::Proxy) -> io::Result<Bridge> {
     let bridge_path = resolve_bridge_path()?;
-    let mut child = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .arg(bridge_path)
         .env("MEDUSA_BROWSER_PROXY", proxy.server())
         .env("MEDUSA_BROWSER_PARENT_PID", std::process::id().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()?;
+        .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x0800_0000);
+    let mut child = command.spawn()?;
     let (stdin, stdout) = take_bridge_stdio(&mut child)?;
     Ok(Bridge {
         child,

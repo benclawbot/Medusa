@@ -112,6 +112,7 @@ pub(super) fn run_loop(
     app: &mut AppState,
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
+    let _ = runtime.ensure_daemon();
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let (mut daemon_jobs, mut daemon_status) = daemon.poll(app);
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
@@ -166,6 +167,7 @@ pub(super) fn run_loop(
 ) -> io::Result<ExitReason> {
     let mut last_frame: Option<Vec<StyledLine>> = None;
     let mut last_ctrl_c = None;
+    let _ = runtime.ensure_daemon();
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let _ = daemon.poll(app);
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;

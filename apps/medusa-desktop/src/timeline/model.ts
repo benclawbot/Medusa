@@ -1,4 +1,4 @@
-import type { DesktopAttachment, PlanStep, RuntimeActivity, RuntimeEvent } from "../runtime";
+import { visibleAssistantText, type DesktopAttachment, type PlanStep, type RuntimeActivity, type RuntimeEvent } from "../runtime";
 
 export type TimelineDensity = "focused" | "balanced" | "diagnostic";
 export type TimelineRole = "user" | "assistant" | "system";
@@ -85,6 +85,9 @@ export function projectRuntimeEvent(
   const fallbackId = options.fallbackId ?? `runtime-${sequence}`;
   switch (event.type) {
     case "assistantText":
+      {
+        const text = visibleAssistantText(event.text);
+        if (!text) return undefined;
       return {
         id: fallbackId,
         sequence,
@@ -93,9 +96,10 @@ export function projectRuntimeEvent(
         status: "succeeded",
         attention: "none",
         title: "Medusa",
-        text: event.text,
+        text,
         details: [],
       };
+      }
     case "activity": {
       const verification = event.activity.kind === "verification";
       return {

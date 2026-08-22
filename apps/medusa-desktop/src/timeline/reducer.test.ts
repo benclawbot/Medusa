@@ -20,6 +20,16 @@ describe("structured timeline reducer", () => {
     });
   });
 
+  it("does not project provider-private thinking tags", () => {
+    const snapshot = reduceTimelineEvents(emptyTimelineSnapshot, [
+      { type: "assistantText", text: "<think>private reasoning</think>Hello there" },
+      { type: "assistantText", text: "<think>only reasoning</think>" },
+    ]);
+
+    expect(snapshot.events).toHaveLength(1);
+    expect(snapshot.events[0]).toMatchObject({ text: "Hello there" });
+  });
+
   it("updates activities in place while preserving sequence", () => {
     const started: RuntimeEvent = {
       type: "activity",

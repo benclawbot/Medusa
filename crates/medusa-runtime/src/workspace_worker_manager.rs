@@ -12,6 +12,9 @@ use std::{
     process::{Command, Output},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_evidence::{ChangeKind, ChangedComponent, normalize_components};
 use serde::{Deserialize, Serialize};
@@ -23,6 +26,13 @@ use crate::git_workers::{
 
 const DIRECTORY_REVISION_PREFIX: &str = "dir-";
 const PATCH_TEXT_LIMIT: usize = 128 * 1024;
+
+fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    command
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WorkspaceMutationBackend {
@@ -633,7 +643,7 @@ impl WorkspaceWorkerManager {
 
 #[must_use]
 pub fn is_git_repository(path: &Path) -> bool {
-    let Ok(output) = Command::new("git")
+    let Ok(output) = hidden_command("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(path)
         .output()
@@ -916,7 +926,7 @@ fn verify_directory_workspace(root: &Path) -> MedusaResult<String> {
     if root.join("verify.ps1").is_file() && cfg!(windows) {
         return output_result(
             "directory workspace verification",
-            Command::new("powershell.exe")
+            hidden_command("powershell.exe")
                 .args(["-NoProfile", "-File", "verify.ps1"])
                 .current_dir(root)
                 .output()?,
@@ -925,7 +935,7 @@ fn verify_directory_workspace(root: &Path) -> MedusaResult<String> {
     if root.join("verify.sh").is_file() && !cfg!(windows) {
         return output_result(
             "directory workspace verification",
-            Command::new("sh")
+            hidden_command("sh")
                 .arg("verify.sh")
                 .current_dir(root)
                 .output()?,
@@ -934,7 +944,7 @@ fn verify_directory_workspace(root: &Path) -> MedusaResult<String> {
     if root.join("Cargo.toml").is_file() {
         return output_result(
             "directory workspace Cargo verification",
-            Command::new("cargo")
+            hidden_command("cargo")
                 .args(["test", "--workspace", "--all-features"])
                 .current_dir(root)
                 .output()?,

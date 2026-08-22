@@ -3,11 +3,12 @@ use std::{
     fmt,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Stdio},
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use medusa_core::hidden_command;
 
 /// Configuration for one language-server process.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -118,7 +119,7 @@ impl LspClient {
         }
         self.state = LspServerState::Starting;
 
-        let mut command = Command::new(&self.config.command);
+        let mut command = hidden_command(&self.config.command);
         command
             .args(&self.config.args)
             .current_dir(&self.config.workspace_root)

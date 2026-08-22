@@ -10,6 +10,7 @@ use std::{
 };
 
 use medusa_config::Config;
+use medusa_core::hidden_command;
 use medusa_protocol::frontend::{
     ApprovalDecision, AttachmentMode as FrontendAttachmentMode, FrontendCommand,
     FrontendCommandEnvelope, FrontendKind,
@@ -1010,7 +1011,7 @@ fn fingerprint(envelope: &FrontendCommandEnvelope) -> Result<String, FrontendCon
 }
 
 fn repository_review_fingerprint(repo: &Path) -> Result<String, FrontendControlError> {
-    let output = std::process::Command::new("git")
+    let output = hidden_command("git")
         .args(["diff", "--binary", "--no-ext-diff", "--", "."])
         .current_dir(repo)
         .output()

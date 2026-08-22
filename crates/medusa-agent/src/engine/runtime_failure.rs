@@ -14,7 +14,7 @@ use medusa_failure::{
 use medusa_provider::{Message, MessageBlock, Role};
 use time::OffsetDateTime;
 
-use crate::session::{AgentPlanStepStatus, AgentSession, persist, record_terminal_skill_outcome};
+use crate::session::{persist, record_terminal_skill_outcome, AgentPlanStepStatus, AgentSession};
 
 pub(crate) enum RuntimeFailureAction {
     Retry,

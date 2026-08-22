@@ -2,10 +2,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use medusa_agent::AgentSession;
+use medusa_core::hidden_command;
 use medusa_intelligence::{CodeIndex, RetrievalBudget, Symbol};
 use sha2::{Digest, Sha256};
 
@@ -378,7 +378,7 @@ fn repository_fingerprint(
 }
 
 fn git_output(repo: &Path, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(arguments)
         .current_dir(repo)
         .output()

@@ -2,11 +2,11 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::Duration,
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use serde::{Deserialize, Serialize};
 
 use crate::support::wait_with_timeout;
@@ -35,7 +35,7 @@ pub fn verify_browser(
     timeout: Duration,
 ) -> MedusaResult<BrowserEvidence> {
     fs::create_dir_all(output_directory)?;
-    let child = Command::new(node)
+    let child = hidden_command(node)
         .arg(sidecar)
         .arg("--url")
         .arg(url)

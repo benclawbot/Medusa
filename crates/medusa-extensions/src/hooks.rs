@@ -2,11 +2,11 @@ use std::{
     collections::BTreeMap,
     io::Write,
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     time::Duration,
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -84,7 +84,7 @@ pub fn run_command_hook(
     if !subprocess_containment_available() {
         return Err(subprocess_containment_error("command hook"));
     }
-    let mut command = Command::new(&hook.program);
+    let mut command = hidden_command(&hook.program);
     command
         .args(&hook.args)
         .current_dir(repository)

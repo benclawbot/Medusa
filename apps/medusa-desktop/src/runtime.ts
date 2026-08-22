@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 export type Effort = "low" | "medium" | "high" | "auto";
 export type SubmitDisposition = "started" | "queued";
@@ -59,6 +59,20 @@ export interface RuntimeStartResponse {
   repo: string;
 }
 
+export interface WebArtifact {
+  path: string;
+  title: string;
+}
+
+/**
+ * Keep the preview inside the Tauri webview instead of handing the artifact
+ * off to the user's default browser. The native asset protocol serves the
+ * validated runtime artifact and preserves relative CSS, images, and scripts.
+ */
+export function webArtifactPreviewUrl(path: string): string {
+  return convertFileSrc(path);
+}
+
 export interface SharedConfiguration {
   revision: number;
   activeProfile: string;
@@ -93,6 +107,17 @@ export interface SessionSummary {
 export interface SessionMessage {
   role: "user" | "assistant" | string;
   text: string;
+}
+
+/** Keep provider-private reasoning out of the user-visible transcript. */
+export function visibleAssistantText(text: string): string {
+  if (typeof text !== "string") return "";
+  let visible = text.replace(
+    /<\s*(?:think|thinking|analysis)\b[^>]*>[\s\S]*?<\s*\/\s*(?:think|thinking|analysis)\s*>/gi,
+    "",
+  );
+  visible = visible.replace(/<\s*(?:think|thinking|analysis)\b[^>]*>[\s\S]*$/i, "");
+  return visible.replace(/<\s*\/?\s*(?:think|thinking|analysis)\b[^>]*>/gi, "").trim();
 }
 
 export interface SessionDetail {
@@ -259,6 +284,11 @@ const timelineListeners = new Set<() => void>();
 const recoveryListeners = new Set<() => void>();
 let recoverySnapshot: RecoveryView | undefined;
 let recoveryCompletion: { auditPath: string } | undefined;
+// A recovery notice belongs to the interrupted turn that produced it. Once a
+// user starts a newer turn, stale recovery events can still arrive from the
+// durable runtime queue; keep those notices hidden until a new failure emits a
+// fresh actionable recovery state.
+let recoverySuppressed = false;
 
 function publishRecovery(recovery: RecoveryView | undefined, completion?: { auditPath: string }): void {
   recoverySnapshot = recovery;
@@ -370,6 +400,12 @@ export function subscribeRecovery(listener: () => void): () => void {
   return () => recoveryListeners.delete(listener);
 }
 
+/** Hide the recovery overlay without pretending that its durable state was repaired. */
+export function dismissRecovery(): void {
+  recoverySuppressed = true;
+  publishRecovery(undefined);
+}
+
 export async function loadSharedConfiguration(): Promise<SharedConfiguration> {
   return invoke<SharedConfiguration>("desktop_shared_configuration");
 }
@@ -381,6 +417,7 @@ export async function startRuntime(repo?: string): Promise<RuntimeStartResponse>
     : await invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
   if (repo && pendingSession) window.localStorage.removeItem(pendingResumeKey);
   publishTimeline({ ...emptyTimeline, runtimeId: response.runtimeId });
+  recoverySuppressed = false;
   publishRecovery(undefined);
   return response;
 }
@@ -433,13 +470,37 @@ export async function cancelRuntime(runtimeId: string): Promise<boolean> {
   return invoke<boolean>("runtime_cancel", { runtimeId });
 }
 
+export async function findWebArtifact(runtimeId: string): Promise<WebArtifact | undefined> {
+  const artifact = await invoke<WebArtifact | null>("runtime_find_web_artifact", { runtimeId });
+  return artifact ?? undefined;
+}
+
+export async function openWebArtifact(runtimeId: string, path: string): Promise<void> {
+  await invoke("runtime_open_web_artifact", { runtimeId, path });
+}
+
 export async function pollRuntime(runtimeId: string): Promise<RuntimeEvent[]> {
   const events = await invoke<RuntimeEvent[]>("runtime_poll", { runtimeId, maxEvents: 200 });
   reduceTimeline(runtimeId, events);
   for (const event of events) {
-    if (event.type === "recoveryAvailable") publishRecovery(event.recovery);
-    if (event.type === "recoveryCompleted") publishRecovery(undefined, { auditPath: event.auditPath });
-    if (event.type === "newSession") publishRecovery(undefined);
+    if (event.type === "recoveryAvailable" && !recoverySuppressed) {
+      publishRecovery(event.recovery);
+    }
+    if (event.type === "recoveryCompleted") {
+      recoverySuppressed = true;
+      publishRecovery(undefined, { auditPath: event.auditPath });
+    }
+    if (event.type === "completed" || event.type === "turnFinished") {
+      recoverySuppressed = true;
+      publishRecovery(undefined);
+    }
+    if (event.type === "failed" || event.type === "cancelled") {
+      recoverySuppressed = false;
+    }
+    if (event.type === "newSession") {
+      recoverySuppressed = false;
+      publishRecovery(undefined);
+    }
   }
   return events;
 }

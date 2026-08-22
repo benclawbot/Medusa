@@ -2,11 +2,11 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::{self, Command},
+    process,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, hidden_command};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -239,7 +239,7 @@ fn graph_identity(repo: &Path) -> MedusaResult<(String, String)> {
 }
 
 fn tracked_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(["ls-files", "-z", "--cached"])
         .current_dir(repo)
         .output()?;
@@ -303,7 +303,7 @@ fn file_metadata(
 }
 
 fn git(repo: &Path, args: &[&str]) -> MedusaResult<String> {
-    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    let output = hidden_command("git").args(args).current_dir(repo).output()?;
     if !output.status.success() {
         return Err(internal(format!(
             "git {} failed: {}",

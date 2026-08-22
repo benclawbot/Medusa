@@ -462,6 +462,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use medusa_core::hidden_command;
 
     fn fixture() -> tempfile::TempDir {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -484,7 +485,7 @@ mod tests {
             vec!["add", "."],
             vec!["commit", "-m", "fixture"],
         ] {
-            let output = Command::new("git")
+            let output = hidden_command("git")
                 .args(&args)
                 .current_dir(directory.path())
                 .output()
@@ -500,7 +501,7 @@ mod tests {
     }
 
     fn head_revision(directory: &tempfile::TempDir) -> String {
-        let output = Command::new("git")
+        let output = hidden_command("git")
             .args(["rev-parse", "HEAD"])
             .current_dir(directory.path())
             .output()

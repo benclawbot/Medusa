@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -35,9 +36,10 @@ use ulid::Ulid;
 use crate::{
     config::{DesktopConfigurationChanged, prepare_provider_profile},
     credentials::{CredentialStore, SystemCredentialStore},
+    desktop_command::hidden_command,
     dto::{
         DesktopAttachment, DesktopCommandSuggestion, DesktopModelConfiguration, DesktopPromptDraft,
-        DesktopRuntimeEvent, DesktopSubmitDisposition, RuntimeStartResponse,
+        DesktopRuntimeEvent, DesktopSubmitDisposition, DesktopWebArtifact, RuntimeStartResponse,
     },
     provider_auth::browser_oauth_credentials_present,
 };
@@ -398,6 +400,22 @@ impl RuntimeRegistry {
             .map_err(|_| format!("runtime {runtime_id} is poisoned"))?;
         action(&mut entry)
     }
+
+    /// Stops every daemon owned by this desktop instance before the app exits.
+    ///
+    /// The daemon is launched detached so it can survive a renderer restart. That
+    /// is useful during normal recovery, but it must not make a closed desktop keep
+    /// provider work or child processes alive.
+    pub fn shutdown_all(&self) {
+        let Ok(entries) = self.entries.lock() else {
+            return;
+        };
+        for entry in entries.values() {
+            if let Ok(mut entry) = entry.lock() {
+                let _ = entry.daemon.supervisor.shutdown_now();
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -435,12 +453,15 @@ pub fn runtime_close(
     runtime_id: String,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<(), String> {
-    registry
+    let entry = registry
         .entries
         .lock()
         .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
         .remove(&runtime_id)
         .ok_or_else(|| format!("runtime {runtime_id} does not exist"))?;
+    if let Ok(mut entry) = entry.lock() {
+        let _ = entry.daemon.supervisor.shutdown_now();
+    }
     Ok(())
 }
 
@@ -567,6 +588,123 @@ pub fn runtime_poll(
         }
         Ok(events)
     })
+}
+
+#[tauri::command]
+pub fn runtime_find_web_artifact(
+    runtime_id: String,
+    registry: State<'_, RuntimeRegistry>,
+) -> Result<Option<DesktopWebArtifact>, String> {
+    registry.with_entry(&runtime_id, |entry| {
+        let Some(path) = latest_web_artifact(&entry.repo)? else {
+            return Ok(None);
+        };
+        Ok(Some(DesktopWebArtifact {
+            title: web_artifact_title(&path),
+            path: path.to_string_lossy().into_owned(),
+        }))
+    })
+}
+
+#[tauri::command]
+pub fn runtime_open_web_artifact(
+    runtime_id: String,
+    path: String,
+    registry: State<'_, RuntimeRegistry>,
+) -> Result<(), String> {
+    registry.with_entry(&runtime_id, |entry| {
+        let executions = execution_root(&entry.repo);
+        let requested = fs::canonicalize(&path)
+            .map_err(|error| format!("cannot open rendered webpage {path}: {error}"))?;
+        if !requested.starts_with(&executions)
+            || requested.file_name().and_then(|name| name.to_str()) != Some("index.html")
+            || !requested.is_file()
+        {
+            return Err("rendered webpage path is outside the active runtime artifacts".to_owned());
+        }
+        open_external(&requested)
+    })
+}
+
+fn execution_root(repo: &Path) -> PathBuf {
+    repo.join(".medusa").join("executions")
+}
+
+fn latest_web_artifact(repo: &Path) -> Result<Option<PathBuf>, String> {
+    let root = execution_root(repo);
+    if !root.is_dir() {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    collect_web_artifacts(&root, 0, &mut candidates);
+    candidates.sort_by_key(|(_, modified)| *modified);
+    Ok(candidates.pop().map(|(path, _)| path))
+}
+
+fn collect_web_artifacts(root: &Path, depth: usize, candidates: &mut Vec<(PathBuf, SystemTime)>) {
+    if depth > 8 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            collect_web_artifacts(&path, depth + 1, candidates);
+        } else if file_type.is_file()
+            && path.file_name().and_then(|name| name.to_str()) == Some("index.html")
+        {
+            let modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            candidates.push((path, modified));
+        }
+    }
+}
+
+fn web_artifact_title(path: &Path) -> String {
+    let fallback = "Rendered webpage".to_owned();
+    let Ok(contents) = fs::read_to_string(path) else {
+        return fallback;
+    };
+    let lower = contents.to_ascii_lowercase();
+    let Some(start) = lower.find("<title") else {
+        return fallback;
+    };
+    let Some(open_end) = lower[start..].find('>') else {
+        return fallback;
+    };
+    let content_start = start + open_end + 1;
+    let Some(close_offset) = lower[content_start..].find("</title>") else {
+        return fallback;
+    };
+    let title = contents[content_start..content_start + close_offset].trim();
+    if title.is_empty() {
+        fallback
+    } else {
+        title.chars().take(120).collect()
+    }
+}
+
+fn open_external(path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    let mut command = hidden_command("explorer.exe");
+    #[cfg(target_os = "macos")]
+    let mut command = hidden_command("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = hidden_command("xdg-open");
+    command
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("cannot open rendered webpage {}: {error}", path.display()))
 }
 
 fn verify_provider_route(
@@ -759,5 +897,24 @@ mod tests {
     #[test]
     fn desktop_client_identity_is_stable_for_cursor_reconnect() {
         assert_eq!(DESKTOP_CLIENT_ID, "desktop-primary");
+    }
+
+    #[test]
+    fn latest_web_artifact_is_scoped_to_execution_workspace() {
+        let directory = crate::tempdir().expect("tempdir");
+        let execution = directory.path().join(".medusa").join("executions").join("run");
+        fs::create_dir_all(&execution).expect("execution directory");
+        fs::write(
+            execution.join("index.html"),
+            "<!doctype html><title>Photography test</title>",
+        )
+        .expect("index");
+        fs::write(directory.path().join("index.html"), "outside").expect("outside index");
+
+        let artifact = latest_web_artifact(directory.path())
+            .expect("scan")
+            .expect("artifact");
+        assert_eq!(artifact, execution.join("index.html"));
+        assert_eq!(web_artifact_title(&artifact), "Photography test");
     }
 }

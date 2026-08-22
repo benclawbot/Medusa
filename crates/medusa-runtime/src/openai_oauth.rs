@@ -1,10 +1,11 @@
 use std::{
-    process::{Child, Command, Stdio},
+    process::{Child, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 use reqwest::blocking::Client;
+use medusa_core::hidden_command;
 use serde_json::Value;
 
 const OPENAI_OAUTH_GATEWAY: &str = "http://127.0.0.1:10531/v1";
@@ -56,7 +57,7 @@ pub fn discover_openai_oauth_models() -> Result<Vec<String>, String> {
 }
 
 fn start_browser_login() -> Result<Child, String> {
-    Command::new("npx")
+    hidden_command("npx")
         .args([
             "--yes",
             "openai-oauth@latest",

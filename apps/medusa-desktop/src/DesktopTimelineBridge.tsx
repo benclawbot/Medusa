@@ -134,7 +134,7 @@ export function DesktopTimelineBridge() {
     [structured.plan],
   );
   const visibleEvents = useMemo(
-    () => structured.events.filter((event) => eventIsVisible(event, density)).slice(-18),
+    () => (structured.events ?? []).filter((event) => eventIsVisible(event, density)).slice(-18),
     [structured.events, density],
   );
   const verificationEvents = visibleEvents.filter((event) => event.kind === "verification");

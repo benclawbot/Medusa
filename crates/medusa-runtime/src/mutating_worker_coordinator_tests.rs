@@ -137,6 +137,16 @@ fn implementer_turn_budget_is_bounded_without_truncating_smaller_limits() {
 }
 
 #[test]
+fn retry_budget_escalates_once_without_crossing_runtime_limits() {
+    assert_eq!(adaptive_implementer_turns(2, 1, 24), 2);
+    assert_eq!(adaptive_implementer_turns(2, 2, 24), 4);
+    assert_eq!(adaptive_implementer_turns(2, 3, 24), 6);
+    assert_eq!(adaptive_implementer_turns(20, 2, 24), 24);
+    assert_eq!(adaptive_implementer_turns(2, 2, 3), 3);
+    assert_eq!(adaptive_implementer_turns(0, 1, 24), 1);
+}
+
+#[test]
 fn isolated_implementation_is_verified_prepared_and_preserved() {
     let (_directory, repo, plan, preflight) = repository("src/");
     let cancel = Arc::new(AtomicBool::new(false));
@@ -190,6 +200,9 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
     let cancel = Arc::new(AtomicBool::new(false));
     let (events, _) = mpsc::channel();
     let attempts = Cell::new(0u32);
+    let first_budget = Cell::new(0u32);
+    let second_budget = Cell::new(0u32);
+    let second_received_failure_feedback = Cell::new(false);
     let evidence = coordinate_with_executor(
         &repo,
         &plan,
@@ -201,10 +214,13 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
             attempts.set(attempt);
             match attempt {
                 1 => {
+                    first_budget.set(request.max_model_turns);
                     fs::write(request.worker.worktree.join("src/first.txt"), "two\n")
                         .map_err(|error| error.to_string())?;
                 }
                 2 => {
+                    second_budget.set(request.max_model_turns);
+                    second_received_failure_feedback.set(request.prior_failure.is_some());
                     let retained =
                         fs::read_to_string(request.worker.worktree.join("src/first.txt"))
                             .map_err(|error| error.to_string())?;
@@ -228,11 +244,48 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
     .expect("corrective implementation");
 
     assert_eq!(attempts.get(), 2);
+    assert!(second_budget.get() > first_budget.get());
+    assert!(second_received_failure_feedback.get());
     assert_eq!(
         evidence.changed_paths,
         vec!["src/first.txt", "src/other.txt", "src/value.txt"]
     );
     assert!(evidence.verification_receipt.passed);
+}
+
+#[test]
+fn interrupted_terminal_scheduler_is_reopened_for_bounded_recovery() {
+    let (_directory, repo, plan, preflight) = repository("src/");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (events, _) = mpsc::channel();
+
+    let first_error = coordinate_with_executor(&repo, &plan, &preflight, &cancel, &events, |_| {
+        Err("simulated provider interruption".to_owned())
+    })
+    .expect_err("first attempt should fail");
+    assert!(first_error.contains("simulated provider interruption"));
+
+    let state_path = preflight.state_path.parent().unwrap().join("implementation-state.json");
+    let mut state = load_state(&state_path).expect("durable failure state");
+    assert_eq!(state.status, ImplementationStatus::Failed);
+    // Model a process interruption between durable child failure and the
+    // parent state transition. The next invocation must recover this boundary
+    // instead of dispatching a terminal child task and returning zero work.
+    state.status = ImplementationStatus::Running;
+    write_atomic(&state_path, &state).expect("simulate interrupted state");
+
+    let evidence = coordinate_with_executor(&repo, &plan, &preflight, &cancel, &events, |request| {
+        fs::write(request.worker.worktree.join("src/lib.rs"), "pub fn value() -> u32 { 2 }\n")
+            .map_err(|error| error.to_string())?;
+        Ok(WorkerRun {
+            session_id: "recovery-session".to_owned(),
+            turns: 1,
+            summary: "recovered after reopening the bounded scheduler".to_owned(),
+        })
+    })
+    .expect("terminal scheduler should be reopened");
+
+    assert_eq!(evidence.changed_paths, vec!["src/lib.rs"]);
 }
 
 #[test]

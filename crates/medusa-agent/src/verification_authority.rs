@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -10,7 +9,7 @@ use std::{
     time::{Duration, Instant, UNIX_EPOCH},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_evidence::{ArtifactId, ChangeKind, ChangedComponent, VerificationReceipt};
 use sha2::{Digest, Sha256};
 
@@ -255,7 +254,7 @@ fn warm_authoritative_resources(
             }
             Ok(None) => {
                 metrics.cache_misses = metrics.cache_misses.saturating_add(1);
-                match Command::new(platform_program("cargo"))
+                match hidden_command(platform_program("cargo"))
                     .args(["metadata", "--format-version", "1", "--no-deps"])
                     .current_dir(repo)
                     .output()
@@ -354,7 +353,7 @@ fn dependency_descriptor(repo: &Path) -> Vec<u8> {
 }
 
 fn verification_toolchain_fingerprint(repo: &Path) -> String {
-    Command::new(platform_program("rustc"))
+    hidden_command(platform_program("rustc"))
         .arg("--version")
         .current_dir(repo)
         .output()
@@ -770,7 +769,7 @@ fn repository_state_paths(
     excluded: Option<&Path>,
 ) -> MedusaResult<Vec<PathBuf>> {
     let mut result = if is_revisioned_git_repository_root(repo) {
-        let output = Command::new("git")
+        let output = hidden_command("git")
             .args([
                 "ls-files",
                 "-z",
@@ -840,7 +839,7 @@ fn hash_repository_state_entry(hasher: &mut Sha256, path: &[u8], kind: &[u8], pa
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(args)
         .current_dir(repo)
         .output()
@@ -907,7 +906,7 @@ mod tests {
     fn explicit_ignored_component_changes_repository_state_fingerprint() {
         let directory = tempfile::tempdir().expect("repository");
         let git = |args: &[&str]| {
-            let status = Command::new("git")
+            let status = hidden_command("git")
                 .args(args)
                 .current_dir(directory.path())
                 .status()

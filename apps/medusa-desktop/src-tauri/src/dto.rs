@@ -199,6 +199,13 @@ pub struct DesktopQuestionOption {
     pub description: String,
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopWebArtifact {
+    pub path: String,
+    pub title: String,
+}
+
 impl From<RuntimeEvent> for DesktopRuntimeEvent {
     fn from(event: RuntimeEvent) -> Self {
         match event {

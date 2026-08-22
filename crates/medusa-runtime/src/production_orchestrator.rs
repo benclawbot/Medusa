@@ -634,6 +634,30 @@ mod tests {
     }
 
     #[test]
+    fn web_artifact_requests_get_a_narrow_default_write_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        let draft = PromptDraft {
+            text: "Build a beautiful photography webpage".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan_for_repository(directory.path(), &draft).unwrap();
+        assert!(requires_mutation(&planned));
+        assert_eq!(
+            planned.planning.scope.effective,
+            vec!["index.html".to_owned()]
+        );
+        assert_eq!(
+            planned
+                .planning
+                .task(TaskKind::Implementation)
+                .unwrap()
+                .task
+                .write_paths,
+            vec!["index.html".to_owned()]
+        );
+    }
+
+    #[test]
     fn task_context_is_bound_to_accepted_plan() {
         let draft = PromptDraft {
             text: "Implement a repository-wide refactor".to_owned(),

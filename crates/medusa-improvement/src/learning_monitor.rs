@@ -10,13 +10,12 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
     thread,
     time::{Duration, SystemTime},
 };
 
 use medusa_context::refinement::{RefinementArtifactKind, RefinementLifecycle};
-use medusa_core::learning_policy::LearningAdmissionPolicy;
+use medusa_core::{hidden_command, learning_policy::LearningAdmissionPolicy};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -1007,7 +1006,7 @@ fn now_unix_ms(outcome: &OutcomeRecord) -> i64 {
 }
 
 fn repository_revision(repo: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(repo)
         .output()

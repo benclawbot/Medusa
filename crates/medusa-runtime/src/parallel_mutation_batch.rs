@@ -2,7 +2,6 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -14,6 +13,7 @@ use medusa_agent::{
     authoritative_verification_for_components_at, prepare_components_for_verification,
 };
 use medusa_config::Config;
+use medusa_core::hidden_command;
 use medusa_evidence::{ChangedComponent, changed_scope_fingerprint};
 use medusa_multi_agent_scheduler::mutation_dag::{
     AcceptedTaskEvidence, IntegrationBarrier, MutationDag,
@@ -531,12 +531,12 @@ fn parallel_metrics(
 }
 
 fn reset_staging_for_replay(worktree: &Path, base_head: &str) -> Result<(), String> {
-    let _ = Command::new("git")
+    let _ = hidden_command("git")
         .args(["cherry-pick", "--abort"])
         .current_dir(worktree)
         .output();
     for args in [vec!["reset", "--hard", base_head], vec!["clean", "-fd"]] {
-        let output = Command::new("git")
+        let output = hidden_command("git")
             .args(&args)
             .current_dir(worktree)
             .output()
@@ -552,7 +552,7 @@ fn reset_staging_for_replay(worktree: &Path, base_head: &str) -> Result<(), Stri
 }
 
 fn cherry_pick_without_commit(worktree: &Path, commit: &str) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(["cherry-pick", "--no-commit", commit])
         .current_dir(worktree)
         .output()
@@ -565,11 +565,11 @@ fn cherry_pick_without_commit(worktree: &Path, commit: &str) -> Result<(), Strin
 }
 
 fn cleanup_staging(manager: &WorkerManager, worker: &Worker, base_head: &str) {
-    let _ = Command::new("git")
+    let _ = hidden_command("git")
         .args(["cherry-pick", "--abort"])
         .current_dir(&worker.worktree)
         .output();
-    let _ = Command::new("git")
+    let _ = hidden_command("git")
         .args(["reset", "--hard", base_head])
         .current_dir(&worker.worktree)
         .output();

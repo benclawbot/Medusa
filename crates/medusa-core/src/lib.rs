@@ -2,12 +2,27 @@
 
 use std::{collections::BTreeMap, fmt};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ulid::Ulid;
 
 pub mod learning_policy;
 pub mod repository_mutation;
+
+/// Creates a child-process command that never opens a visible console window on Windows.
+///
+/// Medusa is primarily a GUI/daemon application. Every subprocess launched for repository
+/// inspection, verification, or background tooling must use this constructor so Windows does
+/// not create a new `cmd.exe` window for each short-lived command.
+pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+    command
+}
 
 macro_rules! typed_id {
     ($name:ident, $prefix:literal) => {

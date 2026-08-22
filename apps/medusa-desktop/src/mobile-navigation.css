@@ -98,6 +98,17 @@
     display: none;
   }
 
+  .work-panel {
+    position: fixed;
+    z-index: 40;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(340px, calc(100vw - 16px));
+    border-left: 1px solid var(--border);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .16);
+  }
+
   .medusa-workspace .topbar {
     min-height: 0;
     padding: 10px 12px;

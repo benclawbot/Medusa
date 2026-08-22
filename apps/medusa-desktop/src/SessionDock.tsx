@@ -146,7 +146,7 @@ export function SessionDock() {
               <div className="session-history-meta">
                 <span>Turn {selected.summary.turn}</span>
                 <span>{formatSessionAge(selected.summary.updatedAt)}</span>
-                <code>{selected.summary.id.slice(0, 8)}</code>
+                <code>{(selected.summary.id ?? "").slice(0, 8) || "unavailable"}</code>
               </div>
               {selected.messages.length ? selected.messages.map((message, index) => (
                 <article className={`session-history-message ${message.role}`} key={`${message.role}-${index}`}>
@@ -166,7 +166,7 @@ export function SessionDock() {
               {!loading && !error && sessions.length === 0 && (
                 <div className="session-dock-empty"><History size={18} /> No saved sessions for this project.</div>
               )}
-              {sessions.slice(0, 12).map((session) => {
+              {(sessions ?? []).slice(0, 12).map((session) => {
                 const status = sessionStatus(session);
                 return (
                   <button
@@ -186,7 +186,7 @@ export function SessionDock() {
                     <div className="session-dock-meta">
                       <span>Turn {session.turn}</span>
                       <span>{formatSessionAge(session.updatedAt)}</span>
-                      <code>{session.id.slice(0, 8)}</code>
+                      <code>{(session.id ?? "").slice(0, 8) || "unavailable"}</code>
                     </div>
                   </button>
                 );

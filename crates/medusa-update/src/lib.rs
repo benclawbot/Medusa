@@ -27,4 +27,4 @@ pub use model::{
     Artifact, DownloadReport, Release, UpdateCheck, UpdatePolicy, copy_with_progress,
     verify_artifact, verify_sha256,
 };
-pub use source::{MainBranchRevision, MainBranchUpdater};
+pub use source::{MainBranchRevision, MainBranchUpdater, rolling_desktop_asset_name};

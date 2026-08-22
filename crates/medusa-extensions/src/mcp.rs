@@ -3,11 +3,11 @@ use std::{
     fs,
     io::Write,
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     time::Duration,
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -65,7 +65,7 @@ pub fn call_mcp_stdio(
         return Err(subprocess_containment_error("MCP stdio"));
     }
     fs::create_dir_all(sandbox_directory)?;
-    let mut command = Command::new(executable);
+    let mut command = hidden_command(executable);
     command
         .args(args)
         .current_dir(sandbox_directory)

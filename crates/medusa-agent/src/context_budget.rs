@@ -1,10 +1,9 @@
-use std::env;
-
 use medusa_provider::{Message, ToolDefinition};
 
 const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 128_000;
 const COMPACTION_THRESHOLD_PERCENT: u64 = 85;
 const BYTES_PER_ESTIMATED_TOKEN: u64 = 4;
+const CONTEXT_SAFETY_MARGIN_TOKENS: u64 = 512;
 
 /// Deterministic action selected before sending a provider request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,15 +79,43 @@ impl PromptBudget {
         self.context_window_tokens
             .saturating_sub(self.estimated_total_tokens)
     }
+
+    /// Returns a response budget that leaves room for provider-side tokenization overhead.
+    ///
+    /// The request budget includes the configured response reservation, but providers count
+    /// serialized envelopes and tool schemas differently. Keep a small safety margin and never
+    /// send a zero-token request after compaction has made the input fit.
+    #[must_use]
+    pub fn response_token_budget(self, requested: u32) -> u32 {
+        let input_tokens = self
+            .system_tokens
+            .saturating_add(self.conversation_tokens)
+            .saturating_add(self.tool_tokens);
+        let input_exceeds_context =
+            self.exceeds_context_window() && input_tokens > self.context_window_tokens;
+        let available = if input_exceeds_context {
+            0
+        } else if !self.exceeds_context_window() {
+            self.remaining_tokens()
+                .saturating_add(self.reserved_response_tokens)
+                .saturating_sub(CONTEXT_SAFETY_MARGIN_TOKENS)
+        } else {
+            self.context_window_tokens
+                .saturating_sub(input_tokens)
+                .saturating_sub(CONTEXT_SAFETY_MARGIN_TOKENS)
+        };
+        let available = u32::try_from(available).unwrap_or(u32::MAX).max(1);
+        requested.max(1).min(available)
+    }
 }
 
 #[must_use]
-pub fn configured_context_window_tokens() -> u64 {
-    env::var("MEDUSA_CONTEXT_WINDOW_TOKENS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
+pub fn configured_context_window_tokens(configured: u64) -> u64 {
+    if configured > 0 {
+        configured
+    } else {
+        DEFAULT_CONTEXT_WINDOW_TOKENS
+    }
 }
 
 /// Identifies provider errors that should trigger one compact-and-retry cycle.

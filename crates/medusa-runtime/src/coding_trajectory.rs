@@ -1,6 +1,7 @@
-use std::{collections::BTreeSet, fs, path::Path, process::Command};
+use std::{collections::BTreeSet, fs, path::Path};
 
 use medusa_agent::{AgentPlanStepStatus, AgentSession};
+use medusa_core::hidden_command;
 use medusa_protocol::EventPayload;
 use medusa_provider::{MessageBlock, Role};
 use medusa_session_continuity::{
@@ -426,7 +427,7 @@ fn repository_checkpoint(repo: &Path) -> RepositoryCheckpoint {
 }
 
 fn git(repo: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -473,6 +474,8 @@ fn store(repo: &Path, session_id: &str) -> ContinuityStore {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use medusa_agent::AgentEngine;
     use medusa_config::Config;
     use medusa_core::MedusaResult;

@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, repository_mutation};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command, repository_mutation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -586,7 +586,7 @@ fn minimal_scope<'a>(before: &'a [u8], after: &'a [u8]) -> (usize, &'a [u8], &'a
 }
 
 fn repository_fingerprint(repo: &Path) -> MedusaResult<String> {
-    let output = std::process::Command::new("git")
+    let output = hidden_command("git")
         .args(["diff", "--binary", "--no-ext-diff", "--", "."])
         .current_dir(repo)
         .output()?;
@@ -675,7 +675,7 @@ mod tests {
     #[test]
     fn commits_multiple_files() {
         let directory = tempfile::tempdir().expect("tempdir");
-        std::process::Command::new("git")
+        hidden_command("git")
             .args(["init", "-q"])
             .current_dir(directory.path())
             .status()
@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn records_minimal_scope_and_preserves_non_overlapping_user_edits_on_revert() {
         let directory = tempfile::tempdir().expect("tempdir");
-        std::process::Command::new("git")
+        hidden_command("git")
             .args(["init", "-q"])
             .current_dir(directory.path())
             .status()
@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn added_file_revert_removes_file_and_deleted_revert_restores_it() {
         let directory = tempfile::tempdir().expect("tempdir");
-        std::process::Command::new("git")
+        hidden_command("git")
             .args(["init", "-q"])
             .current_dir(directory.path())
             .status()
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     fn line_ending_change_round_trips_exactly() {
         let directory = tempfile::tempdir().expect("tempdir");
-        std::process::Command::new("git")
+        hidden_command("git")
             .args(["init", "-q"])
             .current_dir(directory.path())
             .status()
@@ -809,7 +809,7 @@ mod tests {
             MutationKind::BinaryUnavailable,
         ] {
             let directory = tempfile::tempdir().expect("tempdir");
-            std::process::Command::new("git")
+            hidden_command("git")
                 .args(["init", "-q"])
                 .current_dir(directory.path())
                 .status()
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn overlapping_user_edit_rejects_selective_revert() {
         let directory = tempfile::tempdir().expect("tempdir");
-        std::process::Command::new("git")
+        hidden_command("git")
             .args(["init", "-q"])
             .current_dir(directory.path())
             .status()

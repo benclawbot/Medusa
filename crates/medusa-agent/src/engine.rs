@@ -304,7 +304,7 @@ fn execute_session_tool(
 
     // Non-Git workspaces remain writable, but repository-diff provenance is unavailable there.
     // Keep that limitation explicit instead of failing the write or manufacturing authority.
-    let provenance_available = std::process::Command::new("git")
+    let provenance_available = medusa_core::hidden_command("git")
         .args(["diff", "--binary", "--no-ext-diff", "--", "."])
         .current_dir(repo)
         .output()
@@ -1549,14 +1549,17 @@ impl<P: ModelProvider> AgentEngine<P> {
         tools.retain(|tool| scoped_tool_names.binary_search(&tool.name).is_ok());
         let mut request_messages = messages_with_turn_instruction(session, turn_instruction);
         validate_messages(&request_messages, &self.provider.capabilities())?;
-        let max_output_tokens =
+        let requested_output_tokens =
             phase_output_token_budget(phase, self.config.model.max_output_tokens);
+        let context_window_tokens = context_budget::configured_context_window_tokens(
+            self.config.model.context_window_tokens,
+        );
         let mut budget = context_budget::PromptBudget::for_request(
             &system,
             &request_messages,
             &tools,
-            max_output_tokens,
-            context_budget::configured_context_window_tokens(),
+            requested_output_tokens,
+            context_window_tokens,
         );
         let repository_capacity = budget
             .compaction_threshold_tokens
@@ -1581,12 +1584,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                 &system,
                 &request_messages,
                 &tools,
-                max_output_tokens,
-                context_budget::configured_context_window_tokens(),
+                requested_output_tokens,
+                context_window_tokens,
             );
         }
-        let _remaining_context_tokens = budget.remaining_tokens();
-        let _request_exceeds_context_window = budget.exceeds_context_window();
         let mut compacted = false;
         if matches!(
             budget.decision(),
@@ -1601,6 +1602,14 @@ impl<P: ModelProvider> AgentEngine<P> {
             validate_messages(&request_messages, &self.provider.capabilities())?;
             compacted = true;
         }
+        budget = context_budget::PromptBudget::for_request(
+            &system,
+            &request_messages,
+            &tools,
+            requested_output_tokens,
+            context_window_tokens,
+        );
+        let max_output_tokens = budget.response_token_budget(requested_output_tokens);
         let mut request = ModelRequest {
             system,
             messages: request_messages,
@@ -1770,6 +1779,15 @@ impl<P: ModelProvider> AgentEngine<P> {
                     validate_messages(&session.messages, &self.provider.capabilities())?;
                     request.messages = messages_with_turn_instruction(session, turn_instruction);
                     validate_messages(&request.messages, &self.provider.capabilities())?;
+                    let retry_budget = context_budget::PromptBudget::for_request(
+                        &request.system,
+                        &request.messages,
+                        &request.tools,
+                        requested_output_tokens,
+                        context_window_tokens,
+                    );
+                    request.max_tokens =
+                        retry_budget.response_token_budget(requested_output_tokens);
                 }
                 let retry_capabilities = self.provider.capabilities();
                 let retry_manifest = effective_request::persist_before_provider_call(
@@ -1908,6 +1926,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             pause_for_question(session, question, &mut observer)?;
             return Ok(StepOutcome::WaitingForUser);
         }
+
+        let had_tool_calls = !calls.is_empty();
 
         let mut safe_tool_cache = BTreeMap::<String, String>::new();
         while !calls.is_empty() {
@@ -2589,7 +2609,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             }
         }
 
-        if stop_reason_completes_turn(response.stop_reason.as_deref())
+        if response_completes_turn(response.stop_reason.as_deref(), had_tool_calls)
             && !session.messages.last().is_some_and(|message| {
                 matches!(
                     message.content.first(),
@@ -2725,7 +2745,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)?;
         Ok(if session.completed {
             StepOutcome::Completed
-        } else if stop_reason_completes_turn(response.stop_reason.as_deref()) {
+        } else if response_completes_turn(response.stop_reason.as_deref(), had_tool_calls) {
             StepOutcome::TurnComplete
         } else {
             StepOutcome::Continue
@@ -2735,6 +2755,20 @@ impl<P: ModelProvider> AgentEngine<P> {
 
 fn stop_reason_completes_turn(stop_reason: Option<&str>) -> bool {
     matches!(stop_reason.map(str::trim), Some("end_turn" | "stop"))
+}
+
+/// Text-only responses are terminal unless the provider explicitly reports truncation.
+fn response_completes_turn(stop_reason: Option<&str>, had_tool_calls: bool) -> bool {
+    if had_tool_calls {
+        return false;
+    }
+    if stop_reason_completes_turn(stop_reason) {
+        return true;
+    }
+    !matches!(
+        stop_reason.map(str::trim),
+        Some("length" | "max_tokens" | "content_filter")
+    )
 }
 
 fn approval_action_label(name: &str, input: &serde_json::Value) -> String {
@@ -3019,12 +3053,12 @@ mod terminal_stop_reason_tests {
     }
 
     impl ScriptedStopProvider {
-        fn new(stop_reason: &str) -> Self {
+        fn new(stop_reason: Option<&str>) -> Self {
             Self {
                 responses: Mutex::new(
                     [ModelResponse {
                         response_id: Some("stop-reason-fixture".to_owned()),
-                        stop_reason: Some(stop_reason.to_owned()),
+                        stop_reason: stop_reason.map(str::to_owned),
                         blocks: vec![ResponseBlock::Text {
                             text: "Evidence-backed delegated report complete.".to_owned(),
                         }],
@@ -3052,7 +3086,7 @@ mod terminal_stop_reason_tests {
         }
     }
 
-    fn read_only_step(stop_reason: &str) -> StepOutcome {
+    fn read_only_step(stop_reason: Option<&str>) -> StepOutcome {
         let directory = tempfile::tempdir().expect("temporary repository");
         let mut config = Config::default();
         config.agent.mode = Mode::ReadOnly;
@@ -3065,16 +3099,21 @@ mod terminal_stop_reason_tests {
 
     #[test]
     fn openai_stop_completes_a_read_only_turn() {
-        assert_eq!(read_only_step("stop"), StepOutcome::TurnComplete);
+        assert_eq!(read_only_step(Some("stop")), StepOutcome::TurnComplete);
     }
 
     #[test]
     fn anthropic_end_turn_still_completes_a_read_only_turn() {
-        assert_eq!(read_only_step("end_turn"), StepOutcome::TurnComplete);
+        assert_eq!(read_only_step(Some("end_turn")), StepOutcome::TurnComplete);
     }
 
     #[test]
     fn truncated_provider_output_does_not_complete_the_turn() {
-        assert_eq!(read_only_step("length"), StepOutcome::Continue);
+        assert_eq!(read_only_step(Some("length")), StepOutcome::Continue);
+    }
+
+    #[test]
+    fn text_without_a_finish_reason_completes_a_read_only_turn() {
+        assert_eq!(read_only_step(None), StepOutcome::TurnComplete);
     }
 }

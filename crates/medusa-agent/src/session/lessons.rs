@@ -1,6 +1,6 @@
-use std::{collections::BTreeSet, fs, path::PathBuf, process::Command};
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, hidden_command};
 use medusa_improvement::provenance::{
     ProvenanceOutcome, ProvenanceSource, repository_identity, repository_revision,
 };
@@ -206,7 +206,7 @@ fn repository_fingerprint(repo: &std::path::Path) -> String {
 }
 
 fn git_output(repo: &std::path::Path, arguments: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(arguments)
         .current_dir(repo)
         .output()

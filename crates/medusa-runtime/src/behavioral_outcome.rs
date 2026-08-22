@@ -1,7 +1,8 @@
 //! Runtime access to the canonical behavioral outcome projection.
 
-use std::{path::Path, process::Command};
+use std::path::Path;
 
+use medusa_core::hidden_command;
 use medusa_agent::session_browser::replay_events;
 pub use medusa_improvement::behavioral_metrics;
 pub use medusa_improvement::behavioral_outcome::{
@@ -42,7 +43,7 @@ pub fn behavioral_outcome_from_events(
 }
 
 fn repository_revision(repo: &Path) -> Option<String> {
-    Command::new("git")
+    hidden_command("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(repo)
         .output()

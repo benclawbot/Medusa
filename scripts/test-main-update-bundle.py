@@ -23,7 +23,7 @@ REVISION = "0123456789abcdef0123456789abcdef01234567"
 
 class MainUpdateBundleTests(unittest.TestCase):
     def write_bundle(self, root: Path, revision: str = REVISION) -> None:
-        for name in CHECKER.EXPECTED_ARCHIVES.values():
+        for name in CHECKER.EXPECTED_ARTIFACTS.values():
             archive = root / name
             archive.write_bytes((name.encode("utf-8") * 32)[:1024])
             manifest = {
@@ -43,7 +43,7 @@ class MainUpdateBundleTests(unittest.TestCase):
             self.write_bundle(root)
             self.assertEqual(
                 set(CHECKER.verify_bundle(root, REVISION)),
-                set(CHECKER.EXPECTED_ARCHIVES.values()),
+                set(CHECKER.EXPECTED_ARTIFACTS.values()),
             )
 
     def test_stale_manifest_revision_is_rejected(self) -> None:
@@ -57,7 +57,7 @@ class MainUpdateBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.write_bundle(root)
-            missing = next(iter(CHECKER.EXPECTED_ARCHIVES.values()))
+            missing = next(iter(CHECKER.EXPECTED_ARTIFACTS.values()))
             (root / missing).unlink()
             (root / f"{missing}.json").unlink()
             with self.assertRaisesRegex(ValueError, "exactly"):
@@ -67,7 +67,7 @@ class MainUpdateBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.write_bundle(root)
-            name = next(iter(CHECKER.EXPECTED_ARCHIVES.values()))
+            name = next(iter(CHECKER.EXPECTED_ARTIFACTS.values()))
             manifest_path = root / f"{name}.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["sha256"] = "0" * 64

@@ -14,7 +14,7 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 
 use crate::{DaemonClient, DaemonPaths, Request, Response};
 
@@ -61,7 +61,7 @@ impl DaemonLaunch {
     }
 
     fn spawn(&self, paths: &DaemonPaths) -> MedusaResult<()> {
-        let mut command = Command::new(&self.executable);
+        let mut command = hidden_command(&self.executable);
         command
             .args(&self.arguments)
             .arg("--repo")
@@ -268,6 +268,24 @@ impl DaemonSupervisor {
             }
             response => Err(lifecycle_error(format!(
                 "daemon returned an unexpected shutdown response: {response:?}"
+            ))),
+        }
+    }
+
+    /// Requests an immediate daemon shutdown without waiting for accepted jobs to drain.
+    ///
+    /// Frontends use this when their owning window is closing. The daemon must not
+    /// outlive the desktop process or leave a provider turn running in the background.
+    pub fn shutdown_now(&mut self) -> MedusaResult<DaemonLifecycle> {
+        match self.client().request(Request::ShutdownNow)? {
+            Response::Ack => {
+                self.next_retry = Instant::now() + RESTART_BACKOFF;
+                Ok(DaemonLifecycle::degraded(
+                    "daemon shutdown requested immediately",
+                ))
+            }
+            response => Err(lifecycle_error(format!(
+                "daemon returned an unexpected immediate shutdown response: {response:?}"
             ))),
         }
     }
