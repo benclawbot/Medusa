@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Brain, Download, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Download, RefreshCw, ShieldCheck, X } from "lucide-react";
 import {
   exportLearningAudit,
   loadLearningReview,
@@ -10,6 +10,8 @@ import {
   type LearningReviewItem,
   type LearningReviewSnapshot,
 } from "./learningApi";
+import { useDesktopToolRequest } from "./desktop-tools";
+import { useDialogFocus } from "./useDialogFocus";
 import "./learning-dock.css";
 
 function actions(item: LearningReviewItem) {
@@ -31,6 +33,11 @@ export function LearningDock() {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const repo = window.localStorage.getItem("medusa.desktop.repo") ?? "";
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const openFromRail = useCallback(() => setOpen(true), []);
+  useDesktopToolRequest("learning", openFromRail);
+  useDialogFocus(open, dialogRef, close);
 
   const reload = async () => {
     if (!repo) return;
@@ -105,17 +112,14 @@ export function LearningDock() {
   };
 
   return <>
-    <button className="learning-launcher" onClick={() => setOpen(true)} title="Learning review">
-      <Brain size={18}/><span>Learning</span>
-    </button>
-    {open && <div className="learning-overlay" role="dialog" aria-modal="true" aria-label="Learning review">
-      <div className="learning-shell">
+    {open && <div className="learning-overlay">
+      <div ref={dialogRef} className="learning-shell" role="dialog" aria-modal="true" aria-label="Learning review" tabIndex={-1}>
         <header>
           <div><span className="eyebrow">Authoritative lifecycle</span><h2>Learning review</h2></div>
           <div className="learning-header-actions">
             <button onClick={() => void reload()} disabled={busy}><RefreshCw size={15}/>Refresh</button>
             <button onClick={() => void exportAudit()} disabled={busy || !repo}><Download size={15}/>Export audit</button>
-            <button aria-label="Close learning review" onClick={() => setOpen(false)}><X size={17}/></button>
+            <button aria-label="Close learning review" onClick={close}><X size={17}/></button>
           </div>
         </header>
         {!repo && <p className="learning-empty">Open a repository to review learned behavior.</p>}

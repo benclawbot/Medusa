@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownRight,
   ArrowUpRight,
-  BarChart3,
   RefreshCw,
   ShieldCheck,
   X,
@@ -12,6 +11,8 @@ import {
   loadEngineeringDashboard,
   type EngineeringDashboardData,
 } from "./engineeringApi";
+import { useDesktopToolRequest } from "./desktop-tools";
+import { useDialogFocus } from "./useDialogFocus";
 import "./engineering-dashboard.css";
 
 const pct = (value: number) => `${value.toFixed(1)}%`;
@@ -66,5 +67,10 @@ function Dashboard({ repo }: { repo: string }) {
 export function EngineeringDashboardLauncher() {
   const [open, setOpen] = useState(false);
   const repo = window.localStorage.getItem("medusa.desktop.repo") ?? "";
-  return <><button className="engineering-menu-button" onClick={()=>setOpen(true)} title="Engineering dashboard"><BarChart3 size={18}/><span>Engineering</span></button>{open && <div className="engineering-overlay"><div className="engineering-shell"><button className="engineering-close" onClick={()=>setOpen(false)} aria-label="Close engineering dashboard"><X size={18}/></button><Dashboard repo={repo}/></div></div>}</>;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  const openFromRail = useCallback(() => setOpen(true), []);
+  useDesktopToolRequest("engineering", openFromRail);
+  useDialogFocus(open, dialogRef, close);
+  return <>{open && <div className="engineering-overlay"><div ref={dialogRef} className="engineering-shell" role="dialog" aria-modal="true" aria-label="Engineering dashboard" tabIndex={-1}><button className="engineering-close" onClick={close} aria-label="Close engineering dashboard"><X size={18}/></button><Dashboard repo={repo}/></div></div>}</>;
 }

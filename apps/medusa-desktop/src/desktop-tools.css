@@ -1,0 +1,393 @@
+:root {
+  --desktop-tool-overlay: rgba(25, 25, 25, 0.28);
+  --desktop-tool-surface: #ffffff;
+  --desktop-tool-border: #e6e6e6;
+  --desktop-tool-muted: #737373;
+  --desktop-tool-shadow: 0 24px 80px rgba(0, 0, 0, 0.16);
+}
+
+.session-dock,
+.diff-dock-backdrop,
+.memory-dock-backdrop,
+.learning-overlay,
+.engineering-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--desktop-tool-overlay);
+  backdrop-filter: blur(2px);
+}
+
+.session-dock-panel,
+.diff-dock,
+.memory-dock-panel,
+.learning-shell,
+.engineering-shell {
+  position: relative;
+  width: min(1180px, 100%);
+  max-height: min(780px, calc(100vh - 40px));
+  min-height: 0;
+  border: 1px solid var(--desktop-tool-border) !important;
+  border-radius: 16px !important;
+  background: var(--desktop-tool-surface) !important;
+  color: var(--text) !important;
+  box-shadow: var(--desktop-tool-shadow) !important;
+  backdrop-filter: none !important;
+}
+
+.session-dock {
+  font-family: inherit;
+}
+
+.session-dock-panel {
+  width: min(640px, 100%);
+  max-height: min(680px, calc(100vh - 40px));
+  left: auto;
+  bottom: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-dock-panel > header,
+.session-dock-panel > footer {
+  border-color: var(--desktop-tool-border) !important;
+}
+
+.session-dock-panel header small,
+.session-dock-panel footer,
+.session-dock-meta,
+.session-history-meta {
+  color: var(--desktop-tool-muted) !important;
+}
+
+.session-dock-panel header strong,
+.session-dock-item-top > strong,
+.session-history-message p {
+  color: var(--text) !important;
+}
+
+.session-dock-actions button {
+  color: var(--desktop-tool-muted) !important;
+}
+
+.session-dock-actions button:hover,
+.session-dock-item:hover {
+  background: #f5f5f5 !important;
+  color: var(--text) !important;
+}
+
+.session-history-message {
+  background: #f7f7f7 !important;
+}
+
+.session-history-message.user {
+  background: #eeeeee !important;
+}
+
+.session-dock-empty {
+  color: var(--desktop-tool-muted) !important;
+}
+
+.session-dock-error {
+  color: #8f3333 !important;
+}
+
+.session-resume {
+  border-color: var(--desktop-tool-border) !important;
+  background: #f5f5f5 !important;
+  color: var(--text) !important;
+}
+
+.diff-dock-backdrop {
+  z-index: 91;
+}
+
+.diff-dock {
+  inset: auto;
+  display: flex;
+  flex-direction: column;
+  width: min(1180px, 100%);
+  height: min(780px, calc(100vh - 40px));
+  overflow: hidden;
+}
+
+.memory-dock-backdrop {
+  z-index: 92;
+}
+
+.memory-dock-panel {
+  height: min(780px, calc(100vh - 40px));
+}
+
+.learning-overlay {
+  z-index: 93;
+}
+
+.learning-shell {
+  width: min(980px, 100%);
+  overflow: auto;
+}
+
+.engineering-overlay {
+  z-index: 94;
+}
+
+.engineering-shell {
+  width: min(1200px, 100%);
+  height: min(820px, calc(100vh - 40px));
+}
+
+/* The host is a grid-column anchor; the portalized panel itself remains a
+   direct grid item so it cannot push Plan, Settings, or the composer into the
+   transcript flow. */
+.side-panel-slot {
+  display: contents;
+}
+
+/* Keep the composer compact at rest, with the textarea between its controls. */
+.composer-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.composer-card:focus-within {
+  border-color: var(--medusa-border-strong) !important;
+  box-shadow: var(--medusa-shadow) !important;
+}
+
+.composer-line {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px 8px 12px;
+}
+
+.composer-line .composer-tools,
+.composer-line .composer-actions {
+  flex: 0 0 auto;
+  align-self: flex-end;
+}
+
+.composer-line textarea {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 38px;
+  max-height: 160px;
+  margin: 0;
+  padding: 7px 2px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  overflow-y: hidden;
+}
+
+.composer-line textarea:focus {
+  outline: 0;
+  box-shadow: none;
+}
+
+/* Conversation content follows the same reading rhythm as Codex: user turns
+   stay compact on the right while model answers can use the full transcript
+   width for prose, tables, and code. */
+.transcript {
+  width: 100%;
+  max-width: none;
+  align-items: stretch;
+}
+
+.message.user {
+  width: min(50%, 720px);
+  max-width: 50%;
+  align-self: flex-end;
+}
+
+.message.user .message-heading {
+  justify-content: flex-end;
+}
+
+.message.user .message-heading time {
+  margin-left: 0;
+}
+
+.message.user .message-body {
+  border: 0;
+  border-radius: 24px 24px 8px 24px;
+  background: #e8f1ff;
+  padding: 15px 20px;
+  color: #163b6b;
+}
+
+.message.assistant {
+  width: 100%;
+  max-width: none;
+  align-self: flex-start;
+}
+
+.markdown-message {
+  min-width: 0;
+  color: inherit;
+}
+
+.markdown-message > :first-child {
+  margin-top: 0;
+}
+
+.markdown-message > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-message p,
+.markdown-message ul,
+.markdown-message ol,
+.markdown-message blockquote,
+.markdown-message .markdown-table-wrap,
+.markdown-message .markdown-code {
+  margin: 0 0 16px;
+}
+
+.markdown-message h1,
+.markdown-message h2,
+.markdown-message h3,
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 {
+  margin: 20px 0 10px;
+  color: var(--medusa-ink);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+.markdown-message h1 { font-size: 1.55rem; }
+.markdown-message h2 { font-size: 1.3rem; }
+.markdown-message h3 { font-size: 1.12rem; }
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 { font-size: 1rem; }
+
+.markdown-message ul,
+.markdown-message ol {
+  padding-left: 24px;
+}
+
+.markdown-message li + li {
+  margin-top: 6px;
+}
+
+.markdown-message blockquote {
+  border-left: 3px solid var(--medusa-border-strong);
+  padding-left: 16px;
+  color: var(--medusa-muted);
+}
+
+.markdown-message hr {
+  margin: 22px 0;
+  border: 0;
+  border-top: 1px solid var(--medusa-border);
+}
+
+.markdown-message a {
+  color: #244f9e;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.markdown-message code:not(pre code) {
+  border-radius: 4px;
+  background: #f1f1f3;
+  padding: 2px 5px;
+  color: #343438;
+  font-family: var(--medusa-font-mono);
+  font-size: 0.9em;
+}
+
+.markdown-code {
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--medusa-border);
+  border-radius: 12px;
+  background: #f5f5f6;
+  padding: 18px;
+  color: #28282b;
+  font-family: var(--medusa-font-mono);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.markdown-code-language {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  color: var(--medusa-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.markdown-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--medusa-border);
+  border-radius: 10px;
+}
+
+.markdown-message table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 420px;
+}
+
+.markdown-message th,
+.markdown-message td {
+  border-bottom: 1px solid var(--medusa-border);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-message th {
+  color: var(--medusa-ink);
+  background: #f8f8f9;
+  font-weight: 650;
+}
+
+.markdown-message tr:last-child td {
+  border-bottom: 0;
+}
+
+@media (max-width: 700px) {
+  .message.user {
+    width: 86%;
+    max-width: 86%;
+  }
+}
+
+@media (max-width: 700px) {
+  .session-dock,
+  .diff-dock-backdrop,
+  .memory-dock-backdrop,
+  .learning-overlay,
+  .engineering-overlay {
+    padding: 10px;
+  }
+
+  .session-dock-panel,
+  .diff-dock,
+  .memory-dock-panel,
+  .learning-shell,
+  .engineering-shell {
+    max-height: calc(100vh - 20px);
+    border-radius: 12px !important;
+  }
+
+  .diff-dock,
+  .memory-dock-panel,
+  .engineering-shell {
+    height: calc(100vh - 20px);
+  }
+}

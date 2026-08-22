@@ -4,7 +4,6 @@ import {
   Download,
   FileCode2,
   Filter,
-  GitCompareArrows,
   Link2,
   RefreshCw,
   RotateCcw,
@@ -26,6 +25,7 @@ import {
   type ReviewProvenance,
   type ReviewWorkspace,
 } from "./reviewApi";
+import { useDesktopToolRequest } from "./desktop-tools";
 import {
   canPresentVerifiedCompletion,
   evidenceFreshness,
@@ -254,6 +254,8 @@ export function DiffDock() {
   const [error, setError] = useState<string>();
   const dialogRef = useRef<HTMLElement>(null);
   const close = useCallback(() => setOpen(false), []);
+  const openFromRail = useCallback(() => setOpen(true), []);
+  useDesktopToolRequest("review", openFromRail);
   useDialogFocus(open, dialogRef, close);
 
   const refresh = useCallback(async () => {
@@ -358,24 +360,16 @@ export function DiffDock() {
 
   return (
     <>
-      <button
-        className="diff-dock-trigger"
-        onClick={() => setOpen(true)}
-        aria-label="Open code review"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-      >
-        <GitCompareArrows size={16} /> Review
-      </button>
       {open && (
-        <section
-          ref={dialogRef}
-          className="diff-dock"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="diff-dialog-title"
-          tabIndex={-1}
-        >
+        <div className="diff-dock-backdrop">
+          <section
+            ref={dialogRef}
+            className="diff-dock"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="diff-dialog-title"
+            tabIndex={-1}
+          >
           <header className="diff-dock-toolbar">
             <div>
               <h2 id="diff-dialog-title">Code review</h2>
@@ -503,7 +497,8 @@ export function DiffDock() {
               </section>
             </div>
           )}
-        </section>
+          </section>
+        </div>
       )}
     </>
   );

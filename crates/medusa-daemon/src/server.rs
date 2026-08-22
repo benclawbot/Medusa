@@ -34,7 +34,7 @@ use std::{path::PathBuf, thread, time::Duration};
 #[cfg(not(test))]
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 #[cfg(not(test))]
-use medusa_protocol::frontend::{FrontendCommand, FrontendCommandEnvelope};
+use medusa_protocol::frontend::FrontendCommandEnvelope;
 
 #[cfg(not(test))]
 use crate::{
@@ -153,17 +153,15 @@ impl DaemonClient {
 
 #[cfg(not(test))]
 fn frontend_request_is_retryable(request: &Request) -> bool {
-    let Request::Frontend { envelope } = request else {
-        return false;
-    };
-    !matches!(
-        &envelope.command,
-        FrontendCommand::ListSessions
-            | FrontendCommand::Replay { .. }
-            | FrontendCommand::PollTransient
-            | FrontendCommand::ShowSessionActions
-            | FrontendCommand::ShowStatus
-    )
+    // Every frontend request opens a fresh local IPC connection.  A Windows
+    // loopback reset can therefore happen after the daemon has accepted the
+    // command but before the response reaches the client.  Frontend commands
+    // carry an idempotency key (and the read-only projections are naturally
+    // safe to repeat), so retry the complete frontend envelope instead of
+    // surfacing a one-off WSAECONNRESET as a failed turn.  This is especially
+    // important for the high-frequency PollTransient/Replay pair used by the
+    // desktop while a turn is running.
+    matches!(request, Request::Frontend { .. })
 }
 
 #[cfg(not(test))]

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { DESKTOP_TOOL_EVENT, type DesktopTool } from "./desktop-tools";
 import { loadProviderCatalog, startBrowserOauth } from "./providerCatalog";
 import {
   closeRuntime,
@@ -162,6 +163,47 @@ it("starts a general chat without requiring a project", async () => {
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
 });
 
+it("keeps the empty chat quiet and starts the composer at one line", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+
+  expect(screen.queryByRole("heading", { name: "How can Medusa help?" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Ask a question, paste a screenshot, or open a project when you want Medusa to work on files.")).not.toBeInTheDocument();
+  expect(screen.queryByText("Shift+Enter for a new line")).not.toBeInTheDocument();
+  expect(screen.getByRole("textbox")).toHaveAttribute("rows", "1");
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
+});
+
+it("grows the composer only when the prompt spans additional lines", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  Object.defineProperty(composer, "scrollHeight", { configurable: true, value: 84 });
+
+  fireEvent.change(composer, { target: { value: "First line\nSecond line" } });
+
+  await waitFor(() => expect(composer).toHaveStyle({ height: "84px" }));
+});
+
+it("keeps Plan and Settings in the central workspace", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  fireEvent.click(screen.getByRole("button", { name: "Plan" }));
+  const planHeading = screen.getByRole("heading", { name: "Execution plan" });
+  expect(planHeading.closest(".workspace")).toBeInTheDocument();
+  expect(planHeading.closest(".side-panel")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  const settingsHeading = screen.getByRole("heading", { name: "Model settings" });
+  expect(settingsHeading.closest(".workspace")).toBeInTheDocument();
+  expect(settingsHeading.closest(".side-panel")).not.toBeInTheDocument();
+});
+
 it("renders provider and model choices from the shared catalog", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);
@@ -226,6 +268,21 @@ it("gives the icon-only send button an accessible name", async () => {
 
   fireEvent.change(composer, { target: { value: "Hello" } });
   expect(sendButton).toBeEnabled();
+});
+
+it("switches to the stop button while Enter submission is still in flight", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  let resolveSubmit: (value: "started" | "queued") => void = () => undefined;
+  vi.mocked(submitRuntime).mockReturnValue(new Promise((resolve) => { resolveSubmit = resolve; }));
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Hello" } });
+  fireEvent.keyDown(composer, { key: "Enter", shiftKey: false });
+
+  expect(await screen.findByRole("button", { name: "Stop active turn" })).toBeInTheDocument();
+  resolveSubmit("started");
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
 });
 
 it("uses a stop square while working and re-enables send for steering input", async () => {
@@ -372,6 +429,22 @@ it("consolidates desktop tools in the session rail", async () => {
   expect(screen.getByRole("button", { name: "Engineering" })).toBeInTheDocument();
 });
 
+it("routes every Tools rail item through the shared desktop-tool event", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  const requested: DesktopTool[] = [];
+  const onToolRequest = (event: Event) => requested.push((event as CustomEvent<DesktopTool>).detail);
+  window.addEventListener(DESKTOP_TOOL_EVENT, onToolRequest);
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  for (const name of ["Sessions", "Review changes", "Memory", "Learning", "Engineering"]) {
+    fireEvent.click(screen.getByRole("button", { name }));
+  }
+
+  expect(requested).toEqual(["sessions", "review", "memory", "learning", "engineering"]);
+  window.removeEventListener(DESKTOP_TOOL_EVENT, onToolRequest);
+});
+
 it("renders tool work as collapsed activity rows", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   vi.mocked(pollRuntime)
@@ -418,7 +491,7 @@ it("keeps technical error details behind disclosure and retries the last request
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
   expect(await screen.findByRole("alert")).toBeInTheDocument();
-  expect(screen.getByText("EACCES: permission denied")).toBeInTheDocument();
+  expect(screen.getAllByText("EACCES: permission denied").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText("Show details")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -439,7 +512,7 @@ it("adds a terminal error summary to the chat transcript", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
   expect(await screen.findByText(/The request did not complete because the runtime reported an error:/)).toBeInTheDocument();
-  expect(screen.getByText("provider rejected the request")).toBeInTheDocument();
+  expect(screen.getAllByText("provider rejected the request").length).toBeGreaterThanOrEqual(1);
 });
 
 it("adds a fallback summary when a turn finishes without assistant text", async () => {
