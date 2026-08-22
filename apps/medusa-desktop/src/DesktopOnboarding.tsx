@@ -40,7 +40,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   const chooseProvider = (value: string) => {
     const next = catalog.find((entry) => entry.profileProvider === value);
     setProvider(value);
-    setModel(next?.defaultModel ?? "");
+    setModel(next?.browserOauth ? "" : next?.defaultModel ?? "");
     setApiKey("");
     setBaseUrl(next?.baseUrl ?? "");
     setAuthError(undefined);

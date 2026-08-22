@@ -322,7 +322,12 @@ export function App() {
     setSharedConfiguration(configuration);
     setProviderCatalog(catalog);
     setProvider(configuration.provider);
-    setModel(configuration.model);
+    const configuredProvider = catalog.find((entry) => entry.profileProvider === configuration.provider);
+    setModel(configuredProvider?.browserOauth
+      ? configuredProvider.modelOptions.includes(configuration.model)
+        ? configuration.model
+        : configuredProvider.modelOptions[0] ?? ""
+      : configuration.model);
     setEffort(configuration.effort);
     setBaseUrl(configuration.baseUrl ?? catalog.find((entry) => entry.profileProvider === configuration.provider)?.baseUrl ?? "");
     if (
@@ -809,7 +814,7 @@ export function App() {
     setApiKey("");
     setError(undefined);
     setBaseUrl(nextProvider?.baseUrl ?? "");
-    setModel(nextProvider?.defaultModel ?? "");
+    setModel(nextProvider?.browserOauth ? "" : nextProvider?.defaultModel ?? "");
     if (!nextProvider) return;
 
     setLoadingModels(true);
@@ -818,7 +823,7 @@ export function App() {
       setProviderCatalog(refreshed);
       const refreshedProvider = refreshed.find((entry) => entry.profileProvider === value);
       if (refreshedProvider) {
-        setModel(refreshedProvider.modelOptions[0] ?? refreshedProvider.defaultModel);
+        setModel(refreshedProvider.modelOptions[0] ?? (refreshedProvider.browserOauth ? "" : refreshedProvider.defaultModel));
       }
     } catch (cause) {
       setError(String(cause));
@@ -840,7 +845,7 @@ export function App() {
       if (refreshedProvider) {
         setModel((current) => refreshedProvider.modelOptions.includes(current)
           ? current
-          : refreshedProvider.modelOptions[0] ?? refreshedProvider.defaultModel);
+          : refreshedProvider.modelOptions[0] ?? (refreshedProvider.browserOauth ? "" : refreshedProvider.defaultModel));
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

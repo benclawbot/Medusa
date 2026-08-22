@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { loadProviderCatalog } from "./providerCatalog";
+import { loadProviderCatalog, startBrowserOauth } from "./providerCatalog";
 import {
   closeRuntime,
   cancelRuntime,
@@ -63,6 +63,22 @@ const providerCatalog = [
     customValues: false,
     currentCustom: false,
   },
+  {
+    id: "openai-oauth",
+    displayName: "ChatGPT OAuth",
+    description: "ChatGPT/Codex OAuth through the local gateway",
+    connection: "chatgpt-oauth",
+    profileProvider: "openai-oauth",
+    authMethods: ["none"],
+    defaultAuth: "none",
+    defaultModel: "gpt-5",
+    modelOptions: [],
+    baseUrl: "http://127.0.0.1:10531/v1",
+    browserOauth: true,
+    discoverModels: true,
+    customValues: false,
+    currentCustom: false,
+  },
 ];
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
@@ -71,6 +87,7 @@ vi.mock("./providerCatalog", async () => {
   return {
     ...actual,
     loadProviderCatalog: vi.fn(),
+    startBrowserOauth: vi.fn(),
   };
 });
 vi.mock("./runtime", async () => {
@@ -104,6 +121,7 @@ vi.mock("./runtime", async () => {
 beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(loadProviderCatalog).mockReset().mockResolvedValue(providerCatalog);
+  vi.mocked(startBrowserOauth).mockReset();
   vi.mocked(loadSharedConfiguration).mockReset().mockResolvedValue({
     revision: 0,
     activeProfile: "default",
@@ -158,6 +176,30 @@ it("renders provider and model choices from the shared catalog", async () => {
   fireEvent.change(providerSelect, { target: { value: "openai" } });
   expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.1-codex");
   expect(screen.getByRole("option", { name: "gpt-5.1" })).toBeInTheDocument();
+});
+
+it("signs in through ChatGPT OAuth and replaces the placeholder with discovered models", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(startBrowserOauth).mockResolvedValue(undefined);
+  const authenticatedCatalog = providerCatalog.map((entry) => entry.id === "openai-oauth"
+    ? { ...entry, modelOptions: ["gpt-5.6-terra"] }
+    : entry);
+  vi.mocked(loadProviderCatalog)
+    .mockResolvedValueOnce(providerCatalog)
+    .mockResolvedValue(authenticatedCatalog);
+  render(<App />);
+  await waitFor(() => expect(startRuntime).toHaveBeenCalled());
+
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "openai-oauth" } });
+  await waitFor(() => expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument());
+  expect(screen.queryByRole("option", { name: "gpt-5" })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-terra");
+
+  fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
+  await waitFor(() => expect(startBrowserOauth).toHaveBeenCalledWith("openai-oauth"));
+  expect(await screen.findByRole("option", { name: "gpt-5.6-terra" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-terra");
 });
 
 it("uses catalog auth metadata instead of a frontend provider allowlist", async () => {

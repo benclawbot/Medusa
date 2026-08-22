@@ -1,6 +1,5 @@
 use std::{
     net::{SocketAddr, TcpStream},
-    path::PathBuf,
     process::Stdio,
     thread,
     time::{Duration, Instant},
@@ -10,6 +9,10 @@ use crate::desktop_command::hidden_command;
 
 const OPENAI_OAUTH_ADDR: &str = "127.0.0.1:10531";
 
+fn npx_program() -> &'static str {
+    if cfg!(windows) { "npx.cmd" } else { "npx" }
+}
+
 fn browser_oauth_spec(provider: &str) -> Result<(&'static str, [&'static str; 6]), String> {
     if provider != "openai-oauth" {
         return Err(format!(
@@ -17,7 +20,7 @@ fn browser_oauth_spec(provider: &str) -> Result<(&'static str, [&'static str; 6]
         ));
     }
     Ok((
-        "npx",
+        npx_program(),
         [
             "--yes",
             "openai-oauth@latest",
@@ -35,28 +38,20 @@ fn browser_oauth_gateway_spec(provider: &str) -> Result<(&'static str, [&'static
             "provider `{provider}` does not expose a Medusa browser sign-in helper"
         ));
     }
-    Ok(("npx", ["--yes", "openai-oauth@latest", "--detach"]))
-}
-
-fn oauth_auth_file_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(home) = std::env::var_os("CODEX_HOME") {
-        candidates.push(PathBuf::from(home).join("auth.json"));
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(PathBuf::from(home).join(".codex").join("auth.json"));
-    }
-    if let Some(home) = std::env::var_os("USERPROFILE") {
-        candidates.push(PathBuf::from(home).join(".codex").join("auth.json"));
-    }
-    candidates
+    Ok((npx_program(), ["--yes", "openai-oauth@latest", "--detach"]))
 }
 
 pub(crate) fn browser_oauth_credentials_present(provider: &str) -> bool {
-    provider == "openai-oauth"
-        && oauth_auth_file_candidates()
-            .iter()
-            .any(|path| path.is_file())
+    provider == "openai-oauth" && medusa_runtime::discover_openai_oauth_models().is_ok()
+}
+
+fn gateway_is_reachable() -> bool {
+    OPENAI_OAUTH_ADDR
+        .parse::<SocketAddr>()
+        .ok()
+        .is_some_and(|address| {
+            TcpStream::connect_timeout(&address, Duration::from_millis(400)).is_ok()
+        })
 }
 
 fn wait_for_oauth_gateway() -> Result<(), String> {
@@ -94,23 +89,28 @@ pub async fn desktop_browser_oauth(provider: String) -> Result<(), String> {
         if !status.success() {
             return Err(format!("openai-oauth browser sign-in exited with {status}"));
         }
+        if !gateway_is_reachable() {
+            let gateway_status = hidden_command(gateway_program)
+                .args(gateway_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|error| format!("could not start the ChatGPT OAuth gateway: {error}"))?;
+            if !gateway_status.success() {
+                return Err(format!(
+                    "ChatGPT OAuth gateway startup exited with {gateway_status}"
+                ));
+            }
+            wait_for_oauth_gateway()?;
+        }
         if !browser_oauth_credentials_present("openai-oauth") {
-            return Err("ChatGPT OAuth finished without creating a reusable local credential".to_owned());
+            return Err(
+                "ChatGPT sign-in completed, but the OAuth gateway returned no authenticated models"
+                    .to_owned(),
+            );
         }
-
-        let gateway_status = hidden_command(gateway_program)
-            .args(gateway_args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|error| format!("could not start the ChatGPT OAuth gateway: {error}"))?;
-        if !gateway_status.success() {
-            return Err(format!(
-                "ChatGPT OAuth gateway startup exited with {gateway_status}"
-            ));
-        }
-        wait_for_oauth_gateway()
+        Ok(())
     })
     .await
     .map_err(|error| format!("browser sign-in task failed: {error}"))?
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn oauth_command_matches_cli_contract() {
         let (program, args) = browser_oauth_spec("openai-oauth").expect("oauth spec");
-        assert_eq!(program, "npx");
+        assert_eq!(program, npx_program());
         assert_eq!(
             args,
             [
@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn oauth_gateway_is_started_detached() {
         let (program, args) = browser_oauth_gateway_spec("openai-oauth").expect("gateway spec");
-        assert_eq!(program, "npx");
+        assert_eq!(program, npx_program());
         assert_eq!(args, ["--yes", "openai-oauth@latest", "--detach"]);
     }
 

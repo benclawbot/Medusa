@@ -82,13 +82,22 @@ export async function loadProviderCatalog(
         ? {
             ...provider,
             models: registry.models,
-            modelOptions: registry.models.map((model) => model.id),
+            modelOptions: registry.models
+              .filter((model) => !provider.browserOauth || (
+                model.availability === "available"
+                && !model.deprecated
+                && (model.source === "discovered" || model.source === "cached")
+              ))
+              .map((model) => model.id),
           }
         : provider,
     );
   } catch {
-    // Provider metadata remains usable when authenticated discovery is offline.
-    return providers;
+    // Provider metadata remains usable when discovery is offline, but OAuth must not
+    // present its static placeholder as if it were an account-authorized model.
+    return providers.map((provider) => provider.browserOauth
+      ? { ...provider, models: [], modelOptions: [] }
+      : provider);
   }
 }
 

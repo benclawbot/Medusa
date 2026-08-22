@@ -87,6 +87,102 @@ it("keeps deterministic provider fallback when discovery is unavailable", async 
   expect(providers[0].modelOptions).toEqual(["MiniMax-M3"]);
 });
 
+it("never exposes the OAuth placeholder when discovery is unavailable", async () => {
+  vi.mocked(invoke)
+    .mockResolvedValueOnce([{
+      id: "openai-oauth",
+      displayName: "ChatGPT OAuth",
+      description: "Browser OAuth route",
+      connection: "chatgpt-oauth",
+      profileProvider: "openai-oauth",
+      authMethods: ["none"],
+      defaultAuth: "none",
+      defaultModel: "gpt-5",
+      modelOptions: ["gpt-5"],
+      browserOauth: true,
+      discoverModels: true,
+      customValues: false,
+      currentCustom: false,
+    }])
+    .mockResolvedValueOnce({
+      provider_id: "openai-oauth",
+      discovery_available: true,
+      used_cached_discovery: false,
+      models: [{
+        id: "gpt-5",
+        display_name: "gpt-5",
+        provider_id: "openai-oauth",
+        profile_provider: "openai-oauth",
+        availability: "not-authorized",
+        source: "curated",
+        capabilities: {
+          tool_calling: true,
+          image_input: true,
+          audio_input: true,
+          realtime: false,
+          reasoning: true,
+          reasoning_effort_levels: ["low", "medium", "high"],
+          streaming: true,
+          structured_output: true,
+          prompt_caching: true,
+        },
+        deprecated: false,
+        recommended: true,
+      }],
+    });
+
+  const providers = await loadProviderCatalog(true, "openai-oauth");
+  expect(providers[0].modelOptions).toEqual([]);
+});
+
+it("uses only account-discovered OAuth models after sign-in", async () => {
+  vi.mocked(invoke)
+    .mockResolvedValueOnce([{
+      id: "openai-oauth",
+      displayName: "ChatGPT OAuth",
+      description: "Browser OAuth route",
+      connection: "chatgpt-oauth",
+      profileProvider: "openai-oauth",
+      authMethods: ["none"],
+      defaultAuth: "none",
+      defaultModel: "gpt-5",
+      modelOptions: ["gpt-5"],
+      browserOauth: true,
+      discoverModels: true,
+      customValues: false,
+      currentCustom: false,
+    }])
+    .mockResolvedValueOnce({
+      provider_id: "openai-oauth",
+      discovery_available: true,
+      used_cached_discovery: false,
+      models: [{
+        id: "gpt-5.6-terra",
+        display_name: "GPT-5.6 Terra",
+        provider_id: "openai-oauth",
+        profile_provider: "openai-oauth",
+        availability: "available",
+        source: "discovered",
+        capabilities: {
+          tool_calling: true,
+          image_input: true,
+          audio_input: false,
+          realtime: false,
+          reasoning: true,
+          reasoning_effort_levels: ["low", "medium", "high"],
+          streaming: true,
+          structured_output: true,
+          prompt_caching: true,
+        },
+        deprecated: false,
+        recommended: true,
+      }],
+    });
+
+  const providers = await loadProviderCatalog(true, "openai-oauth");
+  expect(providers[0].modelOptions).toEqual(["gpt-5.6-terra"]);
+});
+
 
 it("resolves OpenAI OAuth image input by profile provider and connection metadata", () => {
   const providers: ProviderCatalogEntry[] = [{
