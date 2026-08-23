@@ -2398,6 +2398,8 @@ pub enum ComponentRuntimeError {
     },
     #[error("unknown resource {0:?}")]
     UnknownResource(String),
+    #[error(transparent)]
+    ContainmentPolicy(#[from] ContainmentPolicyError),
     #[error(
         "external operation {operation_id:?} is irreversible and must be tracked by the commit ledger"
     )]
@@ -2496,6 +2498,16 @@ impl ComponentRuntime {
         spec: ComponentSpec,
         provenance: ComponentProvenance,
     ) -> Result<ComponentInstanceId, ComponentRuntimeError> {
+        let platform = ContainmentPlatform::current();
+        self.instantiate_with_platform(spec, provenance, &platform)
+    }
+
+    pub fn instantiate_with_platform(
+        &mut self,
+        spec: ComponentSpec,
+        provenance: ComponentProvenance,
+        platform: &ContainmentPlatform,
+    ) -> Result<ComponentInstanceId, ComponentRuntimeError> {
         spec.validate()?;
         let next = self
             .next_generations
@@ -2509,6 +2521,8 @@ impl ComponentRuntime {
             component_id: spec.id.clone(),
             generation: next,
         };
+        CapabilityPolicyCompiler::compile(&spec, &identity, provenance.desired_revision, platform)
+            .map_err(ComponentRuntimeError::ContainmentPolicy)?;
         for resource in &spec.exclusive_resources {
             if let Some(owner) = self.exclusive_owners.get(resource) {
                 return Err(ComponentRuntimeError::ExclusiveResourceConflict {

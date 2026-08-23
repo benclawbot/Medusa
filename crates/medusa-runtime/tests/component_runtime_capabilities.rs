@@ -1,5 +1,6 @@
 use medusa_runtime::component_runtime::{
-    CapabilityPolicyCompiler, ComponentGeneration, ComponentId, ComponentInstanceId, ComponentSpec,
+    CapabilityPolicyCompiler, ComponentGeneration, ComponentId, ComponentInstanceId,
+    ComponentProvenance, ComponentRuntime, ComponentRuntimeError, ComponentSpec,
     ContainmentControl, ContainmentPlatform, ContainmentPolicyError, HostCapability,
 };
 
@@ -70,4 +71,25 @@ fn policy_fingerprint_changes_for_generation_and_revision_changes() {
         .expect("next revision policy");
     assert_ne!(first.policy_generation, next_generation.policy_generation);
     assert_ne!(first.policy_generation, next_revision.policy_generation);
+}
+
+#[test]
+fn runtime_instantiation_fails_closed_when_platform_cannot_enforce_capability() {
+    let mut runtime = ComponentRuntime::new();
+    let platform = ContainmentPlatform::new("minimal", [ContainmentControl::Filesystem]);
+    let error = runtime
+        .instantiate_with_platform(
+            ComponentSpec::new("worker").with_capability(HostCapability::Network),
+            ComponentProvenance::new(1, "test"),
+            &platform,
+        )
+        .expect_err("runtime must reject an unenforceable capability");
+    assert!(matches!(
+        error,
+        ComponentRuntimeError::ContainmentPolicy(ContainmentPolicyError::Unsupported {
+            control: ContainmentControl::Network,
+            ..
+        })
+    ));
+    assert!(runtime.active_instances().is_empty());
 }
