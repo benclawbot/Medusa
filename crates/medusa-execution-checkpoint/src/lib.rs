@@ -290,7 +290,10 @@ impl LearningRecord {
         if self.learning_id.trim().is_empty() || self.statement.trim().is_empty() {
             return Err(CheckpointError::InvalidLearning);
         }
-        if !matches!(self.state, LearningState::Verified | LearningState::Canonical) {
+        if !matches!(
+            self.state,
+            LearningState::Verified | LearningState::Canonical
+        ) {
             return Err(CheckpointError::UnverifiedLearningInjection);
         }
         let evidence = self
@@ -425,7 +428,8 @@ impl StepCapsule {
         }
         if let Some(hypothesis) = &self.retry_hypothesis {
             hypothesis.verify()?;
-            if self.failure_fingerprint.as_deref() != Some(hypothesis.failure_fingerprint.as_str()) {
+            if self.failure_fingerprint.as_deref() != Some(hypothesis.failure_fingerprint.as_str())
+            {
                 return Err(CheckpointError::RetryFailureMismatch);
             }
         }
@@ -482,7 +486,9 @@ impl StepCapsule {
             if !hypothesis.meaningfully_differs_from(previous_hypothesis) {
                 return Err(CheckpointError::UnchangedRetryStrategy);
             }
-        } else if hypothesis.previous_hypothesis.is_none() && hypothesis.disproving_evidence.is_empty() {
+        } else if hypothesis.previous_hypothesis.is_none()
+            && hypothesis.disproving_evidence.is_empty()
+        {
             return Err(CheckpointError::RetryDeltaRequired);
         }
         Ok(())
