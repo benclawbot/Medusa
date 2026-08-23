@@ -35,6 +35,10 @@ pub(crate) fn shared_blocking_http_client() -> MedusaResult<BlockingClient> {
     let client = BlockingClient::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(PROVIDER_REQUEST_TIMEOUT)
+        // MiniMax's OpenAI-compatible endpoint has intermittently reset HTTP/2
+        // connections on Windows. Keep provider traffic on HTTP/1.1, which is
+        // the protocol used by the documented curl/Python integrations.
+        .http1_only()
         .tcp_nodelay(true)
         .pool_max_idle_per_host(8)
         .build()
@@ -51,6 +55,7 @@ pub(crate) fn shared_async_http_client() -> MedusaResult<AsyncClient> {
     let client = AsyncClient::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(PROVIDER_REQUEST_TIMEOUT)
+        .http1_only()
         .tcp_nodelay(true)
         .pool_max_idle_per_host(8)
         .build()

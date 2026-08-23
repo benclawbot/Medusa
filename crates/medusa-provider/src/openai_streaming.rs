@@ -123,6 +123,18 @@ impl OpenAiStreamAccumulator {
         Ok(response)
     }
 
+    /// Finalizes a provider stream that closes after a terminal chunk without emitting `[DONE]`.
+    /// MiniMax's OpenAI-compatible endpoint uses this valid HTTP/SSE close pattern.
+    pub fn finish_at_eof(
+        &mut self,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<Option<ModelResponse>> {
+        if self.completed || self.stop_reason.is_none() {
+            return Ok(None);
+        }
+        self.finish(sink).map(Some)
+    }
+
     fn finish_pending_tools(
         &mut self,
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
@@ -312,6 +324,30 @@ mod tests {
             event,
             ProviderStreamEvent::TextDelta { text } if text == "hel"
         )));
+    }
+
+    #[test]
+    fn terminal_chunk_can_finish_without_done_sentinel() {
+        let mut accumulator = OpenAiStreamAccumulator::default();
+        let mut events = Vec::new();
+        let mut sink = |event| {
+            events.push(event);
+            Ok(())
+        };
+        accumulator
+            .push_sse_data(
+                r#"{"id":"chatcmpl-eof","choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]}"#,
+                &mut sink,
+            )
+            .expect("terminal chunk");
+        let response = accumulator
+            .finish_at_eof(&mut sink)
+            .expect("finish at eof")
+            .expect("response");
+        assert_eq!(response.blocks, vec![ResponseBlock::Text { text: "hello".into() }]);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ProviderStreamEvent::Completed { .. })));
     }
 
     #[test]

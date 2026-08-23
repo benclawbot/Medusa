@@ -55,6 +55,9 @@ pub(crate) fn complete_blocking(
         }
         Ok(())
     })?;
+    if completed.is_none() {
+        completed = accumulator.finish_at_eof(sink)?;
+    }
     completed.ok_or_else(|| stream_error("OpenAI SSE stream ended without [DONE]"))
 }
 
@@ -68,7 +71,10 @@ pub(crate) fn complete_cancellable(
 ) -> MedusaResult<ModelResponse> {
     let (sender, receiver) = mpsc::channel::<ProviderStreamEvent>();
     thread::scope(|scope| {
-        let worker = scope.spawn(|| {
+        // The worker owns its sender. Keeping the outer sender alive while waiting
+        // on the receiver would prevent the event loop from observing completion.
+        let worker_sender = sender.clone();
+        let worker = scope.spawn(move || {
             run_cancellable_request(cancel, async {
                 let mut builder = client.post(endpoint).json(&body);
                 if let Some(key) = api_key {
@@ -85,7 +91,7 @@ pub(crate) fn complete_cancellable(
                 while let Some(chunk) = response.chunk().await.map_err(provider_error)? {
                     decoder.push(&chunk, |data| {
                         let mut channel_sink = |event| {
-                            sender
+                            worker_sender
                                 .send(event)
                                 .map_err(|_| stream_error("OpenAI stream consumer disconnected"))
                         };
@@ -99,7 +105,7 @@ pub(crate) fn complete_cancellable(
                 }
                 decoder.finish(|data| {
                     let mut channel_sink = |event| {
-                        sender
+                        worker_sender
                             .send(event)
                             .map_err(|_| stream_error("OpenAI stream consumer disconnected"))
                     };
@@ -108,10 +114,19 @@ pub(crate) fn complete_cancellable(
                     }
                     Ok(())
                 })?;
+                if completed.is_none() {
+                    let mut channel_sink = |event| {
+                        worker_sender
+                            .send(event)
+                            .map_err(|_| stream_error("OpenAI stream consumer disconnected"))
+                    };
+                    completed = accumulator.finish_at_eof(&mut channel_sink)?;
+                }
                 completed.ok_or_else(|| stream_error("OpenAI SSE stream ended without [DONE]"))
             })
         });
 
+        drop(sender);
         for event in receiver {
             sink(event)?;
         }
@@ -191,7 +206,75 @@ fn stream_error(message: impl Into<String>) -> MedusaError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read as _, Write as _},
+        net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc::channel,
+        },
+        time::Duration,
+    };
+
     use super::*;
+
+    #[test]
+    fn cancellable_stream_completion_returns_after_done() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let body = concat!(
+                "data: {\"id\":\"stream-1\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n"
+            );
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("response");
+        });
+
+        let client = AsyncClient::builder()
+            .http1_only()
+            .build()
+            .expect("client");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_for_worker = Arc::clone(&cancel);
+        let (done_sender, done_receiver) = channel();
+        thread::spawn(move || {
+            let mut events = Vec::new();
+            let result = complete_cancellable(
+                &client,
+                &format!("http://{address}/chat/completions"),
+                None,
+                serde_json::json!({"model":"MiniMax-M3","messages":[],"stream":true}),
+                &cancel_for_worker,
+                &mut |event| {
+                    events.push(event);
+                    Ok(())
+                },
+            )
+            .map(|response| (response, events));
+            let _ = done_sender.send(result);
+        });
+
+        let (response, events) = done_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("stream completion should not wait on the sender")
+            .expect("stream request");
+        assert_eq!(response.blocks.len(), 1);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ProviderStreamEvent::Completed { .. })));
+        cancel.store(true, Ordering::SeqCst);
+        server.join().expect("server");
+    }
 
     #[test]
     fn decoder_handles_fragmented_crlf_and_multiline_data() {
