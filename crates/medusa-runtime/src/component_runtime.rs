@@ -1839,6 +1839,23 @@ impl<'a> SelfModificationApi<'a> {
         runtime: &mut ComponentRuntime,
         commit: &ProposalCommit,
     ) -> Result<ReconcileReport, ProposalError> {
+        let current = self.store.snapshot();
+        if current != commit.receipt.snapshot || current.revision != commit.receipt.revision {
+            return Err(ProposalError::DesiredState(
+                DesiredStateError::RevisionConflict {
+                    expected: commit.receipt.revision,
+                    current,
+                },
+            ));
+        }
+        if !self
+            .store
+            .audit_records()
+            .iter()
+            .any(|audit| audit == &commit.audit)
+        {
+            return Err(ProposalError::DirectMutationDenied);
+        }
         Reconciler::reconcile(runtime, &commit.receipt.snapshot).map_err(ProposalError::from)
     }
 }

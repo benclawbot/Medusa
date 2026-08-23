@@ -80,3 +80,24 @@ fn invalid_proposal_is_rejected_before_cas_and_keeps_audits_clean() {
     assert_eq!(store.snapshot().revision, 0);
     assert!(store.audit_records().is_empty());
 }
+
+#[test]
+fn forged_commit_receipt_cannot_bypass_the_audited_proposal_path() {
+    let store = DesiredStateStore::new();
+    let mut runtime = ComponentRuntime::new();
+    let facade = AgentRuntimeFacade::new(&store);
+    let proposal = DesiredStateProposal::new(
+        "proposal-1",
+        0,
+        vec![DesiredStateMutation::upsert(ComponentSpec::new("worker"))],
+        ProposalSource::new("agent-1", "task-1"),
+    );
+    let mut forged = facade.commit(&proposal, &runtime).expect("commit");
+    forged.audit.proposal_id = "forged".to_owned();
+
+    let error = facade
+        .apply(&mut runtime, &forged)
+        .expect_err("forged audit");
+    assert!(matches!(error, ProposalError::DirectMutationDenied));
+    assert!(runtime.active_generations("worker").is_empty());
+}
