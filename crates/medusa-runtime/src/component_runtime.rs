@@ -7,8 +7,10 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -766,6 +768,378 @@ impl From<ComponentRuntimeError> for ReplacementError {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DesiredRuntimeState {
+    pub revision: u64,
+    pub components: BTreeMap<ComponentId, ComponentSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
+}
+
+impl Default for DesiredRuntimeState {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            components: BTreeMap::new(),
+            provenance: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DesiredStateMutation {
+    Upsert(ComponentSpec),
+    Remove(ComponentId),
+    SetEnabled {
+        component: ComponentId,
+        enabled: bool,
+    },
+}
+
+impl DesiredStateMutation {
+    #[must_use]
+    pub fn upsert(spec: ComponentSpec) -> Self {
+        Self::Upsert(spec)
+    }
+
+    #[must_use]
+    pub fn remove(component: ComponentId) -> Self {
+        Self::Remove(component)
+    }
+
+    #[must_use]
+    pub fn set_enabled(component: ComponentId, enabled: bool) -> Self {
+        Self::SetEnabled { component, enabled }
+    }
+
+    fn apply(&self, state: &mut DesiredRuntimeState) -> Result<(), DesiredStateError> {
+        match self {
+            Self::Upsert(spec) => {
+                spec.validate()
+                    .map_err(|error| DesiredStateError::Validation {
+                        reason: error.to_string(),
+                    })?;
+                state.components.insert(spec.id.clone(), spec.clone());
+            }
+            Self::Remove(component) => {
+                state.components.remove(component);
+            }
+            Self::SetEnabled { component, enabled } => {
+                let spec = state.components.get_mut(component).ok_or_else(|| {
+                    DesiredStateError::Validation {
+                        reason: format!(
+                            "cannot change enabled state of unknown component {component:?}"
+                        ),
+                    }
+                })?;
+                spec.enabled = *enabled;
+            }
+        }
+        let specs = state.components.values().cloned().collect::<Vec<_>>();
+        DependencyResolver::validate_graph(&specs).map_err(|error| {
+            DesiredStateError::Validation {
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DesiredStateCommit {
+    pub revision: u64,
+    pub snapshot: DesiredRuntimeState,
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Error)]
+pub enum DesiredStateError {
+    #[error("desired-state revision conflict: expected {expected}, current {current:?}")]
+    RevisionConflict {
+        expected: u64,
+        current: DesiredRuntimeState,
+    },
+    #[error("desired-state validation failed: {reason}")]
+    Validation { reason: String },
+    #[error("desired-state persistence failed: {0}")]
+    Persistence(String),
+    #[error("desired-state serialization failed: {0}")]
+    Serialization(String),
+}
+
+struct DesiredStateStoreInner {
+    state: DesiredRuntimeState,
+    idempotent_commits: BTreeMap<String, DesiredStateCommit>,
+}
+
+pub struct DesiredStateStore {
+    inner: Mutex<DesiredStateStoreInner>,
+    path: Option<PathBuf>,
+}
+
+impl DesiredStateStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(DesiredStateStoreInner {
+                state: DesiredRuntimeState::default(),
+                idempotent_commits: BTreeMap::new(),
+            }),
+            path: None,
+        }
+    }
+
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, DesiredStateError> {
+        let path = path.into();
+        let state = if path.is_file() {
+            let bytes = fs::read(&path)
+                .map_err(|error| DesiredStateError::Persistence(error.to_string()))?;
+            serde_json::from_slice(&bytes)
+                .map_err(|error| DesiredStateError::Serialization(error.to_string()))?
+        } else {
+            DesiredRuntimeState::default()
+        };
+        Ok(Self {
+            inner: Mutex::new(DesiredStateStoreInner {
+                state,
+                idempotent_commits: BTreeMap::new(),
+            }),
+            path: Some(path),
+        })
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> DesiredRuntimeState {
+        self.inner.lock().expect("desired-state lock").state.clone()
+    }
+
+    pub fn compare_and_swap(
+        &self,
+        expected_revision: u64,
+        mutation: DesiredStateMutation,
+        source: impl Into<String>,
+    ) -> Result<DesiredStateCommit, DesiredStateError> {
+        self.compare_and_swap_with_idempotency(expected_revision, mutation, source, None)
+    }
+
+    pub fn compare_and_swap_with_idempotency(
+        &self,
+        expected_revision: u64,
+        mutation: DesiredStateMutation,
+        source: impl Into<String>,
+        idempotency_key: Option<String>,
+    ) -> Result<DesiredStateCommit, DesiredStateError> {
+        let mut inner = self.inner.lock().expect("desired-state lock");
+        if let Some(key) = idempotency_key.as_deref()
+            && let Some(previous) = inner.idempotent_commits.get(key)
+        {
+            return Ok(previous.clone());
+        }
+        if inner.state.revision != expected_revision {
+            return Err(DesiredStateError::RevisionConflict {
+                expected: expected_revision,
+                current: inner.state.clone(),
+            });
+        }
+        let mut next = inner.state.clone();
+        mutation.apply(&mut next)?;
+        next.revision = next.revision.saturating_add(1);
+        next.provenance = Some(source.into());
+        if let Some(path) = &self.path {
+            persist_desired_state(path, &next)?;
+        }
+        let commit = DesiredStateCommit {
+            revision: next.revision,
+            snapshot: next.clone(),
+            idempotency_key,
+        };
+        inner.state = next;
+        if let Some(key) = commit.idempotency_key.as_ref() {
+            inner.idempotent_commits.insert(key.clone(), commit.clone());
+        }
+        Ok(commit)
+    }
+}
+
+impl Default for DesiredStateStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn persist_desired_state(
+    path: &PathBuf,
+    state: &DesiredRuntimeState,
+) -> Result<(), DesiredStateError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| DesiredStateError::Persistence(error.to_string()))?;
+    }
+    let temporary = path.with_extension("tmp");
+    let bytes = serde_json::to_vec_pretty(state)
+        .map_err(|error| DesiredStateError::Serialization(error.to_string()))?;
+    fs::write(&temporary, bytes)
+        .map_err(|error| DesiredStateError::Persistence(error.to_string()))?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        if path.exists() {
+            fs::remove_file(path)
+                .and_then(|_| fs::rename(&temporary, path))
+                .map_err(|_| DesiredStateError::Persistence(error.to_string()))?;
+        } else {
+            return Err(DesiredStateError::Persistence(error.to_string()));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReconcileAction {
+    Added {
+        component: ComponentId,
+    },
+    Updated {
+        component: ComponentId,
+    },
+    Disabled {
+        component: ComponentId,
+    },
+    Removed {
+        component: ComponentId,
+    },
+    Noop {
+        component: ComponentId,
+    },
+    Blocked {
+        component: ComponentId,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconcileReport {
+    pub desired_revision: u64,
+    pub applied: bool,
+    pub actions: Vec<ReconcileAction>,
+}
+
+pub struct Reconciler;
+
+impl Reconciler {
+    pub fn reconcile(
+        runtime: &mut ComponentRuntime,
+        desired: &DesiredRuntimeState,
+    ) -> Result<ReconcileReport, DesiredStateError> {
+        let mut actions = Vec::new();
+        let mut applied = false;
+        let desired_ids = desired.components.keys().cloned().collect::<BTreeSet<_>>();
+        for (component, spec) in &desired.components {
+            let active = runtime.active_generations(component.as_str());
+            if !spec.enabled {
+                if active.is_empty() {
+                    actions.push(ReconcileAction::Noop {
+                        component: component.clone(),
+                    });
+                } else {
+                    for identity in active {
+                        let report = runtime.deactivate(&identity).map_err(|error| {
+                            DesiredStateError::Validation {
+                                reason: error.to_string(),
+                            }
+                        })?;
+                        if report.is_clean() {
+                            actions.push(ReconcileAction::Disabled {
+                                component: component.clone(),
+                            });
+                            applied = true;
+                        } else {
+                            actions.push(ReconcileAction::Blocked {
+                                component: component.clone(),
+                                reason: format!("cleanup debt: {:?}", report.cleanup_debt),
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
+            if active.is_empty() {
+                let identity = runtime
+                    .instantiate(spec.clone(), desired.revision)
+                    .map_err(|error| DesiredStateError::Validation {
+                        reason: error.to_string(),
+                    })?;
+                runtime
+                    .activate(&identity)
+                    .map_err(|error| DesiredStateError::Validation {
+                        reason: error.to_string(),
+                    })?;
+                actions.push(ReconcileAction::Added {
+                    component: component.clone(),
+                });
+                applied = true;
+                continue;
+            }
+            let mut changed = false;
+            for identity in active {
+                if runtime.spec(&identity) != Some(spec) {
+                    let replacement = runtime.replace_component(
+                        &identity,
+                        spec.clone(),
+                        |_, _| Ok(()),
+                        |_| Ok(()),
+                        ReplacementOptions::default(),
+                    );
+                    match replacement {
+                        Ok(_) => {
+                            changed = true;
+                            applied = true;
+                        }
+                        Err(error) => actions.push(ReconcileAction::Blocked {
+                            component: component.clone(),
+                            reason: error.to_string(),
+                        }),
+                    }
+                }
+            }
+            if changed {
+                actions.push(ReconcileAction::Updated {
+                    component: component.clone(),
+                });
+            } else if !actions.iter().any(|action| {
+                matches!(action, ReconcileAction::Blocked { component: existing, .. } if existing == component)
+            }) {
+                actions.push(ReconcileAction::Noop {
+                    component: component.clone(),
+                });
+            }
+        }
+        for identity in runtime.active_instances() {
+            if !desired_ids.contains(identity.component_id()) {
+                let report = runtime.deactivate(&identity).map_err(|error| {
+                    DesiredStateError::Validation {
+                        reason: error.to_string(),
+                    }
+                })?;
+                if report.is_clean() {
+                    actions.push(ReconcileAction::Removed {
+                        component: identity.component_id.clone(),
+                    });
+                    applied = true;
+                } else {
+                    actions.push(ReconcileAction::Blocked {
+                        component: identity.component_id.clone(),
+                        reason: format!("cleanup debt: {:?}", report.cleanup_debt),
+                    });
+                }
+            }
+        }
+        Ok(ReconcileReport {
+            desired_revision: desired.revision,
+            applied,
+            actions,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
 pub enum DependencyResolutionError {
     #[error("component {component:?} requires missing service {service:?}")]
@@ -1239,6 +1613,26 @@ impl ComponentRuntime {
         Ok(())
     }
 
+    pub fn deactivate(
+        &mut self,
+        identity: &ComponentInstanceId,
+    ) -> Result<RollbackReport, ComponentRuntimeError> {
+        let record = self
+            .instances
+            .get_mut(identity)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))?;
+        record.state = LifecycleState::Deactivating;
+        let report = record.journal.rollback();
+        if report.is_clean() {
+            record.state = LifecycleState::Inactive;
+            record.committed_dependency_view = DependencyView::default();
+            record.target_dependency_view = DependencyView::default();
+        } else {
+            record.state = LifecycleState::BlockedRetirement;
+        }
+        Ok(report)
+    }
+
     pub fn record_effect<F>(
         &mut self,
         identity: &ComponentInstanceId,
@@ -1444,6 +1838,15 @@ impl ComponentRuntime {
                 identity.component_id.as_str() == component_id
                     && record.state == LifecycleState::Active
             })
+            .map(|(identity, _)| identity.clone())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn active_instances(&self) -> Vec<ComponentInstanceId> {
+        self.instances
+            .iter()
+            .filter(|(_, record)| record.state == LifecycleState::Active)
             .map(|(identity, _)| identity.clone())
             .collect()
     }
