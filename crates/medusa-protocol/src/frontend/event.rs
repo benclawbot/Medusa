@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{CURRENT_PROTOCOL_VERSION, ProtocolVersion};
+use crate::{ProtocolVersion, CURRENT_PROTOCOL_VERSION};
 
 #[cfg(test)]
 use super::FRONTEND_PROTOCOL_VERSION;
@@ -128,8 +128,18 @@ pub enum FrontendEvent {
     Usage {
         input_tokens: u64,
         output_tokens: u64,
+        #[serde(default)]
+        cache_read_input_tokens: u64,
+        #[serde(default)]
+        cache_creation_input_tokens: u64,
         total_tokens: u64,
+        #[serde(default)]
+        duration_ms: u64,
+        #[serde(default)]
+        tokens_per_second_milli: u64,
         estimated_cost_microusd: u64,
+        #[serde(default)]
+        provenance: String,
     },
     Progress {
         turn: u32,

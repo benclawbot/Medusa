@@ -1248,19 +1248,24 @@ fn map_frontend_event(
         FrontendEvent::Usage {
             input_tokens,
             output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
             total_tokens,
+            duration_ms,
+            tokens_per_second_milli,
             estimated_cost_microusd,
+            provenance,
         } => {
             events.push_back(RuntimeEvent::Usage {
                 input_tokens,
                 output_tokens,
-                cache_read_input_tokens: 0,
-                cache_creation_input_tokens: 0,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
                 total_tokens,
-                duration_ms: 0,
-                tokens_per_second_milli: 0,
+                duration_ms,
+                tokens_per_second_milli,
                 estimated_cost_microusd,
-                provenance: "canonical-journal".to_owned(),
+                provenance,
             });
         }
         FrontendEvent::Progress { turn, .. } => {

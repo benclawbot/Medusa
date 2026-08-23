@@ -212,14 +212,39 @@ pub fn project_event(
         EventPayload::ModelResponseReceived { usage, .. } => {
             let input_tokens = integer(usage, &["input_tokens", "inputTokens"]);
             let output_tokens = integer(usage, &["output_tokens", "outputTokens"]);
+            let cache_read_input_tokens =
+                integer(usage, &["cache_read_input_tokens", "cacheReadInputTokens"]);
+            let cache_creation_input_tokens = integer(
+                usage,
+                &["cache_creation_input_tokens", "cacheCreationInputTokens"],
+            );
+            let total_tokens =
+                if usage.get("total_tokens").is_some() || usage.get("totalTokens").is_some() {
+                    integer(usage, &["total_tokens", "totalTokens"])
+                } else {
+                    input_tokens
+                        .saturating_add(output_tokens)
+                        .saturating_add(cache_read_input_tokens)
+                        .saturating_add(cache_creation_input_tokens)
+                };
             FrontendEvent::Usage {
                 input_tokens,
                 output_tokens,
-                total_tokens: input_tokens.saturating_add(output_tokens),
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                total_tokens,
+                duration_ms: integer(usage, &["duration_ms", "durationMs"]),
+                tokens_per_second_milli: integer(
+                    usage,
+                    &["tokens_per_second_milli", "tokensPerSecondMilli"],
+                ),
                 estimated_cost_microusd: integer(
                     usage,
                     &["estimated_cost_microusd", "estimatedCostMicrousd"],
                 ),
+                provenance: string(usage, &["provenance"])
+                    .unwrap_or("canonical-journal")
+                    .to_owned(),
             }
         }
         EventPayload::ProviderExecutionRecorded { status } => FrontendEvent::Activity(activity(
@@ -802,6 +827,41 @@ mod tests {
             projected.event,
             FrontendEvent::AssistantTextDelta {
                 text: "Visible answer".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn usage_projection_preserves_normalized_telemetry() {
+        let source = event(EventPayload::ModelResponseReceived {
+            response_id: Some("response-1".to_owned()),
+            usage: json!({
+                "input_tokens": 11,
+                "output_tokens": 7,
+                "cache_read_input_tokens": 3,
+                "cache_creation_input_tokens": 2,
+                "total_tokens": 23,
+                "duration_ms": 900,
+                "tokens_per_second_milli": 25_555,
+                "estimated_cost_microusd": 123,
+                "provenance": "provider_reported"
+            }),
+            request_id: None,
+            request_fingerprint: None,
+        });
+        let projected = project_event(&source, 1, FrontendKind::Desktop).expect("projection");
+        assert_eq!(
+            projected.event,
+            FrontendEvent::Usage {
+                input_tokens: 11,
+                output_tokens: 7,
+                cache_read_input_tokens: 3,
+                cache_creation_input_tokens: 2,
+                total_tokens: 23,
+                duration_ms: 900,
+                tokens_per_second_milli: 25_555,
+                estimated_cost_microusd: 123,
+                provenance: "provider_reported".to_owned(),
             }
         );
     }

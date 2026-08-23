@@ -441,6 +441,37 @@ it("keeps diagnostics behind an explicit Session details control", async () => {
   expect(screen.getByRole("complementary", { name: "Session details" })).toBeInTheDocument();
 });
 
+it("renders normalized usage metrics from the runtime event", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{
+      type: "usage",
+      inputTokens: 11,
+      outputTokens: 7,
+      cacheReadInputTokens: 3,
+      cacheCreationInputTokens: 2,
+      totalTokens: 23,
+      durationMs: 900,
+      tokensPerSecondMilli: 25_555,
+      estimatedCostMicrousd: 123,
+      provenance: "provider_reported",
+    }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  fireEvent.click(screen.getByRole("button", { name: "Session details" }));
+
+  const panel = await screen.findByRole("complementary", { name: "Session details" });
+  await waitFor(() => {
+    expect(within(panel).getByText("11")).toBeInTheDocument();
+    expect(within(panel).getByText("7")).toBeInTheDocument();
+    expect(within(panel).getByText("3")).toBeInTheDocument();
+    expect(within(panel).getByText("23")).toBeInTheDocument();
+    expect(within(panel).getByText("Model time: 0.9s")).toBeInTheDocument();
+  });
+});
+
 it("consolidates desktop tools in the session rail", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);

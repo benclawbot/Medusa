@@ -207,19 +207,24 @@ fn map_frontend_event(
         FrontendEvent::Usage {
             input_tokens,
             output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
             total_tokens,
+            duration_ms,
+            tokens_per_second_milli,
             estimated_cost_microusd,
+            provenance,
         } => {
             events.push_back(DesktopRuntimeEvent::Usage {
                 input_tokens,
                 output_tokens,
-                cache_read_input_tokens: 0,
-                cache_creation_input_tokens: 0,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
                 total_tokens,
-                duration_ms: 0,
-                tokens_per_second_milli: 0,
+                duration_ms,
+                tokens_per_second_milli,
                 estimated_cost_microusd,
-                provenance: "canonical-journal".to_owned(),
+                provenance,
             });
         }
         FrontendEvent::Progress { turn, .. } => {
@@ -447,6 +452,39 @@ mod desktop_projection_tests {
             Some(DesktopRuntimeEvent::Activity { activity })
                 if matches!(activity.kind, crate::dto::DesktopActivityKind::Verification)
                     && activity.id.as_deref() == Some("verify-1")
+        ));
+    }
+
+    #[test]
+    fn canonical_usage_keeps_normalized_telemetry() {
+        let mut run_active = false;
+        let usage = map_frontend_event(
+            envelope(FrontendEvent::Usage {
+                input_tokens: 11,
+                output_tokens: 7,
+                cache_read_input_tokens: 3,
+                cache_creation_input_tokens: 2,
+                total_tokens: 23,
+                duration_ms: 900,
+                tokens_per_second_milli: 25_555,
+                estimated_cost_microusd: 123,
+                provenance: "provider_reported".to_owned(),
+            }),
+            &mut run_active,
+        );
+        assert!(matches!(
+            usage.front(),
+            Some(DesktopRuntimeEvent::Usage {
+                input_tokens: 11,
+                output_tokens: 7,
+                cache_read_input_tokens: 3,
+                cache_creation_input_tokens: 2,
+                total_tokens: 23,
+                duration_ms: 900,
+                tokens_per_second_milli: 25_555,
+                estimated_cost_microusd: 123,
+                provenance,
+            }) if provenance == "provider_reported"
         ));
     }
 }

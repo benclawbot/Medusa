@@ -96,6 +96,7 @@ interface UsageState {
   output: number;
   cached: number;
   cacheWrite: number;
+  total: number;
   elapsed: number;
 }
 
@@ -108,7 +109,7 @@ interface SettingsState {
 
 type SidePanelView = "work" | "preview" | "details";
 
-const emptyUsage: UsageState = { input: 0, output: 0, cached: 0, cacheWrite: 0, elapsed: 0 };
+const emptyUsage: UsageState = { input: 0, output: 0, cached: 0, cacheWrite: 0, total: 0, elapsed: 0 };
 let messageCounter = 0;
 const nextMessageId = () => ++messageCounter;
 let workEntryCounter = 0;
@@ -453,7 +454,8 @@ export function App() {
           output: event.outputTokens,
           cached: event.cacheReadInputTokens,
           cacheWrite: event.cacheCreationInputTokens,
-          elapsed: event.modelElapsedMillis,
+          total: event.totalTokens,
+          elapsed: event.durationMs,
         });
         break;
       case "progress":
@@ -984,7 +986,7 @@ export function App() {
   const credentiallessProvider = !oauthProvider
     && (selectedProvider?.authMethods.every((method) => method === "none") ?? false);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
-  const totalTokens = usage.input + usage.output;
+  const totalTokens = usage.total;
   const openDesktopTool = (tool: DesktopTool) => requestDesktopTool(tool);
   const activeWorkEntry = [...workLog].reverse().find((entry) => entry.kind === "activity" && entry.status === "Working");
   const hasPartialResult = partialResult && Boolean(webArtifact);

@@ -226,7 +226,11 @@ export type RuntimeEvent =
       outputTokens: number;
       cacheReadInputTokens: number;
       cacheCreationInputTokens: number;
-      modelElapsedMillis: number;
+      totalTokens: number;
+      durationMs: number;
+      tokensPerSecondMilli: number;
+      estimatedCostMicrousd: number;
+      provenance: string;
     }
   | { type: "progress"; turn: number }
   | {
