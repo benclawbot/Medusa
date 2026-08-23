@@ -87,7 +87,10 @@ pub fn discover_models(
         .map_err(|_| ModelDiscoveryError::Offline)?;
     let mut request = client.get(endpoint);
     if let Some(api_key) = api_key {
-        if catalog.id == "anthropic" || catalog.id == "anthropic-compatible" {
+        if catalog.id == "minimax"
+            || catalog.id == "anthropic"
+            || catalog.id == "anthropic-compatible"
+        {
             request = request
                 .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01");
@@ -120,7 +123,7 @@ fn default_base_url(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         "openai" => Some("https://api.openai.com/v1"),
         "anthropic" => Some("https://api.anthropic.com/v1"),
-        "minimax" => Some("https://api.minimax.io/v1"),
+        "minimax" => Some("https://api.minimax.io/anthropic"),
         _ => None,
     }
 }

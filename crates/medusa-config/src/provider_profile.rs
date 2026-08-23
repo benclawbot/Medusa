@@ -116,7 +116,12 @@ impl ProviderProfile {
     #[must_use]
     pub fn protocol(&self) -> &'static str {
         match self.connection.as_str() {
-            "direct" if matches!(self.provider.as_str(), "anthropic" | "anthropic-compatible") => {
+            "direct"
+                if matches!(
+                    self.provider.as_str(),
+                    "minimax" | "anthropic" | "anthropic-compatible"
+                ) =>
+            {
                 "anthropic"
             }
             _ => "openai",

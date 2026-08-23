@@ -20,7 +20,7 @@ use medusa_daemon::{
 use medusa_protocol::frontend::{
     FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
 };
-use medusa_provider::discover_models;
+use medusa_provider::{ModelDiscoveryError, discover_models};
 use medusa_runtime::{
     attachment::{
         MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_PROMPT,
@@ -736,18 +736,30 @@ fn verify_provider_route(
         &BTreeMap::new(),
     )
     .map_err(|error| error.to_string())?;
-    let discovered = discover_models(&config, api_key).map_err(|error| {
-        format!(
-            "{} route verification failed at {}: {error:?}",
-            entry.display_name,
-            prepared_profile
-                .profile()
-                .base_url
-                .as_deref()
-                .or(entry.base_url)
-                .unwrap_or("the provider endpoint")
-        )
-    })?;
+    let discovered = match discover_models(&config, api_key) {
+        Ok(models) => models,
+        // MiniMax's Anthropic-compatible endpoint intentionally does not expose the OpenAI
+        // `/models` discovery resource. Its curated catalog is the authoritative model list,
+        // so a configured catalog model can pass startup verification without a billable probe.
+        Err(ModelDiscoveryError::Unsupported)
+            if entry.id == "minimax"
+                && entry.known_models.iter().any(|candidate| *candidate == model) =>
+        {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!(
+                "{} route verification failed at {}: {error:?}",
+                entry.display_name,
+                prepared_profile
+                    .profile()
+                    .base_url
+                    .as_deref()
+                    .or(entry.base_url)
+                    .unwrap_or("the provider endpoint")
+            ));
+        }
+    };
     if !discovered.iter().any(|candidate| candidate.id == model) {
         let available = discovered
             .iter()

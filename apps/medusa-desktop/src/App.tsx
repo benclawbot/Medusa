@@ -1229,13 +1229,6 @@ export function App() {
         {activePanel === "chat" && (
           <>
             <div className="transcript" ref={transcriptRef}>
-              {!runtimeId && (
-                <div className="empty-state">
-                  <span className="empty-icon"><Bot size={28} /></span>
-                  <h2>Starting Medusa</h2>
-                  <p>Preparing a general chat. You can attach a project whenever the task needs repository access.</p>
-                </div>
-              )}
               {messages.map((message) => (
                 <article className={`message ${message.role}`} key={message.id}>
                   {!!message.text.trim() && (
@@ -1356,7 +1349,7 @@ export function App() {
                       if (slashSuggestions.length && event.key === "Enter" && !event.shiftKey) { const selected = slashSuggestions[slashSelection]; const exact = prompt.trim() === `/${selected.name}`; if (!exact || prompt.trim() === "/skills") { event.preventDefault(); selectSlashSuggestion(selected); return; } }
                       if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
                     }}
-                    placeholder={runtimeId ? busy ? "Add guidance for the next turn…" : repo ? "Describe a coding task…" : "Ask Medusa anything…" : "Starting Medusa…"}
+                    placeholder={busy ? "Add guidance for the next turn…" : repo ? "Describe a coding task…" : "Ask Medusa anything…"}
                     rows={1}
                   />
                   <div className="composer-actions">

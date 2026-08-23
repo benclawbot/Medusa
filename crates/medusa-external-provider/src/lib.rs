@@ -346,6 +346,7 @@ fn truthful_capabilities(config: &Config) -> ProviderCapabilitySet {
                 protocol.as_str(),
                 "anthropic" | "openai" | "anthropic-compatible"
             ),
+        // Readiness remains conservative until a live request verifies the route capability.
         streaming_text: false,
         streaming_audio: false,
         cancellation: false,
@@ -369,7 +370,11 @@ fn truthful_capabilities(config: &Config) -> ProviderCapabilitySet {
 }
 
 fn configured_streaming(config: &Config) -> bool {
-    config.model.streaming && config.model.protocol.eq_ignore_ascii_case("openai")
+    config.model.streaming
+        && matches!(
+            config.model.protocol.to_ascii_lowercase().as_str(),
+            "anthropic" | "openai" | "anthropic-compatible"
+        )
 }
 
 fn credential_present(config: &Config, session_api_key: Option<&str>) -> bool {
@@ -483,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_openai_streaming_reaches_runtime_without_overclaiming_readiness() {
+    fn configured_minimax_streaming_reaches_runtime_without_overclaiming_readiness() {
         let mut config = Config::default();
         config.model.streaming = true;
         let manager = LazyConfiguredProviderManager::from_config_in_memory(
@@ -498,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn anthropic_routes_do_not_claim_unsupported_streaming() {
+    fn anthropic_routes_claim_native_streaming() {
         let mut config = Config::default();
         config.model.protocol = "anthropic".to_owned();
         config.model.streaming = true;
@@ -509,7 +514,7 @@ mod tests {
         .unwrap();
         let readiness = manager.route_readiness().unwrap();
         assert!(!readiness[0].capabilities.streaming_text);
-        assert!(!manager.capabilities().streaming);
+        assert!(manager.capabilities().streaming);
     }
 
     #[test]

@@ -19,14 +19,14 @@
       "connection": "direct",
       "profile_provider": "minimax",
       "support_tier": "production-supported",
-      "runtime_protocol": "openai",
+      "runtime_protocol": "anthropic",
       "credential_environment": "MINIMAX_API_KEY",
       "default_model": "MiniMax-M3",
       "dogfood": {
         "status": "primary",
         "model": "MiniMax-M3",
-        "protocol": "openai",
-        "base_url": "https://api.minimax.io/v1",
+        "protocol": "anthropic",
+        "base_url": "https://api.minimax.io/anthropic",
         "auth": "api-key"
       },
       "realtime_voice": "unavailable"

@@ -4,7 +4,7 @@ This file is generated from `docs/provider-support.json`. The manifest is the re
 
 | Provider | Support tier | Runtime protocol | Credential | Live dogfood | Realtime voice |
 |---|---|---|---|---|---|
-| `minimax` | `production-supported` | `openai` | `MINIMAX_API_KEY` | `primary` | `unavailable` |
+| `minimax` | `production-supported` | `anthropic` | `MINIMAX_API_KEY` | `primary` | `unavailable` |
 | `anthropic` | `production-supported` | `anthropic` | `ANTHROPIC_API_KEY` | `configurable` | `unavailable` |
 | `anthropic-compatible` | `custom` | `anthropic` | `MEDUSA_API_KEY` | `not-enabled` | `unavailable` |
 | `openai` | `production-supported` | `openai` | `OPENAI_API_KEY` | `configurable` | `unavailable` |

@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
     env,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    io::Read,
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
+    thread,
 };
 
 use medusa_config::{Config, model_capabilities};
@@ -11,10 +13,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    MessageBlock, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities, ResponseBlock,
-    Usage, async_response_error, async_response_json, blocking_response_error,
-    blocking_response_json, provider_error, run_cancellable_request, shared_async_http_client,
-    shared_blocking_http_client,
+    MessageBlock, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
+    ProviderStreamEvent, ResponseBlock, Usage, async_response_error, async_response_json,
+    blocking_response_error, blocking_response_json, provider_error, run_cancellable_request,
+    shared_async_http_client, shared_blocking_http_client,
 };
 
 type WireHistory = Arc<Mutex<HashMap<String, Arc<Vec<Value>>>>>;
@@ -62,7 +64,6 @@ impl MiniMaxProvider {
         let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);
         capabilities.image_input = capabilities.image_input && registry_capabilities.image_input;
         capabilities.tool_calling = config.model.tool_calling && registry_capabilities.tool_calling;
-        capabilities.streaming = false;
         Ok(Self {
             blocking_client: shared_blocking_http_client()?,
             async_client: shared_async_http_client()?,
@@ -103,6 +104,10 @@ impl MiniMaxProvider {
     }
 
     fn request_body(&self, request: &ModelRequest) -> Value {
+        self.request_body_with_stream(request, false)
+    }
+
+    fn request_body_with_stream(&self, request: &ModelRequest, stream: bool) -> Value {
         let mut tools = json!(request.tools);
         if let Some(last) = tools.as_array_mut().and_then(|items| items.last_mut())
             && let Some(object) = last.as_object_mut()
@@ -120,7 +125,10 @@ impl MiniMaxProvider {
             "tools": tools,
             "max_tokens": request.max_tokens,
             "temperature": f64::from(request.temperature_milli) / 1000.0,
-            "stream": false
+            // Match the harness's fast/simple path: reasoning is opt-in, so short conversational
+            // turns can begin producing visible text without waiting for a hidden thinking pass.
+            "thinking": {"type": "disabled"},
+            "stream": stream
         })
     }
 
@@ -235,6 +243,148 @@ impl MiniMaxProvider {
         }
         Err(async_response_error(response).await)
     }
+
+    fn complete_streaming_request(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.validate_request(request)?;
+        let endpoint = format!("{}/v1/messages", self.base_url);
+        let mut response = self
+            .blocking_client
+            .post(&endpoint)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&self.request_body_with_stream(request, true))
+            .send()
+            .map_err(provider_error)?;
+        if !response.status().is_success() {
+            return Err(blocking_response_error(response));
+        }
+        let mut decoder = AnthropicSseDecoder::default();
+        let mut accumulator = AnthropicStreamAccumulator::default();
+        let mut completed = None;
+        let mut buffer = [0_u8; 8 * 1024];
+        loop {
+            let read = response.read(&mut buffer).map_err(|error| {
+                anthropic_stream_error(format!("MiniMax SSE read failed: {error}"))
+            })?;
+            if read == 0 {
+                break;
+            }
+            decoder.push(&buffer[..read], |data| {
+                if let Some(wire) = accumulator.push_sse_data(data, sink)? {
+                    let model = self.model_response_from_wire(wire);
+                    sink(ProviderStreamEvent::Completed {
+                        response: model.clone(),
+                    })?;
+                    completed = Some(model);
+                }
+                Ok(())
+            })?;
+        }
+        decoder.finish(|data| {
+            if let Some(wire) = accumulator.push_sse_data(data, sink)? {
+                let model = self.model_response_from_wire(wire);
+                sink(ProviderStreamEvent::Completed {
+                    response: model.clone(),
+                })?;
+                completed = Some(model);
+            }
+            Ok(())
+        })?;
+        completed
+            .ok_or_else(|| anthropic_stream_error("MiniMax SSE stream ended without message_stop"))
+    }
+
+    fn complete_streaming_cancellable_request(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.validate_request(request)?;
+        let (sender, receiver) = mpsc::channel::<ProviderStreamEvent>();
+        let endpoint = format!("{}/v1/messages", self.base_url);
+        let body = self.request_body_with_stream(request, true);
+        thread::scope(|scope| {
+            let worker_sender = sender.clone();
+            let worker = scope.spawn(move || {
+                run_cancellable_request(cancel, async {
+                    let mut response = self
+                        .async_client
+                        .post(&endpoint)
+                        .header("x-api-key", &self.api_key)
+                        .header("anthropic-version", "2023-06-01")
+                        .json(&body)
+                        .send()
+                        .await
+                        .map_err(provider_error)?;
+                    if !response.status().is_success() {
+                        return Err(async_response_error(response).await);
+                    }
+                    let mut decoder = AnthropicSseDecoder::default();
+                    let mut accumulator = AnthropicStreamAccumulator::default();
+                    let mut completed = None;
+                    while let Some(chunk) = response.chunk().await.map_err(provider_error)? {
+                        decoder.push(&chunk, |data| {
+                            let mut channel_sink = |event| {
+                                worker_sender.send(event).map_err(|_| {
+                                    anthropic_stream_error("MiniMax stream consumer disconnected")
+                                })
+                            };
+                            if let Some(wire) =
+                                accumulator.push_sse_data(data, &mut channel_sink)?
+                            {
+                                let model = self.model_response_from_wire(wire);
+                                worker_sender
+                                    .send(ProviderStreamEvent::Completed {
+                                        response: model.clone(),
+                                    })
+                                    .map_err(|_| {
+                                        anthropic_stream_error(
+                                            "MiniMax stream consumer disconnected",
+                                        )
+                                    })?;
+                                completed = Some(model);
+                            }
+                            Ok(())
+                        })?;
+                    }
+                    decoder.finish(|data| {
+                        let mut channel_sink = |event| {
+                            worker_sender.send(event).map_err(|_| {
+                                anthropic_stream_error("MiniMax stream consumer disconnected")
+                            })
+                        };
+                        if let Some(wire) = accumulator.push_sse_data(data, &mut channel_sink)? {
+                            let model = self.model_response_from_wire(wire);
+                            worker_sender
+                                .send(ProviderStreamEvent::Completed {
+                                    response: model.clone(),
+                                })
+                                .map_err(|_| {
+                                    anthropic_stream_error("MiniMax stream consumer disconnected")
+                                })?;
+                            completed = Some(model);
+                        }
+                        Ok(())
+                    })?;
+                    completed.ok_or_else(|| {
+                        anthropic_stream_error("MiniMax SSE stream ended without message_stop")
+                    })
+                })
+            });
+            drop(sender);
+            for event in receiver {
+                sink(event)?;
+            }
+            worker
+                .join()
+                .map_err(|_| anthropic_stream_error("MiniMax streaming worker panicked"))?
+        })
+    }
 }
 
 impl ModelProvider for MiniMaxProvider {
@@ -248,6 +398,23 @@ impl ModelProvider for MiniMaxProvider {
         cancel: &AtomicBool,
     ) -> MedusaResult<ModelResponse> {
         run_cancellable_request(cancel, self.complete_request_async(request))
+    }
+
+    fn complete_streaming(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_streaming_request(request, sink)
+    }
+
+    fn complete_streaming_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_streaming_cancellable_request(request, cancel, sink)
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -308,12 +475,12 @@ fn minimax_capabilities_from_environment() -> ProviderCapabilities {
             max_image_bytes: Some(20 * 1024 * 1024),
             max_images_per_request: Some(10),
             tool_calling: true,
-            streaming: false,
+            streaming: true,
         }
     } else {
         ProviderCapabilities {
             tool_calling: true,
-            streaming: false,
+            streaming: true,
             ..ProviderCapabilities::default()
         }
     }
@@ -331,8 +498,301 @@ fn anthropic_capabilities() -> ProviderCapabilities {
         max_image_bytes: Some(20 * 1024 * 1024),
         max_images_per_request: Some(20),
         tool_calling: true,
-        streaming: false,
+        streaming: true,
     }
+}
+
+#[derive(Debug, Default)]
+struct AnthropicSseDecoder {
+    pending: Vec<u8>,
+    data: String,
+}
+
+impl AnthropicSseDecoder {
+    fn push(
+        &mut self,
+        bytes: &[u8],
+        mut sink: impl FnMut(&str) -> MedusaResult<()>,
+    ) -> MedusaResult<()> {
+        self.pending.extend_from_slice(bytes);
+        while let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let mut line = self.pending.drain(..=newline).collect::<Vec<_>>();
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            self.process_line(&line, &mut sink)?;
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self, mut sink: impl FnMut(&str) -> MedusaResult<()>) -> MedusaResult<()> {
+        if !self.pending.is_empty() {
+            let line = std::mem::take(&mut self.pending);
+            self.process_line(&line, &mut sink)?;
+        }
+        self.dispatch(&mut sink)
+    }
+
+    fn process_line(
+        &mut self,
+        line: &[u8],
+        sink: &mut impl FnMut(&str) -> MedusaResult<()>,
+    ) -> MedusaResult<()> {
+        let line = std::str::from_utf8(line).map_err(|error| {
+            anthropic_stream_error(format!("MiniMax SSE line is not UTF-8: {error}"))
+        })?;
+        if line.is_empty() {
+            return self.dispatch(sink);
+        }
+        if let Some(value) = line.strip_prefix("data:") {
+            if !self.data.is_empty() {
+                self.data.push('\n');
+            }
+            self.data.push_str(value.strip_prefix(' ').unwrap_or(value));
+        }
+        Ok(())
+    }
+
+    fn dispatch(&mut self, sink: &mut impl FnMut(&str) -> MedusaResult<()>) -> MedusaResult<()> {
+        if self.data.is_empty() {
+            return Ok(());
+        }
+        let data = std::mem::take(&mut self.data);
+        sink(&data)
+    }
+}
+
+#[derive(Debug, Default)]
+struct AnthropicStreamAccumulator {
+    response_id: Option<String>,
+    blocks: Vec<Option<WireBlock>>,
+    tool_fragments: HashMap<usize, String>,
+    stop_reason: Option<String>,
+    usage: WireUsage,
+    output_started: bool,
+    completed: bool,
+}
+
+impl AnthropicStreamAccumulator {
+    fn push_sse_data(
+        &mut self,
+        data: &str,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<Option<WireResponse>> {
+        if self.completed {
+            return Err(anthropic_stream_error(
+                "MiniMax stream emitted data after message_stop",
+            ));
+        }
+        let event: Value = serde_json::from_str(data).map_err(|error| {
+            anthropic_stream_error(format!("MiniMax stream event is invalid JSON: {error}"))
+        })?;
+        let event_type = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match event_type {
+            "message_start" => {
+                let message = event.get("message").unwrap_or(&Value::Null);
+                self.response_id = message.get("id").and_then(Value::as_str).map(str::to_owned);
+                if let Some(id) = &self.response_id {
+                    sink(ProviderStreamEvent::ResponseStarted {
+                        response_id: Some(id.clone()),
+                    })?;
+                }
+                if let Some(usage) = message.get("usage") {
+                    self.apply_usage(usage);
+                    sink(ProviderStreamEvent::Usage {
+                        usage: self.usage.as_usage(),
+                    })?;
+                }
+            }
+            "content_block_start" => {
+                let index =
+                    event.get("index").and_then(Value::as_u64).ok_or_else(|| {
+                        anthropic_stream_error("MiniMax block start omitted index")
+                    })? as usize;
+                self.ensure_block(index);
+                let block = event.get("content_block").unwrap_or(&Value::Null);
+                let wire = match block.get("type").and_then(Value::as_str) {
+                    Some("text") => WireBlock::Text {
+                        text: block
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    },
+                    Some("tool_use") => WireBlock::ToolUse {
+                        id: block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        name: block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        input: block.get("input").cloned().unwrap_or_else(|| json!({})),
+                    },
+                    Some("thinking") => WireBlock::Thinking {
+                        thinking: block
+                            .get("thinking")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        signature: block
+                            .get("signature")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    },
+                    _ => WireBlock::Unknown,
+                };
+                self.blocks[index] = Some(wire);
+            }
+            "content_block_delta" => {
+                let index =
+                    event.get("index").and_then(Value::as_u64).ok_or_else(|| {
+                        anthropic_stream_error("MiniMax block delta omitted index")
+                    })? as usize;
+                self.ensure_block(index);
+                let delta = event.get("delta").unwrap_or(&Value::Null);
+                match delta.get("type").and_then(Value::as_str) {
+                    Some("text_delta") => {
+                        let text = delta
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if !text.is_empty() {
+                            if !self.output_started {
+                                self.output_started = true;
+                                sink(ProviderStreamEvent::OutputStarted)?;
+                            }
+                            if let Some(Some(WireBlock::Text { text: output })) =
+                                self.blocks.get_mut(index)
+                            {
+                                output.push_str(text);
+                            }
+                            sink(ProviderStreamEvent::TextDelta {
+                                text: text.to_owned(),
+                            })?;
+                        }
+                    }
+                    Some("thinking_delta") => {
+                        if let Some(thinking) = delta.get("thinking").and_then(Value::as_str)
+                            && let Some(Some(WireBlock::Thinking {
+                                thinking: output, ..
+                            })) = self.blocks.get_mut(index)
+                        {
+                            output.push_str(thinking);
+                        }
+                    }
+                    Some("input_json_delta") => {
+                        self.tool_fragments.entry(index).or_default().push_str(
+                            delta
+                                .get("partial_json")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            "content_block_stop" => {
+                let index = event
+                    .get("index")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| anthropic_stream_error("MiniMax block stop omitted index"))?
+                    as usize;
+                if let Some(Some(WireBlock::ToolUse { input, .. })) = self.blocks.get_mut(index) {
+                    if let Some(fragment) = self.tool_fragments.remove(&index) {
+                        *input = serde_json::from_str(&fragment).map_err(|error| {
+                            anthropic_stream_error(format!(
+                                "MiniMax tool input is invalid JSON: {error}"
+                            ))
+                        })?;
+                    }
+                    if let Some(Some(WireBlock::ToolUse { id, name, input })) =
+                        self.blocks.get(index)
+                    {
+                        if !self.output_started {
+                            self.output_started = true;
+                            sink(ProviderStreamEvent::OutputStarted)?;
+                        }
+                        sink(ProviderStreamEvent::ToolUseReady {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        })?;
+                    }
+                }
+            }
+            "message_delta" => {
+                if let Some(reason) = event
+                    .get("delta")
+                    .and_then(|delta| delta.get("stop_reason"))
+                    .and_then(Value::as_str)
+                {
+                    self.stop_reason = Some(reason.to_owned());
+                }
+                if let Some(usage) = event.get("usage") {
+                    self.apply_usage(usage);
+                    sink(ProviderStreamEvent::Usage {
+                        usage: self.usage.as_usage(),
+                    })?;
+                }
+            }
+            "message_stop" => {
+                self.completed = true;
+                return Ok(Some(self.finish_wire()));
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    fn ensure_block(&mut self, index: usize) {
+        if self.blocks.len() <= index {
+            self.blocks.resize_with(index + 1, || None);
+        }
+    }
+
+    fn apply_usage(&mut self, usage: &Value) {
+        for (key, target) in [
+            ("input_tokens", &mut self.usage.input_tokens),
+            ("output_tokens", &mut self.usage.output_tokens),
+            (
+                "cache_read_input_tokens",
+                &mut self.usage.cache_read_input_tokens,
+            ),
+            (
+                "cache_creation_input_tokens",
+                &mut self.usage.cache_creation_input_tokens,
+            ),
+        ] {
+            if let Some(value) = usage.get(key).and_then(Value::as_u64) {
+                *target = value;
+            }
+        }
+    }
+
+    fn finish_wire(&self) -> WireResponse {
+        WireResponse {
+            id: self.response_id.clone(),
+            stop_reason: self.stop_reason.clone(),
+            content: self.blocks.iter().filter_map(Clone::clone).collect(),
+            usage: self.usage.clone(),
+        }
+    }
+}
+
+fn anthropic_stream_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Execution,
+        message.into(),
+    )
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -405,6 +865,17 @@ struct WireUsage {
     cache_creation_input_tokens: u64,
 }
 
+impl WireUsage {
+    fn as_usage(&self) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_read_input_tokens: self.cache_read_input_tokens,
+            cache_creation_input_tokens: self.cache_creation_input_tokens,
+        }
+    }
+}
+
 impl WireResponse {
     fn into_model_response(self) -> ModelResponse {
         let blocks = self
@@ -432,12 +903,7 @@ impl WireResponse {
             response_id: self.id,
             stop_reason: self.stop_reason,
             blocks,
-            usage: Usage {
-                input_tokens: self.usage.input_tokens,
-                output_tokens: self.usage.output_tokens,
-                cache_read_input_tokens: self.usage.cache_read_input_tokens,
-                cache_creation_input_tokens: self.usage.cache_creation_input_tokens,
-            },
+            usage: self.usage.as_usage(),
         }
     }
 }
@@ -599,7 +1065,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_streaming_never_exceeds_wire_support() {
+    fn configured_streaming_uses_native_wire_support() {
         let mut config = Config::default();
         config.model.provider = "anthropic".to_owned();
         config.model.protocol = "anthropic".to_owned();
@@ -607,10 +1073,53 @@ mod tests {
         let provider =
             MiniMaxProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
                 .expect("anthropic provider");
-        assert!(!provider.capabilities().streaming);
+        assert!(provider.capabilities().streaming);
         assert_eq!(
-            provider.request_body(&empty_request())["stream"],
-            Value::Bool(false)
+            provider.request_body_with_stream(&empty_request(), true)["stream"],
+            Value::Bool(true)
         );
+    }
+
+    #[test]
+    fn native_stream_accumulator_emits_visible_text_and_terminal_response() {
+        let mut accumulator = AnthropicStreamAccumulator::default();
+        let mut events = Vec::new();
+        let mut push = |data: &str| {
+            if let Some(wire) = accumulator
+                .push_sse_data(data, &mut |event| {
+                    events.push(event);
+                    Ok(())
+                })
+                .expect("stream event")
+            {
+                assert_eq!(wire.id.as_deref(), Some("msg-1"));
+                assert_eq!(wire.stop_reason.as_deref(), Some("end_turn"));
+                assert_eq!(wire.content.len(), 1);
+            }
+        };
+        push(r#"{"type":"message_start","message":{"id":"msg-1","usage":{"input_tokens":2}}}"#);
+        push(
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        );
+        push(
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#,
+        );
+        push(
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}"#,
+        );
+        push(r#"{"type":"message_stop"}"#);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ProviderStreamEvent::OutputStarted))
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamEvent::TextDelta { text } if text == "hello"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamEvent::Usage { usage } if usage.input_tokens == 2 && usage.output_tokens == 1
+        )));
     }
 }

@@ -4,16 +4,16 @@ use medusa_config::{Config, ProviderProfile, provider_runtime_protocol};
 fn minimax_protocol_is_consistent_across_default_profile_catalog_and_dogfood() {
     let default = Config::default();
     assert_eq!(default.model.provider, "minimax");
-    assert_eq!(default.model.protocol, "openai");
+    assert_eq!(default.model.protocol, "anthropic");
 
     let profile = ProviderProfile {
         configured: true,
         ..ProviderProfile::default()
     };
     assert_eq!(profile.provider, "minimax");
-    assert_eq!(profile.protocol(), "openai");
+    assert_eq!(profile.protocol(), "anthropic");
 
-    assert_eq!(provider_runtime_protocol("minimax"), Some("openai"));
+    assert_eq!(provider_runtime_protocol("minimax"), Some("anthropic"));
 
     let manifest: serde_json::Value =
         serde_json::from_str(include_str!("../../../docs/provider-support.json"))
@@ -25,7 +25,10 @@ fn minimax_protocol_is_consistent_across_default_profile_catalog_and_dogfood() {
         .find(|provider| provider["id"] == "minimax")
         .expect("minimax support entry");
 
-    assert_eq!(minimax["runtime_protocol"], "openai");
-    assert_eq!(minimax["dogfood"]["protocol"], "openai");
-    assert_eq!(minimax["dogfood"]["base_url"], "https://api.minimax.io/v1");
+    assert_eq!(minimax["runtime_protocol"], "anthropic");
+    assert_eq!(minimax["dogfood"]["protocol"], "anthropic");
+    assert_eq!(
+        minimax["dogfood"]["base_url"],
+        "https://api.minimax.io/anthropic"
+    );
 }

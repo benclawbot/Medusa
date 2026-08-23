@@ -232,7 +232,7 @@ pub fn provider_catalog_entry_for_profile(
 #[must_use]
 pub fn provider_runtime_protocol(provider: &str) -> Option<&'static str> {
     provider_catalog_entry(provider).map(|entry| match entry.profile_provider {
-        "anthropic" | "anthropic-compatible" => "anthropic",
+        "minimax" | "anthropic" | "anthropic-compatible" => "anthropic",
         _ => "openai",
     })
 }

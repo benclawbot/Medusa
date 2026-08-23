@@ -177,7 +177,7 @@ impl Default for ModelConfig {
             fallback_providers: Vec::new(),
             role_routes: BTreeMap::new(),
             name: "MiniMax-M3".into(),
-            protocol: "openai".into(),
+            protocol: "anthropic".into(),
             temperature_milli: 200,
             max_output_tokens: 32_768,
             context_window_tokens: 1_000_000,
@@ -185,10 +185,9 @@ impl Default for ModelConfig {
             base_url: None,
             auth: "api-key".into(),
             tool_calling: true,
-            // OpenAI-compatible routes advertise streaming and should expose the
-            // first response tokens immediately instead of buffering the whole turn.
-            // Providers that do not support streaming still fail closed through
-            // their capability contract.
+            // Direct provider routes advertise streaming and should expose the first response
+            // tokens immediately instead of buffering the whole turn. Providers that do not
+            // support streaming still fail closed through their capability contract.
             streaming: true,
             max_retries: default_max_retries(),
             retry_base_delay_ms: default_retry_base_delay_ms(),
@@ -520,9 +519,9 @@ mod tests {
     }
 
     #[test]
-    fn omitted_streaming_settings_keep_openai_routes_streaming() {
+    fn omitted_streaming_settings_keep_direct_routes_streaming() {
         let config = Config::from_toml(
-            "version = 1\n[model]\nprovider = 'minimax'\nname = 'MiniMax-M3'\nprotocol = 'openai'\nauth = 'api-key'\n",
+            "version = 1\n[model]\nprovider = 'minimax'\nname = 'MiniMax-M3'\nprotocol = 'anthropic'\nauth = 'api-key'\n",
         )
         .expect("partial provider configuration");
         assert!(config.model.streaming);
