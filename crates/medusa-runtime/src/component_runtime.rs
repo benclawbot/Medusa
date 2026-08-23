@@ -1436,11 +1436,18 @@ impl DesiredStateMutation {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DesiredStateCommit {
     pub revision: u64,
     pub snapshot: DesiredRuntimeState,
     pub idempotency_key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PersistedDesiredState {
+    state: DesiredRuntimeState,
+    #[serde(default)]
+    idempotent_commits: BTreeMap<String, DesiredStateCommit>,
 }
 
 #[derive(Debug, Error)]
@@ -1484,18 +1491,29 @@ impl DesiredStateStore {
 
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, DesiredStateError> {
         let path = path.into();
-        let state = if path.is_file() {
+        let (state, idempotent_commits) = if path.is_file() {
             let bytes = fs::read(&path)
                 .map_err(|error| DesiredStateError::Persistence(error.to_string()))?;
-            serde_json::from_slice(&bytes)
-                .map_err(|error| DesiredStateError::Serialization(error.to_string()))?
+            match serde_json::from_slice::<PersistedDesiredState>(&bytes) {
+                Ok(persisted) => (persisted.state, persisted.idempotent_commits),
+                Err(envelope_error) => {
+                    let state = serde_json::from_slice::<DesiredRuntimeState>(&bytes).map_err(
+                        |state_error| {
+                            DesiredStateError::Serialization(format!(
+                                "{envelope_error}; legacy state: {state_error}"
+                            ))
+                        },
+                    )?;
+                    (state, BTreeMap::new())
+                }
+            }
         } else {
-            DesiredRuntimeState::default()
+            (DesiredRuntimeState::default(), BTreeMap::new())
         };
         Ok(Self {
             inner: Mutex::new(DesiredStateStoreInner {
                 state,
-                idempotent_commits: BTreeMap::new(),
+                idempotent_commits,
                 audits: Vec::new(),
             }),
             path: Some(path),
@@ -1539,18 +1557,20 @@ impl DesiredStateStore {
         mutation.apply(&mut next)?;
         next.revision = next.revision.saturating_add(1);
         next.provenance = Some(source.into());
-        if let Some(path) = &self.path {
-            persist_desired_state(path, &next)?;
-        }
         let commit = DesiredStateCommit {
             revision: next.revision,
             snapshot: next.clone(),
             idempotency_key,
         };
-        inner.state = next;
+        let mut next_idempotent_commits = inner.idempotent_commits.clone();
         if let Some(key) = commit.idempotency_key.as_ref() {
-            inner.idempotent_commits.insert(key.clone(), commit.clone());
+            next_idempotent_commits.insert(key.clone(), commit.clone());
         }
+        if let Some(path) = &self.path {
+            persist_desired_state(path, &next, &next_idempotent_commits)?;
+        }
+        inner.state = next;
+        inner.idempotent_commits = next_idempotent_commits;
         Ok(commit)
     }
 
@@ -1581,13 +1601,18 @@ impl Default for DesiredStateStore {
 fn persist_desired_state(
     path: &PathBuf,
     state: &DesiredRuntimeState,
+    idempotent_commits: &BTreeMap<String, DesiredStateCommit>,
 ) -> Result<(), DesiredStateError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| DesiredStateError::Persistence(error.to_string()))?;
     }
     let temporary = path.with_extension("tmp");
-    let bytes = serde_json::to_vec_pretty(state)
+    let envelope = PersistedDesiredState {
+        state: state.clone(),
+        idempotent_commits: idempotent_commits.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&envelope)
         .map_err(|error| DesiredStateError::Serialization(error.to_string()))?;
     fs::write(&temporary, bytes)
         .map_err(|error| DesiredStateError::Persistence(error.to_string()))?;

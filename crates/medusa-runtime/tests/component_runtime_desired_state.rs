@@ -99,6 +99,35 @@ fn validation_failure_does_not_publish_a_partial_desired_state() {
 }
 
 #[test]
+fn persisted_store_replays_idempotent_commit_after_reopen() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let path = directory.path().join("desired-state.json");
+    let first = {
+        let store = DesiredStateStore::open(&path).expect("open store");
+        store
+            .compare_and_swap_with_idempotency(
+                0,
+                DesiredStateMutation::upsert(ComponentSpec::new("worker")),
+                "agent",
+                Some("request-1".to_owned()),
+            )
+            .expect("first commit")
+    };
+
+    let reopened = DesiredStateStore::open(&path).expect("reopen store");
+    let replay = reopened
+        .compare_and_swap_with_idempotency(
+            0,
+            DesiredStateMutation::upsert(ComponentSpec::new("different")),
+            "replayed-agent",
+            Some("request-1".to_owned()),
+        )
+        .expect("persisted idempotent replay");
+    assert_eq!(replay, first);
+    assert_eq!(reopened.snapshot(), first.snapshot);
+}
+
+#[test]
 fn reconciler_adds_disables_and_noops_from_one_authoritative_snapshot() {
     let store = DesiredStateStore::new();
     let desired = store
