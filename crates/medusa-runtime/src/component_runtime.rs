@@ -786,7 +786,7 @@ impl Default for DesiredRuntimeState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DesiredStateMutation {
     Upsert(ComponentSpec),
     Remove(ComponentId),
@@ -794,6 +794,7 @@ pub enum DesiredStateMutation {
         component: ComponentId,
         enabled: bool,
     },
+    Batch(Vec<DesiredStateMutation>),
 }
 
 impl DesiredStateMutation {
@@ -813,6 +814,17 @@ impl DesiredStateMutation {
     }
 
     fn apply(&self, state: &mut DesiredRuntimeState) -> Result<(), DesiredStateError> {
+        self.apply_raw(state)?;
+        let specs = state.components.values().cloned().collect::<Vec<_>>();
+        DependencyResolver::validate_graph(&specs).map_err(|error| {
+            DesiredStateError::Validation {
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(())
+    }
+
+    fn apply_raw(&self, state: &mut DesiredRuntimeState) -> Result<(), DesiredStateError> {
         match self {
             Self::Upsert(spec) => {
                 spec.validate()
@@ -834,13 +846,12 @@ impl DesiredStateMutation {
                 })?;
                 spec.enabled = *enabled;
             }
-        }
-        let specs = state.components.values().cloned().collect::<Vec<_>>();
-        DependencyResolver::validate_graph(&specs).map_err(|error| {
-            DesiredStateError::Validation {
-                reason: error.to_string(),
+            Self::Batch(mutations) => {
+                for mutation in mutations {
+                    mutation.apply_raw(state)?;
+                }
             }
-        })?;
+        }
         Ok(())
     }
 }
@@ -870,6 +881,7 @@ pub enum DesiredStateError {
 struct DesiredStateStoreInner {
     state: DesiredRuntimeState,
     idempotent_commits: BTreeMap<String, DesiredStateCommit>,
+    audits: Vec<ProposalAuditRecord>,
 }
 
 pub struct DesiredStateStore {
@@ -884,6 +896,7 @@ impl DesiredStateStore {
             inner: Mutex::new(DesiredStateStoreInner {
                 state: DesiredRuntimeState::default(),
                 idempotent_commits: BTreeMap::new(),
+                audits: Vec::new(),
             }),
             path: None,
         }
@@ -903,6 +916,7 @@ impl DesiredStateStore {
             inner: Mutex::new(DesiredStateStoreInner {
                 state,
                 idempotent_commits: BTreeMap::new(),
+                audits: Vec::new(),
             }),
             path: Some(path),
         })
@@ -959,6 +973,23 @@ impl DesiredStateStore {
         }
         Ok(commit)
     }
+
+    pub fn record_audit(&self, audit: ProposalAuditRecord) {
+        self.inner
+            .lock()
+            .expect("desired-state lock")
+            .audits
+            .push(audit);
+    }
+
+    #[must_use]
+    pub fn audit_records(&self) -> Vec<ProposalAuditRecord> {
+        self.inner
+            .lock()
+            .expect("desired-state lock")
+            .audits
+            .clone()
+    }
 }
 
 impl Default for DesiredStateStore {
@@ -990,6 +1021,259 @@ fn persist_desired_state(
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProposalSource {
+    pub agent_id: String,
+    pub task_id: String,
+}
+
+impl ProposalSource {
+    #[must_use]
+    pub fn new(agent_id: impl Into<String>, task_id: impl Into<String>) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            task_id: task_id.into(),
+        }
+    }
+
+    fn validate(&self) -> Result<(), ProposalError> {
+        for (label, value) in [("agent_id", &self.agent_id), ("task_id", &self.task_id)] {
+            if value.trim().is_empty() || value.chars().any(char::is_whitespace) {
+                return Err(ProposalError::Validation {
+                    reason: format!("proposal {label} must be a non-empty opaque identifier"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn audit_label(&self) -> String {
+        format!("agent:{} task:{}", self.agent_id, self.task_id)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DesiredStateProposal {
+    pub proposal_id: String,
+    pub base_revision: u64,
+    pub operations: Vec<DesiredStateMutation>,
+    pub source: ProposalSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+}
+
+impl DesiredStateProposal {
+    #[must_use]
+    pub fn new(
+        proposal_id: impl Into<String>,
+        base_revision: u64,
+        operations: Vec<DesiredStateMutation>,
+        source: ProposalSource,
+    ) -> Self {
+        Self {
+            proposal_id: proposal_id.into(),
+            base_revision,
+            operations,
+            source,
+            idempotency_key: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+
+    fn mutation(&self) -> DesiredStateMutation {
+        DesiredStateMutation::Batch(self.operations.clone())
+    }
+
+    fn validate(&self) -> Result<(), ProposalError> {
+        if self.proposal_id.trim().is_empty() {
+            return Err(ProposalError::Validation {
+                reason: "proposal id must not be empty".to_owned(),
+            });
+        }
+        if self.operations.is_empty() {
+            return Err(ProposalError::Validation {
+                reason: "proposal must contain at least one operation".to_owned(),
+            });
+        }
+        self.source.validate()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProposalPreview {
+    pub proposal_id: String,
+    pub base_revision: u64,
+    pub affected_components: Vec<ComponentId>,
+    pub predicted_restarts: Vec<ComponentId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProposalAuditRecord {
+    pub proposal_id: String,
+    pub source: ProposalSource,
+    pub base_revision: u64,
+    pub resulting_revision: u64,
+    pub affected_components: Vec<ComponentId>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProposalCommit {
+    pub receipt: DesiredStateCommit,
+    pub audit: ProposalAuditRecord,
+}
+
+#[derive(Debug, Error)]
+pub enum ProposalError {
+    #[error(transparent)]
+    DesiredState(#[from] DesiredStateError),
+    #[error("proposal validation failed: {reason}")]
+    Validation { reason: String },
+    #[error("proposal cannot directly mutate runtime registries or lifecycle state")]
+    DirectMutationDenied,
+}
+
+pub struct SelfModificationApi<'a> {
+    store: &'a DesiredStateStore,
+}
+
+impl<'a> SelfModificationApi<'a> {
+    #[must_use]
+    pub fn new(store: &'a DesiredStateStore) -> Self {
+        Self { store }
+    }
+
+    pub fn preview(
+        &self,
+        proposal: &DesiredStateProposal,
+        runtime: &ComponentRuntime,
+    ) -> Result<ProposalPreview, ProposalError> {
+        proposal.validate()?;
+        let current = self.store.snapshot();
+        if current.revision != proposal.base_revision {
+            return Err(ProposalError::DesiredState(
+                DesiredStateError::RevisionConflict {
+                    expected: proposal.base_revision,
+                    current,
+                },
+            ));
+        }
+        let mut next = current;
+        proposal.mutation().apply(&mut next)?;
+        let mut affected = proposal
+            .operations
+            .iter()
+            .flat_map(mutation_components)
+            .collect::<BTreeSet<_>>();
+        affected.extend(
+            next.components
+                .keys()
+                .filter(|component| !runtime.active_generations(component.as_str()).is_empty())
+                .cloned(),
+        );
+        let mut predicted_restarts = Vec::new();
+        for component in &affected {
+            let active = runtime.active_generations(component.as_str());
+            if active
+                .iter()
+                .any(|identity| runtime.spec(identity) != next.components.get(component))
+            {
+                predicted_restarts.push(component.clone());
+            }
+        }
+        Ok(ProposalPreview {
+            proposal_id: proposal.proposal_id.clone(),
+            base_revision: proposal.base_revision,
+            affected_components: affected.into_iter().collect(),
+            predicted_restarts,
+        })
+    }
+
+    pub fn commit(
+        &self,
+        proposal: &DesiredStateProposal,
+        runtime: &ComponentRuntime,
+    ) -> Result<ProposalCommit, ProposalError> {
+        let preview = self.preview(proposal, runtime)?;
+        let receipt = self.store.compare_and_swap_with_idempotency(
+            proposal.base_revision,
+            proposal.mutation(),
+            proposal.source.audit_label(),
+            proposal.idempotency_key.clone(),
+        )?;
+        let audit = ProposalAuditRecord {
+            proposal_id: proposal.proposal_id.clone(),
+            source: proposal.source.clone(),
+            base_revision: proposal.base_revision,
+            resulting_revision: receipt.revision,
+            affected_components: preview.affected_components,
+        };
+        self.store.record_audit(audit.clone());
+        Ok(ProposalCommit { receipt, audit })
+    }
+
+    pub fn apply(
+        &self,
+        runtime: &mut ComponentRuntime,
+        commit: &ProposalCommit,
+    ) -> Result<ReconcileReport, ProposalError> {
+        Reconciler::reconcile(runtime, &commit.receipt.snapshot).map_err(ProposalError::from)
+    }
+}
+
+pub struct AgentRuntimeFacade<'a> {
+    proposals: SelfModificationApi<'a>,
+}
+
+impl<'a> AgentRuntimeFacade<'a> {
+    #[must_use]
+    pub fn new(store: &'a DesiredStateStore) -> Self {
+        Self {
+            proposals: SelfModificationApi::new(store),
+        }
+    }
+
+    pub fn preview(
+        &self,
+        proposal: &DesiredStateProposal,
+        runtime: &ComponentRuntime,
+    ) -> Result<ProposalPreview, ProposalError> {
+        self.proposals.preview(proposal, runtime)
+    }
+
+    pub fn commit(
+        &self,
+        proposal: &DesiredStateProposal,
+        runtime: &ComponentRuntime,
+    ) -> Result<ProposalCommit, ProposalError> {
+        self.proposals.commit(proposal, runtime)
+    }
+
+    pub fn apply(
+        &self,
+        runtime: &mut ComponentRuntime,
+        commit: &ProposalCommit,
+    ) -> Result<ReconcileReport, ProposalError> {
+        self.proposals.apply(runtime, commit)
+    }
+}
+
+fn mutation_components(mutation: &DesiredStateMutation) -> Vec<ComponentId> {
+    match mutation {
+        DesiredStateMutation::Upsert(spec) => vec![spec.id.clone()],
+        DesiredStateMutation::Remove(component)
+        | DesiredStateMutation::SetEnabled { component, .. } => vec![component.clone()],
+        DesiredStateMutation::Batch(mutations) => {
+            mutations.iter().flat_map(mutation_components).collect()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
