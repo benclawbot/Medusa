@@ -1163,8 +1163,18 @@ impl ComponentSpec {
                 });
             }
         }
+        let mut required_services = BTreeSet::new();
         for requirement in &self.requires {
             validate_service_name(&requirement.service)?;
+            if !required_services.insert(requirement.service.clone()) {
+                return Err(ComponentRuntimeError::InvalidSpec {
+                    component: self.id.clone(),
+                    reason: format!(
+                        "service is required more than once: {}",
+                        requirement.service
+                    ),
+                });
+            }
             if let VersionConstraint::Exact(version) | VersionConstraint::AtLeast(version) =
                 &requirement.version
                 && !valid_version(version)
@@ -2171,12 +2181,10 @@ impl DependencyResolver {
             let view = Self::resolve(spec, &candidates)?;
             for providers in view.providers.values() {
                 for provider in providers {
-                    if provider.component_id != spec.id {
-                        edges
-                            .entry(spec.id.clone())
-                            .or_default()
-                            .push(provider.component_id.clone());
-                    }
+                    edges
+                        .entry(spec.id.clone())
+                        .or_default()
+                        .push(provider.component_id.clone());
                 }
             }
         }

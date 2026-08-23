@@ -87,3 +87,13 @@ fn unsatisfied_dependency_cycles_are_detected_before_activation() {
     let error = DependencyResolver::validate_graph(&[a, b]).expect_err("cycle");
     assert!(matches!(error, DependencyResolutionError::Cycle { .. }));
 }
+
+#[test]
+fn self_dependency_is_rejected_as_a_cycle() {
+    let self_referencing = ComponentSpec::new("loop")
+        .with_provided_service("loop-api", "1.0.0")
+        .with_requirement(DependencyRequirement::required("loop-api"));
+
+    let error = DependencyResolver::validate_graph(&[self_referencing]).expect_err("self cycle");
+    assert!(matches!(error, DependencyResolutionError::Cycle { .. }));
+}
