@@ -94,6 +94,293 @@ pub enum HostCapability {
     CredentialUse,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKind {
+    ToolRegistration,
+    ServiceRegistration,
+    Callback,
+    ContainedProcess,
+    Route,
+    TemporaryRoute,
+    CapabilityLease,
+    FilesystemState,
+    Subscription,
+    Other,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OwnedResource {
+    pub id: String,
+    pub owner: ComponentInstanceId,
+    pub kind: ResourceKind,
+    pub owner_process_alive: bool,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Default)]
+pub struct ResourceOwnershipRegistry {
+    resources: BTreeMap<String, OwnedResource>,
+}
+
+impl ResourceOwnershipRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(
+        &mut self,
+        context: &ScopedComponentContext,
+        id: impl Into<String>,
+        kind: ResourceKind,
+    ) -> Result<OwnedResource, ComponentRuntimeError> {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return Err(ComponentRuntimeError::InvalidResourceId(id));
+        }
+        if let Some(existing) = self.resources.get(&id) {
+            if existing.owner != context.identity {
+                return Err(ComponentRuntimeError::ResourceOwnershipConflict {
+                    resource: id,
+                    existing_owner: existing.owner.clone(),
+                    requested_owner: context.identity.clone(),
+                });
+            }
+            return Ok(existing.clone());
+        }
+        let resource = OwnedResource {
+            id: id.clone(),
+            owner: context.identity.clone(),
+            kind,
+            owner_process_alive: true,
+            metadata: BTreeMap::new(),
+        };
+        self.resources.insert(id, resource.clone());
+        Ok(resource)
+    }
+
+    pub fn release(
+        &mut self,
+        context: &ScopedComponentContext,
+        id: &str,
+    ) -> Result<OwnedResource, ComponentRuntimeError> {
+        let Some(existing) = self.resources.get(id) else {
+            return Err(ComponentRuntimeError::UnknownResource(id.to_owned()));
+        };
+        if existing.owner != context.identity {
+            return Err(ComponentRuntimeError::ResourceOwnershipDenied {
+                resource: id.to_owned(),
+                actual_owner: existing.owner.clone(),
+                requested_owner: context.identity.clone(),
+            });
+        }
+        self.resources
+            .remove(id)
+            .ok_or_else(|| ComponentRuntimeError::UnknownResource(id.to_owned()))
+    }
+
+    #[must_use]
+    pub fn resources_for(&self, owner: ComponentInstanceId) -> Vec<OwnedResource> {
+        self.resources
+            .values()
+            .filter(|resource| resource.owner == owner)
+            .cloned()
+            .collect()
+    }
+
+    #[must_use]
+    pub fn resource(&self, id: &str) -> Option<&OwnedResource> {
+        self.resources.get(id)
+    }
+
+    pub fn mark_process_dead(&mut self, owner: ComponentInstanceId) {
+        for resource in self.resources.values_mut() {
+            if resource.owner == owner {
+                resource.owner_process_alive = false;
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.resources.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.resources.is_empty()
+    }
+}
+
+pub type EffectInverse = Box<dyn FnMut() -> Result<(), String> + Send + 'static>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectState {
+    Active,
+    Reverted,
+    CleanupDebt,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CleanupDebt {
+    pub effect_id: u64,
+    pub owner: ComponentInstanceId,
+    pub label: String,
+    pub reason: String,
+}
+
+struct EffectEntry {
+    id: u64,
+    owner: ComponentInstanceId,
+    label: String,
+    state: EffectState,
+    inverse: Option<EffectInverse>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RollbackReport {
+    pub attempted: usize,
+    pub reverted: usize,
+    pub failures: usize,
+    pub remaining: usize,
+    pub cleanup_debt: Vec<CleanupDebt>,
+}
+
+impl RollbackReport {
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.failures == 0 && self.remaining == 0
+    }
+}
+
+pub struct EffectJournal {
+    owner: ComponentInstanceId,
+    next_effect_id: u64,
+    effects: Vec<EffectEntry>,
+    cleanup_debt: Vec<CleanupDebt>,
+}
+
+impl EffectJournal {
+    #[must_use]
+    pub fn new(owner: ComponentInstanceId) -> Self {
+        Self {
+            owner,
+            next_effect_id: 1,
+            effects: Vec::new(),
+            cleanup_debt: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn owner(&self) -> &ComponentInstanceId {
+        &self.owner
+    }
+
+    pub fn record_successful_effect<F>(&mut self, label: impl Into<String>, inverse: F) -> u64
+    where
+        F: FnMut() -> Result<(), String> + Send + 'static,
+    {
+        let id = self.next_effect_id;
+        self.next_effect_id = self.next_effect_id.saturating_add(1);
+        self.effects.push(EffectEntry {
+            id,
+            owner: self.owner.clone(),
+            label: label.into(),
+            state: EffectState::Active,
+            inverse: Some(Box::new(inverse)),
+        });
+        id
+    }
+
+    pub fn apply<T, F, I>(
+        &mut self,
+        label: impl Into<String>,
+        forward: F,
+        inverse: I,
+    ) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, String>,
+        I: FnMut() -> Result<(), String> + Send + 'static,
+    {
+        let value = forward()?;
+        self.record_successful_effect(label, inverse);
+        Ok(value)
+    }
+
+    pub fn rollback(&mut self) -> RollbackReport {
+        let mut report = RollbackReport::default();
+        for index in (0..self.effects.len()).rev() {
+            let (effect_id, owner, label, inverse) = {
+                let entry = &mut self.effects[index];
+                if entry.state == EffectState::Reverted {
+                    continue;
+                }
+                (
+                    entry.id,
+                    entry.owner.clone(),
+                    entry.label.clone(),
+                    entry.inverse.take(),
+                )
+            };
+            let Some(mut inverse) = inverse else {
+                continue;
+            };
+            report.attempted += 1;
+            match inverse() {
+                Ok(()) => {
+                    self.effects[index].state = EffectState::Reverted;
+                    report.reverted += 1;
+                    self.cleanup_debt.retain(|debt| debt.effect_id != effect_id);
+                }
+                Err(reason) => {
+                    self.effects[index].state = EffectState::CleanupDebt;
+                    self.effects[index].inverse = Some(inverse);
+                    report.failures += 1;
+                    if !self
+                        .cleanup_debt
+                        .iter()
+                        .any(|debt| debt.effect_id == effect_id)
+                    {
+                        self.cleanup_debt.push(CleanupDebt {
+                            effect_id,
+                            owner,
+                            label,
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+        report.remaining = self.pending_effect_count();
+        report.cleanup_debt = self.cleanup_debt.clone();
+        report
+    }
+
+    #[must_use]
+    pub fn pending_effect_count(&self) -> usize {
+        self.effects
+            .iter()
+            .filter(|effect| effect.state != EffectState::Reverted)
+            .count()
+    }
+
+    #[must_use]
+    pub fn cleanup_debt(&self) -> &[CleanupDebt] {
+        &self.cleanup_debt
+    }
+
+    #[must_use]
+    pub fn effect_states(&self) -> Vec<(u64, EffectState)> {
+        self.effects
+            .iter()
+            .map(|effect| (effect.id, effect.state))
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComponentProvenance {
     pub desired_revision: u64,
@@ -226,6 +513,26 @@ pub enum ComponentRuntimeError {
         component: ComponentInstanceId,
         capability: HostCapability,
     },
+    #[error("resource id must not be empty")]
+    InvalidResourceId(String),
+    #[error(
+        "resource {resource:?} is already owned by {existing_owner:?}; cannot assign it to {requested_owner:?}"
+    )]
+    ResourceOwnershipConflict {
+        resource: String,
+        existing_owner: ComponentInstanceId,
+        requested_owner: ComponentInstanceId,
+    },
+    #[error(
+        "component {requested_owner:?} does not own resource {resource:?}; it belongs to {actual_owner:?}"
+    )]
+    ResourceOwnershipDenied {
+        resource: String,
+        actual_owner: ComponentInstanceId,
+        requested_owner: ComponentInstanceId,
+    },
+    #[error("unknown resource {0:?}")]
+    UnknownResource(String),
 }
 
 struct ComponentRecord {
