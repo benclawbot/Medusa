@@ -581,6 +581,7 @@ pub struct ProviderCandidate {
     pub identity: ComponentInstanceId,
     pub spec: ComponentSpec,
     pub retiring: bool,
+    pub available: bool,
 }
 
 impl ProviderCandidate {
@@ -590,12 +591,19 @@ impl ProviderCandidate {
             identity,
             spec,
             retiring: false,
+            available: true,
         }
     }
 
     #[must_use]
     pub fn retiring(mut self, retiring: bool) -> Self {
         self.retiring = retiring;
+        self
+    }
+
+    #[must_use]
+    pub fn available(mut self, available: bool) -> Self {
+        self.available = available;
         self
     }
 }
@@ -628,6 +636,31 @@ impl DependencyView {
     pub fn as_map(&self) -> &BTreeMap<String, Vec<ComponentInstanceId>> {
         &self.providers
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DependencyReconciliationAction {
+    Noop {
+        component: ComponentInstanceId,
+    },
+    Restart {
+        component: ComponentInstanceId,
+        committed: DependencyView,
+        target: DependencyView,
+    },
+    Deactivate {
+        component: ComponentInstanceId,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderRetirementReport {
+    pub provider: ComponentInstanceId,
+    pub consumers: Vec<ComponentInstanceId>,
+    pub order: Vec<ComponentInstanceId>,
+    pub blocked: Vec<ComponentInstanceId>,
+    pub withdrawn: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
@@ -687,6 +720,7 @@ impl DependencyResolver {
                 .iter()
                 .filter(|candidate| {
                     candidate.spec.enabled
+                        && candidate.available
                         && !candidate.retiring
                         && candidate
                             .spec
@@ -986,6 +1020,10 @@ struct ComponentRecord {
     spec: ComponentSpec,
     context: ScopedComponentContext,
     state: LifecycleState,
+    journal: EffectJournal,
+    committed_dependency_view: DependencyView,
+    target_dependency_view: DependencyView,
+    retiring: bool,
 }
 
 #[derive(Default)]
@@ -1029,6 +1067,10 @@ impl ComponentRuntime {
                 spec,
                 context,
                 state: LifecycleState::Inactive,
+                journal: EffectJournal::new(identity.clone()),
+                committed_dependency_view: DependencyView::default(),
+                target_dependency_view: DependencyView::default(),
+                retiring: false,
             },
         );
         Ok(identity)
@@ -1052,5 +1094,214 @@ impl ComponentRuntime {
     #[must_use]
     pub fn spec(&self, identity: &ComponentInstanceId) -> Option<&ComponentSpec> {
         self.instances.get(identity).map(|record| &record.spec)
+    }
+
+    pub fn activate(
+        &mut self,
+        identity: &ComponentInstanceId,
+    ) -> Result<(), ComponentRuntimeError> {
+        let record = self
+            .instances
+            .get_mut(identity)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))?;
+        if record.retiring {
+            return Err(ComponentRuntimeError::InvalidSpec {
+                component: identity.component_id.clone(),
+                reason: "retiring components cannot be activated".to_owned(),
+            });
+        }
+        record.state = LifecycleState::Active;
+        Ok(())
+    }
+
+    pub fn record_effect<F>(
+        &mut self,
+        identity: &ComponentInstanceId,
+        label: impl Into<String>,
+        inverse: F,
+    ) -> Result<u64, ComponentRuntimeError>
+    where
+        F: FnMut() -> Result<(), String> + Send + 'static,
+    {
+        let record = self
+            .instances
+            .get_mut(identity)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))?;
+        Ok(record.journal.record_successful_effect(label, inverse))
+    }
+
+    pub fn provider_candidate(
+        &self,
+        identity: &ComponentInstanceId,
+    ) -> Result<ProviderCandidate, ComponentRuntimeError> {
+        let record = self
+            .instances
+            .get(identity)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))?;
+        Ok(
+            ProviderCandidate::new(identity.clone(), record.spec.clone())
+                .retiring(record.retiring)
+                .available(record.state == LifecycleState::Active),
+        )
+    }
+
+    pub fn set_committed_dependency_view(
+        &mut self,
+        identity: &ComponentInstanceId,
+        view: DependencyView,
+    ) -> Result<(), ComponentRuntimeError> {
+        let record = self
+            .instances
+            .get_mut(identity)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))?;
+        record.committed_dependency_view = view.clone();
+        record.target_dependency_view = view;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn committed_dependency_view(
+        &self,
+        identity: &ComponentInstanceId,
+    ) -> Option<DependencyView> {
+        self.instances
+            .get(identity)
+            .map(|record| record.committed_dependency_view.clone())
+    }
+
+    #[must_use]
+    pub fn target_dependency_view(&self, identity: &ComponentInstanceId) -> Option<DependencyView> {
+        self.instances
+            .get(identity)
+            .map(|record| record.target_dependency_view.clone())
+    }
+
+    #[must_use]
+    pub fn is_provider_retiring(&self, identity: &ComponentInstanceId) -> bool {
+        self.instances
+            .get(identity)
+            .is_some_and(|record| record.retiring)
+    }
+
+    pub fn dependency_reconciliation_plan(
+        &self,
+    ) -> Result<Vec<DependencyReconciliationAction>, DependencyResolutionError> {
+        let candidates = self
+            .instances
+            .values()
+            .map(|record| {
+                ProviderCandidate::new(record.context.identity(), record.spec.clone())
+                    .retiring(record.retiring)
+                    .available(record.state == LifecycleState::Active)
+            })
+            .collect::<Vec<_>>();
+        let mut actions = Vec::new();
+        for (identity, record) in &self.instances {
+            if record.state != LifecycleState::Active || record.retiring {
+                continue;
+            }
+            match DependencyResolver::resolve(&record.spec, &candidates) {
+                Ok(target) if target == record.committed_dependency_view => {
+                    actions.push(DependencyReconciliationAction::Noop {
+                        component: identity.clone(),
+                    });
+                }
+                Ok(target) => actions.push(DependencyReconciliationAction::Restart {
+                    component: identity.clone(),
+                    committed: record.committed_dependency_view.clone(),
+                    target,
+                }),
+                Err(error) => actions.push(DependencyReconciliationAction::Deactivate {
+                    component: identity.clone(),
+                    reason: error.to_string(),
+                }),
+            }
+        }
+        Ok(actions)
+    }
+
+    pub fn retire_provider(
+        &mut self,
+        provider: &ComponentInstanceId,
+    ) -> Result<ProviderRetirementReport, ComponentRuntimeError> {
+        let provider_record = self
+            .instances
+            .get_mut(provider)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(provider.clone()))?;
+        provider_record.retiring = true;
+        provider_record.state = LifecycleState::Retiring;
+
+        let consumers = self
+            .instances
+            .iter()
+            .filter(|(identity, record)| {
+                *identity != provider
+                    && record.state == LifecycleState::Active
+                    && record
+                        .committed_dependency_view
+                        .providers
+                        .values()
+                        .any(|providers| providers.contains(provider))
+            })
+            .map(|(identity, _)| identity.clone())
+            .collect::<Vec<_>>();
+        let mut report = ProviderRetirementReport {
+            provider: provider.clone(),
+            consumers: consumers.clone(),
+            order: Vec::new(),
+            blocked: Vec::new(),
+            withdrawn: false,
+        };
+
+        for consumer in consumers {
+            let record = self
+                .instances
+                .get_mut(&consumer)
+                .expect("consumer collected from instances");
+            record.state = LifecycleState::Deactivating;
+            let rollback = record.journal.rollback();
+            if !rollback.is_clean() {
+                record.state = LifecycleState::BlockedRetirement;
+                report.blocked.push(consumer);
+                if let Some(provider_record) = self.instances.get_mut(provider) {
+                    provider_record.state = LifecycleState::BlockedRetirement;
+                }
+                return Ok(report);
+            }
+            record.state = LifecycleState::Inactive;
+            record.committed_dependency_view = DependencyView::default();
+            record.target_dependency_view = DependencyView::default();
+            report.order.push(consumer);
+        }
+
+        let provider_rollback = self
+            .instances
+            .get_mut(provider)
+            .expect("provider exists")
+            .journal
+            .rollback();
+        if !provider_rollback.is_clean() {
+            if let Some(provider_record) = self.instances.get_mut(provider) {
+                provider_record.state = LifecycleState::BlockedRetirement;
+            }
+            report.blocked.push(provider.clone());
+            return Ok(report);
+        }
+        if let Some(provider_record) = self.instances.get_mut(provider) {
+            provider_record.state = LifecycleState::Inactive;
+        }
+        report.order.push(provider.clone());
+        report.withdrawn = true;
+        Ok(report)
+    }
+
+    pub fn effect_pending(
+        &self,
+        identity: &ComponentInstanceId,
+    ) -> Result<bool, ComponentRuntimeError> {
+        self.instances
+            .get(identity)
+            .map(|record| record.journal.pending_effect_count() > 0)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))
     }
 }
