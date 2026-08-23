@@ -57,6 +57,7 @@ struct RuntimeEntry {
     session_id: Option<String>,
     replay_cursor: u64,
     pending_ack_cursor: Option<u64>,
+    web_artifact_baseline: BTreeMap<PathBuf, SystemTime>,
     presentation: DesktopCanonicalPresentation,
     daemon: DesktopDaemon,
 }
@@ -356,6 +357,7 @@ impl RuntimeRegistry {
             "desktop-runtime-{}",
             self.next_id.fetch_add(1, Ordering::Relaxed) + 1
         );
+        let web_artifact_baseline = web_artifact_snapshot(&repo);
         let launch = DaemonLaunch::for_current_executable().map_err(|error| error.to_string())?;
         let mut supervisor = DaemonSupervisor::new(&repo, launch);
         let lifecycle = supervisor
@@ -367,6 +369,7 @@ impl RuntimeRegistry {
             session_id: None,
             replay_cursor: 0,
             pending_ack_cursor: None,
+            web_artifact_baseline,
             presentation: DesktopCanonicalPresentation::new(),
             daemon: DesktopDaemon {
                 supervisor,
@@ -473,6 +476,7 @@ pub fn runtime_submit(
 ) -> Result<DesktopSubmitDisposition, String> {
     registry.with_entry(&runtime_id, |entry| {
         entry.ensure_daemon()?;
+        entry.web_artifact_baseline = web_artifact_snapshot(&entry.repo);
         let (text, attachment_ids) = entry.stage_draft(draft)?;
         let command = if entry.session_id.is_none() {
             FrontendCommand::CreateSession {
@@ -596,9 +600,12 @@ pub fn runtime_find_web_artifact(
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<Option<DesktopWebArtifact>, String> {
     registry.with_entry(&runtime_id, |entry| {
-        let Some(path) = latest_web_artifact(&entry.repo)? else {
+        let current = web_artifact_snapshot(&entry.repo);
+        let Some(path) = latest_web_artifact_in_snapshot(&current, &entry.web_artifact_baseline)
+        else {
             return Ok(None);
         };
+        entry.web_artifact_baseline = current;
         Ok(Some(DesktopWebArtifact {
             title: web_artifact_title(&path),
             path: path.to_string_lossy().into_owned(),
@@ -631,14 +638,32 @@ fn execution_root(repo: &Path) -> PathBuf {
 }
 
 fn latest_web_artifact(repo: &Path) -> Result<Option<PathBuf>, String> {
+    let snapshot = web_artifact_snapshot(repo);
+    Ok(snapshot
+        .into_iter()
+        .max_by_key(|(path, modified)| (*modified, path.clone()))
+        .map(|(path, _)| path))
+}
+
+fn web_artifact_snapshot(repo: &Path) -> BTreeMap<PathBuf, SystemTime> {
     let root = execution_root(repo);
     if !root.is_dir() {
-        return Ok(None);
+        return BTreeMap::new();
     }
     let mut candidates = Vec::new();
     collect_web_artifacts(&root, 0, &mut candidates);
-    candidates.sort_by_key(|(_, modified)| *modified);
-    Ok(candidates.pop().map(|(path, _)| path))
+    candidates.into_iter().collect()
+}
+
+fn latest_web_artifact_in_snapshot(
+    current: &BTreeMap<PathBuf, SystemTime>,
+    baseline: &BTreeMap<PathBuf, SystemTime>,
+) -> Option<PathBuf> {
+    current
+        .iter()
+        .filter(|(path, modified)| baseline.get(*path) != Some(*modified))
+        .max_by_key(|(path, modified)| (*modified, (*path).clone()))
+        .map(|(path, _)| path.clone())
 }
 
 fn collect_web_artifacts(root: &Path, depth: usize, candidates: &mut Vec<(PathBuf, SystemTime)>) {
@@ -928,5 +953,38 @@ mod tests {
             .expect("artifact");
         assert_eq!(artifact, execution.join("index.html"));
         assert_eq!(web_artifact_title(&artifact), "Photography test");
+    }
+
+    #[test]
+    fn web_artifact_discovery_ignores_artifacts_present_before_the_turn() {
+        let directory = crate::tempdir().expect("tempdir");
+        let previous = directory
+            .path()
+            .join(".medusa")
+            .join("executions")
+            .join("previous");
+        fs::create_dir_all(&previous).expect("previous execution");
+        fs::write(previous.join("index.html"), "<title>Previous</title>")
+            .expect("previous index");
+
+        let baseline = web_artifact_snapshot(directory.path());
+        assert_eq!(
+            latest_web_artifact_in_snapshot(&web_artifact_snapshot(directory.path()), &baseline),
+            None
+        );
+
+        let current = directory
+            .path()
+            .join(".medusa")
+            .join("executions")
+            .join("current");
+        fs::create_dir_all(&current).expect("current execution");
+        fs::write(current.join("index.html"), "<title>Current</title>")
+            .expect("current index");
+
+        assert_eq!(
+            latest_web_artifact_in_snapshot(&web_artifact_snapshot(directory.path()), &baseline),
+            Some(current.join("index.html"))
+        );
     }
 }
