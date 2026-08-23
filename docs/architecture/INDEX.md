@@ -181,6 +181,8 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Decision: [`decisions/0006-authoritative-evidence-artifacts-and-verification.md`](decisions/0006-authoritative-evidence-artifacts-and-verification.md)
 - Decision: [`decisions/0007-canonical-frontend-projection.md`](decisions/0007-canonical-frontend-projection.md)
 - Decision: [`decisions/0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md)
+- Decision: [`decisions/0010-typed-non-authority-service-providers.md`](decisions/0010-typed-non-authority-service-providers.md)
+- Decision: [`decisions/0011-transactional-component-runtime.md`](decisions/0011-transactional-component-runtime.md)
 - Final independent audit: [`FINAL-CERTIFICATION-AUDIT.md`](FINAL-CERTIFICATION-AUDIT.md)
 - Machine-readable certification baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)

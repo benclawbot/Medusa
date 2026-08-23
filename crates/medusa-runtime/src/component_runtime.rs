@@ -849,6 +849,96 @@ impl ExternalCommitLedger {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FaultPoint {
+    ActivationEffect,
+    CandidateHealth,
+    ConsumerTeardown,
+    ProviderTeardown,
+    DesiredStatePersist,
+    ReconciliationCommit,
+    ExternalPrepare,
+    ExternalCommit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FaultTraceEvent {
+    pub sequence: u64,
+    pub point: FaultPoint,
+    pub injected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
+pub enum InjectedFaultError {
+    #[error("fault injected at {point:?}: {reason}")]
+    Injected { point: FaultPoint, reason: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FaultInjector {
+    seed: u64,
+    failures: BTreeMap<FaultPoint, String>,
+    trace: Vec<FaultTraceEvent>,
+}
+
+impl FaultInjector {
+    #[must_use]
+    pub fn new(seed: u64) -> Self {
+        Self {
+            seed,
+            failures: BTreeMap::new(),
+            trace: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    pub fn fail_once(&mut self, point: FaultPoint, reason: impl Into<String>) {
+        self.failures.insert(point, reason.into());
+    }
+
+    pub fn check(&mut self, point: FaultPoint) -> Result<(), InjectedFaultError> {
+        let reason = self.failures.remove(&point);
+        let event = FaultTraceEvent {
+            sequence: self.trace.len() as u64,
+            point,
+            injected: reason.is_some(),
+            reason: reason.clone(),
+        };
+        self.trace.push(event);
+        if let Some(reason) = reason {
+            Err(InjectedFaultError::Injected { point, reason })
+        } else {
+            Ok(())
+        }
+    }
+
+    #[must_use]
+    pub fn trace(&self) -> &[FaultTraceEvent] {
+        &self.trace
+    }
+
+    #[must_use]
+    pub fn replay_fingerprint(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(self.seed.to_le_bytes());
+        for event in &self.trace {
+            hasher.update(event.sequence.to_le_bytes());
+            hasher.update(format!("{:?};{};", event.point, event.injected).as_bytes());
+            if let Some(reason) = &event.reason {
+                hasher.update(reason.as_bytes());
+            }
+        }
+        format!("sha256:{:x}", hasher.finalize())
+    }
+}
+
 impl EffectJournal {
     pub fn record_external_commit(
         &mut self,
@@ -857,6 +947,22 @@ impl EffectJournal {
         Err(ComponentRuntimeError::ExternalCommitNotReversible {
             operation_id: request.operation_id.clone(),
         })
+    }
+
+    pub fn apply_with_fault<T, F, I>(
+        &mut self,
+        injector: &mut FaultInjector,
+        point: FaultPoint,
+        label: impl Into<String>,
+        forward: F,
+        inverse: I,
+    ) -> Result<T, String>
+    where
+        F: FnOnce() -> Result<T, String>,
+        I: FnMut() -> Result<(), String> + Send + 'static,
+    {
+        injector.check(point).map_err(|error| error.to_string())?;
+        self.apply(label, forward, inverse)
     }
 }
 
@@ -2264,6 +2370,51 @@ pub enum ComponentRuntimeError {
     },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeInvariantViolation {
+    IdentityContextMismatch {
+        identity: ComponentInstanceId,
+        context_identity: ComponentInstanceId,
+    },
+    JournalOwnerMismatch {
+        identity: ComponentInstanceId,
+        journal_owner: ComponentInstanceId,
+    },
+    CapabilityDrift {
+        identity: ComponentInstanceId,
+    },
+    RetiringInstanceActive {
+        identity: ComponentInstanceId,
+        state: LifecycleState,
+    },
+    RetiringStateMissingFlag {
+        identity: ComponentInstanceId,
+        state: LifecycleState,
+    },
+    OrphanedExclusiveOwner {
+        resource: String,
+        owner: ComponentInstanceId,
+    },
+    ExclusiveOwnershipDrift {
+        resource: String,
+        owner: ComponentInstanceId,
+    },
+    MissingExclusiveOwner {
+        resource: String,
+        owner: ComponentInstanceId,
+    },
+    GenerationCounterBehind {
+        component: ComponentId,
+        counter: ComponentGeneration,
+        instance: ComponentInstanceId,
+    },
+    UnknownDependencyProvider {
+        consumer: ComponentInstanceId,
+        provider: ComponentInstanceId,
+    },
+}
+
 struct ComponentRecord {
     spec: ComponentSpec,
     context: ScopedComponentContext,
@@ -2586,6 +2737,113 @@ impl ComponentRuntime {
             .get(identity)
             .map(|record| record.journal.pending_effect_count() > 0)
             .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))
+    }
+
+    #[must_use]
+    pub fn invariant_violations(&self) -> Vec<RuntimeInvariantViolation> {
+        let mut violations = Vec::new();
+        for (identity, record) in &self.instances {
+            if &record.context.identity != identity {
+                violations.push(RuntimeInvariantViolation::IdentityContextMismatch {
+                    identity: identity.clone(),
+                    context_identity: record.context.identity.clone(),
+                });
+            }
+            if record.journal.owner() != identity {
+                violations.push(RuntimeInvariantViolation::JournalOwnerMismatch {
+                    identity: identity.clone(),
+                    journal_owner: record.journal.owner().clone(),
+                });
+            }
+            if record.context.capabilities != record.spec.capabilities {
+                violations.push(RuntimeInvariantViolation::CapabilityDrift {
+                    identity: identity.clone(),
+                });
+            }
+            if record.retiring
+                && matches!(
+                    record.state,
+                    LifecycleState::Active | LifecycleState::Activating
+                )
+            {
+                violations.push(RuntimeInvariantViolation::RetiringInstanceActive {
+                    identity: identity.clone(),
+                    state: record.state,
+                });
+            }
+            if !record.retiring
+                && matches!(
+                    record.state,
+                    LifecycleState::Retiring | LifecycleState::BlockedRetirement
+                )
+            {
+                violations.push(RuntimeInvariantViolation::RetiringStateMissingFlag {
+                    identity: identity.clone(),
+                    state: record.state,
+                });
+            }
+            if self
+                .next_generations
+                .get(&identity.component_id)
+                .is_none_or(|counter| counter.get() < identity.generation.get())
+            {
+                violations.push(RuntimeInvariantViolation::GenerationCounterBehind {
+                    component: identity.component_id.clone(),
+                    counter: self
+                        .next_generations
+                        .get(&identity.component_id)
+                        .copied()
+                        .unwrap_or(ComponentGeneration::new(0)),
+                    instance: identity.clone(),
+                });
+            }
+            for view in [
+                &record.committed_dependency_view,
+                &record.target_dependency_view,
+            ] {
+                for provider in view.providers.values().flatten() {
+                    if !self.instances.contains_key(provider) {
+                        violations.push(RuntimeInvariantViolation::UnknownDependencyProvider {
+                            consumer: identity.clone(),
+                            provider: provider.clone(),
+                        });
+                    }
+                }
+            }
+            for resource in &record.spec.exclusive_resources {
+                if self.exclusive_owners.get(resource) != Some(identity) {
+                    violations.push(RuntimeInvariantViolation::MissingExclusiveOwner {
+                        resource: resource.clone(),
+                        owner: identity.clone(),
+                    });
+                }
+            }
+        }
+        for (resource, owner) in &self.exclusive_owners {
+            let Some(record) = self.instances.get(owner) else {
+                violations.push(RuntimeInvariantViolation::OrphanedExclusiveOwner {
+                    resource: resource.clone(),
+                    owner: owner.clone(),
+                });
+                continue;
+            };
+            if !record.spec.exclusive_resources.contains(resource) {
+                violations.push(RuntimeInvariantViolation::ExclusiveOwnershipDrift {
+                    resource: resource.clone(),
+                    owner: owner.clone(),
+                });
+            }
+        }
+        violations
+    }
+
+    pub fn validate_invariants(&self) -> Result<(), Vec<RuntimeInvariantViolation>> {
+        let violations = self.invariant_violations();
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(violations)
+        }
     }
 
     #[must_use]

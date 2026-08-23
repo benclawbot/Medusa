@@ -251,7 +251,7 @@
     {
       "path": "docs/PROVIDER-SUPPORT.md",
       "disposition": "current",
-      "sha256": "9d5d1dee449a049208e5494836adb7611a09860981d75ed7e41cdbabbaf8c80c"
+      "sha256": "be58ed300e785bb8d441c4782a5f4cac1e9dbc1bb604a28f06497fde98b4d3a6"
     },
     {
       "path": "docs/PUBLIC-API-BASELINE.md",
@@ -396,7 +396,7 @@
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "87cc1f20f1ad10e656d89cce4ad8b0ec050be052aea75998407cea241eeacb12"
+      "sha256": "c42bd942c8914ef62e4b322636f9d35a454c3773cb2f97f21ce03a708c90b093"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
@@ -467,6 +467,11 @@
       "path": "docs/architecture/decisions/0010-typed-non-authority-service-providers.md",
       "disposition": "current",
       "sha256": "da729b18ff2b49828e619ff0dc24774aba704146801f6f2bce88974a3004f25c"
+    },
+    {
+      "path": "docs/architecture/decisions/0011-transactional-component-runtime.md",
+      "disposition": "current",
+      "sha256": "feb8cbb4e0d7bb0696b6a913f361562f2b05fef22f78a8ebd0b5563f2b3f707c"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",
