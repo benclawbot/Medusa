@@ -1,5 +1,6 @@
 use std::{
     net::{SocketAddr, TcpStream},
+    path::PathBuf,
     process::Stdio,
     thread,
     time::{Duration, Instant},
@@ -10,7 +11,35 @@ use crate::desktop_command::hidden_command;
 const OPENAI_OAUTH_ADDR: &str = "127.0.0.1:10531";
 
 fn npx_program() -> &'static str {
-    if cfg!(windows) { "npx.cmd" } else { "npx" }
+    if cfg!(windows) {
+        "npx.cmd"
+    } else {
+        "npx"
+    }
+}
+
+fn oauth_auth_file_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = std::env::var_os("CODEX_HOME") {
+        candidates.push(PathBuf::from(home).join("auth.json"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".codex").join("auth.json"));
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        candidates.push(PathBuf::from(home).join(".codex").join("auth.json"));
+    }
+    candidates
+}
+
+fn oauth_auth_file_present() -> bool {
+    oauth_auth_file_candidates()
+        .iter()
+        .any(|path| path.is_file())
+}
+
+fn should_launch_browser_login(auth_file_present: bool) -> bool {
+    !auth_file_present
 }
 
 fn browser_oauth_spec(provider: &str) -> Result<(&'static str, [&'static str; 6]), String> {
@@ -74,20 +103,23 @@ fn wait_for_oauth_gateway() -> Result<(), String> {
 pub async fn desktop_browser_oauth(provider: String) -> Result<(), String> {
     let (program, args) = browser_oauth_spec(&provider)?;
     let (gateway_program, gateway_args) = browser_oauth_gateway_spec(&provider)?;
+    let launch_browser_login = should_launch_browser_login(oauth_auth_file_present());
     tauri::async_runtime::spawn_blocking(move || {
-        let status = hidden_command(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|error| {
-                format!(
-                    "could not launch browser sign-in with openai-oauth: {error}. Install Node.js and retry from Medusa"
-                )
-            })?;
-        if !status.success() {
-            return Err(format!("openai-oauth browser sign-in exited with {status}"));
+        if launch_browser_login {
+            let status = hidden_command(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|error| {
+                    format!(
+                        "could not launch browser sign-in with openai-oauth: {error}. Install Node.js and retry from Medusa"
+                    )
+                })?;
+            if !status.success() {
+                return Err(format!("openai-oauth browser sign-in exited with {status}"));
+            }
         }
         if !gateway_is_reachable() {
             let gateway_status = hidden_command(gateway_program)
@@ -106,7 +138,7 @@ pub async fn desktop_browser_oauth(provider: String) -> Result<(), String> {
         }
         if !browser_oauth_credentials_present("openai-oauth") {
             return Err(
-                "ChatGPT sign-in completed, but the OAuth gateway returned no authenticated models"
+                "ChatGPT OAuth credentials are present or sign-in completed, but the OAuth gateway returned no authenticated models. Run `npx openai-oauth login` in an interactive terminal to re-authenticate"
                     .to_owned(),
             );
         }
@@ -142,6 +174,12 @@ mod tests {
         let (program, args) = browser_oauth_gateway_spec("openai-oauth").expect("gateway spec");
         assert_eq!(program, npx_program());
         assert_eq!(args, ["--yes", "openai-oauth@latest", "--detach"]);
+    }
+
+    #[test]
+    fn existing_oauth_credentials_skip_noninteractive_login() {
+        assert!(!should_launch_browser_login(true));
+        assert!(should_launch_browser_login(false));
     }
 
     #[test]
