@@ -25,6 +25,20 @@ fn general_chat_requests_skip_repository_work_but_attachments_stay_explicit() {
 }
 
 #[test]
+fn general_chat_preparation_does_not_scan_or_capture_repository_state() {
+    let draft = PromptDraft {
+        text: "hey".to_owned(),
+        ..PromptDraft::default()
+    };
+
+    assert!(!should_capture_review_baseline(true, false));
+    let plan = execution_plan_for_prompt(Path::new("C:/profile-root"), &draft, true)
+        .expect("general chat plan");
+    assert_eq!(plan.mode, production_orchestrator::ExecutionMode::Direct);
+    assert!(plan.planning.scope.effective.is_empty());
+}
+
+#[test]
 fn command_processing_does_not_wait_for_capability_discovery() {
     use std::{
         sync::{Arc, Mutex, mpsc},

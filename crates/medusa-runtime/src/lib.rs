@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     env,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -1255,6 +1255,23 @@ fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
     .all(|marker| !normalized.contains(marker))
 }
 
+fn should_capture_review_baseline(general_chat: bool, resuming_pending_question: bool) -> bool {
+    !general_chat && !resuming_pending_question
+}
+
+fn execution_plan_for_prompt(
+    repo: &Path,
+    draft: &PromptDraft,
+    general_chat: bool,
+) -> Result<crate::production_orchestrator::ProductionExecutionPlan, RuntimeError> {
+    let plan = if general_chat {
+        crate::production_orchestrator::plan_for_general_chat(draft)
+    } else {
+        crate::production_orchestrator::plan_for_repository(repo, draft)
+    };
+    plan.map_err(RuntimeError::agent)
+}
+
 fn run_prompt(
     state: &mut RuntimeState,
     draft: PromptDraft,
@@ -1287,16 +1304,14 @@ fn run_prompt(
         .session
         .as_ref()
         .is_some_and(|session| session.pending_question.is_some());
-    if !resuming_pending_question {
+    let general_chat = is_general_chat_request(&draft.text, draft.attachments.len());
+    let turn_instruction = general_chat.then_some(GENERAL_CHAT_TURN_INSTRUCTION);
+    if should_capture_review_baseline(general_chat, resuming_pending_question) {
         crate::review::capture_review_baseline(&state.repo)
             .map_err(|error| RuntimeError::agent(error.to_string()))?;
     }
     let selected_skill = state.pending_skill.clone();
-    let execution_plan =
-        crate::production_orchestrator::plan_for_repository(&state.repo, &draft)
-            .map_err(RuntimeError::agent)?;
-    let general_chat = is_general_chat_request(&draft.text, draft.attachments.len());
-    let turn_instruction = general_chat.then_some(GENERAL_CHAT_TURN_INSTRUCTION);
+    let execution_plan = execution_plan_for_prompt(&state.repo, &draft, general_chat)?;
     let coordinated =
         execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated;
     let analysis_host = Arc::new(crate::analysis_tool::RuntimeAnalysisHost::new(

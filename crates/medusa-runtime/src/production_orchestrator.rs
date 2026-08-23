@@ -96,6 +96,29 @@ pub fn plan_for_repository(
         repository_paths: repository_paths(repo),
     })?;
     let planning = enrich_plan_from_repository_graph(repo, planning)?;
+    build_execution_plan(draft, planning)
+}
+
+/// Plans a conversation without touching repository metadata.
+///
+/// General chat is deliberately not repository-scoped. Keeping this path separate from
+/// `plan_for_repository` prevents a prompt such as "hey" from recursively enumerating a large
+/// working directory before the model can answer.
+pub fn plan_for_general_chat(
+    draft: &PromptDraft,
+) -> Result<ProductionExecutionPlan, &'static str> {
+    let planning = plan_typed(PlannerInput {
+        objective: draft.text.clone(),
+        attachment_count: draft.attachments.len(),
+        repository_paths: Vec::new(),
+    })?;
+    build_execution_plan(draft, planning)
+}
+
+fn build_execution_plan(
+    draft: &PromptDraft,
+    planning: PlanningResult,
+) -> Result<ProductionExecutionPlan, &'static str> {
     let mode = if planning.strategy == ExecutionStrategy::Direct {
         ExecutionMode::Direct
     } else {
