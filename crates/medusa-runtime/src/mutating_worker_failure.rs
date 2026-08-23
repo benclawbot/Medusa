@@ -17,27 +17,25 @@ fn digest(value: impl AsRef<[u8]>) -> String {
 
 fn retry_capsule(
     state: &DurableImplementationState,
-    assignment: &LeasedAssignment,
+    task_id: &str,
+    worker_id: &str,
+    lease_epoch: u64,
     error: &str,
 ) -> Result<StepCapsule, String> {
     let authority_fingerprint = if state.delegation_contract_fingerprint.trim().is_empty() {
         digest(format!(
-            "{}:{}:{}",
-            state.plan_fingerprint, state.context_fingerprint, assignment.task_id
+            "{}:{}:{task_id}",
+            state.plan_fingerprint, state.context_fingerprint
         ))
     } else {
         state.delegation_contract_fingerprint.clone()
     };
     let capsule_root = format!(
-        "{}:{}:{}:{}",
-        state.plan_fingerprint,
-        assignment.task_id,
-        assignment.worker_id,
-        assignment.lease_epoch
+        "{}:{task_id}:{worker_id}:{lease_epoch}",
+        state.plan_fingerprint
     );
     let objective = format!(
-        "Retry delegated mutating task `{}` from durable failure evidence without reusing the failed reasoning context",
-        assignment.task_id
+        "Retry delegated mutating task `{task_id}` from durable failure evidence without reusing the failed reasoning context"
     );
     let acceptance_criteria = vec![
         "remain inside the delegated mutation authority".to_owned(),
@@ -49,7 +47,7 @@ fn retry_capsule(
         state.plan_fingerprint.clone(),
         state.plan_fingerprint.clone(),
         1,
-        assignment.task_id.clone(),
+        task_id.to_owned(),
         objective.clone(),
         acceptance_criteria.clone(),
         state.changed_paths.clone(),
@@ -67,13 +65,12 @@ fn retry_capsule(
         previous_hypothesis: None,
         disproving_evidence: vec![failure_fingerprint.clone()],
         new_hypothesis: format!(
-            "the recorded failure for `{}` requires rebuilding the bounded context before choosing the next action",
-            assignment.task_id
+            "the recorded failure for `{task_id}` requires rebuilding the bounded context before choosing the next action"
         ),
         changed_strategy: "start from the durable delegation contract and failure evidence; do not continue the prior reasoning trace".to_owned(),
         environment_fingerprint: digest(format!(
-            "{}:{}:{}",
-            state.base_head, state.context_fingerprint, assignment.lease_epoch
+            "{}:{}:{lease_epoch}",
+            state.base_head, state.context_fingerprint
         )),
     };
     let retry = StepCapsule::new(
@@ -81,7 +78,7 @@ fn retry_capsule(
         state.plan_fingerprint.clone(),
         state.plan_fingerprint.clone(),
         1,
-        assignment.task_id.clone(),
+        task_id.to_owned(),
         objective,
         acceptance_criteria,
         state.changed_paths.clone(),
@@ -174,7 +171,13 @@ pub(super) fn record_attempt_failure(
         format!("{error}; {}", secondary.join("; "))
     };
     if state.status == ImplementationStatus::Retrying {
-        let capsule = retry_capsule(&state, assignment, &recorded)?;
+        let capsule = retry_capsule(
+            &state,
+            &assignment.task_id,
+            &assignment.worker_id,
+            assignment.lease_epoch,
+            &recorded,
+        )?;
         let capsule_json = serde_json::to_string(&capsule).map_err(|error| error.to_string())?;
         recorded.push_str("\nFresh retry Step Capsule (authoritative): ");
         recorded.push_str(&capsule_json);
@@ -199,18 +202,17 @@ pub(super) fn record_attempt_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use medusa_workers::{WorkerKind, WorkerState};
     use std::path::PathBuf;
 
     fn worker() -> Worker {
         Worker {
             id: "worker-implement".to_owned(),
-            kind: WorkerKind::Worktree,
-            worktree: PathBuf::from("/tmp/worker"),
             branch: "medusa/worker".to_owned(),
-            base_head: digest("base"),
-            commit: None,
+            worktree: PathBuf::from("/tmp/worker"),
             state: WorkerState::Ready,
+            commit: None,
+            stdout: String::new(),
+            stderr: String::new(),
         }
     }
 
@@ -244,13 +246,14 @@ mod tests {
 
     #[test]
     fn retry_capsule_is_fresh_and_bound_to_failure() {
-        let assignment = LeasedAssignment {
-            task_id: "implementation".to_owned(),
-            worker_id: "worker-implement".to_owned(),
-            lease_epoch: 1,
-        };
-        let capsule = retry_capsule(&state(), &assignment, "verification failed")
-            .expect("retry capsule");
+        let capsule = retry_capsule(
+            &state(),
+            "implementation",
+            "worker-implement",
+            1,
+            "verification failed",
+        )
+        .expect("retry capsule");
         capsule.verify().expect("verified capsule");
         assert!(capsule.fresh_context);
         assert!(capsule.retry_hypothesis.is_some());
