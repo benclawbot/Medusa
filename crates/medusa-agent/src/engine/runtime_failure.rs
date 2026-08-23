@@ -48,6 +48,11 @@ pub(crate) fn handle(
             if let Some(delay) = backoff_ms {
                 thread::sleep(Duration::from_millis(delay));
             }
+            session.messages = fresh_retry_messages(
+                &session.messages,
+                error,
+                "Retry from the durable failure classification with a new hypothesis. Do not continue prior assistant reasoning or tool-result context",
+            );
             persist(session)?;
             Ok(RuntimeFailureAction::Retry)
         }
@@ -57,14 +62,13 @@ pub(crate) fn handle(
                     step.status = AgentPlanStepStatus::Pending;
                 }
             }
-            session.messages.push(Message {
-                role: Role::User,
-                content: vec![MessageBlock::Text {
-                    text: format!(
-                        "Runtime failure policy requires a revised strategy. {reason}. Last error: {error}"
-                    ),
-                }],
-            });
+            session.messages = fresh_retry_messages(
+                &session.messages,
+                error,
+                &format!(
+                    "Runtime failure policy requires a revised strategy: {reason}. Replan from user-authored requirements and durable state only"
+                ),
+            );
             persist_replan_count(session, performed_replan_count(session).saturating_add(1))?;
             persist(session)?;
             Ok(RuntimeFailureAction::Replan)
@@ -87,6 +91,25 @@ pub(crate) fn handle(
             Ok(RuntimeFailureAction::Stop)
         }
     }
+}
+
+fn fresh_retry_messages(
+    messages: &[Message],
+    error: &MedusaError,
+    directive: &str,
+) -> Vec<Message> {
+    let mut fresh = messages
+        .iter()
+        .filter(|message| message.role == Role::User)
+        .cloned()
+        .collect::<Vec<_>>();
+    fresh.push(Message {
+        role: Role::User,
+        content: vec![MessageBlock::Text {
+            text: format!("Fresh failure-recovery context. {directive}. Last error: {error}"),
+        }],
+    });
+    fresh
 }
 
 pub(crate) fn record_terminal(
@@ -227,4 +250,41 @@ fn persist_history(session: &AgentSession, history: &FailureHistory) -> MedusaRe
 
 fn validation_error(message: &'static str) -> MedusaError {
     MedusaError::new(ErrorCode::InvalidInput, ErrorCategory::Validation, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_retry_context_drops_assistant_reasoning_and_keeps_user_requirements() {
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![MessageBlock::Text {
+                    text: "Keep the public API stable".to_owned(),
+                }],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![MessageBlock::Text {
+                    text: "failed reasoning trace".to_owned(),
+                }],
+            },
+        ];
+        let error = MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            "compiler rejected the attempt",
+        );
+        let fresh = fresh_retry_messages(&messages, &error, "try a different bounded strategy");
+        assert_eq!(fresh.len(), 2);
+        assert_eq!(fresh[0], messages[0]);
+        assert_eq!(fresh[1].role, Role::User);
+        assert!(matches!(
+            fresh[1].content.as_slice(),
+            [MessageBlock::Text { text }] if text.contains("Fresh failure-recovery context")
+                && text.contains("compiler rejected the attempt")
+        ));
+    }
 }
