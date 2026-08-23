@@ -397,11 +397,96 @@ impl ComponentProvenance {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionConstraint {
+    Any,
+    Exact(String),
+    AtLeast(String),
+}
+
+impl Default for VersionConstraint {
+    fn default() -> Self {
+        Self::Any
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyCardinality {
+    #[default]
+    One,
+    Many,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DependencyRequirement {
+    pub service: String,
+    #[serde(default)]
+    pub version: VersionConstraint,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub cardinality: DependencyCardinality,
+}
+
+impl DependencyRequirement {
+    #[must_use]
+    pub fn required(service: impl Into<String>) -> Self {
+        Self {
+            service: service.into(),
+            version: VersionConstraint::Any,
+            optional: false,
+            cardinality: DependencyCardinality::One,
+        }
+    }
+
+    #[must_use]
+    pub fn optional(service: impl Into<String>) -> Self {
+        Self {
+            optional: true,
+            ..Self::required(service)
+        }
+    }
+
+    #[must_use]
+    pub fn with_version(mut self, version: VersionConstraint) -> Self {
+        self.version = version;
+        self
+    }
+
+    #[must_use]
+    pub fn with_cardinality(mut self, cardinality: DependencyCardinality) -> Self {
+        self.cardinality = cardinality;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProvidedService {
+    pub service: String,
+    pub version: String,
+}
+
+impl ProvidedService {
+    #[must_use]
+    pub fn new(service: impl Into<String>, version: impl Into<String>) -> Self {
+        Self {
+            service: service.into(),
+            version: version.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ComponentSpec {
     pub id: ComponentId,
     pub version: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub requires: Vec<DependencyRequirement>,
+    #[serde(default)]
+    pub provides: Vec<ProvidedService>,
     pub capabilities: BTreeSet<HostCapability>,
     #[serde(default)]
     pub configuration: serde_json::Value,
@@ -416,6 +501,8 @@ impl ComponentSpec {
             id,
             version: "0.0.0".to_owned(),
             enabled: true,
+            requires: Vec::new(),
+            provides: Vec::new(),
             capabilities: BTreeSet::new(),
             configuration: serde_json::Value::Null,
         }
@@ -427,6 +514,22 @@ impl ComponentSpec {
         self
     }
 
+    #[must_use]
+    pub fn with_requirement(mut self, requirement: DependencyRequirement) -> Self {
+        self.requires.push(requirement);
+        self
+    }
+
+    #[must_use]
+    pub fn with_provided_service(
+        mut self,
+        service: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
+        self.provides.push(ProvidedService::new(service, version));
+        self
+    }
+
     pub fn validate(&self) -> Result<(), ComponentRuntimeError> {
         ComponentId::new(self.id.as_str().to_owned())?;
         if self.version.trim().is_empty() {
@@ -435,8 +538,352 @@ impl ComponentSpec {
                 reason: "version must not be empty".to_owned(),
             });
         }
+        if !valid_version(&self.version) {
+            return Err(ComponentRuntimeError::InvalidSpec {
+                component: self.id.clone(),
+                reason: format!("invalid component version: {}", self.version),
+            });
+        }
+        let mut provided_services = BTreeSet::new();
+        for provided in &self.provides {
+            validate_service_name(&provided.service)?;
+            if !valid_version(&provided.version) {
+                return Err(ComponentRuntimeError::InvalidSpec {
+                    component: self.id.clone(),
+                    reason: format!("invalid provided service version: {}", provided.version),
+                });
+            }
+            if !provided_services.insert(provided.service.clone()) {
+                return Err(ComponentRuntimeError::InvalidSpec {
+                    component: self.id.clone(),
+                    reason: format!("service is provided more than once: {}", provided.service),
+                });
+            }
+        }
+        for requirement in &self.requires {
+            validate_service_name(&requirement.service)?;
+            if let VersionConstraint::Exact(version) | VersionConstraint::AtLeast(version) =
+                &requirement.version
+                && !valid_version(version)
+            {
+                return Err(ComponentRuntimeError::InvalidSpec {
+                    component: self.id.clone(),
+                    reason: format!("invalid required service version: {version}"),
+                });
+            }
+        }
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProviderCandidate {
+    pub identity: ComponentInstanceId,
+    pub spec: ComponentSpec,
+    pub retiring: bool,
+}
+
+impl ProviderCandidate {
+    #[must_use]
+    pub fn new(identity: ComponentInstanceId, spec: ComponentSpec) -> Self {
+        Self {
+            identity,
+            spec,
+            retiring: false,
+        }
+    }
+
+    #[must_use]
+    pub fn retiring(mut self, retiring: bool) -> Self {
+        self.retiring = retiring;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DependencyView {
+    providers: BTreeMap<String, Vec<ComponentInstanceId>>,
+}
+
+impl DependencyView {
+    #[must_use]
+    pub fn providers(&self, service: &str) -> &[ComponentInstanceId] {
+        self.providers
+            .get(service)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    #[must_use]
+    pub fn provider(&self, service: &str) -> Option<&ComponentInstanceId> {
+        self.providers(service).first()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.providers.values().all(Vec::is_empty)
+    }
+
+    #[must_use]
+    pub fn as_map(&self) -> &BTreeMap<String, Vec<ComponentInstanceId>> {
+        &self.providers
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+pub enum DependencyResolutionError {
+    #[error("component {component:?} requires missing service {service:?}")]
+    MissingRequired {
+        component: ComponentId,
+        service: String,
+    },
+    #[error(
+        "component {component:?} has incompatible providers for {service:?}; required {required:?}, available {available:?}"
+    )]
+    IncompatibleVersion {
+        component: ComponentId,
+        service: String,
+        required: VersionConstraint,
+        available: Vec<String>,
+    },
+    #[error("component {component:?} has ambiguous providers for {service:?}: {providers:?}")]
+    Ambiguous {
+        component: ComponentId,
+        service: String,
+        providers: Vec<String>,
+    },
+    #[error("dependency cycle detected: {path:?}")]
+    Cycle { path: Vec<String> },
+    #[error("invalid service name {service:?}")]
+    InvalidServiceName { service: String },
+    #[error("component {component:?} has an undeclared dependency on {service:?}")]
+    UndeclaredDependency {
+        component: ComponentId,
+        service: String,
+    },
+    #[error("invalid dependency specification for {component:?}: {reason}")]
+    InvalidSpecification {
+        component: ComponentId,
+        reason: String,
+    },
+}
+
+pub struct DependencyResolver;
+
+impl DependencyResolver {
+    pub fn resolve(
+        consumer: &ComponentSpec,
+        candidates: &[ProviderCandidate],
+    ) -> Result<DependencyView, DependencyResolutionError> {
+        consumer
+            .validate()
+            .map_err(|error| DependencyResolutionError::InvalidSpecification {
+                component: consumer.id.clone(),
+                reason: error.to_string(),
+            })?;
+        let mut view = DependencyView::default();
+        for requirement in &consumer.requires {
+            let service_candidates = candidates
+                .iter()
+                .filter(|candidate| {
+                    candidate.spec.enabled
+                        && !candidate.retiring
+                        && candidate
+                            .spec
+                            .provides
+                            .iter()
+                            .any(|provided| provided.service == requirement.service)
+                })
+                .collect::<Vec<_>>();
+            if service_candidates.is_empty() {
+                if requirement.optional {
+                    continue;
+                }
+                return Err(DependencyResolutionError::MissingRequired {
+                    component: consumer.id.clone(),
+                    service: requirement.service.clone(),
+                });
+            }
+            let matching = service_candidates
+                .iter()
+                .filter(|candidate| {
+                    candidate.spec.provides.iter().any(|provided| {
+                        provided.service == requirement.service
+                            && requirement.version.matches(&provided.version)
+                    })
+                })
+                .collect::<Vec<_>>();
+            if matching.is_empty() {
+                return Err(DependencyResolutionError::IncompatibleVersion {
+                    component: consumer.id.clone(),
+                    service: requirement.service.clone(),
+                    required: requirement.version.clone(),
+                    available: service_candidates
+                        .iter()
+                        .flat_map(|candidate| {
+                            candidate
+                                .spec
+                                .provides
+                                .iter()
+                                .filter(|provided| provided.service == requirement.service)
+                                .map(|provided| provided.version.clone())
+                        })
+                        .collect(),
+                });
+            }
+            if requirement.cardinality == DependencyCardinality::One && matching.len() > 1 {
+                let mut providers = matching
+                    .iter()
+                    .map(|candidate| candidate.identity.component_id.as_str().to_owned())
+                    .collect::<Vec<_>>();
+                providers.sort();
+                return Err(DependencyResolutionError::Ambiguous {
+                    component: consumer.id.clone(),
+                    service: requirement.service.clone(),
+                    providers,
+                });
+            }
+            let mut identities = matching
+                .iter()
+                .map(|candidate| candidate.identity.clone())
+                .collect::<Vec<_>>();
+            identities.sort();
+            view.providers
+                .insert(requirement.service.clone(), identities);
+        }
+        Ok(view)
+    }
+
+    pub fn validate_graph(specs: &[ComponentSpec]) -> Result<(), DependencyResolutionError> {
+        let candidates = specs
+            .iter()
+            .cloned()
+            .map(|spec| {
+                let identity = ComponentInstanceId {
+                    component_id: spec.id.clone(),
+                    generation: ComponentGeneration::new(1),
+                };
+                ProviderCandidate::new(identity, spec)
+            })
+            .collect::<Vec<_>>();
+        let mut edges = BTreeMap::<ComponentId, Vec<ComponentId>>::new();
+        for spec in specs {
+            let view = Self::resolve(spec, &candidates)?;
+            for providers in view.providers.values() {
+                for provider in providers {
+                    if provider.component_id != spec.id {
+                        edges
+                            .entry(spec.id.clone())
+                            .or_default()
+                            .push(provider.component_id.clone());
+                    }
+                }
+            }
+        }
+        let mut visiting = BTreeSet::new();
+        let mut visited = BTreeSet::new();
+        let mut path = Vec::new();
+        for component in specs.iter().map(|spec| spec.id.clone()) {
+            if let Some(cycle) =
+                detect_cycle(&component, &edges, &mut visiting, &mut visited, &mut path)
+            {
+                return Err(DependencyResolutionError::Cycle { path: cycle });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl VersionConstraint {
+    #[must_use]
+    pub fn matches(&self, version: &str) -> bool {
+        match self {
+            Self::Any => valid_version(version),
+            Self::Exact(expected) => expected == version,
+            Self::AtLeast(minimum) => {
+                compare_versions(version, minimum).is_some_and(|ordering| ordering.is_ge())
+            }
+        }
+    }
+}
+
+fn detect_cycle(
+    component: &ComponentId,
+    edges: &BTreeMap<ComponentId, Vec<ComponentId>>,
+    visiting: &mut BTreeSet<ComponentId>,
+    visited: &mut BTreeSet<ComponentId>,
+    path: &mut Vec<ComponentId>,
+) -> Option<Vec<String>> {
+    if visiting.contains(component) {
+        let start = path.iter().position(|item| item == component).unwrap_or(0);
+        let mut cycle = path[start..]
+            .iter()
+            .map(|item| item.as_str().to_owned())
+            .collect::<Vec<_>>();
+        cycle.push(component.as_str().to_owned());
+        return Some(cycle);
+    }
+    if !visited.insert(component.clone()) {
+        return None;
+    }
+    visiting.insert(component.clone());
+    path.push(component.clone());
+    if let Some(dependencies) = edges.get(component) {
+        for dependency in dependencies {
+            if let Some(cycle) = detect_cycle(dependency, edges, visiting, visited, path) {
+                return Some(cycle);
+            }
+        }
+    }
+    path.pop();
+    visiting.remove(component);
+    None
+}
+
+fn validate_service_name(service: &str) -> Result<(), ComponentRuntimeError> {
+    if service.trim().is_empty()
+        || service.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        })
+    {
+        return Err(ComponentRuntimeError::InvalidSpec {
+            component: ComponentId(service.to_owned()),
+            reason: "service name must be lowercase dotted, kebab, or snake case".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn valid_version(version: &str) -> bool {
+    !version.is_empty()
+        && version.split('.').all(|part| {
+            !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+        })
+}
+
+fn compare_versions(left: &str, right: &str) -> Option<std::cmp::Ordering> {
+    let left = left
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let right = right
+        .split('.')
+        .map(str::parse::<u64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let length = left.len().max(right.len());
+    for index in 0..length {
+        let ordering = left
+            .get(index)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&right.get(index).copied().unwrap_or(0));
+        if ordering != std::cmp::Ordering::Equal {
+            return Some(ordering);
+        }
+    }
+    Some(std::cmp::Ordering::Equal)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
