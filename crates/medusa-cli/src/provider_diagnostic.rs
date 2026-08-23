@@ -233,6 +233,7 @@ mod tests {
         config.model.protocol = "openai".into();
         config.model.auth = "none".into();
         config.model.base_url = Some("http://127.0.0.1:11434/v1".into());
+        config.model.streaming = false;
         let report = diagnose(&config);
         assert_eq!(report.status, "ready");
         assert_eq!(report.external_dependencies.len(), 1);

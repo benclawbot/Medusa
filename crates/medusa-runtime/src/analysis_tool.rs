@@ -18,6 +18,7 @@ use crate::{
     RuntimeController, RuntimeEvent, SubmissionState,
     analysis_workspace::{AnalysisDelegationKind, AnalysisOperation, AnalysisValue},
     multi_agent_coordinator, production_orchestrator,
+    invariants::RuntimeInvariantRegistry,
     prompt::PromptDraft,
     team_control::TeamControlPlane,
 };
@@ -67,6 +68,7 @@ impl RuntimeAnalysisHost {
             event_sender: self.events.clone(),
             team_control: self.team_control.clone(),
             repo: self.repo.clone(),
+            invariants: Arc::new(Mutex::new(RuntimeInvariantRegistry::default())),
         }
     }
 

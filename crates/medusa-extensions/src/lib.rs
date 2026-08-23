@@ -16,8 +16,9 @@ pub use desktop_commander::{
 pub use hooks::{CommandHook, HookDecision, HookEvent, HookFailurePolicy, run_command_hook};
 pub use mcp::{McpRegistryEntry, McpRequest, McpResponse, call_mcp_stdio};
 pub use plugins::{
-    LoadedPlugin, ManagedPluginManifest, PLUGIN_MANIFEST_SCHEMA_VERSION, PluginAuthentication,
-    PluginIntegrity, PluginKind, PluginPermissions, load_managed_plugin, validate_manifest,
+    LoadedPlugin, ManagedPluginCatalog, ManagedPluginManifest, PLUGIN_MANIFEST_SCHEMA_VERSION,
+    PluginAuthentication, PluginIntegrity, PluginKind, PluginPermissions, load_managed_plugin,
+    validate_manifest,
 };
 pub use skills::{LoadedSkill, SkillCompatibility, SkillManifest, SkillPermissions, load_skill};
 

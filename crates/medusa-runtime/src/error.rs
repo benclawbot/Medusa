@@ -13,8 +13,6 @@ use medusa_agent::{
     AgentPlanStepStatus, AgentSession, persist_session,
     session_browser::{list_sessions, load_session},
 };
-use medusa_capabilities::CapabilityRegistry;
-
 use super::{
     RuntimeCommand, RuntimeController, RuntimeEvent, RuntimeState, SubmissionState,
     configure_model, dispatch_runtime_events, execute_slash_command_with_submission, mark_idle,
@@ -175,6 +173,7 @@ impl RuntimeController {
             event_sender: runtime_event_tx,
             team_control,
             repo,
+            invariants: Arc::new(Mutex::new(crate::invariants::RuntimeInvariantRegistry::default())),
         })
     }
 }
@@ -259,21 +258,7 @@ fn resumed_worker_loop(
             let _ = events.send(RuntimeEvent::Question(question));
         }
     }
-    let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
-        Ok(registry) => RuntimeEvent::Notice {
-            title: "Runtime capabilities".to_owned(),
-            details: registry
-                .prompt_summary()
-                .lines()
-                .map(str::to_owned)
-                .collect(),
-        },
-        Err(error) => RuntimeEvent::Notice {
-            title: "Runtime capabilities unavailable".to_owned(),
-            details: vec![error.to_string()],
-        },
-    };
-    let _ = events.send(capability_event);
+    let _ = events.send(crate::capability_event(state.repo.clone()));
 
     while let Ok(command) = commands.recv() {
         match command {

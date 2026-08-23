@@ -25,6 +25,7 @@ use crate::{
     commands::{
         Effort, LearningCommand, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand,
     },
+    invariants::{RuntimeInvariantContext, RuntimeInvariantRegistry, RuntimeInvariantRegistryError},
     prompt::PromptDraft,
 };
 
@@ -42,6 +43,7 @@ mod config_command;
 mod error;
 pub mod execution_history;
 pub mod frontend;
+pub mod invariants;
 pub mod learning_retrieval;
 mod learning_authority;
 pub mod learning_review;
@@ -303,6 +305,7 @@ pub struct RuntimeController {
     event_sender: Sender<RuntimeEvent>,
     team_control: TeamControlPlane,
     repo: PathBuf,
+    invariants: Arc<Mutex<RuntimeInvariantRegistry>>,
 }
 
 impl RuntimeController {
@@ -373,6 +376,7 @@ impl RuntimeController {
             event_sender: runtime_event_tx,
             team_control,
             repo: state_repo,
+            invariants: Arc::new(Mutex::new(RuntimeInvariantRegistry::default())),
         }
     }
 
@@ -388,10 +392,60 @@ impl RuntimeController {
             event_sender: event_tx,
             team_control: TeamControlPlane::default(),
             repo: PathBuf::new(),
+            invariants: Arc::new(Mutex::new(RuntimeInvariantRegistry::default())),
         }
     }
 
+    /// Registers a trusted in-process runtime check. Managed plugins cannot add checks through
+    /// this API; plugin metadata must still pass through the capability and policy authorities.
+    pub fn register_runtime_invariant<F>(
+        &self,
+        id: impl Into<String>,
+        check: F,
+    ) -> Result<(), RuntimeInvariantRegistryError>
+    where
+        F: Fn(&RuntimeInvariantContext) -> Result<(), String> + Send + Sync + 'static,
+    {
+        lock_runtime_invariants(&self.invariants).register(id, check)
+    }
+
+    #[must_use]
+    pub fn remove_runtime_invariant(&self, id: &str) -> bool {
+        lock_runtime_invariants(&self.invariants).remove(id)
+    }
+
+    #[must_use]
+    pub fn runtime_invariant_ids(&self) -> Vec<String> {
+        lock_runtime_invariants(&self.invariants)
+            .ids()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn check_runtime_invariants(&self, operation: &str) -> Result<(), RuntimeError> {
+        let submission = lock_submission(&self.submission);
+        let context = RuntimeInvariantContext::new(
+            operation,
+            self.repo.clone(),
+            submission.busy,
+            submission.active_session_id.clone(),
+        );
+        let violations = lock_runtime_invariants(&self.invariants).validate(&context);
+        if violations.is_empty() {
+            return Ok(());
+        }
+        let details = violations
+            .into_iter()
+            .map(|violation| format!("{}: {}", violation.id, violation.reason))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Err(RuntimeError::InvalidCommand(format!(
+            "runtime invariant check failed before {operation}: {details}"
+        )))
+    }
+
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
+        self.check_runtime_invariants("submit")?;
         let mut submission = lock_submission(&self.submission);
         if submission.busy {
             let session_id = submission
@@ -449,6 +503,7 @@ impl RuntimeController {
     }
 
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
+        self.check_runtime_invariants("slash-command")?;
         if let SlashCommand::Team(command) = &command {
             let snapshot = match command {
                 crate::commands::TeamCommand::Show => self.team_control.snapshot(),
@@ -486,6 +541,7 @@ impl RuntimeController {
     }
 
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
+        self.check_runtime_invariants("configure-model")?;
         if lock_submission(&self.submission).busy {
             return Err(RuntimeError::Busy);
         }
@@ -500,6 +556,7 @@ impl RuntimeController {
         request: medusa_recovery_coordinator::RecoveryActionRequest,
         preflight: medusa_recovery_coordinator::RecoveryPreflightEvidence,
     ) -> Result<(), RuntimeError> {
+        self.check_runtime_invariants("recovery")?;
         if lock_submission(&self.submission).busy {
             return Err(RuntimeError::Busy);
         }
@@ -731,6 +788,15 @@ fn lock_submission(
     }
 }
 
+fn lock_runtime_invariants(
+    invariants: &Mutex<RuntimeInvariantRegistry>,
+) -> std::sync::MutexGuard<'_, RuntimeInvariantRegistry> {
+    match invariants.lock() {
+        Ok(registry) => registry,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 impl Drop for RuntimeController {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::SeqCst);
@@ -873,7 +939,13 @@ fn worker_loop_with_discovery<F>(
 }
 
 fn capability_event(repo: PathBuf) -> RuntimeEvent {
-    match CapabilityRegistry::discover(repo) {
+    let plugin_root = repo.join(".medusa/plugins");
+    let registry = if plugin_root.is_dir() {
+        CapabilityRegistry::discover_with_plugins(repo.clone(), &plugin_root)
+    } else {
+        CapabilityRegistry::discover(repo)
+    };
+    match registry {
         Ok(registry) => RuntimeEvent::Notice {
             title: "Runtime capabilities".to_owned(),
             details: registry

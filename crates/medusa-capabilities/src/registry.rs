@@ -7,7 +7,7 @@ use std::{
 
 use medusa_browser_client::verification_route::VerificationRoute;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
-use medusa_extensions::DesktopCommanderSettings;
+use medusa_extensions::{DesktopCommanderSettings, ManagedPluginCatalog, PluginKind};
 use medusa_provider::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -273,6 +273,18 @@ impl CapabilityRegistry {
         )
     }
 
+    pub fn discover_with_plugins(
+        repository: impl Into<PathBuf>,
+        plugin_root: &Path,
+    ) -> MedusaResult<Self> {
+        Self::discover_with_desktop_and_plugins(
+            repository.into(),
+            &SystemProbe,
+            DesktopCommanderSettings::from_env(),
+            Some(plugin_root),
+        )
+    }
+
     pub fn discover_with(repository: PathBuf, probe: &impl CommandProbe) -> MedusaResult<Self> {
         Self::discover_with_desktop(repository, probe, DesktopCommanderSettings::from_env())
     }
@@ -281,6 +293,15 @@ impl CapabilityRegistry {
         repository: PathBuf,
         probe: &impl CommandProbe,
         desktop: DesktopCommanderSettings,
+    ) -> MedusaResult<Self> {
+        Self::discover_with_desktop_and_plugins(repository, probe, desktop, None)
+    }
+
+    pub fn discover_with_desktop_and_plugins(
+        repository: PathBuf,
+        probe: &impl CommandProbe,
+        desktop: DesktopCommanderSettings,
+        plugin_root: Option<&Path>,
     ) -> MedusaResult<Self> {
         let mut capabilities = BTreeMap::new();
         let filesystem = repository.is_dir();
@@ -390,7 +411,58 @@ impl CapabilityRegistry {
             },
         );
 
-        let entries = build_entries(&capabilities, &desktop);
+        let mut entries = build_entries(&capabilities, &desktop);
+        if let Some(plugin_root) = plugin_root {
+            let origin = format!("project:{}", plugin_root.display());
+            let catalog = ManagedPluginCatalog::discover(plugin_root, origin)?;
+            for plugin in catalog.plugins() {
+                let id = format!("plugin.{}", plugin.manifest.id);
+                let mut permissions = BTreeSet::new();
+                if !plugin.manifest.permissions.read_paths.is_empty()
+                    || plugin.manifest.kind == PluginKind::InstructionOnly
+                {
+                    permissions.insert(RegistryPermission::Read);
+                }
+                if !plugin.manifest.permissions.write_paths.is_empty() {
+                    permissions.insert(RegistryPermission::Write);
+                    permissions.insert(RegistryPermission::RepositoryMutation);
+                }
+                if !plugin.manifest.permissions.network_hosts.is_empty() {
+                    permissions.insert(RegistryPermission::Network);
+                }
+                if plugin.manifest.permissions.process_spawn {
+                    permissions.insert(RegistryPermission::ProcessSpawn);
+                }
+                entries.insert(
+                    id.clone(),
+                    RegistryEntry {
+                        id,
+                        capability: Capability::SelfImprovement,
+                        kind: RegistryKind::Plugin,
+                        status: CapabilityStatus::Experimental,
+                        description: plugin.manifest.description.clone(),
+                        owner: "managed plugin catalog".into(),
+                        lifecycle_owner: "medusa-extensions::ManagedPluginCatalog".into(),
+                        surfaces: BTreeSet::from([
+                            CapabilitySurface::Protocol,
+                            CapabilitySurface::Documentation,
+                        ]),
+                        permissions,
+                        explicit_approval: BTreeSet::new(),
+                        dependencies: plugin.manifest.required_capabilities.iter().cloned().collect(),
+                        supported_platforms: supported_platforms(),
+                        readiness: ReadinessContract {
+                            ready: false,
+                            detail: "validated metadata only; executable authority requires capability certification".into(),
+                            evidence: vec![plugin.manifest.integrity.digest.clone()],
+                        },
+                        handler: None,
+                        tool: None,
+                        provenance: Some(plugin.manifest.integrity.origin.clone()),
+                    },
+                );
+            }
+        }
         let registry = Self {
             repository,
             capabilities,
@@ -1185,6 +1257,57 @@ mod tests {
             assert!(entry.readiness.ready);
             assert!(entry.handler.is_some());
         }
+    }
+
+    #[test]
+    fn managed_plugins_are_discovered_as_metadata_without_model_authority() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let plugin_root = directory.path().join(".medusa/plugins/review");
+        fs::create_dir_all(&plugin_root).expect("plugin root");
+        fs::write(
+            plugin_root.join("instructions.md"),
+            "Review durable evidence.",
+        )
+        .expect("instructions");
+        fs::write(
+            plugin_root.join("plugin.json"),
+            serde_json::json!({
+                "schema_version": medusa_extensions::PLUGIN_MANIFEST_SCHEMA_VERSION,
+                "id": "review",
+                "version": "1.0.0",
+                "kind": "instruction-only",
+                "description": "Review evidence",
+                "instructions": ["instructions.md"],
+                "compatibility": ">=1.0.0",
+                "integrity": {
+                    "algorithm": "sha256-directory-v1",
+                    "digest": format!("sha256:{}", "0".repeat(64)),
+                    "origin": "fixture"
+                }
+            })
+            .to_string(),
+        )
+        .expect("manifest");
+
+        let registry = CapabilityRegistry::discover_with_desktop_and_plugins(
+            directory.path().to_path_buf(),
+            &FakeProbe(BTreeSet::new()),
+            DesktopCommanderSettings::default(),
+            Some(&directory.path().join(".medusa/plugins")),
+        )
+        .expect("registry");
+        let plugin = registry.entry("plugin.review").expect("plugin metadata");
+        assert_eq!(plugin.kind, RegistryKind::Plugin);
+        assert_eq!(plugin.status, CapabilityStatus::Experimental);
+        assert!(!plugin.readiness.ready);
+        assert!(plugin.tool.is_none());
+        assert!(!plugin.surfaces.contains(&CapabilitySurface::Model));
+        assert!(
+            registry
+                .model_tools(false)
+                .iter()
+                .all(|tool| tool.name != "review")
+        );
     }
 
     #[test]

@@ -424,6 +424,9 @@ fn initial_submit_reports_pre_session_failure_instead_of_channel_loss() {
         event_sender,
         team_control: TeamControlPlane::default(),
         repo: directory.path().to_path_buf(),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(
+            RuntimeInvariantRegistry::default(),
+        )),
     };
     let worker = thread::spawn(move || {
         let RuntimeCommand::Submit { accepted, .. } =
@@ -450,6 +453,43 @@ fn initial_submit_reports_pre_session_failure_instead_of_channel_loss() {
     assert!(!error.to_string().contains("prompt ended"));
     worker.join().expect("worker joins");
     assert!(!submission.lock().expect("submission state").busy);
+}
+
+#[test]
+fn runtime_invariant_failure_blocks_submission_before_queueing() {
+    let directory = tempdir().expect("temporary directory");
+    let submission = std::sync::Arc::new(std::sync::Mutex::new(SubmissionState::default()));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (_frontend_tx, frontend_rx) = mpsc::channel();
+    let (event_sender, _runtime_event_rx) = mpsc::channel();
+    let runtime = RuntimeController {
+        commands: command_tx,
+        events: frontend_rx,
+        cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        submission,
+        event_sender,
+        team_control: TeamControlPlane::default(),
+        repo: directory.path().to_path_buf(),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(
+            RuntimeInvariantRegistry::default(),
+        )),
+    };
+    runtime
+        .register_runtime_invariant("durability", |_context| {
+            Err("durability preflight is unavailable".to_owned())
+        })
+        .expect("register invariant");
+
+    let error = runtime
+        .submit(PromptDraft {
+            text: "should not queue".to_owned(),
+            ..PromptDraft::default()
+        })
+        .expect_err("invariant should block submission");
+    assert!(error
+        .to_string()
+        .contains("durability preflight is unavailable"));
+    assert!(command_rx.try_recv().is_err());
 }
 
 #[test]
@@ -864,6 +904,9 @@ fn initial_submit_waits_for_session_acceptance_before_returning() {
         event_sender,
         team_control: TeamControlPlane::default(),
         repo: directory.path().to_path_buf(),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(
+            RuntimeInvariantRegistry::default(),
+        )),
     };
     let worker_submission = std::sync::Arc::clone(&submission);
     let worker = thread::spawn(move || {
@@ -921,6 +964,9 @@ fn followup_fails_closed_until_a_durable_session_identity_exists() {
         event_sender,
         team_control: TeamControlPlane::default(),
         repo: directory.path().to_path_buf(),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(
+            RuntimeInvariantRegistry::default(),
+        )),
     };
 
     assert!(matches!(
