@@ -17,6 +17,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -101,6 +102,197 @@ pub enum HostCapability {
     GitRead,
     GitWrite,
     CredentialUse,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainmentControl {
+    Filesystem,
+    Environment,
+    Network,
+    Process,
+    ResourceLimits,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContainmentPlatform {
+    pub name: String,
+    supported: BTreeSet<ContainmentControl>,
+}
+
+impl ContainmentPlatform {
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        supported: impl IntoIterator<Item = ContainmentControl>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            supported: supported.into_iter().collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn current() -> Self {
+        Self::new(
+            std::env::consts::OS,
+            [
+                ContainmentControl::Filesystem,
+                ContainmentControl::Environment,
+                ContainmentControl::Network,
+                ContainmentControl::Process,
+                ContainmentControl::ResourceLimits,
+            ],
+        )
+    }
+
+    #[must_use]
+    pub fn supports(&self, control: ContainmentControl) -> bool {
+        self.supported.contains(&control)
+    }
+
+    #[must_use]
+    pub fn supported_controls(&self) -> &BTreeSet<ContainmentControl> {
+        &self.supported
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HostAuthority {
+    allowed: BTreeSet<HostCapability>,
+}
+
+impl HostAuthority {
+    #[must_use]
+    pub fn has(&self, capability: HostCapability) -> bool {
+        self.allowed.contains(&capability)
+    }
+
+    pub fn require(&self, capability: HostCapability) -> Result<(), ContainmentPolicyError> {
+        if self.has(capability) {
+            Ok(())
+        } else {
+            Err(ContainmentPolicyError::CapabilityDenied { capability })
+        }
+    }
+
+    #[must_use]
+    pub fn capabilities(&self) -> &BTreeSet<HostCapability> {
+        &self.allowed
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedCapabilityPolicy {
+    pub component: ComponentInstanceId,
+    pub desired_revision: u64,
+    pub declared: BTreeSet<HostCapability>,
+    pub host_authority: HostAuthority,
+    pub os_controls: BTreeSet<ContainmentControl>,
+    pub unsupported: Vec<ContainmentControl>,
+    pub policy_generation: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Error)]
+pub enum ContainmentPolicyError {
+    #[error("capability {capability:?} is not declared for the component")]
+    CapabilityDenied { capability: HostCapability },
+    #[error(
+        "containment control {control:?} requested by {capability:?} is unsupported on {platform}"
+    )]
+    Unsupported {
+        platform: String,
+        control: ContainmentControl,
+        capability: HostCapability,
+    },
+    #[error("capability policy is invalid: {0}")]
+    Invalid(String),
+}
+
+pub struct CapabilityPolicyCompiler;
+
+impl CapabilityPolicyCompiler {
+    pub fn compile(
+        spec: &ComponentSpec,
+        identity: &ComponentInstanceId,
+        desired_revision: u64,
+        platform: &ContainmentPlatform,
+    ) -> Result<ResolvedCapabilityPolicy, ContainmentPolicyError> {
+        spec.validate()
+            .map_err(|error| ContainmentPolicyError::Invalid(error.to_string()))?;
+        if &spec.id != identity.component_id() {
+            return Err(ContainmentPolicyError::Invalid(
+                "component identity does not match component specification".to_owned(),
+            ));
+        }
+        let declared = spec.capabilities.clone();
+        let host_authority = HostAuthority {
+            allowed: declared.clone(),
+        };
+        let mut os_controls = BTreeSet::new();
+        for capability in &declared {
+            let Some(control) = containment_control(*capability) else {
+                continue;
+            };
+            if !platform.supports(control) {
+                return Err(ContainmentPolicyError::Unsupported {
+                    platform: platform.name.clone(),
+                    control,
+                    capability: *capability,
+                });
+            }
+            os_controls.insert(control);
+        }
+        let policy_generation = policy_fingerprint(identity, desired_revision, &declared);
+        Ok(ResolvedCapabilityPolicy {
+            component: identity.clone(),
+            desired_revision,
+            declared,
+            host_authority,
+            os_controls,
+            unsupported: Vec::new(),
+            policy_generation,
+        })
+    }
+
+    pub fn validate_spec(spec: &ComponentSpec) -> Result<(), ContainmentPolicyError> {
+        let identity = ComponentInstanceId {
+            component_id: spec.id.clone(),
+            generation: ComponentGeneration::new(0),
+        };
+        Self::compile(spec, &identity, 0, &ContainmentPlatform::current()).map(|_| ())
+    }
+}
+
+fn containment_control(capability: HostCapability) -> Option<ContainmentControl> {
+    match capability {
+        HostCapability::FilesystemRead
+        | HostCapability::FilesystemWrite
+        | HostCapability::GitRead
+        | HostCapability::GitWrite => Some(ContainmentControl::Filesystem),
+        HostCapability::EnvironmentRead => Some(ContainmentControl::Environment),
+        HostCapability::Network => Some(ContainmentControl::Network),
+        HostCapability::ProcessSpawn | HostCapability::ProcessTree => {
+            Some(ContainmentControl::Process)
+        }
+        HostCapability::ResourceLimits => Some(ContainmentControl::ResourceLimits),
+        HostCapability::CredentialUse => None,
+    }
+}
+
+fn policy_fingerprint(
+    identity: &ComponentInstanceId,
+    desired_revision: u64,
+    declared: &BTreeSet<HostCapability>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(identity.component_id.as_str().as_bytes());
+    hasher.update(identity.generation.get().to_le_bytes());
+    hasher.update(desired_revision.to_le_bytes());
+    for capability in declared {
+        hasher.update(format!("{capability:?};").as_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -387,6 +579,284 @@ impl EffectJournal {
             .iter()
             .map(|effect| (effect.id, effect.state))
             .collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalCommitSemantics {
+    AtMostOnce,
+    AtLeastOnce,
+    CompensationRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExternalCommitRequest {
+    pub operation_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    pub semantics: ExternalCommitSemantics,
+    pub payload_digest: String,
+    pub source: String,
+}
+
+impl ExternalCommitRequest {
+    #[must_use]
+    pub fn new(
+        operation_id: impl Into<String>,
+        semantics: ExternalCommitSemantics,
+        payload_digest: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            idempotency_key: None,
+            semantics,
+            payload_digest: payload_digest.into(),
+            source: source.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        self.idempotency_key = Some(key.into());
+        self
+    }
+
+    fn validate(&self) -> Result<(), ExternalCommitError> {
+        if self.operation_id.trim().is_empty() {
+            return Err(ExternalCommitError::InvalidRequest {
+                reason: "operation id must not be empty".to_owned(),
+            });
+        }
+        if self.payload_digest.trim().is_empty() {
+            return Err(ExternalCommitError::InvalidRequest {
+                reason: "payload digest must not be empty".to_owned(),
+            });
+        }
+        if self.source.trim().is_empty() {
+            return Err(ExternalCommitError::InvalidRequest {
+                reason: "source must not be empty".to_owned(),
+            });
+        }
+        if self
+            .idempotency_key
+            .as_deref()
+            .is_some_and(|key| key.trim().is_empty())
+        {
+            return Err(ExternalCommitError::InvalidRequest {
+                reason: "idempotency key must not be empty".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalCommitStatus {
+    Prepared,
+    Committed,
+    Unknown,
+    CompensationRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExternalCommitRecord {
+    pub request: ExternalCommitRequest,
+    pub status: ExternalCommitStatus,
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Debug, Error, Clone, Eq, PartialEq)]
+pub enum ExternalCommitError {
+    #[error("external commit request is invalid: {reason}")]
+    InvalidRequest { reason: String },
+    #[error("external operation {operation_id:?} was reused with a different payload or semantics")]
+    OperationConflict { operation_id: String },
+    #[error("idempotency key {idempotency_key:?} was reused for a different operation")]
+    IdempotencyConflict { idempotency_key: String },
+    #[error("external operation {operation_id:?} is not present in the ledger")]
+    UnknownOperation { operation_id: String },
+    #[error("external operation {operation_id:?} cannot transition from {status:?} to {target:?}")]
+    InvalidTransition {
+        operation_id: String,
+        status: ExternalCommitStatus,
+        target: ExternalCommitStatus,
+    },
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExternalCommitLedger {
+    records: BTreeMap<String, ExternalCommitRecord>,
+}
+
+impl ExternalCommitLedger {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn prepare(
+        &mut self,
+        request: ExternalCommitRequest,
+    ) -> Result<ExternalCommitRecord, ExternalCommitError> {
+        request.validate()?;
+        if let Some(existing) = self.records.get(&request.operation_id) {
+            if existing.request == request {
+                return Ok(existing.clone());
+            }
+            return Err(ExternalCommitError::OperationConflict {
+                operation_id: request.operation_id,
+            });
+        }
+        if let Some(idempotency_key) = request.idempotency_key.as_deref()
+            && let Some(existing) = self
+                .records
+                .values()
+                .find(|record| record.request.idempotency_key.as_deref() == Some(idempotency_key))
+        {
+            if existing.request.payload_digest == request.payload_digest
+                && existing.request.semantics == request.semantics
+            {
+                return Ok(existing.clone());
+            }
+            return Err(ExternalCommitError::IdempotencyConflict {
+                idempotency_key: idempotency_key.to_owned(),
+            });
+        }
+        let record = ExternalCommitRecord {
+            request: request.clone(),
+            status: ExternalCommitStatus::Prepared,
+            attempts: 1,
+            failure_reason: None,
+        };
+        self.records.insert(request.operation_id, record.clone());
+        Ok(record)
+    }
+
+    pub fn mark_committed(
+        &mut self,
+        operation_id: &str,
+    ) -> Result<ExternalCommitRecord, ExternalCommitError> {
+        self.transition(operation_id, ExternalCommitStatus::Committed, None)
+    }
+
+    pub fn mark_unknown(
+        &mut self,
+        operation_id: &str,
+        reason: impl Into<String>,
+    ) -> Result<ExternalCommitRecord, ExternalCommitError> {
+        self.transition(
+            operation_id,
+            ExternalCommitStatus::Unknown,
+            Some(reason.into()),
+        )
+    }
+
+    pub fn mark_compensation_required(
+        &mut self,
+        operation_id: &str,
+        reason: impl Into<String>,
+    ) -> Result<ExternalCommitRecord, ExternalCommitError> {
+        self.transition(
+            operation_id,
+            ExternalCommitStatus::CompensationRequired,
+            Some(reason.into()),
+        )
+    }
+
+    pub fn retry(
+        &mut self,
+        operation_id: &str,
+    ) -> Result<ExternalCommitRecord, ExternalCommitError> {
+        let record = self.records.get_mut(operation_id).ok_or_else(|| {
+            ExternalCommitError::UnknownOperation {
+                operation_id: operation_id.to_owned(),
+            }
+        })?;
+        if record.status != ExternalCommitStatus::Unknown
+            || record.request.semantics != ExternalCommitSemantics::AtLeastOnce
+        {
+            return Err(ExternalCommitError::InvalidTransition {
+                operation_id: operation_id.to_owned(),
+                status: record.status,
+                target: ExternalCommitStatus::Prepared,
+            });
+        }
+        record.status = ExternalCommitStatus::Prepared;
+        record.attempts = record.attempts.saturating_add(1);
+        record.failure_reason = None;
+        Ok(record.clone())
+    }
+
+    fn transition(
+        &mut self,
+        operation_id: &str,
+        target: ExternalCommitStatus,
+        reason: Option<String>,
+    ) -> Result<ExternalCommitRecord, ExternalCommitError> {
+        let record = self.records.get_mut(operation_id).ok_or_else(|| {
+            ExternalCommitError::UnknownOperation {
+                operation_id: operation_id.to_owned(),
+            }
+        })?;
+        if record.status == target {
+            return Ok(record.clone());
+        }
+        let allowed = match (record.status, target) {
+            (ExternalCommitStatus::Prepared, ExternalCommitStatus::Committed)
+            | (ExternalCommitStatus::Prepared, ExternalCommitStatus::Unknown)
+            | (ExternalCommitStatus::Prepared, ExternalCommitStatus::CompensationRequired)
+            | (ExternalCommitStatus::Unknown, ExternalCommitStatus::CompensationRequired) => true,
+            _ => false,
+        };
+        if !allowed {
+            return Err(ExternalCommitError::InvalidTransition {
+                operation_id: operation_id.to_owned(),
+                status: record.status,
+                target,
+            });
+        }
+        record.status = target;
+        record.failure_reason = reason;
+        Ok(record.clone())
+    }
+
+    #[must_use]
+    pub fn record(&self, operation_id: &str) -> Option<&ExternalCommitRecord> {
+        self.records.get(operation_id)
+    }
+
+    #[must_use]
+    pub fn retryable(&self, operation_id: &str) -> Option<bool> {
+        let record = self.records.get(operation_id)?;
+        Some(match record.status {
+            ExternalCommitStatus::Prepared => true,
+            ExternalCommitStatus::Committed => false,
+            ExternalCommitStatus::Unknown => {
+                record.request.semantics == ExternalCommitSemantics::AtLeastOnce
+            }
+            ExternalCommitStatus::CompensationRequired => false,
+        })
+    }
+
+    #[must_use]
+    pub fn records(&self) -> &BTreeMap<String, ExternalCommitRecord> {
+        &self.records
+    }
+}
+
+impl EffectJournal {
+    pub fn record_external_commit(
+        &mut self,
+        request: &ExternalCommitRequest,
+    ) -> Result<(), ComponentRuntimeError> {
+        Err(ComponentRuntimeError::ExternalCommitNotReversible {
+            operation_id: request.operation_id.clone(),
+        })
     }
 }
 
@@ -831,6 +1301,11 @@ impl DesiredStateMutation {
                     .map_err(|error| DesiredStateError::Validation {
                         reason: error.to_string(),
                     })?;
+                CapabilityPolicyCompiler::validate_spec(spec).map_err(|error| {
+                    DesiredStateError::Validation {
+                        reason: error.to_string(),
+                    }
+                })?;
                 state.components.insert(spec.id.clone(), spec.clone());
             }
             Self::Remove(component) => {
@@ -1775,6 +2250,10 @@ pub enum ComponentRuntimeError {
     },
     #[error("unknown resource {0:?}")]
     UnknownResource(String),
+    #[error(
+        "external operation {operation_id:?} is irreversible and must be tracked by the commit ledger"
+    )]
+    ExternalCommitNotReversible { operation_id: String },
     #[error(
         "exclusive resource {resource:?} is owned by {owner:?}; cannot assign it to {requested:?}"
     )]
