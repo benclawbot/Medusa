@@ -2485,6 +2485,17 @@ impl ComponentRuntime {
         spec: ComponentSpec,
         desired_revision: u64,
     ) -> Result<ComponentInstanceId, ComponentRuntimeError> {
+        self.instantiate_with_provenance(
+            spec,
+            ComponentProvenance::new(desired_revision, "component-runtime"),
+        )
+    }
+
+    pub fn instantiate_with_provenance(
+        &mut self,
+        spec: ComponentSpec,
+        provenance: ComponentProvenance,
+    ) -> Result<ComponentInstanceId, ComponentRuntimeError> {
         spec.validate()?;
         let next = self
             .next_generations
@@ -2513,7 +2524,7 @@ impl ComponentRuntime {
         }
         let context = ScopedComponentContext {
             identity: identity.clone(),
-            provenance: ComponentProvenance::new(desired_revision, "component-runtime"),
+            provenance,
             capabilities: spec.capabilities.clone(),
         };
         self.instances.insert(

@@ -1,5 +1,6 @@
 use medusa_runtime::component_runtime::{
-    ComponentId, ComponentRuntime, ComponentSpec, HostCapability, LifecycleState,
+    ComponentId, ComponentProvenance, ComponentRuntime, ComponentSpec, HostCapability,
+    LifecycleState,
 };
 
 #[test]
@@ -54,4 +55,18 @@ fn contexts_are_isolated_between_component_generations() {
     assert!(!first_context.has_capability(HostCapability::Network));
     assert!(second_context.has_capability(HostCapability::Network));
     assert!(!second_context.has_capability(HostCapability::ProcessSpawn));
+}
+
+#[test]
+fn custom_provenance_is_bound_to_the_generation_context() {
+    let mut runtime = ComponentRuntime::new();
+    let identity = runtime
+        .instantiate_with_provenance(
+            ComponentSpec::new("worker"),
+            ComponentProvenance::new(42, "desired-state:proposal-7"),
+        )
+        .expect("instance");
+    let context = runtime.context(&identity).expect("context");
+    assert_eq!(context.desired_revision(), 42);
+    assert_eq!(context.provenance().source, "desired-state:proposal-7");
 }
