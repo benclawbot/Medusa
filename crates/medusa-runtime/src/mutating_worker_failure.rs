@@ -171,16 +171,25 @@ pub(super) fn record_attempt_failure(
         format!("{error}; {}", secondary.join("; "))
     };
     if state.status == ImplementationStatus::Retrying {
-        let capsule = retry_capsule(
+        match retry_capsule(
             &state,
             &assignment.task_id,
             &assignment.worker_id,
             assignment.lease_epoch,
             &recorded,
-        )?;
-        let capsule_json = serde_json::to_string(&capsule).map_err(|error| error.to_string())?;
-        recorded.push_str("\nFresh retry Step Capsule (authoritative): ");
-        recorded.push_str(&capsule_json);
+        ) {
+            Ok(capsule) => {
+                let capsule_json =
+                    serde_json::to_string(&capsule).map_err(|error| error.to_string())?;
+                recorded.push_str("\nFresh retry Step Capsule (authoritative): ");
+                recorded.push_str(&capsule_json);
+            }
+            Err(capsule_error) => {
+                state.status = ImplementationStatus::Failed;
+                recorded.push_str("; fresh retry Step Capsule validation failed: ");
+                recorded.push_str(&capsule_error);
+            }
+        }
     }
     state.last_error = Some(recorded.clone());
     write_atomic(state_path, &state)?;
@@ -192,7 +201,7 @@ pub(super) fn record_attempt_failure(
     if let Ok(snapshot) = snapshot {
         let _ = events.send(RuntimeEvent::Team(snapshot));
     }
-    if secondary.is_empty() {
+    if state.status == ImplementationStatus::Retrying && secondary.is_empty() {
         Ok(recorded)
     } else {
         Err(recorded)
