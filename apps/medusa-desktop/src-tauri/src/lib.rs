@@ -67,7 +67,7 @@ use model_registry::desktop_model_registry;
 use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
 };
-use provider_auth::desktop_browser_oauth;
+use provider_auth::{desktop_browser_oauth, desktop_ensure_browser_oauth_gateway};
 use pull_requests::runtime_create_draft_pull_request;
 use review::{runtime_apply_review_action, runtime_export_review_audit, runtime_read_review};
 use runtime::{
@@ -97,6 +97,7 @@ pub fn run() -> tauri::Result<()> {
             desktop_provider_catalog,
             desktop_model_registry,
             desktop_browser_oauth,
+            desktop_ensure_browser_oauth_gateway,
             desktop_realtime_capability,
             desktop_establish_realtime_session,
             runtime_start,

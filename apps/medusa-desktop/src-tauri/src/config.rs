@@ -44,6 +44,7 @@ pub struct DesktopProviderCatalogEntry {
     pub browser_oauth: bool,
     pub discover_models: bool,
     pub custom_values: bool,
+    pub credential_configured: bool,
     pub disabled_reason: Option<String>,
     pub current_custom: bool,
 }
@@ -285,9 +286,10 @@ fn provider_catalog_for(
     let snapshot = catalog.snapshot().map_err(|error| error.to_string())?;
     let current = snapshot.profile;
     let current_entry = provider_catalog_entry_for_profile(&current);
+    let credentials = SystemCredentialStore;
     let mut entries = provider_catalog()
         .iter()
-        .map(|entry| desktop_catalog_entry(entry, &current, current_entry))
+        .map(|entry| desktop_catalog_entry(entry, &current, current_entry, &credentials))
         .collect::<Vec<_>>();
 
     if current_entry.is_none() && !current.provider.trim().is_empty() {
@@ -307,6 +309,11 @@ fn provider_catalog_for(
                 browser_oauth: false,
                 discover_models: false,
                 custom_values: true,
+                credential_configured: current.auth == "none"
+                    || credential_environment(&current.provider)
+                        .and_then(std::env::var_os)
+                        .is_some_and(|value| !value.is_empty())
+                    || credentials.load(&current.provider).ok().flatten().is_some(),
                 disabled_reason: None,
                 current_custom: true,
             },
@@ -319,6 +326,7 @@ fn desktop_catalog_entry(
     entry: &ProviderCatalogEntry,
     current: &ProviderProfile,
     current_entry: Option<&ProviderCatalogEntry>,
+    credentials: &impl CredentialStore,
 ) -> DesktopProviderCatalogEntry {
     let current_model = current_entry
         .filter(|candidate| candidate.id == entry.id)
@@ -341,9 +349,36 @@ fn desktop_catalog_entry(
         browser_oauth: entry.browser_oauth,
         discover_models: entry.discover_models,
         custom_values: entry.custom_values,
+        credential_configured: provider_credential_configured(entry, current, credentials),
         disabled_reason: entry.disabled_reason.map(str::to_owned),
         current_custom: false,
     }
+}
+
+fn provider_credential_configured(
+    entry: &ProviderCatalogEntry,
+    current: &ProviderProfile,
+    credentials: &impl CredentialStore,
+) -> bool {
+    if entry.browser_oauth {
+        return browser_oauth_credentials_present(entry.profile_provider);
+    }
+
+    let no_auth_required = entry.default_auth == "none"
+        || (entry.profile_provider == current.provider && current.auth == "none");
+    if no_auth_required {
+        return true;
+    }
+
+    let environment_credential = credential_environment(entry.profile_provider)
+        .and_then(std::env::var_os)
+        .is_some_and(|value| !value.is_empty());
+    environment_credential
+        || credentials
+            .load(entry.profile_provider)
+            .ok()
+            .flatten()
+            .is_some()
 }
 
 fn reasoning_for_effort(effort: &str) -> &'static str {
@@ -424,6 +459,18 @@ mod tests {
                 canonical.disabled_reason
             );
         }
+    }
+
+    #[test]
+    fn desktop_marks_no_auth_routes_ready_for_model_selection() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let entries = provider_catalog_for(&ProviderProfileCatalog::at(directory.path()))
+            .expect("catalog");
+        let omniroute = entries
+            .iter()
+            .find(|entry| entry.profile_provider == "auto/coding")
+            .expect("omniroute entry");
+        assert!(omniroute.credential_configured);
     }
 
     #[test]

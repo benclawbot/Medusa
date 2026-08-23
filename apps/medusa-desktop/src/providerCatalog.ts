@@ -59,6 +59,7 @@ export interface ProviderCatalogEntry {
   browserOauth: boolean;
   discoverModels: boolean;
   customValues: boolean;
+  credentialConfigured?: boolean;
   disabledReason?: string;
   currentCustom: boolean;
 }
@@ -103,6 +104,10 @@ export async function loadProviderCatalog(
 
 export async function startBrowserOauth(provider: string): Promise<void> {
   await invoke("desktop_browser_oauth", { provider });
+}
+
+export async function ensureBrowserOauthGateway(provider: string): Promise<void> {
+  await invoke("desktop_ensure_browser_oauth_gateway", { provider });
 }
 
 export type ModelCapabilityState = "supported" | "unsupported" | "unknown";

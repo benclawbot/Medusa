@@ -71,6 +71,10 @@ fn browser_oauth_gateway_spec(provider: &str) -> Result<(&'static str, [&'static
 }
 
 pub(crate) fn browser_oauth_credentials_present(provider: &str) -> bool {
+    provider == "openai-oauth" && oauth_auth_file_present()
+}
+
+fn browser_oauth_models_present(provider: &str) -> bool {
     provider == "openai-oauth" && medusa_runtime::discover_openai_oauth_models().is_ok()
 }
 
@@ -99,10 +103,37 @@ fn wait_for_oauth_gateway() -> Result<(), String> {
     ))
 }
 
+fn ensure_browser_oauth_gateway(provider: &str) -> Result<(), String> {
+    let (gateway_program, gateway_args) = browser_oauth_gateway_spec(provider)?;
+    if gateway_is_reachable() {
+        return Ok(());
+    }
+
+    let gateway_status = hidden_command(gateway_program)
+        .args(gateway_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("could not start the ChatGPT OAuth gateway: {error}"))?;
+    if !gateway_status.success() {
+        return Err(format!(
+            "ChatGPT OAuth gateway startup exited with {gateway_status}"
+        ));
+    }
+    wait_for_oauth_gateway()
+}
+
+#[tauri::command]
+pub async fn desktop_ensure_browser_oauth_gateway(provider: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || ensure_browser_oauth_gateway(&provider))
+        .await
+        .map_err(|error| format!("OAuth gateway startup task failed: {error}"))?
+}
+
 #[tauri::command]
 pub async fn desktop_browser_oauth(provider: String) -> Result<(), String> {
     let (program, args) = browser_oauth_spec(&provider)?;
-    let (gateway_program, gateway_args) = browser_oauth_gateway_spec(&provider)?;
     let launch_browser_login = should_launch_browser_login(oauth_auth_file_present());
     tauri::async_runtime::spawn_blocking(move || {
         if launch_browser_login {
@@ -121,22 +152,8 @@ pub async fn desktop_browser_oauth(provider: String) -> Result<(), String> {
                 return Err(format!("openai-oauth browser sign-in exited with {status}"));
             }
         }
-        if !gateway_is_reachable() {
-            let gateway_status = hidden_command(gateway_program)
-                .args(gateway_args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| format!("could not start the ChatGPT OAuth gateway: {error}"))?;
-            if !gateway_status.success() {
-                return Err(format!(
-                    "ChatGPT OAuth gateway startup exited with {gateway_status}"
-                ));
-            }
-            wait_for_oauth_gateway()?;
-        }
-        if !browser_oauth_credentials_present("openai-oauth") {
+        ensure_browser_oauth_gateway(&provider)?;
+        if !browser_oauth_models_present("openai-oauth") {
             return Err(
                 "ChatGPT OAuth credentials are present or sign-in completed, but the OAuth gateway returned no authenticated models. Run `npx openai-oauth login` in an interactive terminal to re-authenticate"
                     .to_owned(),

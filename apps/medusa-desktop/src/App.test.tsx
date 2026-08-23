@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DESKTOP_TOOL_EVENT, type DesktopTool } from "./desktop-tools";
-import { loadProviderCatalog, startBrowserOauth } from "./providerCatalog";
+import { ensureBrowserOauthGateway, loadProviderCatalog, startBrowserOauth } from "./providerCatalog";
 import {
   closeRuntime,
   cancelRuntime,
@@ -30,6 +30,7 @@ const providerCatalog = [
     browserOauth: false,
     discoverModels: false,
     customValues: false,
+    credentialConfigured: true,
     currentCustom: false,
   },
   {
@@ -46,6 +47,7 @@ const providerCatalog = [
     browserOauth: false,
     discoverModels: false,
     customValues: false,
+    credentialConfigured: true,
     currentCustom: false,
   },
   {
@@ -62,6 +64,7 @@ const providerCatalog = [
     browserOauth: false,
     discoverModels: false,
     customValues: false,
+    credentialConfigured: true,
     currentCustom: false,
   },
   {
@@ -78,6 +81,7 @@ const providerCatalog = [
     browserOauth: true,
     discoverModels: true,
     customValues: false,
+    credentialConfigured: false,
     currentCustom: false,
   },
 ];
@@ -88,6 +92,7 @@ vi.mock("./providerCatalog", async () => {
   return {
     ...actual,
     loadProviderCatalog: vi.fn(),
+    ensureBrowserOauthGateway: vi.fn(),
     startBrowserOauth: vi.fn(),
   };
 });
@@ -122,6 +127,7 @@ vi.mock("./runtime", async () => {
 beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(loadProviderCatalog).mockReset().mockResolvedValue(providerCatalog);
+  vi.mocked(ensureBrowserOauthGateway).mockReset().mockResolvedValue(undefined);
   vi.mocked(startBrowserOauth).mockReset();
   vi.mocked(loadSharedConfiguration).mockReset().mockResolvedValue({
     revision: 0,
@@ -234,6 +240,7 @@ it("signs in through ChatGPT OAuth and replaces the placeholder with discovered 
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "openai-oauth" } });
+  await waitFor(() => expect(ensureBrowserOauthGateway).toHaveBeenCalledWith("openai-oauth"));
   await waitFor(() => expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument());
   expect(screen.queryByRole("option", { name: "gpt-5" })).not.toBeInTheDocument();
   expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-terra");
@@ -256,6 +263,35 @@ it("uses catalog auth metadata instead of a frontend provider allowlist", async 
     "placeholder",
     "This route does not require an API key",
   );
+});
+
+it("persists the composer provider, model, and effort until changed and applies them before the next turn", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  fireEvent.click(screen.getByRole("button", { name: /Choose provider, model, and effort/ }));
+  fireEvent.change(screen.getByLabelText("Composer provider"), { target: { value: "openai" } });
+  await waitFor(() => expect(screen.getByLabelText("Composer model")).toHaveValue("gpt-5.1-codex"));
+  fireEvent.change(screen.getByLabelText("Composer effort"), { target: { value: "high" } });
+
+  expect(screen.getByRole("button", { name: /Choose provider, model, and effort/ })).toHaveTextContent("OpenAI API · gpt-5.1-codex · High");
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Use the selected route" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() => expect(submitRuntime).toHaveBeenCalled());
+  expect(configureRuntime).toHaveBeenCalledWith(
+    "runtime-general",
+    expect.objectContaining({
+      provider: "openai",
+      model: "gpt-5.1-codex",
+      effort: "high",
+      expectedRevision: 0,
+    }),
+  );
+  expect(vi.mocked(configureRuntime).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(submitRuntime).mock.invocationCallOrder[0]);
+  expect(screen.getByRole("button", { name: /Choose provider, model, and effort/ })).toHaveTextContent("OpenAI API · gpt-5.1-codex · High");
 });
 
 it("gives the icon-only send button an accessible name", async () => {

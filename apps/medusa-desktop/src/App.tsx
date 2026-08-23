@@ -5,6 +5,7 @@ import {
   Brain,
   CheckCircle2,
   Check,
+  ChevronDown,
   ChevronRight,
   Circle,
   Copy,
@@ -43,6 +44,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import "./approval-card.css";
 import {
   loadProviderCatalog,
+  ensureBrowserOauthGateway,
   profileModelCapabilityState,
   startBrowserOauth,
   type ProviderCatalogEntry,
@@ -117,6 +119,19 @@ const nextWorkEntryId = () => `work-${++workEntryCounter}`;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_COMPOSER_HEIGHT = 160;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const EFFORT_ORDER: Effort[] = ["auto", "low", "medium", "high"];
+
+function effortOptionsForModel(provider: ProviderCatalogEntry | undefined, model: string): Effort[] {
+  const metadata = provider?.models?.find((candidate) => candidate.id === model);
+  if (!metadata) return EFFORT_ORDER;
+  const supported = new Set(metadata.capabilities.reasoning_effort_levels.map((value) => value.toLowerCase()));
+  const options = EFFORT_ORDER.filter((value) => value === "auto" || supported.has(value));
+  return options.length ? options : ["auto"];
+}
+
+function effortLabel(value: Effort): string {
+  return value === "auto" ? "Auto" : value[0].toUpperCase() + value.slice(1);
+}
 
 function formatBytes(bytes?: number): string {
   if (bytes === undefined) return "unknown size";
@@ -276,6 +291,7 @@ export function App() {
   const [authenticating, setAuthenticating] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
   const [oauthAuthenticatedProvider, setOauthAuthenticatedProvider] = useState<string>();
+  const [composerSelectorOpen, setComposerSelectorOpen] = useState(false);
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [sidePanelView, setSidePanelView] = useState<SidePanelView | undefined>("work");
@@ -351,10 +367,11 @@ export function App() {
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
-    const [configuration, catalog] = await Promise.all([
-      loadSharedConfiguration(),
-      loadProviderCatalog(),
-    ]);
+    const configuration = await loadSharedConfiguration();
+    if (configuration.provider === "openai-oauth") {
+      await ensureBrowserOauthGateway(configuration.provider).catch(() => undefined);
+    }
+    const catalog = await loadProviderCatalog();
     setSharedConfiguration(configuration);
     setProviderCatalog(catalog);
     setProvider(configuration.provider);
@@ -743,6 +760,33 @@ export function App() {
     return { supported: undefined, text: "Image compatibility will be verified by the runtime before upload." };
   }, [providerCatalog, provider, model, sharedConfiguration?.connection]);
 
+  const configureSelectedModelForTurn = async () => {
+    if (!runtimeId || !provider.trim() || !model.trim()) return;
+    const selected = providerCatalog.find((entry) => entry.profileProvider === provider);
+    const selectedProviderIsReady = selected?.credentialConfigured === true
+      || selected?.profileProvider === sharedConfiguration?.provider;
+    if (selected && !selectedProviderIsReady) {
+      throw new Error(`${selected.displayName} is not configured in Settings yet.`);
+    }
+    const alreadyActive = sharedConfiguration?.provider === provider
+      && sharedConfiguration.model === model
+      && sharedConfiguration.effort === effort;
+    if (alreadyActive) return;
+
+    await configureRuntime(runtimeId, {
+      provider,
+      model,
+      effort,
+      expectedRevision: sharedConfiguration?.revision ?? 0,
+      baseUrl: selected?.customValues ? baseUrl.trim() || undefined : undefined,
+    });
+    const configuration = await loadSharedConfiguration();
+    setSharedConfiguration(configuration);
+    if (configuration.credentialConfigured && configuration.provider === "openai-oauth") {
+      setOauthAuthenticatedProvider(configuration.provider);
+    }
+  };
+
   const onPaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
     if (!images.length) return;
@@ -798,6 +842,7 @@ export function App() {
       if (clean.startsWith("/") && suppliedAttachments.length === 0) {
         await runRuntimeCommand(runtimeId, clean);
       } else {
+        await configureSelectedModelForTurn();
         const disposition = await submitRuntime(runtimeId, {
           text,
           attachments: suppliedAttachments,
@@ -879,6 +924,9 @@ export function App() {
 
     setLoadingModels(true);
     try {
+      if (nextProvider.browserOauth) {
+        await ensureBrowserOauthGateway(value);
+      }
       const refreshed = await loadProviderCatalog(true, value);
       setProviderCatalog(refreshed);
       const refreshedProvider = refreshed.find((entry) => entry.profileProvider === value);
@@ -978,13 +1026,31 @@ export function App() {
     () => providerCatalog.find((entry) => entry.profileProvider === provider),
     [providerCatalog, provider],
   );
+  const effortOptions = useMemo(
+    () => effortOptionsForModel(selectedProvider, model),
+    [selectedProvider, model],
+  );
+  useEffect(() => {
+    if (!effortOptions.includes(effort)) setEffort(effortOptions[0]);
+  }, [effort, effortOptions]);
   const oauthProvider = selectedProvider?.browserOauth ?? false;
   const oauthAuthenticated = oauthProvider && (
     oauthAuthenticatedProvider === provider
+    || selectedProvider?.credentialConfigured === true
     || (sharedConfiguration?.provider === provider && sharedConfiguration.credentialConfigured)
   );
   const credentiallessProvider = !oauthProvider
     && (selectedProvider?.authMethods.every((method) => method === "none") ?? false);
+  const composerProviders = useMemo(
+    () => providerCatalog.filter((entry) =>
+      !entry.disabledReason
+      && (entry.profileProvider === provider || entry.credentialConfigured === true),
+    ),
+    [providerCatalog, provider],
+  );
+  const composerSelectorLabel = selectedProvider && model
+    ? `${selectedProvider.displayName} · ${model} · ${effortLabel(effort)}`
+    : "Choose provider and model";
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.total;
   const openDesktopTool = (tool: DesktopTool) => requestDesktopTool(tool);
@@ -1353,6 +1419,62 @@ export function App() {
                     rows={1}
                   />
                   <div className="composer-actions">
+                    <div className="composer-selector">
+                      <button
+                        className="composer-selector-trigger"
+                        type="button"
+                        disabled={!runtimeId}
+                        aria-expanded={composerSelectorOpen}
+                        aria-haspopup="dialog"
+                        aria-label={`Choose provider, model, and effort: ${composerSelectorLabel}`}
+                        onClick={() => setComposerSelectorOpen((current) => !current)}
+                      >
+                        <span>{composerSelectorLabel}</span>
+                        <ChevronDown size={15} aria-hidden="true" />
+                      </button>
+                      {composerSelectorOpen && (
+                        <div className="composer-selector-popover" role="dialog" aria-label="Provider, model, and effort">
+                          <label className="composer-selector-row">
+                            <span>Provider</span>
+                            <select
+                              aria-label="Composer provider"
+                              value={provider}
+                              onChange={(event) => void selectProvider(event.target.value)}
+                            >
+                              {composerProviders.map((entry) => (
+                                <option key={entry.id} value={entry.profileProvider}>
+                                  {entry.displayName}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="composer-selector-row">
+                            <span>Model</span>
+                            <select
+                              aria-label="Composer model"
+                              value={model}
+                              disabled={loadingModels || !selectedProvider?.modelOptions.length}
+                              onChange={(event) => setModel(event.target.value)}
+                            >
+                              {!selectedProvider?.modelOptions.length && <option value="">No models available</option>}
+                              {(selectedProvider?.modelOptions ?? []).map((option) => (
+                                <option key={option} value={option}>{option}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="composer-selector-row">
+                            <span>Effort</span>
+                            <select
+                              aria-label="Composer effort"
+                              value={effort}
+                              onChange={(event) => setEffort(event.target.value as Effort)}
+                            >
+                              {effortOptions.map((option) => <option key={option} value={option}>{effortLabel(option)}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                      )}
+                    </div>
                     {busy && (pendingSubmit || (!prompt.trim() && attachments.length === 0)) ? (
                       <button className="send-button stop-button" onClick={() => void cancel()} aria-label="Stop active turn" title="Stop active turn"><Square size={15} /></button>
                     ) : (
@@ -1380,7 +1502,7 @@ export function App() {
             {selectedProvider && <small>{selectedProvider.disabledReason ?? selectedProvider.description}</small>}
             {loadingModels && <small role="status">Refreshing available models…</small>}
             <label>Model<select value={model} disabled={loadingModels} onChange={(event) => setModel(event.target.value)}>{(selectedProvider?.modelOptions ?? (model ? [model] : [])).map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-            <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+            <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}>{effortOptions.map((option) => <option key={option} value={option}>{effortLabel(option)}</option>)}</select></label>
             {oauthProvider ? (
               <div>
                 <button className="secondary-action" disabled={authenticating} onClick={() => void authenticateSelectedProvider()}>{authenticating ? "Opening ChatGPT sign-in…" : oauthAuthenticated ? "Re-authenticate with ChatGPT" : "Sign in with ChatGPT"}</button>
