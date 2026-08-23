@@ -1930,6 +1930,7 @@ impl Reconciler {
     ) -> Result<ReconcileReport, DesiredStateError> {
         let mut actions = Vec::new();
         let mut applied = false;
+        let mut added_instances = Vec::new();
         let desired_ids = desired.components.keys().cloned().collect::<BTreeSet<_>>();
         for (component, spec) in &desired.components {
             let active = runtime.active_generations(component.as_str());
@@ -1971,6 +1972,7 @@ impl Reconciler {
                     .map_err(|error| DesiredStateError::Validation {
                         reason: error.to_string(),
                     })?;
+                added_instances.push(identity);
                 actions.push(ReconcileAction::Added {
                     component: component.clone(),
                 });
@@ -2008,6 +2010,14 @@ impl Reconciler {
             }) {
                 actions.push(ReconcileAction::Noop {
                     component: component.clone(),
+                });
+            }
+        }
+        for identity in added_instances {
+            if let Err(error) = runtime.commit_dependency_view(&identity) {
+                actions.push(ReconcileAction::Blocked {
+                    component: identity.component_id.clone(),
+                    reason: error.to_string(),
                 });
             }
         }
@@ -2683,6 +2693,44 @@ impl ComponentRuntime {
             }
         }
         Ok(actions)
+    }
+
+    pub fn resolve_dependency_view(
+        &self,
+        identity: &ComponentInstanceId,
+    ) -> Result<DependencyView, DependencyResolutionError> {
+        let record = self.instances.get(identity).ok_or_else(|| {
+            DependencyResolutionError::InvalidSpecification {
+                component: identity.component_id.clone(),
+                reason: format!("unknown component instance {identity:?}"),
+            }
+        })?;
+        let candidates = self
+            .instances
+            .values()
+            .map(|record| {
+                ProviderCandidate::new(record.context.identity(), record.spec.clone())
+                    .retiring(record.retiring)
+                    .available(record.state == LifecycleState::Active)
+            })
+            .collect::<Vec<_>>();
+        DependencyResolver::resolve(&record.spec, &candidates)
+    }
+
+    pub fn commit_dependency_view(
+        &mut self,
+        identity: &ComponentInstanceId,
+    ) -> Result<DependencyView, DependencyResolutionError> {
+        let view = self.resolve_dependency_view(identity)?;
+        let record = self.instances.get_mut(identity).ok_or_else(|| {
+            DependencyResolutionError::InvalidSpecification {
+                component: identity.component_id.clone(),
+                reason: format!("unknown component instance {identity:?}"),
+            }
+        })?;
+        record.committed_dependency_view = view.clone();
+        record.target_dependency_view = view.clone();
+        Ok(view)
     }
 
     pub fn retire_provider(

@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use medusa_runtime::component_runtime::{
     ComponentRuntime, ComponentSpec, DependencyReconciliationAction, DependencyRequirement,
-    DependencyResolver, LifecycleState,
+    DependencyResolver, DesiredStateMutation, DesiredStateStore, LifecycleState, ReconcileAction,
+    Reconciler,
 };
 
 fn provider_spec(id: &str, service: &str) -> ComponentSpec {
@@ -158,4 +159,46 @@ fn unrelated_provider_changes_do_not_restart_an_active_consumer() {
             DependencyReconciliationAction::Restart { component, .. } if component == &unrelated
         )
     }));
+}
+
+#[test]
+fn reconciler_commits_dependency_views_after_adding_a_provider_and_consumer() {
+    let store = DesiredStateStore::new();
+    let desired = store
+        .compare_and_swap(
+            0,
+            DesiredStateMutation::Batch(vec![
+                DesiredStateMutation::upsert(
+                    ComponentSpec::new("consumer")
+                        .with_requirement(DependencyRequirement::required("database")),
+                ),
+                DesiredStateMutation::upsert(provider_spec("provider", "database")),
+            ]),
+            "test",
+        )
+        .expect("valid desired graph")
+        .snapshot;
+    let mut runtime = ComponentRuntime::new();
+
+    let report = Reconciler::reconcile(&mut runtime, &desired).expect("reconcile");
+    assert!(report.actions.iter().any(|action| {
+        matches!(action, ReconcileAction::Added { component } if component.as_str() == "consumer")
+    }));
+    let consumer = runtime
+        .active_generations("consumer")
+        .into_iter()
+        .next()
+        .expect("active consumer");
+    let provider = runtime
+        .active_generations("provider")
+        .into_iter()
+        .next()
+        .expect("active provider");
+    assert_eq!(
+        runtime
+            .committed_dependency_view(&consumer)
+            .expect("committed view")
+            .provider("database"),
+        Some(&provider)
+    );
 }
