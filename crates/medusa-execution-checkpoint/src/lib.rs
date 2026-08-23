@@ -307,6 +307,7 @@ impl LearningRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetryHypothesis {
     pub failure_fingerprint: String,
+    pub previous_capsule_fingerprint: String,
     pub previous_hypothesis: Option<String>,
     pub disproving_evidence: Vec<String>,
     pub new_hypothesis: String,
@@ -317,6 +318,7 @@ pub struct RetryHypothesis {
 impl RetryHypothesis {
     pub fn verify(&self) -> Result<(), CheckpointError> {
         validate_sha256(&self.failure_fingerprint)?;
+        validate_sha256(&self.previous_capsule_fingerprint)?;
         validate_sha256(&self.environment_fingerprint)?;
         if self.new_hypothesis.trim().is_empty() || self.changed_strategy.trim().is_empty() {
             return Err(CheckpointError::InvalidRetryHypothesis);
@@ -475,6 +477,14 @@ impl StepCapsule {
         {
             return Err(CheckpointError::RetryScopeMismatch);
         }
+        if self.authority_fingerprint != previous.authority_fingerprint
+            || self.objective != previous.objective
+            || self.acceptance_criteria != previous.acceptance_criteria
+            || self.allowed_paths != previous.allowed_paths
+            || self.allowed_tools != previous.allowed_tools
+        {
+            return Err(CheckpointError::RetryAuthorityMismatch);
+        }
         if self.capsule_id == previous.capsule_id || self.fingerprint == previous.fingerprint {
             return Err(CheckpointError::FreshContextRequired);
         }
@@ -482,6 +492,9 @@ impl StepCapsule {
             .retry_hypothesis
             .as_ref()
             .ok_or(CheckpointError::MissingRetryHypothesis)?;
+        if hypothesis.previous_capsule_fingerprint != previous.fingerprint {
+            return Err(CheckpointError::RetryLineageMismatch);
+        }
         if let Some(previous_hypothesis) = &previous.retry_hypothesis {
             if !hypothesis.meaningfully_differs_from(previous_hypothesis) {
                 return Err(CheckpointError::UnchangedRetryStrategy);
@@ -539,8 +552,12 @@ pub enum CheckpointError {
     FreshContextRequired,
     #[error("retry hypothesis must reference the capsule failure")]
     RetryFailureMismatch,
-    #[error("retry capsule changed execution, plan, revision, or step authority")]
+    #[error("retry capsule changed execution, plan, revision, or step identity")]
     RetryScopeMismatch,
+    #[error("retry capsule changed objective, acceptance criteria, tools, paths, or authority")]
+    RetryAuthorityMismatch,
+    #[error("retry capsule does not name the immediately preceding capsule fingerprint")]
+    RetryLineageMismatch,
     #[error("retry requires an explicit hypothesis")]
     MissingRetryHypothesis,
     #[error("first retry must record a prior hypothesis or disproving evidence")]
@@ -700,15 +717,22 @@ mod tests {
     fn retry_requires_a_new_capsule_and_changed_strategy() {
         let previous_hypothesis = RetryHypothesis {
             failure_fingerprint: digest("failure"),
+            previous_capsule_fingerprint: digest("older-capsule"),
             previous_hypothesis: Some("dependency mismatch".into()),
             disproving_evidence: vec![digest("compiler-output")],
             new_hypothesis: "trait contract changed".into(),
             changed_strategy: "update the implementation against the trait".into(),
             environment_fingerprint: digest("env"),
         };
-        let previous = capsule("capsule-1", Some("failure"), Some(previous_hypothesis)).unwrap();
+        let previous = capsule(
+            "capsule-1",
+            Some("failure"),
+            Some(previous_hypothesis),
+        )
+        .unwrap();
         let next_hypothesis = RetryHypothesis {
             failure_fingerprint: digest("failure"),
+            previous_capsule_fingerprint: previous.fingerprint.clone(),
             previous_hypothesis: Some("trait contract changed".into()),
             disproving_evidence: vec![digest("targeted-test")],
             new_hypothesis: "fixture still uses the old contract".into(),
@@ -721,19 +745,81 @@ mod tests {
 
     #[test]
     fn retry_rejects_identical_strategy() {
-        let hypothesis = RetryHypothesis {
+        let previous_hypothesis = RetryHypothesis {
             failure_fingerprint: digest("failure"),
+            previous_capsule_fingerprint: digest("older-capsule"),
             previous_hypothesis: Some("dependency mismatch".into()),
             disproving_evidence: vec![digest("compiler-output")],
             new_hypothesis: "trait contract changed".into(),
             changed_strategy: "update the implementation against the trait".into(),
             environment_fingerprint: digest("env"),
         };
-        let previous = capsule("capsule-1", Some("failure"), Some(hypothesis.clone())).unwrap();
+        let previous = capsule(
+            "capsule-1",
+            Some("failure"),
+            Some(previous_hypothesis.clone()),
+        )
+        .unwrap();
+        let hypothesis = RetryHypothesis {
+            previous_capsule_fingerprint: previous.fingerprint.clone(),
+            ..previous_hypothesis
+        };
         let next = capsule("capsule-2", Some("failure"), Some(hypothesis)).unwrap();
         assert_eq!(
             next.verify_retry_from(&previous),
             Err(CheckpointError::UnchangedRetryStrategy)
+        );
+    }
+
+    #[test]
+    fn retry_rejects_authority_drift() {
+        let previous = capsule("capsule-1", None, None).unwrap();
+        let hypothesis = RetryHypothesis {
+            failure_fingerprint: digest("failure"),
+            previous_capsule_fingerprint: previous.fingerprint.clone(),
+            previous_hypothesis: None,
+            disproving_evidence: vec![digest("compiler-output")],
+            new_hypothesis: "the fixture is stale".into(),
+            changed_strategy: "update only the bounded fixture".into(),
+            environment_fingerprint: digest("env"),
+        };
+        let mut next = capsule("capsule-2", Some("failure"), Some(hypothesis)).unwrap();
+        next.allowed_paths.push("../outside-authority".into());
+        next.fingerprint = next.calculate_fingerprint();
+        assert_eq!(
+            next.verify_retry_from(&previous),
+            Err(CheckpointError::RetryAuthorityMismatch)
+        );
+    }
+
+    #[test]
+    fn retry_rejects_nonconsecutive_capsule_replay() {
+        let root = capsule("capsule-root", None, None).unwrap();
+        let first_hypothesis = RetryHypothesis {
+            failure_fingerprint: digest("failure"),
+            previous_capsule_fingerprint: root.fingerprint.clone(),
+            previous_hypothesis: None,
+            disproving_evidence: vec![digest("compiler-output")],
+            new_hypothesis: "first hypothesis".into(),
+            changed_strategy: "first changed strategy".into(),
+            environment_fingerprint: digest("env-1"),
+        };
+        let first = capsule("capsule-a", Some("failure"), Some(first_hypothesis)).unwrap();
+        first.verify_retry_from(&root).unwrap();
+        let second_hypothesis = RetryHypothesis {
+            failure_fingerprint: digest("failure"),
+            previous_capsule_fingerprint: first.fingerprint.clone(),
+            previous_hypothesis: Some("first hypothesis".into()),
+            disproving_evidence: vec![digest("targeted-test")],
+            new_hypothesis: "second hypothesis".into(),
+            changed_strategy: "second changed strategy".into(),
+            environment_fingerprint: digest("env-2"),
+        };
+        let second = capsule("capsule-b", Some("failure"), Some(second_hypothesis)).unwrap();
+        second.verify_retry_from(&first).unwrap();
+        assert_eq!(
+            first.verify_retry_from(&second),
+            Err(CheckpointError::RetryLineageMismatch)
         );
     }
 
