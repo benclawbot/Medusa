@@ -5,7 +5,14 @@
 //! generation.  Later runtime layers (effects, dependency reconciliation, and desired state) use
 //! the scoped context defined here instead of handing component code a global runtime handle.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -489,6 +496,8 @@ pub struct ComponentSpec {
     pub provides: Vec<ProvidedService>,
     pub capabilities: BTreeSet<HostCapability>,
     #[serde(default)]
+    pub exclusive_resources: BTreeSet<String>,
+    #[serde(default)]
     pub configuration: serde_json::Value,
 }
 
@@ -504,6 +513,7 @@ impl ComponentSpec {
             requires: Vec::new(),
             provides: Vec::new(),
             capabilities: BTreeSet::new(),
+            exclusive_resources: BTreeSet::new(),
             configuration: serde_json::Value::Null,
         }
     }
@@ -511,6 +521,12 @@ impl ComponentSpec {
     #[must_use]
     pub fn with_capability(mut self, capability: HostCapability) -> Self {
         self.capabilities.insert(capability);
+        self
+    }
+
+    #[must_use]
+    pub fn with_exclusive_resource(mut self, resource: impl Into<String>) -> Self {
+        self.exclusive_resources.insert(resource.into());
         self
     }
 
@@ -571,6 +587,16 @@ impl ComponentSpec {
                     reason: format!("invalid required service version: {version}"),
                 });
             }
+        }
+        if self
+            .exclusive_resources
+            .iter()
+            .any(|resource| resource.trim().is_empty())
+        {
+            return Err(ComponentRuntimeError::InvalidSpec {
+                component: self.id.clone(),
+                reason: "exclusive resource names must not be empty".to_owned(),
+            });
         }
         Ok(())
     }
@@ -661,6 +687,83 @@ pub struct ProviderRetirementReport {
     pub order: Vec<ComponentInstanceId>,
     pub blocked: Vec<ComponentInstanceId>,
     pub withdrawn: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ReplacementOptions {
+    pub cancellation: Option<Arc<AtomicBool>>,
+    pub timeout: Option<Duration>,
+}
+
+impl ReplacementOptions {
+    fn check(&self, started: Instant) -> Result<(), ReplacementError> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|cancellation| cancellation.load(Ordering::SeqCst))
+        {
+            return Err(ReplacementError::Cancelled);
+        }
+        if self
+            .timeout
+            .is_some_and(|timeout| started.elapsed() >= timeout)
+        {
+            return Err(ReplacementError::TimedOut);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplacementOutcome {
+    pub old: ComponentInstanceId,
+    pub candidate: ComponentInstanceId,
+    pub migrated_consumers: Vec<ComponentInstanceId>,
+    pub old_withdrawn: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum ReplacementError {
+    #[error(transparent)]
+    Runtime(ComponentRuntimeError),
+    #[error("component replacement was cancelled before commit")]
+    Cancelled,
+    #[error("component replacement timed out before commit")]
+    TimedOut,
+    #[error("candidate generation was rejected: {reason}")]
+    CandidateRejected {
+        reason: String,
+        cleanup_debt: Vec<CleanupDebt>,
+    },
+    #[error("candidate generation cannot replace a different logical component")]
+    ComponentIdMismatch,
+    #[error("old provider cleanup was blocked after candidate validation: {reason}")]
+    OldProviderCleanupBlocked { reason: String },
+    #[error(
+        "exclusive resource {resource:?} is owned by {owner:?}; candidate {requested:?} cannot prepare"
+    )]
+    ExclusiveResourceConflict {
+        resource: String,
+        owner: ComponentInstanceId,
+        requested: ComponentInstanceId,
+    },
+}
+
+impl From<ComponentRuntimeError> for ReplacementError {
+    fn from(error: ComponentRuntimeError) -> Self {
+        match error {
+            ComponentRuntimeError::ExclusiveResourceConflict {
+                resource,
+                owner,
+                requested,
+            } => Self::ExclusiveResourceConflict {
+                resource,
+                owner,
+                requested,
+            },
+            other => Self::Runtime(other),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Error)]
@@ -1014,6 +1117,14 @@ pub enum ComponentRuntimeError {
     },
     #[error("unknown resource {0:?}")]
     UnknownResource(String),
+    #[error(
+        "exclusive resource {resource:?} is owned by {owner:?}; cannot assign it to {requested:?}"
+    )]
+    ExclusiveResourceConflict {
+        resource: String,
+        owner: ComponentInstanceId,
+        requested: ComponentInstanceId,
+    },
 }
 
 struct ComponentRecord {
@@ -1030,6 +1141,7 @@ struct ComponentRecord {
 pub struct ComponentRuntime {
     next_generations: BTreeMap<ComponentId, ComponentGeneration>,
     instances: BTreeMap<ComponentInstanceId, ComponentRecord>,
+    exclusive_owners: BTreeMap<String, ComponentInstanceId>,
 }
 
 impl ComponentRuntime {
@@ -1056,6 +1168,19 @@ impl ComponentRuntime {
             component_id: spec.id.clone(),
             generation: next,
         };
+        for resource in &spec.exclusive_resources {
+            if let Some(owner) = self.exclusive_owners.get(resource) {
+                return Err(ComponentRuntimeError::ExclusiveResourceConflict {
+                    resource: resource.clone(),
+                    owner: owner.clone(),
+                    requested: identity.clone(),
+                });
+            }
+        }
+        for resource in &spec.exclusive_resources {
+            self.exclusive_owners
+                .insert(resource.clone(), identity.clone());
+        }
         let context = ScopedComponentContext {
             identity: identity.clone(),
             provenance: ComponentProvenance::new(desired_revision, "component-runtime"),
@@ -1290,6 +1415,7 @@ impl ComponentRuntime {
         if let Some(provider_record) = self.instances.get_mut(provider) {
             provider_record.state = LifecycleState::Inactive;
         }
+        self.exclusive_owners.retain(|_, owner| owner != provider);
         report.order.push(provider.clone());
         report.withdrawn = true;
         Ok(report)
@@ -1303,5 +1429,253 @@ impl ComponentRuntime {
             .get(identity)
             .map(|record| record.journal.pending_effect_count() > 0)
             .ok_or_else(|| ComponentRuntimeError::UnknownInstance(identity.clone()))
+    }
+
+    #[must_use]
+    pub fn contains(&self, identity: &ComponentInstanceId) -> bool {
+        self.instances.contains_key(identity)
+    }
+
+    #[must_use]
+    pub fn active_generations(&self, component_id: &str) -> Vec<ComponentInstanceId> {
+        self.instances
+            .iter()
+            .filter(|(identity, record)| {
+                identity.component_id.as_str() == component_id
+                    && record.state == LifecycleState::Active
+            })
+            .map(|(identity, _)| identity.clone())
+            .collect()
+    }
+
+    pub fn replace_component<A, H>(
+        &mut self,
+        old: &ComponentInstanceId,
+        candidate_spec: ComponentSpec,
+        activate: A,
+        health_check: H,
+        options: ReplacementOptions,
+    ) -> Result<ReplacementOutcome, ReplacementError>
+    where
+        A: FnOnce(&ScopedComponentContext, &mut EffectJournal) -> Result<(), String>,
+        H: FnOnce(&ScopedComponentContext) -> Result<(), String>,
+    {
+        let started = Instant::now();
+        options.check(started)?;
+        let old_record = self
+            .instances
+            .get(old)
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(old.clone()))?;
+        if candidate_spec.id != old.component_id {
+            return Err(ReplacementError::ComponentIdMismatch);
+        }
+        let desired_revision = old_record.context.desired_revision();
+        let candidate = self.instantiate(candidate_spec, desired_revision)?;
+        let candidate_context = self.context(&candidate)?;
+        if let Err(control) = options.check(started) {
+            return self.finish_candidate_control_failure(&candidate, control);
+        }
+
+        let activation_error = {
+            let record = self
+                .instances
+                .get_mut(&candidate)
+                .expect("candidate exists after instantiate");
+            record.state = LifecycleState::Activating;
+            activate(&candidate_context, &mut record.journal).err()
+        };
+        if let Some(reason) = activation_error {
+            return Err(self.reject_candidate(&candidate, reason));
+        }
+        if let Err(control) = options.check(started) {
+            return self.finish_candidate_control_failure(&candidate, control);
+        }
+        if let Err(reason) = health_check(&candidate_context) {
+            return Err(self.reject_candidate(&candidate, reason));
+        }
+        if let Err(control) = options.check(started) {
+            return self.finish_candidate_control_failure(&candidate, control);
+        }
+
+        if let Some(record) = self.instances.get_mut(&candidate) {
+            record.state = LifecycleState::Active;
+        }
+        let candidate_providers = self
+            .instances
+            .values()
+            .map(|record| {
+                ProviderCandidate::new(record.context.identity(), record.spec.clone())
+                    .retiring(record.retiring)
+                    .available(record.state == LifecycleState::Active)
+            })
+            .collect::<Vec<_>>();
+        let candidate_target = {
+            let spec = self
+                .instances
+                .get(&candidate)
+                .expect("candidate exists")
+                .spec
+                .clone();
+            DependencyResolver::resolve(&spec, &candidate_providers)
+        };
+        let candidate_target = match candidate_target {
+            Ok(target) => target,
+            Err(reason) => return Err(self.reject_candidate(&candidate, reason.to_string())),
+        };
+        if let Some(record) = self.instances.get_mut(&candidate) {
+            record.committed_dependency_view = candidate_target.clone();
+            record.target_dependency_view = candidate_target;
+        }
+
+        let consumers = self
+            .instances
+            .iter()
+            .filter(|(identity, record)| {
+                *identity != old
+                    && *identity != &candidate
+                    && record.state == LifecycleState::Active
+                    && record
+                        .committed_dependency_view
+                        .providers
+                        .values()
+                        .any(|providers| providers.contains(old))
+            })
+            .map(|(identity, _)| identity.clone())
+            .collect::<Vec<_>>();
+        let saved_consumers = consumers
+            .iter()
+            .filter_map(|identity| {
+                self.instances.get(identity).map(|record| {
+                    (
+                        identity.clone(),
+                        record.state,
+                        record.committed_dependency_view.clone(),
+                        record.target_dependency_view.clone(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut migrated_consumers = Vec::new();
+        for consumer in &consumers {
+            let record = self
+                .instances
+                .get_mut(consumer)
+                .expect("consumer collected from instances");
+            record.state = LifecycleState::Deactivating;
+            let rollback = record.journal.rollback();
+            if !rollback.is_clean() {
+                self.restore_consumers(&saved_consumers);
+                return Err(self.reject_candidate(
+                    &candidate,
+                    format!(
+                        "consumer {} teardown blocked: {:?}",
+                        consumer.component_id.as_str(),
+                        rollback.cleanup_debt
+                    ),
+                ));
+            }
+            let mut replacement_view = record.committed_dependency_view.clone();
+            for providers in replacement_view.providers.values_mut() {
+                for provider in providers {
+                    if provider == old {
+                        *provider = candidate.clone();
+                    }
+                }
+            }
+            record.committed_dependency_view = replacement_view.clone();
+            record.target_dependency_view = replacement_view;
+            record.state = LifecycleState::Active;
+            migrated_consumers.push(consumer.clone());
+        }
+
+        let old_rollback = self
+            .instances
+            .get_mut(old)
+            .expect("old provider exists")
+            .journal
+            .rollback();
+        if !old_rollback.is_clean() {
+            self.restore_consumers(&saved_consumers);
+            let _ = self.reject_candidate(&candidate, "old provider cleanup blocked".to_owned());
+            if let Some(record) = self.instances.get_mut(old) {
+                record.state = LifecycleState::BlockedRetirement;
+                record.retiring = true;
+            }
+            return Err(ReplacementError::OldProviderCleanupBlocked {
+                reason: format!("cleanup debt: {:?}", old_rollback.cleanup_debt),
+            });
+        }
+        if let Some(record) = self.instances.get_mut(old) {
+            record.retiring = true;
+            record.state = LifecycleState::Inactive;
+        }
+        self.exclusive_owners.retain(|_, owner| owner != old);
+        Ok(ReplacementOutcome {
+            old: old.clone(),
+            candidate,
+            migrated_consumers,
+            old_withdrawn: true,
+        })
+    }
+
+    fn reject_candidate(
+        &mut self,
+        candidate: &ComponentInstanceId,
+        reason: String,
+    ) -> ReplacementError {
+        let cleanup_debt = self
+            .instances
+            .get_mut(candidate)
+            .map(|record| record.journal.rollback().cleanup_debt)
+            .unwrap_or_default();
+        self.remove_instance(candidate);
+        ReplacementError::CandidateRejected {
+            reason,
+            cleanup_debt,
+        }
+    }
+
+    fn finish_candidate_control_failure(
+        &mut self,
+        candidate: &ComponentInstanceId,
+        control: ReplacementError,
+    ) -> Result<ReplacementOutcome, ReplacementError> {
+        let cleanup_debt = self
+            .instances
+            .get_mut(candidate)
+            .map(|record| record.journal.rollback().cleanup_debt)
+            .unwrap_or_default();
+        self.remove_instance(candidate);
+        if cleanup_debt.is_empty() {
+            Err(control)
+        } else {
+            Err(ReplacementError::CandidateRejected {
+                reason: control.to_string(),
+                cleanup_debt,
+            })
+        }
+    }
+
+    fn restore_consumers(
+        &mut self,
+        saved: &[(
+            ComponentInstanceId,
+            LifecycleState,
+            DependencyView,
+            DependencyView,
+        )],
+    ) {
+        for (identity, state, committed, target) in saved {
+            if let Some(record) = self.instances.get_mut(identity) {
+                record.state = *state;
+                record.committed_dependency_view = committed.clone();
+                record.target_dependency_view = target.clone();
+            }
+        }
+    }
+
+    fn remove_instance(&mut self, identity: &ComponentInstanceId) {
+        self.instances.remove(identity);
+        self.exclusive_owners.retain(|_, owner| owner != identity);
     }
 }
