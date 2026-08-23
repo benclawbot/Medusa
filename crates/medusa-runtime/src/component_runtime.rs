@@ -806,13 +806,22 @@ impl ExternalCommitLedger {
         if record.status == target {
             return Ok(record.clone());
         }
-        let allowed = match (record.status, target) {
-            (ExternalCommitStatus::Prepared, ExternalCommitStatus::Committed)
-            | (ExternalCommitStatus::Prepared, ExternalCommitStatus::Unknown)
-            | (ExternalCommitStatus::Prepared, ExternalCommitStatus::CompensationRequired)
-            | (ExternalCommitStatus::Unknown, ExternalCommitStatus::CompensationRequired) => true,
-            _ => false,
-        };
+        let allowed = matches!(
+            (record.status, target),
+            (
+                ExternalCommitStatus::Prepared,
+                ExternalCommitStatus::Committed
+            ) | (
+                ExternalCommitStatus::Prepared,
+                ExternalCommitStatus::Unknown
+            ) | (
+                ExternalCommitStatus::Prepared,
+                ExternalCommitStatus::CompensationRequired
+            ) | (
+                ExternalCommitStatus::Unknown,
+                ExternalCommitStatus::CompensationRequired
+            )
+        );
         if !allowed {
             return Err(ExternalCommitError::InvalidTransition {
                 operation_id: operation_id.to_owned(),
@@ -1083,7 +1092,7 @@ impl ComponentSpec {
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         let raw_id = id.into();
-        let id = ComponentId::new(raw_id.clone()).unwrap_or_else(|_| ComponentId(raw_id));
+        let id = ComponentId::new(raw_id.clone()).unwrap_or(ComponentId(raw_id));
         Self {
             id,
             version: "0.0.0".to_owned(),
@@ -1344,22 +1353,12 @@ impl From<ComponentRuntimeError> for ReplacementError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DesiredRuntimeState {
     pub revision: u64,
     pub components: BTreeMap<ComponentId, ComponentSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<String>,
-}
-
-impl Default for DesiredRuntimeState {
-    fn default() -> Self {
-        Self {
-            revision: 0,
-            components: BTreeMap::new(),
-            provenance: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

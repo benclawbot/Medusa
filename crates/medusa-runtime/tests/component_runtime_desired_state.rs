@@ -68,10 +68,9 @@ fn concurrent_writers_from_one_base_revision_have_one_winner_and_idempotent_retr
     let right_result = right_thread.join().expect("right thread");
     assert_eq!(left_result.is_ok() as u8 + right_result.is_ok() as u8, 1);
 
-    let winner = if left_result.is_ok() {
-        left_result.unwrap()
-    } else {
-        right_result.unwrap()
+    let winner = match (left_result, right_result) {
+        (Ok(winner), Err(_)) | (Err(_), Ok(winner)) => winner,
+        _ => unreachable!("exactly one writer should commit"),
     };
     let retry = store
         .compare_and_swap_with_idempotency(
