@@ -159,6 +159,21 @@ fn baseline_allows_a_plain_non_git_directory() {
 }
 
 #[test]
+fn plain_workspace_does_not_inherit_an_ancestor_git_repository() {
+    let parent = tempfile::tempdir().expect("parent");
+    git(parent.path(), &["init"]);
+    let workspace = parent.path().join("workspace");
+    fs::create_dir_all(&workspace).expect("workspace");
+
+    capture_review_baseline(&workspace).expect("baseline");
+
+    let baseline: ReviewBaseline =
+        read_json(&workspace.join(REVIEW_DIR).join(BASELINE_FILE)).expect("read baseline");
+    assert!(baseline.paths.is_empty());
+    assert_eq!(baseline.repository_fingerprint, fingerprint(b""));
+}
+
+#[test]
 fn unborn_git_repository_uses_current_worktree_content() {
     let repo = tempfile::tempdir().expect("repo");
     git(repo.path(), &["init"]);

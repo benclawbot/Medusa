@@ -520,6 +520,13 @@ fn is_git_work_tree(repo: &Path) -> bool {
     let Ok(repo) = repo.canonicalize() else {
         return false;
     };
+    // Git searches ancestor directories when the selected folder is not itself a
+    // worktree. Review state is repository-scoped, so do not let a desktop
+    // workspace accidentally inherit an unrelated parent repository (which can
+    // also make this probe scan a very large home directory).
+    if !repo.join(".git").exists() {
+        return false;
+    }
     let Ok(output) = hidden_command("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(&repo)
