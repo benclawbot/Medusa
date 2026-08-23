@@ -32,6 +32,7 @@ use crate::{
 pub mod attachment;
 pub mod analysis_workspace;
 pub mod analysis_contained;
+pub mod component_runtime;
 mod analysis_tool;
 pub mod checkpoint_payload;
 pub mod checkpoint_store;
