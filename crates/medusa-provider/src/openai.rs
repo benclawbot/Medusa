@@ -44,27 +44,31 @@ impl OpenAiProvider {
             .to_ascii_uppercase()
             .replace('-', "_");
         let (base_url, endpoint_source) = resolve_base_url(config, &provider);
-        validate_provider_endpoint(&base_url)?;
+        validate_provider_endpoint(&provider, &base_url)?;
 
         let provider_key_name = format!("{provider}_API_KEY");
         let provider_key_allowed =
             provider_credential_allowed(&provider, endpoint_source, &base_url);
-        let api_key = session_api_key
-            .or_else(|| {
-                provider_key_allowed
-                    .then(|| env::var(&provider_key_name).ok())
-                    .flatten()
+        let api_key = (provider != "OPENAI_OAUTH")
+            .then(|| {
+                session_api_key
+                    .or_else(|| {
+                        provider_key_allowed
+                            .then(|| env::var(&provider_key_name).ok())
+                            .flatten()
+                    })
+                    .or_else(|| {
+                        generic_openai_credential_allowed(&provider, endpoint_source, &base_url)
+                            .then(|| env::var("OPENAI_API_KEY").ok())
+                            .flatten()
+                    })
+                    .or_else(|| {
+                        generic_medusa_credential_allowed(&provider, endpoint_source)
+                            .then(|| env::var("MEDUSA_API_KEY").ok())
+                            .flatten()
+                    })
             })
-            .or_else(|| {
-                generic_openai_credential_allowed(&provider, endpoint_source, &base_url)
-                    .then(|| env::var("OPENAI_API_KEY").ok())
-                    .flatten()
-            })
-            .or_else(|| {
-                generic_medusa_credential_allowed(&provider, endpoint_source)
-                    .then(|| env::var("MEDUSA_API_KEY").ok())
-                    .flatten()
-            });
+            .flatten();
         if config.model.auth == "api-key" && api_key.is_none() {
             let mut message = format!("missing provider credential; set {provider_key_name}");
             if endpoint_source == EndpointSource::RepositoryConfig {
@@ -379,15 +383,33 @@ fn canonical_https_origin(base_url: &str, expected_host: &str) -> bool {
     })
 }
 
-fn validate_provider_endpoint(base_url: &str) -> MedusaResult<()> {
+fn validate_provider_endpoint(provider: &str, base_url: &str) -> MedusaResult<()> {
     let allow_insecure_loopback = env_flag("MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP");
-    validate_provider_endpoint_with_policy(base_url, allow_insecure_loopback)
+    validate_provider_endpoint_for_provider(provider, base_url, allow_insecure_loopback)
 }
 
+fn validate_provider_endpoint_for_provider(
+    provider: &str,
+    base_url: &str,
+    allow_insecure_loopback: bool,
+) -> MedusaResult<()> {
+    let url = parse_provider_endpoint(base_url)?;
+    if url.scheme() == "http" && is_openai_oauth_gateway(provider, &url) {
+        return Ok(());
+    }
+    validate_parsed_provider_endpoint(url, allow_insecure_loopback)
+}
+
+#[cfg(test)]
 fn validate_provider_endpoint_with_policy(
     base_url: &str,
     allow_insecure_loopback: bool,
 ) -> MedusaResult<()> {
+    let url = parse_provider_endpoint(base_url)?;
+    validate_parsed_provider_endpoint(url, allow_insecure_loopback)
+}
+
+fn parse_provider_endpoint(base_url: &str) -> MedusaResult<Url> {
     let url = Url::parse(base_url).map_err(|error| {
         MedusaError::new(
             ErrorCode::DependencyUnavailable,
@@ -402,6 +424,10 @@ fn validate_provider_endpoint_with_policy(
             "provider base_url must not contain embedded credentials",
         ));
     }
+    Ok(url)
+}
+
+fn validate_parsed_provider_endpoint(url: Url, allow_insecure_loopback: bool) -> MedusaResult<()> {
     if url.scheme() == "https" {
         return Ok(());
     }
@@ -413,6 +439,15 @@ fn validate_provider_endpoint_with_policy(
         ErrorCategory::Validation,
         "provider base_url must use HTTPS; loopback HTTP requires MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP=1",
     ))
+}
+
+fn is_openai_oauth_gateway(provider: &str, url: &Url) -> bool {
+    provider == "OPENAI_OAUTH"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port() == Some(10531)
+        && url.path() == "/v1"
+        && url.query().is_none()
+        && url.fragment().is_none()
 }
 
 fn is_loopback_url(url: &Url) -> bool {
@@ -739,6 +774,36 @@ mod tests {
         assert!(validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err());
         validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", true)
             .expect("explicit loopback development opt-in");
+    }
+
+    #[test]
+    fn chatgpt_oauth_allows_only_its_exact_loopback_gateway_without_global_opt_in() {
+        let mut config = Config::default();
+        config.model.provider = "openai-oauth".to_owned();
+        config.model.protocol = "openai".to_owned();
+        config.model.auth = "none".to_owned();
+        config.model.base_url = Some("http://127.0.0.1:10531/v1".to_owned());
+        let provider = OpenAiProvider::from_config_with_api_key(
+            &config,
+            Some("api-key-must-not-enter-oauth-route".to_owned()),
+        )
+        .expect("the fixed OAuth gateway is a trusted local transport");
+        assert!(
+            provider.api_key.is_none(),
+            "ChatGPT OAuth must rely on gateway authentication, not an API key"
+        );
+
+        for (provider, endpoint) in [
+            ("OPENAI", "http://127.0.0.1:10531/v1"),
+            ("OPENAI_OAUTH", "http://localhost:10531/v1"),
+            ("OPENAI_OAUTH", "http://127.0.0.1:10532/v1"),
+            ("OPENAI_OAUTH", "http://127.0.0.1:10531/other"),
+        ] {
+            assert!(
+                validate_provider_endpoint_for_provider(provider, endpoint, false).is_err(),
+                "{provider} must not trust {endpoint}"
+            );
+        }
     }
 
     #[test]
