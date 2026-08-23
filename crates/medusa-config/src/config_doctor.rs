@@ -291,7 +291,7 @@ fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorChe
     let reachable = TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok();
     let remediation = match profile.connection.as_str() {
         "chatgpt-oauth" => {
-            "Run `npx openai-oauth@latest login` or use Sign in with browser in /settings, then refresh diagnostics."
+            "Run `npx openai-oauth@2.0.0 login` or use Sign in with browser in /settings, then refresh diagnostics."
         }
         "omniroute" => {
             "Start OmniRoute on the configured loopback endpoint, then refresh diagnostics."

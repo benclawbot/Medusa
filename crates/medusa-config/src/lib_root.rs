@@ -4,6 +4,7 @@ mod implementation;
 pub use implementation::*;
 
 pub mod model_registry;
+pub mod openai_oauth;
 pub mod provider_catalog;
 
 pub use model_registry::{

@@ -6,7 +6,7 @@ use std::{
 
 use medusa_config::{
     Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, PROVIDER_PROFILE_KEYS,
-    ProviderProfile, ProviderProfileCatalog,
+    ProviderProfile, ProviderProfileCatalog, openai_oauth,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_tui::setup::{
@@ -111,15 +111,8 @@ impl FirstRunSetupHost for CliSetupHost {
                 "provider `{provider_id}` does not expose a Medusa browser sign-in helper"
             ));
         }
-        let child = Command::new("npx")
-            .args([
-                "--yes",
-                "openai-oauth@latest",
-                "login",
-                "--open",
-                "--login-timeout-ms",
-                "300000",
-            ])
+        let child = Command::new(openai_oauth::npx_program())
+            .args(openai_oauth::LOGIN_ARGS)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

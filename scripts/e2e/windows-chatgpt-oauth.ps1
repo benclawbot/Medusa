@@ -125,7 +125,7 @@ try {
     if (Test-Gateway) {
         $summary.gateway_reused = $true
     } else {
-        Invoke-External -FilePath "npx" -ArgumentList @("--yes", "openai-oauth@latest", "--detach") -LogName "oauth-gateway-start" -TimeoutSeconds 120 | Out-Null
+        Invoke-External -FilePath "npx" -ArgumentList @("--yes", "openai-oauth@2.0.0", "--no-open", "--detach") -LogName "oauth-gateway-start" -TimeoutSeconds 120 | Out-Null
         $deadline = [DateTime]::UtcNow.AddSeconds($GatewayStartupTimeoutSeconds)
         while ([DateTime]::UtcNow -lt $deadline -and -not (Test-Gateway)) {
             Start-Sleep -Seconds 2

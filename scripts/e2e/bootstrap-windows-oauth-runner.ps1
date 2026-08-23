@@ -45,7 +45,7 @@ function Assert-OAuthGateway {
         Write-Host "openai-oauth gateway is reachable at 127.0.0.1:10531."
     }
     catch {
-        throw "The openai-oauth gateway is not reachable. Complete ChatGPT OAuth login first, then run: npx --yes openai-oauth@latest --detach"
+        throw "The openai-oauth gateway is not reachable. Complete ChatGPT OAuth login first, then run: npx --yes openai-oauth@2.0.0 --no-open --detach"
     }
 }
 

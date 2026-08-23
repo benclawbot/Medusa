@@ -11,7 +11,7 @@ use std::{
 use medusa_config::{
     Config, PROVIDER_PROFILE_KEYS, ConfigurationApplyTiming, ConfigurationChangeOrigin,
     ConfigurationChanged, ProviderProfile, ProviderProfileCatalog, ProviderProfileStore,
-    credential_environment, diagnose_config_catalog,
+    credential_environment, diagnose_config_catalog, openai_oauth,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Serialize;
@@ -555,11 +555,11 @@ fn ensure_runtime_for_profile(profile: &ProviderProfile) -> MedusaResult<()> {
 }
 
 fn npx_program() -> &'static str {
-    if cfg!(windows) { "npx.cmd" } else { "npx" }
+    openai_oauth::npx_program()
 }
 
 fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
-    let address: SocketAddr = "127.0.0.1:10531"
+    let address: SocketAddr = openai_oauth::GATEWAY_ADDR
         .parse()
         .map_err(|error| config_error(format!("invalid OAuth gateway address: {error}")))?;
     if TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok() {
@@ -568,7 +568,7 @@ fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
 
     println!("Starting the local ChatGPT OAuth gateway...");
     let status = Command::new(npx_program())
-        .args(["--yes", "openai-oauth@latest", "--detach"])
+        .args(openai_oauth::GATEWAY_ARGS)
         .status()
         .map_err(|error| {
             config_error(format!(
@@ -578,8 +578,9 @@ fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
         })?;
     if !status.success() {
         return Err(config_error(format!(
-            "openai-oauth exited with status {status}; run `{} openai-oauth@latest login` and retry",
-            npx_program()
+            "openai-oauth exited with status {status}; run `{} {} login` and retry",
+            npx_program(),
+            openai_oauth::PACKAGE,
         )));
     }
     if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err() {

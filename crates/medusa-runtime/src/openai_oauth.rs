@@ -4,11 +4,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use reqwest::blocking::Client;
+use medusa_config::openai_oauth;
 use medusa_core::hidden_command;
+use reqwest::blocking::Client;
 use serde_json::Value;
 
-const OPENAI_OAUTH_GATEWAY: &str = "http://127.0.0.1:10531/v1";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -41,7 +41,7 @@ fn parse_models(value: Value) -> Result<Vec<String>, String> {
 
 pub fn discover_openai_oauth_models() -> Result<Vec<String>, String> {
     let response = gateway_client()?
-        .get(format!("{OPENAI_OAUTH_GATEWAY}/models"))
+        .get(format!("{}/models", openai_oauth::GATEWAY_BASE_URL))
         .send()
         .map_err(|error| format!("OAuth gateway is not ready: {error}"))?;
     if !response.status().is_success() {
@@ -57,15 +57,8 @@ pub fn discover_openai_oauth_models() -> Result<Vec<String>, String> {
 }
 
 fn start_browser_login() -> Result<Child, String> {
-    hidden_command("npx")
-        .args([
-            "--yes",
-            "openai-oauth@latest",
-            "login",
-            "--open",
-            "--login-timeout-ms",
-            "300000",
-        ])
+    hidden_command(openai_oauth::npx_program())
+        .args(openai_oauth::LOGIN_ARGS)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

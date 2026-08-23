@@ -4,11 +4,11 @@ Medusa's ChatGPT OAuth route depends on the external `openai-oauth` loopback gat
 
 ## Setup
 
-Run `medusa config` and choose **ChatGPT OAuth via local openai-oauth gateway**. The gateway owns browser login, token refresh, credential storage, and account-aware model access. If the loopback gateway is not running, Medusa starts it with `npx --yes openai-oauth@latest --detach`.
+Run `medusa config` and choose **ChatGPT OAuth via local openai-oauth gateway**. The gateway owns browser login, token refresh, credential storage, and account-aware model access. If the loopback gateway is not running, Medusa starts the pinned gateway with `npx --yes openai-oauth@2.0.0 --no-open --detach`.
 
-The gateway can also be managed directly with `npx openai-oauth@latest login`, `npx openai-oauth@latest status`, and `npx openai-oauth@latest stop`. Keep it bound to loopback; port `10531` must not be exposed to a LAN or the internet.
+The gateway can also be managed directly with `npx openai-oauth@2.0.0 login`, `npx openai-oauth@2.0.0 status`, and `npx openai-oauth@2.0.0 stop`. Keep it bound to loopback; port `10531` must not be exposed to a LAN or the internet.
 
-Before an interactive, `run`, or `resume` coding session starts, Medusa verifies the configured gateway at the profile `base_url` (default `http://127.0.0.1:10531/v1`). The preflight runs once at process startup, before the coding runtime accepts work, and:
+Before an interactive, `run`, or `resume` coding session starts, Medusa verifies the configured gateway at the profile `base_url` (default `http://127.0.0.1:10531/v1`). The default fast preflight performs one bounded `GET /models` check so an already-authenticated gateway can accept work with minimal startup latency. For a full compatibility check, set `MEDUSA_OAUTH_PREFLIGHT=full`; that runs once at process startup and:
 
 1. calls `GET /models` and requires the configured model to be present;
 2. submits a forced function call and requires OpenAI-compatible `tool_calls`;
@@ -19,7 +19,7 @@ The gateway does not expose a portable cancellation-capability endpoint, so canc
 
 ## Offline startup
 
-Set `MEDUSA_OAUTH_PREFLIGHT=off` to skip network verification. Medusa prints an explicit warning that model, tool-calling, streaming, and cancellation compatibility are unverified. This is intended for offline startup and must not be treated as a successful capability check.
+Set `MEDUSA_OAUTH_PREFLIGHT=off` to skip network verification. Medusa prints an explicit warning that model, tool-calling, streaming, and cancellation compatibility are unverified. This is intended for offline startup and must not be treated as a successful capability check. The fast default defers tool-calling and streaming probes; use `full` when those capability checks are required.
 
 ## Authentication safety
 

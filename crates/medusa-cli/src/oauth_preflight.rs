@@ -5,14 +5,19 @@ use std::{
     time::Duration,
 };
 
-use medusa_config::Config;
+use medusa_config::{Config, openai_oauth};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{StatusCode, blocking::Client};
 use serde_json::{Value, json};
 
-const DEFAULT_GATEWAY: &str = "http://127.0.0.1:10531/v1";
 const PREFLIGHT_ENV: &str = "MEDUSA_OAUTH_PREFLIGHT";
-const OAUTH_PROVIDER: &str = "openai-oauth";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreflightMode {
+    Fast,
+    Full,
+    Off,
+}
 
 #[derive(Debug, PartialEq)]
 struct PreflightReport {
@@ -26,7 +31,8 @@ pub(crate) fn run_if_needed(config: &Config) -> MedusaResult<()> {
     if !eager_model_command() || !requires_preflight(config) {
         return Ok(());
     }
-    if preflight_disabled() {
+    let mode = preflight_mode();
+    if mode == PreflightMode::Off {
         eprintln!(
             "ChatGPT OAuth gateway preflight is disabled by {PREFLIGHT_ENV}; model, tool-calling, streaming, and cancellation compatibility are unverified."
         );
@@ -34,13 +40,29 @@ pub(crate) fn run_if_needed(config: &Config) -> MedusaResult<()> {
     }
 
     ensure_gateway_running()?;
-    let base_url = config.model.base_url.as_deref().unwrap_or(DEFAULT_GATEWAY);
-    let client = gateway_client()?;
-    let report = probe_gateway(&client, base_url, &config.model.name)?;
-    eprintln!(
-        "ChatGPT OAuth gateway verified: model={}, tool_calling={}, streaming={}, cancellation={}.",
-        report.model, report.tool_calling, report.streaming, report.cancellation
-    );
+    let base_url = config
+        .model
+        .base_url
+        .as_deref()
+        .unwrap_or(openai_oauth::GATEWAY_BASE_URL);
+    let client = if mode == PreflightMode::Full {
+        full_gateway_client()?
+    } else {
+        gateway_client()?
+    };
+    if mode == PreflightMode::Full {
+        let report = probe_gateway(&client, base_url, &config.model.name)?;
+        eprintln!(
+            "ChatGPT OAuth gateway verified: model={}, tool_calling={}, streaming={}, cancellation={}.",
+            report.model, report.tool_calling, report.streaming, report.cancellation
+        );
+    } else {
+        verify_model_available(&client, base_url, &config.model.name)?;
+        eprintln!(
+            "ChatGPT OAuth gateway ready: model={} (fast preflight; tool-calling and streaming checks deferred; set {PREFLIGHT_ENV}=full for the full compatibility probe).",
+            config.model.name
+        );
+    }
     Ok(())
 }
 
@@ -49,7 +71,7 @@ pub(crate) fn discover_models() -> MedusaResult<Vec<String>> {
     ensure_gateway_running()?;
     let client = gateway_client()?;
     let response = client
-        .get(format!("{DEFAULT_GATEWAY}/models"))
+        .get(format!("{}/models", openai_oauth::GATEWAY_BASE_URL))
         .send()
         .map_err(gateway_transport_error)?;
     let body = require_success(response, "gateway model discovery")?;
@@ -58,6 +80,14 @@ pub(crate) fn discover_models() -> MedusaResult<Vec<String>> {
 
 fn gateway_client() -> MedusaResult<Client> {
     Client::builder()
+        .connect_timeout(Duration::from_millis(500))
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(gateway_transport_error)
+}
+
+fn full_gateway_client() -> MedusaResult<Client> {
+    Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(15))
         .build()
@@ -65,7 +95,7 @@ fn gateway_client() -> MedusaResult<Client> {
 }
 
 fn requires_preflight(config: &Config) -> bool {
-    config.model.provider == OAUTH_PROVIDER
+    config.model.provider == openai_oauth::PROVIDER
 }
 
 fn eager_model_command() -> bool {
@@ -74,21 +104,30 @@ fn eager_model_command() -> bool {
         .any(|argument| matches!(argument.to_str(), Some("run" | "resume")))
 }
 
-fn preflight_disabled() -> bool {
-    env::var(PREFLIGHT_ENV).ok().is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off" | "skip" | "disabled"
-        )
-    })
+fn preflight_mode() -> PreflightMode {
+    preflight_mode_for(env::var(PREFLIGHT_ENV).ok().as_deref())
+}
+
+fn preflight_mode_for(value: Option<&str>) -> PreflightMode {
+    match value.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "0" | "false" | "off" | "skip" | "disabled") => {
+            PreflightMode::Off
+        }
+        Some(value) if matches!(value.as_str(), "full" | "strict") => PreflightMode::Full,
+        _ => PreflightMode::Fast,
+    }
 }
 
 fn npx_program() -> &'static str {
-    if cfg!(windows) { "npx.cmd" } else { "npx" }
+    openai_oauth::npx_program()
+}
+
+fn gateway_launch_args() -> [&'static str; 4] {
+    openai_oauth::GATEWAY_ARGS
 }
 
 fn ensure_gateway_running() -> MedusaResult<()> {
-    let address: SocketAddr = "127.0.0.1:10531".parse().map_err(|error| {
+    let address: SocketAddr = openai_oauth::GATEWAY_ADDR.parse().map_err(|error| {
         preflight_error(
             ErrorCategory::Validation,
             format!("invalid OAuth gateway address: {error}"),
@@ -98,7 +137,7 @@ fn ensure_gateway_running() -> MedusaResult<()> {
         return Ok(());
     }
     let status = Command::new(npx_program())
-        .args(["--yes", "openai-oauth@latest", "--detach"])
+        .args(gateway_launch_args())
         .status()
         .map_err(|error| {
             preflight_error(
@@ -120,10 +159,23 @@ fn ensure_gateway_running() -> MedusaResult<()> {
     if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err() {
         return Err(preflight_error(
             ErrorCategory::Environment,
-            "OAuth gateway process started but 127.0.0.1:10531 is unreachable",
+            format!(
+                "OAuth gateway process started but {} is unreachable",
+                openai_oauth::GATEWAY_ADDR
+            ),
         ));
     }
     Ok(())
+}
+
+fn verify_model_available(client: &Client, base_url: &str, model: &str) -> MedusaResult<()> {
+    let base_url = base_url.trim_end_matches('/');
+    let models = client
+        .get(format!("{base_url}/models"))
+        .send()
+        .map_err(gateway_transport_error)?;
+    let models = require_success(models, "gateway model discovery")?;
+    verify_model(&models, model)
 }
 
 fn probe_gateway(client: &Client, base_url: &str, model: &str) -> MedusaResult<PreflightReport> {
@@ -317,7 +369,7 @@ mod tests {
         let mut config = Config::default();
         assert!(!requires_preflight(&config));
 
-        config.model.provider = OAUTH_PROVIDER.into();
+        config.model.provider = openai_oauth::PROVIDER.into();
         assert!(requires_preflight(&config));
 
         config.model.provider = "openai".into();
@@ -327,6 +379,22 @@ mod tests {
     #[test]
     fn platform_npx_program_uses_windows_command_wrapper() {
         assert_eq!(npx_program(), if cfg!(windows) { "npx.cmd" } else { "npx" });
+    }
+
+    #[test]
+    fn gateway_launch_contract_is_pinned_and_headless() {
+        assert_eq!(
+            gateway_launch_args(),
+            ["--yes", "openai-oauth@2.0.0", "--no-open", "--detach"]
+        );
+    }
+
+    #[test]
+    fn preflight_defaults_to_fast_and_allows_explicit_full_probe() {
+        assert_eq!(preflight_mode_for(None), PreflightMode::Fast);
+        assert_eq!(preflight_mode_for(Some("full")), PreflightMode::Full);
+        assert_eq!(preflight_mode_for(Some("strict")), PreflightMode::Full);
+        assert_eq!(preflight_mode_for(Some("off")), PreflightMode::Off);
     }
 
     #[test]

@@ -7,15 +7,12 @@ use std::{
 };
 
 use crate::desktop_command::hidden_command;
+use medusa_config::openai_oauth;
 
-const OPENAI_OAUTH_ADDR: &str = "127.0.0.1:10531";
+const OPENAI_OAUTH_ADDR: &str = openai_oauth::GATEWAY_ADDR;
 
 fn npx_program() -> &'static str {
-    if cfg!(windows) {
-        "npx.cmd"
-    } else {
-        "npx"
-    }
+    openai_oauth::npx_program()
 }
 
 fn oauth_auth_file_candidates() -> Vec<PathBuf> {
@@ -48,26 +45,16 @@ fn browser_oauth_spec(provider: &str) -> Result<(&'static str, [&'static str; 6]
             "provider `{provider}` does not expose a Medusa browser sign-in helper"
         ));
     }
-    Ok((
-        npx_program(),
-        [
-            "--yes",
-            "openai-oauth@latest",
-            "login",
-            "--open",
-            "--login-timeout-ms",
-            "300000",
-        ],
-    ))
+    Ok((npx_program(), openai_oauth::LOGIN_ARGS))
 }
 
-fn browser_oauth_gateway_spec(provider: &str) -> Result<(&'static str, [&'static str; 3]), String> {
+fn browser_oauth_gateway_spec(provider: &str) -> Result<(&'static str, [&'static str; 4]), String> {
     if provider != "openai-oauth" {
         return Err(format!(
             "provider `{provider}` does not expose a Medusa browser sign-in helper"
         ));
     }
-    Ok((npx_program(), ["--yes", "openai-oauth@latest", "--detach"]))
+    Ok((npx_program(), openai_oauth::GATEWAY_ARGS))
 }
 
 pub(crate) fn browser_oauth_credentials_present(provider: &str) -> bool {
@@ -177,7 +164,7 @@ mod tests {
             args,
             [
                 "--yes",
-                "openai-oauth@latest",
+                "openai-oauth@2.0.0",
                 "login",
                 "--open",
                 "--login-timeout-ms",
@@ -190,7 +177,7 @@ mod tests {
     fn oauth_gateway_is_started_detached() {
         let (program, args) = browser_oauth_gateway_spec("openai-oauth").expect("gateway spec");
         assert_eq!(program, npx_program());
-        assert_eq!(args, ["--yes", "openai-oauth@latest", "--detach"]);
+        assert_eq!(args, ["--yes", "openai-oauth@2.0.0", "--no-open", "--detach"]);
     }
 
     #[test]

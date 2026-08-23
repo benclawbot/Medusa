@@ -231,7 +231,7 @@ MiniMax API-key profiles stay on the MiniMax route; they are not reclassified as
 ChatGPT OAuth is supplied through the separately distributed `openai-oauth` loopback gateway. See [ChatGPT OAuth](docs/CHATGPT-OAUTH.md):
 
 ```bash
-npx --yes openai-oauth@latest --detach
+npx --yes openai-oauth@2.0.0 --no-open --detach
 ```
 
 ## Quick start
