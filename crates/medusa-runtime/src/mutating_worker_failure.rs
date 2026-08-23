@@ -62,6 +62,7 @@ fn retry_capsule(
     let failure_fingerprint = digest(error);
     let hypothesis = RetryHypothesis {
         failure_fingerprint: failure_fingerprint.clone(),
+        previous_capsule_fingerprint: previous.fingerprint.clone(),
         previous_hypothesis: None,
         disproving_evidence: vec![failure_fingerprint.clone()],
         new_hypothesis: format!(
