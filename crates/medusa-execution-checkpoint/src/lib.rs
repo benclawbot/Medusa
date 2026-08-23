@@ -257,6 +257,238 @@ impl ExecutionLog {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FactProvenance {
+    UserRequirement,
+    RepositoryFact,
+    VerificationEvidence,
+    AgentInference,
+    ArchitecturePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LearningState {
+    Candidate,
+    Verified,
+    Canonical,
+    Invalidated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LearningRecord {
+    pub learning_id: String,
+    pub statement: String,
+    pub provenance: FactProvenance,
+    pub state: LearningState,
+    pub evidence_fingerprint: Option<String>,
+}
+
+impl LearningRecord {
+    pub fn verify_for_injection(&self) -> Result<(), CheckpointError> {
+        if self.learning_id.trim().is_empty() || self.statement.trim().is_empty() {
+            return Err(CheckpointError::InvalidLearning);
+        }
+        if !matches!(self.state, LearningState::Verified | LearningState::Canonical) {
+            return Err(CheckpointError::UnverifiedLearningInjection);
+        }
+        let evidence = self
+            .evidence_fingerprint
+            .as_deref()
+            .ok_or(CheckpointError::MissingLearningEvidence)?;
+        validate_sha256(evidence)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetryHypothesis {
+    pub failure_fingerprint: String,
+    pub previous_hypothesis: Option<String>,
+    pub disproving_evidence: Vec<String>,
+    pub new_hypothesis: String,
+    pub changed_strategy: String,
+    pub environment_fingerprint: String,
+}
+
+impl RetryHypothesis {
+    pub fn verify(&self) -> Result<(), CheckpointError> {
+        validate_sha256(&self.failure_fingerprint)?;
+        validate_sha256(&self.environment_fingerprint)?;
+        if self.new_hypothesis.trim().is_empty() || self.changed_strategy.trim().is_empty() {
+            return Err(CheckpointError::InvalidRetryHypothesis);
+        }
+        for evidence in &self.disproving_evidence {
+            validate_sha256(evidence)?;
+        }
+        Ok(())
+    }
+
+    fn meaningfully_differs_from(&self, previous: &Self) -> bool {
+        self.new_hypothesis != previous.new_hypothesis
+            || self.changed_strategy != previous.changed_strategy
+            || self.environment_fingerprint != previous.environment_fingerprint
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepCapsule {
+    pub capsule_id: String,
+    pub execution_id: String,
+    pub plan_id: String,
+    pub plan_revision: u64,
+    pub step_id: String,
+    pub objective: String,
+    pub acceptance_criteria: Vec<String>,
+    pub allowed_paths: Vec<String>,
+    pub allowed_tools: Vec<String>,
+    pub relevant_files: Vec<String>,
+    pub verified_learnings: Vec<LearningRecord>,
+    pub failure_fingerprint: Option<String>,
+    pub retry_hypothesis: Option<RetryHypothesis>,
+    pub authority_fingerprint: String,
+    pub fresh_context: bool,
+    pub fingerprint: String,
+}
+
+impl StepCapsule {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        capsule_id: impl Into<String>,
+        execution_id: impl Into<String>,
+        plan_id: impl Into<String>,
+        plan_revision: u64,
+        step_id: impl Into<String>,
+        objective: impl Into<String>,
+        acceptance_criteria: Vec<String>,
+        allowed_paths: Vec<String>,
+        allowed_tools: Vec<String>,
+        relevant_files: Vec<String>,
+        verified_learnings: Vec<LearningRecord>,
+        failure_fingerprint: Option<String>,
+        retry_hypothesis: Option<RetryHypothesis>,
+        authority_fingerprint: impl Into<String>,
+    ) -> Result<Self, CheckpointError> {
+        let mut capsule = Self {
+            capsule_id: capsule_id.into(),
+            execution_id: execution_id.into(),
+            plan_id: plan_id.into(),
+            plan_revision,
+            step_id: step_id.into(),
+            objective: objective.into(),
+            acceptance_criteria,
+            allowed_paths,
+            allowed_tools,
+            relevant_files,
+            verified_learnings,
+            failure_fingerprint,
+            retry_hypothesis,
+            authority_fingerprint: authority_fingerprint.into(),
+            fresh_context: true,
+            fingerprint: String::new(),
+        };
+        capsule.validate_fields()?;
+        capsule.fingerprint = capsule.calculate_fingerprint();
+        Ok(capsule)
+    }
+
+    fn validate_fields(&self) -> Result<(), CheckpointError> {
+        if self.capsule_id.trim().is_empty()
+            || self.execution_id.trim().is_empty()
+            || self.plan_id.trim().is_empty()
+            || self.step_id.trim().is_empty()
+        {
+            return Err(CheckpointError::InvalidStepCapsuleIdentity);
+        }
+        if self.plan_revision == 0 {
+            return Err(CheckpointError::InvalidPlanRevision);
+        }
+        if self.objective.trim().is_empty() || self.acceptance_criteria.is_empty() {
+            return Err(CheckpointError::IncompleteStepCapsule);
+        }
+        if self
+            .acceptance_criteria
+            .iter()
+            .any(|criterion| criterion.trim().is_empty())
+        {
+            return Err(CheckpointError::IncompleteStepCapsule);
+        }
+        if !self.fresh_context {
+            return Err(CheckpointError::FreshContextRequired);
+        }
+        validate_sha256(&self.authority_fingerprint)?;
+        if let Some(failure) = &self.failure_fingerprint {
+            validate_sha256(failure)?;
+        }
+        for learning in &self.verified_learnings {
+            learning.verify_for_injection()?;
+        }
+        if let Some(hypothesis) = &self.retry_hypothesis {
+            hypothesis.verify()?;
+            if self.failure_fingerprint.as_deref() != Some(hypothesis.failure_fingerprint.as_str()) {
+                return Err(CheckpointError::RetryFailureMismatch);
+            }
+        }
+        Ok(())
+    }
+
+    fn calculate_fingerprint(&self) -> String {
+        hash_json(&(
+            &self.capsule_id,
+            &self.execution_id,
+            &self.plan_id,
+            self.plan_revision,
+            &self.step_id,
+            &self.objective,
+            &self.acceptance_criteria,
+            &self.allowed_paths,
+            &self.allowed_tools,
+            &self.relevant_files,
+            &self.verified_learnings,
+            &self.failure_fingerprint,
+            &self.retry_hypothesis,
+            &self.authority_fingerprint,
+            self.fresh_context,
+        ))
+    }
+
+    pub fn verify(&self) -> Result<(), CheckpointError> {
+        self.validate_fields()?;
+        validate_sha256(&self.fingerprint)?;
+        if self.fingerprint != self.calculate_fingerprint() {
+            return Err(CheckpointError::FingerprintMismatch);
+        }
+        Ok(())
+    }
+
+    pub fn verify_retry_from(&self, previous: &Self) -> Result<(), CheckpointError> {
+        previous.verify()?;
+        self.verify()?;
+        if self.execution_id != previous.execution_id
+            || self.plan_id != previous.plan_id
+            || self.plan_revision != previous.plan_revision
+            || self.step_id != previous.step_id
+        {
+            return Err(CheckpointError::RetryScopeMismatch);
+        }
+        if self.capsule_id == previous.capsule_id || self.fingerprint == previous.fingerprint {
+            return Err(CheckpointError::FreshContextRequired);
+        }
+        let hypothesis = self
+            .retry_hypothesis
+            .as_ref()
+            .ok_or(CheckpointError::MissingRetryHypothesis)?;
+        if let Some(previous_hypothesis) = &previous.retry_hypothesis {
+            if !hypothesis.meaningfully_differs_from(previous_hypothesis) {
+                return Err(CheckpointError::UnchangedRetryStrategy);
+            }
+        } else if hypothesis.previous_hypothesis.is_none() && hypothesis.disproving_evidence.is_empty() {
+            return Err(CheckpointError::RetryDeltaRequired);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CheckpointError {
     #[error("execution id must not be empty")]
@@ -283,6 +515,32 @@ pub enum CheckpointError {
     CheckpointEventMismatch,
     #[error("checkpoint sequences must increase monotonically")]
     NonMonotonicCheckpoint,
+    #[error("learning id and statement must not be empty")]
+    InvalidLearning,
+    #[error("only verified or canonical learnings may enter a fresh execution context")]
+    UnverifiedLearningInjection,
+    #[error("verified learnings require evidence provenance")]
+    MissingLearningEvidence,
+    #[error("retry hypothesis is incomplete")]
+    InvalidRetryHypothesis,
+    #[error("step capsule identity fields must not be empty")]
+    InvalidStepCapsuleIdentity,
+    #[error("plan revision must start at one")]
+    InvalidPlanRevision,
+    #[error("step capsule requires an objective and acceptance criteria")]
+    IncompleteStepCapsule,
+    #[error("step execution and retries require a newly constructed context capsule")]
+    FreshContextRequired,
+    #[error("retry hypothesis must reference the capsule failure")]
+    RetryFailureMismatch,
+    #[error("retry capsule changed execution, plan, revision, or step authority")]
+    RetryScopeMismatch,
+    #[error("retry requires an explicit hypothesis")]
+    MissingRetryHypothesis,
+    #[error("first retry must record a prior hypothesis or disproving evidence")]
+    RetryDeltaRequired,
+    #[error("retry strategy is unchanged from the previous attempt")]
+    UnchangedRetryStrategy,
 }
 
 fn validate_sha256(value: &str) -> Result<(), CheckpointError> {
@@ -323,6 +581,39 @@ mod tests {
             BTreeMap::from([("leases".into(), digest("leases"))]),
         )
         .unwrap()
+    }
+
+    fn learning(state: LearningState) -> LearningRecord {
+        LearningRecord {
+            learning_id: "learning-1".into(),
+            statement: "the repository requires locked tests".into(),
+            provenance: FactProvenance::VerificationEvidence,
+            state,
+            evidence_fingerprint: Some(digest("test-receipt")),
+        }
+    }
+
+    fn capsule(
+        capsule_id: &str,
+        failure: Option<&str>,
+        retry_hypothesis: Option<RetryHypothesis>,
+    ) -> Result<StepCapsule, CheckpointError> {
+        StepCapsule::new(
+            capsule_id,
+            "run-1",
+            "plan-1",
+            1,
+            "implement",
+            "Implement the bounded change",
+            vec!["targeted tests pass".into()],
+            vec!["crates/medusa-execution-checkpoint".into()],
+            vec!["read_file".into(), "write_file".into()],
+            vec!["src/lib.rs".into()],
+            vec![learning(LearningState::Verified)],
+            failure.map(digest),
+            retry_hypothesis,
+            digest("authority"),
+        )
     }
 
     #[test]
@@ -376,5 +667,74 @@ mod tests {
             log.add_checkpoint(checkpoint(&log, 1)),
             Err(CheckpointError::NonMonotonicCheckpoint)
         );
+    }
+
+    #[test]
+    fn capsule_rejects_unverified_learning_injection() {
+        let result = StepCapsule::new(
+            "capsule-1",
+            "run-1",
+            "plan-1",
+            1,
+            "implement",
+            "Implement the bounded change",
+            vec!["tests pass".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![learning(LearningState::Candidate)],
+            None,
+            None,
+            digest("authority"),
+        );
+        assert_eq!(result, Err(CheckpointError::UnverifiedLearningInjection));
+    }
+
+    #[test]
+    fn retry_requires_a_new_capsule_and_changed_strategy() {
+        let previous_hypothesis = RetryHypothesis {
+            failure_fingerprint: digest("failure"),
+            previous_hypothesis: Some("dependency mismatch".into()),
+            disproving_evidence: vec![digest("compiler-output")],
+            new_hypothesis: "trait contract changed".into(),
+            changed_strategy: "update the implementation against the trait".into(),
+            environment_fingerprint: digest("env"),
+        };
+        let previous = capsule("capsule-1", Some("failure"), Some(previous_hypothesis)).unwrap();
+        let next_hypothesis = RetryHypothesis {
+            failure_fingerprint: digest("failure"),
+            previous_hypothesis: Some("trait contract changed".into()),
+            disproving_evidence: vec![digest("targeted-test")],
+            new_hypothesis: "fixture still uses the old contract".into(),
+            changed_strategy: "update the fixture and rerun the targeted test".into(),
+            environment_fingerprint: digest("env"),
+        };
+        let next = capsule("capsule-2", Some("failure"), Some(next_hypothesis)).unwrap();
+        next.verify_retry_from(&previous).unwrap();
+    }
+
+    #[test]
+    fn retry_rejects_identical_strategy() {
+        let hypothesis = RetryHypothesis {
+            failure_fingerprint: digest("failure"),
+            previous_hypothesis: Some("dependency mismatch".into()),
+            disproving_evidence: vec![digest("compiler-output")],
+            new_hypothesis: "trait contract changed".into(),
+            changed_strategy: "update the implementation against the trait".into(),
+            environment_fingerprint: digest("env"),
+        };
+        let previous = capsule("capsule-1", Some("failure"), Some(hypothesis.clone())).unwrap();
+        let next = capsule("capsule-2", Some("failure"), Some(hypothesis)).unwrap();
+        assert_eq!(
+            next.verify_retry_from(&previous),
+            Err(CheckpointError::UnchangedRetryStrategy)
+        );
+    }
+
+    #[test]
+    fn capsule_fingerprint_detects_context_tampering() {
+        let mut value = capsule("capsule-1", None, None).unwrap();
+        value.objective = "silently broaden the task".into();
+        assert_eq!(value.verify(), Err(CheckpointError::FingerprintMismatch));
     }
 }
