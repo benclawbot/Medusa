@@ -454,11 +454,12 @@ pub fn run_speculative_implementation(
     }
     let repository_fingerprint =
         crate::multi_agent_coordinator::repository_fingerprint(repo)?;
-    let root = crate::multi_agent_coordinator::execution_root(
+    let root = crate::multi_agent_coordinator::execution_root_for_config(
         repo,
         &plan.fingerprint,
         &repository_fingerprint,
-    );
+        config,
+    )?;
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let ledger_path = root.join("speculation-ledger.json");
     let mut ledger = SpeculationLedger::open_or_create(

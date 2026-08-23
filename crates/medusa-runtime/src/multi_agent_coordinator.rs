@@ -129,6 +129,7 @@ pub fn run_preflight(
 
 pub fn run_deterministic_fast_preflight(
     repo: &Path,
+    config: &Config,
     plan: &ProductionExecutionPlan,
     control: &TeamControlPlane,
     events: &Sender<RuntimeEvent>,
@@ -139,7 +140,12 @@ pub fn run_deterministic_fast_preflight(
         return Err("deterministic preflight requires the fast mutation lane".to_owned());
     }
     let repository_fingerprint = repository_fingerprint(repo)?;
-    let root = execution_root(repo, &plan.fingerprint, &repository_fingerprint);
+    let root = execution_root_for_config(
+        repo,
+        &plan.fingerprint,
+        &repository_fingerprint,
+        config,
+    )?;
     let evidence_path = root.join("preflight-evidence.json");
     if evidence_path.is_file() {
         let restored: CoordinatorEvidence =
@@ -276,7 +282,12 @@ where
     F: Fn(WorkerRequest) -> Result<WorkerEvidence, String> + Sync,
 {
     let repository_fingerprint = repository_fingerprint(repo)?;
-    let root = execution_root(repo, &plan.fingerprint, &repository_fingerprint);
+    let root = execution_root_for_config(
+        repo,
+        &plan.fingerprint,
+        &repository_fingerprint,
+        config,
+    )?;
     let evidence_path = root.join("preflight-evidence.json");
     let execution_key = execution_id(&plan.fingerprint, &repository_fingerprint);
     if evidence_path.is_file() {
@@ -958,10 +969,27 @@ fn validate_worker_evidence(
     .map_err(str::to_owned)
 }
 
-pub(crate) fn execution_root(repo: &Path, plan_fingerprint: &str, repository_fingerprint: &str) -> PathBuf {
-    repo.join(".medusa")
+/// Returns the durable execution root for the selected worker route.
+///
+/// The selected route is part of the identity so cached worker evidence and immutable
+/// delegation contracts cannot silently survive a provider/model change.
+pub(crate) fn execution_root_for_config(
+    repo: &Path,
+    plan_fingerprint: &str,
+    repository_fingerprint: &str,
+    config: &Config,
+) -> Result<PathBuf, String> {
+    let model = serde_json::to_vec(&config.model).map_err(|error| error.to_string())?;
+    let mut digest = Sha256::new();
+    digest.update(plan_fingerprint.as_bytes());
+    digest.update([0]);
+    digest.update(repository_fingerprint.as_bytes());
+    digest.update([0]);
+    digest.update(model);
+    Ok(repo
+        .join(".medusa")
         .join("executions")
-        .join(execution_id(plan_fingerprint, repository_fingerprint))
+        .join(format!("{:x}", digest.finalize())))
 }
 
 fn execution_id(plan_fingerprint: &str, repository_fingerprint: &str) -> String {
@@ -1196,6 +1224,81 @@ mod tests {
         assert_eq!(restored, first);
     }
 
+    fn accepted_worker_evidence(request: WorkerRequest) -> Result<WorkerEvidence, String> {
+        Ok(WorkerEvidence {
+            task_id: request.contract.task_id,
+            worker_id: request.worker_id,
+            role: request.contract.role,
+            context_fingerprint: request.packet.fingerprint,
+            lease_epoch: 0,
+            delegation_contract_id: request.delegation.contract_id,
+            delegation_contract_fingerprint: request.delegation.fingerprint,
+            delegation_attempt_fingerprint: request.attempt.fingerprint,
+            session_id: request.session_id.to_string(),
+            turns: 1,
+            summary: "repository evidence collected".to_owned(),
+        })
+    }
+
+    #[test]
+    fn changing_selected_model_dispatches_new_worker_contracts() {
+        let repo = tempfile::tempdir().expect("repository");
+        let plan = production_orchestrator::plan(&PromptDraft {
+            text: "Implement a repository-wide refactor with tests".to_owned(),
+            ..PromptDraft::default()
+        })
+        .expect("plan");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (events, _) = mpsc::channel();
+        let control = TeamControlPlane::default();
+        let mut selected_config = Config::default();
+        selected_config.model.provider = "openai-oauth".to_owned();
+        selected_config.model.name = "gpt-5".to_owned();
+        selected_config.model.protocol = "openai".to_owned();
+        selected_config.model.auth = "none".to_owned();
+        selected_config.model.base_url = Some("http://127.0.0.1:10531/v1".to_owned());
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let first_calls = Arc::clone(&calls);
+        coordinate_with_control(
+            repo.path(),
+            &Config::default(),
+            &plan,
+            &cancel,
+            &control,
+            &events,
+            move |request| {
+                first_calls.fetch_add(1, Ordering::SeqCst);
+                accepted_worker_evidence(request)
+            },
+        )
+        .expect("initial worker execution");
+
+        let selected_provider = selected_config.model.provider.clone();
+        let selected_model = selected_config.model.name.clone();
+        let second_calls = Arc::clone(&calls);
+        coordinate_with_control(
+            repo.path(),
+            &selected_config,
+            &plan,
+            &cancel,
+            &control,
+            &events,
+            move |request| {
+                assert_eq!(
+                    request.delegation.authority.model.provider,
+                    selected_provider
+                );
+                assert_eq!(request.delegation.authority.model.name, selected_model);
+                second_calls.fetch_add(1, Ordering::SeqCst);
+                accepted_worker_evidence(request)
+            },
+        )
+        .expect("selected-model worker execution");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
     #[test]
     fn deterministic_fast_preflight_uses_zero_model_turns_and_restores() {
         let repo = tempfile::tempdir().expect("repository");
@@ -1213,11 +1316,23 @@ mod tests {
         assert_eq!(plan.planning.lane, ExecutionLane::FastMutation);
         let (events, _) = mpsc::channel();
         let control = TeamControlPlane::default();
-        let first = run_deterministic_fast_preflight(repo.path(), &plan, &control, &events)
+        let first = run_deterministic_fast_preflight(
+            repo.path(),
+            &Config::default(),
+            &plan,
+            &control,
+            &events,
+        )
             .expect("deterministic preflight");
         assert_eq!(first.workers.len(), 2);
         assert!(first.workers.iter().all(|worker| worker.turns == 0));
-        let restored = run_deterministic_fast_preflight(repo.path(), &plan, &control, &events)
+        let restored = run_deterministic_fast_preflight(
+            repo.path(),
+            &Config::default(),
+            &plan,
+            &control,
+            &events,
+        )
             .expect("restored deterministic preflight");
         assert_eq!(restored, first);
     }

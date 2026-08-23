@@ -1414,6 +1414,7 @@ fn run_prompt(
         ) {
             crate::multi_agent_coordinator::run_deterministic_fast_preflight(
                 &state.repo,
+                &config,
                 &execution_plan,
                 &state.team_control,
                 events,

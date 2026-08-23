@@ -214,6 +214,7 @@ fn validate_existing(
         "max_delegation_depth": authority.max_delegation_depth,
     });
     if expected != recorded
+        || authority.model != request.config.model
         || binding.contract_fingerprint != contract.fingerprint
         || binding.worker_id != request.worker_id
         || binding.accepted_lease_epoch != authority.accepted_lease_epoch
