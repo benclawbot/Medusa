@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "69660b8f5e2d26971396c4093b23d4595982083039aaf8a5ace262787b863efa"
+      "sha256": "18c09ceb43bb3f079a3e91a24c08a0a6fc3f0526438172346bd494c4a01cf048"
     },
     {
       "path": "SECURITY.md",
@@ -91,7 +91,7 @@
     {
       "path": "docs/AUTOMATIC-LESSON-EXTRACTION.md",
       "disposition": "current",
-      "sha256": "021f926ecc0a1abf6395882e6f433a978cd11c602b5dcb5d419ba4c5402a07bd"
+      "sha256": "021f926ecc0a1abf6395882e6f433a978cd11c602b5d419ba4c5402a07bd"
     },
     {
       "path": "docs/AUTOMATIC-SKILL-REFINEMENT.md",
