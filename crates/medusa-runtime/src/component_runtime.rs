@@ -1532,7 +1532,7 @@ impl DesiredStateStore {
 
     #[must_use]
     pub fn snapshot(&self) -> DesiredRuntimeState {
-        self.inner.lock().expect("desired-state lock").state.clone()
+        self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner).state.clone()
     }
 
     pub fn compare_and_swap(
@@ -1551,7 +1551,7 @@ impl DesiredStateStore {
         source: impl Into<String>,
         idempotency_key: Option<String>,
     ) -> Result<DesiredStateCommit, DesiredStateError> {
-        let mut inner = self.inner.lock().expect("desired-state lock");
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(key) = idempotency_key.as_deref()
             && let Some(previous) = inner.idempotent_commits.get(key)
         {
@@ -1587,7 +1587,7 @@ impl DesiredStateStore {
     pub fn record_audit(&self, audit: ProposalAuditRecord) {
         self.inner
             .lock()
-            .expect("desired-state lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .audits
             .push(audit);
     }
@@ -1596,7 +1596,7 @@ impl DesiredStateStore {
     pub fn audit_records(&self) -> Vec<ProposalAuditRecord> {
         self.inner
             .lock()
-            .expect("desired-state lock")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .audits
             .clone()
     }
@@ -2812,7 +2812,7 @@ impl ComponentRuntime {
             let record = self
                 .instances
                 .get_mut(&consumer)
-                .expect("consumer collected from instances");
+                .ok_or_else(|| ComponentRuntimeError::UnknownInstance(consumer.clone()))?;
             record.state = LifecycleState::Deactivating;
             let rollback = record.journal.rollback();
             if !rollback.is_clean() {
@@ -2832,7 +2832,7 @@ impl ComponentRuntime {
         let provider_rollback = self
             .instances
             .get_mut(provider)
-            .expect("provider exists")
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(provider.clone()))?
             .journal
             .rollback();
         if !provider_rollback.is_clean() {
@@ -3026,7 +3026,7 @@ impl ComponentRuntime {
             let record = self
                 .instances
                 .get_mut(&candidate)
-                .expect("candidate exists after instantiate");
+                .ok_or_else(|| ComponentRuntimeError::UnknownInstance(candidate.clone()))?;
             record.state = LifecycleState::Activating;
             activate(&candidate_context, &mut record.journal).err()
         };
@@ -3059,7 +3059,7 @@ impl ComponentRuntime {
             let spec = self
                 .instances
                 .get(&candidate)
-                .expect("candidate exists")
+                .ok_or_else(|| ComponentRuntimeError::UnknownInstance(candidate.clone()))?
                 .spec
                 .clone();
             DependencyResolver::resolve(&spec, &candidate_providers)
@@ -3106,7 +3106,7 @@ impl ComponentRuntime {
             let record = self
                 .instances
                 .get_mut(consumer)
-                .expect("consumer collected from instances");
+                .ok_or_else(|| ComponentRuntimeError::UnknownInstance((*consumer).clone()))?;
             record.state = LifecycleState::Deactivating;
             let rollback = record.journal.rollback();
             if !rollback.is_clean() {
@@ -3137,7 +3137,7 @@ impl ComponentRuntime {
         let old_rollback = self
             .instances
             .get_mut(old)
-            .expect("old provider exists")
+            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(old.clone()))?
             .journal
             .rollback();
         if !old_rollback.is_clean() {
