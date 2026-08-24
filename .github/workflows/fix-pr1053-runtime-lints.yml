@@ -1,9 +1,8 @@
 name: Fix PR 1053 Runtime Lints
 
 on:
-  push:
-    branches:
-      - ux/action-based-recovery
+  pull_request:
+    types: [synchronize]
     paths:
       - '.github/workflows/fix-pr1053-runtime-lints.yml'
 
@@ -17,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ux/action-based-recovery
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt
@@ -108,11 +107,11 @@ jobs:
             crates/medusa-runtime/src/lib.rs \
             crates/medusa-runtime/src/component_runtime.rs
           do
-            sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_REF_NAME" --jq .sha)"
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=ux/action-based-recovery" --jq .sha)"
             content="$(base64 -w0 "$path")"
             gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" \
               -f message='fix(runtime): satisfy production lint policy' \
               -f content="$content" \
               -f sha="$sha" \
-              -f branch="$GITHUB_REF_NAME"
+              -f branch='ux/action-based-recovery'
           done
