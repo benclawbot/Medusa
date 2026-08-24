@@ -81,9 +81,13 @@ pub(crate) fn required_browser_verification(repo: &Path) -> MedusaResult<Verific
     let mut client = match BrowserClient::spawn_with_env(&command, &browserd_environment(&route)) {
         Ok(client) => client,
         Err(error) if automatic_server.is_some() => {
-            let server = automatic_server
-                .as_ref()
-                .expect("automatic server is present for static fallback");
+            let server = automatic_server.as_ref().ok_or_else(|| {
+                MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Internal,
+                    "automatic static verification fallback was selected without a server",
+                )
+            })?;
             let (status, body) = server.probe().map_err(|probe_error| {
                 MedusaError::new(
                     ErrorCode::DependencyUnavailable,

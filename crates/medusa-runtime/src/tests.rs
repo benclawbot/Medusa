@@ -31,7 +31,7 @@ fn general_chat_preparation_does_not_scan_or_capture_repository_state() {
         ..PromptDraft::default()
     };
 
-    assert!(!should_capture_review_baseline(true, false));
+    assert!(!should_capture_review_baseline_for_plan(true, false, false));
     let plan = execution_plan_for_prompt(Path::new("C:/profile-root"), &draft, true)
         .expect("general chat plan");
     assert_eq!(plan.mode, production_orchestrator::ExecutionMode::Direct);

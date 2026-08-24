@@ -18,7 +18,11 @@ pub mod repository_mutation;
 /// inspection, verification, or background tooling must use this constructor so Windows does
 /// not create a new `cmd.exe` window for each short-lived command.
 pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let program = program.as_ref();
+    #[cfg(windows)]
     let mut command = std::process::Command::new(program);
+    #[cfg(not(windows))]
+    let command = std::process::Command::new(program);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
     command
