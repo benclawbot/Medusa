@@ -329,7 +329,7 @@ fn handle_action(
             Ok(false)
         }
         AppAction::Submit(draft) => {
-            if draft.attachments.is_empty() && is_continuation_intent(&draft.text) {
+            if should_resume_latest(app, &draft) {
                 match RuntimeController::start_continue_latest(app.repository().to_path_buf()) {
                     Ok(resumed) => {
                         *runtime = resumed;
@@ -421,6 +421,23 @@ fn handle_action(
     }
 }
 
+fn should_resume_latest(app: &AppState, draft: &PromptDraft) -> bool {
+    if !draft.attachments.is_empty() || !is_continuation_intent(&draft.text) {
+        return false;
+    }
+
+    let mut user_messages = 0_usize;
+    let mut has_assistant_message = false;
+    for entry in &app.transcript {
+        match entry {
+            TranscriptEntry::User(_) => user_messages = user_messages.saturating_add(1),
+            TranscriptEntry::Assistant(_) => has_assistant_message = true,
+            _ => {}
+        }
+    }
+    user_messages <= 1 && !has_assistant_message
+}
+
 fn is_continuation_intent(input: &str) -> bool {
     let normalized = input
         .trim()
@@ -429,7 +446,14 @@ fn is_continuation_intent(input: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "go" | "go on" | "continue" | "continue on" | "proceed" | "resume" | "finish" | "finish it"
+        "go"
+            | "go on"
+            | "continue"
+            | "continue on"
+            | "proceed"
+            | "resume"
+            | "finish"
+            | "finish it"
     )
 }
 
@@ -706,6 +730,26 @@ mod tests {
         ] {
             assert!(!is_continuation_intent(input), "{input}");
         }
+    }
+
+    #[test]
+    fn continuation_only_reconnects_without_prior_conversation() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "continuation-intent",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        let draft = PromptDraft {
+            text: "go".to_owned(),
+            ..PromptDraft::default()
+        };
+        app.transcript.push(TranscriptEntry::User(draft.clone()));
+        assert!(should_resume_latest(&app, &draft));
+        app.transcript.push(TranscriptEntry::Assistant("done".to_owned()));
+        assert!(!should_resume_latest(&app, &draft));
     }
 
     #[test]
