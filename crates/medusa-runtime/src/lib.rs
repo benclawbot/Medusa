@@ -1255,10 +1255,6 @@ fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
     .all(|marker| !normalized.contains(marker))
 }
 
-fn should_capture_review_baseline(general_chat: bool, resuming_pending_question: bool) -> bool {
-    !general_chat && !resuming_pending_question
-}
-
 fn should_capture_review_baseline_for_plan(
     general_chat: bool,
     resuming_pending_question: bool,
