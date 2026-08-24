@@ -20,41 +20,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt
-      - name: Repair production lint violations
+      - name: Repair component runtime production lint violations
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              file = Path(path)
-              text = file.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one match, found {count}: {old!r}')
-              file.write_text(text.replace(old, new))
-
-          replace_once(
-              'crates/medusa-runtime/src/workspace_worker_manager.rs',
-              '''fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {\n    let mut command = Command::new(program);\n    #[cfg(windows)]\n    command.creation_flags(0x0800_0000);\n    command\n}\n''',
-              '''fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {\n    let program = program.as_ref();\n    #[cfg(windows)]\n    let mut command = Command::new(program);\n    #[cfg(not(windows))]\n    let command = Command::new(program);\n    #[cfg(windows)]\n    command.creation_flags(0x0800_0000);\n    command\n}\n''',
-          )
-
-          replace_once(
-              'crates/medusa-runtime/src/lib.rs',
-              '''fn should_capture_review_baseline(general_chat: bool, resuming_pending_question: bool) -> bool {\n    !general_chat && !resuming_pending_question\n}\n\n''',
-              '',
-          )
-
           path = Path('crates/medusa-runtime/src/component_runtime.rs')
           text = path.read_text()
           inline_lock = '.lock().expect("desired-state lock")'
           multiline_lock = '.lock()\n            .expect("desired-state lock")'
           if text.count(inline_lock) != 2:
-              raise SystemExit(f'component_runtime.rs: expected 2 inline desired-state lock expects, found {text.count(inline_lock)}')
+              raise SystemExit(f'expected 2 inline desired-state lock expects, found {text.count(inline_lock)}')
           if text.count(multiline_lock) != 2:
-              raise SystemExit(f'component_runtime.rs: expected 2 multiline desired-state lock expects, found {text.count(multiline_lock)}')
+              raise SystemExit(f'expected 2 multiline desired-state lock expects, found {text.count(multiline_lock)}')
           text = text.replace(
               inline_lock,
               '.lock().unwrap_or_else(std::sync::PoisonError::into_inner)',
@@ -63,7 +43,6 @@ jobs:
               multiline_lock,
               '.lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner)',
           )
-          path.write_text(text)
 
           replacements = [
               (
@@ -91,33 +70,33 @@ jobs:
                   '''        let old_rollback = self\n            .instances\n            .get_mut(old)\n            .ok_or_else(|| ComponentRuntimeError::UnknownInstance(old.clone()))?\n            .journal\n            .rollback();\n''',
               ),
           ]
-          path = Path('crates/medusa-runtime/src/component_runtime.rs')
-          text = path.read_text()
           for old, new in replacements:
               count = text.count(old)
               if count != 1:
-                  raise SystemExit(f'component_runtime.rs: expected one match, found {count}: {old!r}')
+                  raise SystemExit(f'expected one component-runtime match, found {count}: {old!r}')
               text = text.replace(old, new)
           path.write_text(text)
           PY
           cargo fmt --all
           git diff --check
-      - name: Commit fixes through GitHub contents API
+      - name: Commit component runtime through file-backed GitHub API payload
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          for path in \
-            crates/medusa-runtime/src/workspace_worker_manager.rs \
-            crates/medusa-runtime/src/lib.rs \
-            crates/medusa-runtime/src/component_runtime.rs
-          do
-            sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=ux/action-based-recovery" --jq .sha)"
-            content="$(base64 -w0 "$path")"
-            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" \
-              -f message='fix(runtime): satisfy production lint policy' \
-              -f content="$content" \
-              -f sha="$sha" \
-              -f branch='ux/action-based-recovery'
-          done
+          path='crates/medusa-runtime/src/component_runtime.rs'
+          sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=ux/action-based-recovery" --jq .sha)"
+          SHA="$sha" PATH_TO_FILE="$path" python3 - <<'PY'
+          import base64, json, os
+          from pathlib import Path
+          path = Path(os.environ['PATH_TO_FILE'])
+          payload = {
+              'message': 'fix(runtime): satisfy component runtime lint policy',
+              'content': base64.b64encode(path.read_bytes()).decode('ascii'),
+              'sha': os.environ['SHA'],
+              'branch': 'ux/action-based-recovery',
+          }
+          Path('payload.json').write_text(json.dumps(payload))
+          PY
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" --input payload.json
