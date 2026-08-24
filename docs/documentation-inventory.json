@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "873a73a65aad7e4cfd79820b1bcb82da2f1626fa4e988bd9604bba47e4108dfa"
+      "sha256": "69660b8f5e2d26971396c4093b23d4595982083039aaf8a5ace262787b863efa"
     },
     {
       "path": "SECURITY.md",
@@ -111,7 +111,7 @@
     {
       "path": "docs/CHATGPT-OAUTH.md",
       "disposition": "current",
-      "sha256": "085064cf0bda68d89604510a2c90b44355123035628fd0269259e0c6cbfc9370"
+      "sha256": "594b5f7b5062634fb5300bb32d43ed5ca87b78ea09a81f9579fb719789a03a35"
     },
     {
       "path": "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
