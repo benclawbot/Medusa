@@ -27,7 +27,10 @@ pub(crate) fn strip_hidden_reasoning(text: &str) -> String {
             break;
         };
         output.push_str(&text[cursor..open_start]);
-        let Some(open_end) = lower[open_start..].find('>').map(|offset| open_start + offset + 1) else {
+        let Some(open_end) = lower[open_start..]
+            .find('>')
+            .map(|offset| open_start + offset + 1)
+        else {
             break;
         };
         let next_close = CLOSE_TAGS
@@ -37,7 +40,10 @@ pub(crate) fn strip_hidden_reasoning(text: &str) -> String {
         let Some(close_start) = next_close else {
             break;
         };
-        let Some(close_end) = lower[close_start..].find('>').map(|offset| close_start + offset + 1) else {
+        let Some(close_end) = lower[close_start..]
+            .find('>')
+            .map(|offset| close_start + offset + 1)
+        else {
             break;
         };
         cursor = close_end;
@@ -368,9 +374,15 @@ mod tests {
 
     #[test]
     fn hidden_reasoning_tags_are_removed_without_losing_visible_text() {
-        assert_eq!(strip_hidden_reasoning("before <think>private</think> after"), "before  after");
+        assert_eq!(
+            strip_hidden_reasoning("before <think>private</think> after"),
+            "before  after"
+        );
         assert_eq!(strip_hidden_reasoning("<analysis>private"), "");
-        assert_eq!(strip_hidden_reasoning("<THINK>private</THINK>answer"), "answer");
+        assert_eq!(
+            strip_hidden_reasoning("<THINK>private</THINK>answer"),
+            "answer"
+        );
     }
 
     #[test]

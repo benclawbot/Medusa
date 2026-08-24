@@ -505,15 +505,24 @@ mod tests {
     #[test]
     fn legacy_default_event_fields_remain_omitted_from_checksum_material() {
         let request = serde_json::to_value(EventPayload::ModelRequestStarted {
-            provider: "minimax".to_owned(), model: "MiniMax-M3".to_owned(),
-            request_id: None, request_fingerprint: None, manifest_ref: None,
-            attempt_ordinal: 0, parent_request_id: None,
-        }).expect("serialize request event");
+            provider: "minimax".to_owned(),
+            model: "MiniMax-M3".to_owned(),
+            request_id: None,
+            request_fingerprint: None,
+            manifest_ref: None,
+            attempt_ordinal: 0,
+            parent_request_id: None,
+        })
+        .expect("serialize request event");
         assert!(request["data"].get("attempt_ordinal").is_none());
         let compacted = serde_json::to_value(EventPayload::ConversationCompacted {
-            original_messages: 4, retained_messages: 2, generation: 0,
-            source_event_sequences: Vec::new(), preserved_sections: Vec::new(),
-        }).expect("serialize compaction event");
+            original_messages: 4,
+            retained_messages: 2,
+            generation: 0,
+            source_event_sequences: Vec::new(),
+            preserved_sections: Vec::new(),
+        })
+        .expect("serialize compaction event");
         assert!(compacted["data"].get("generation").is_none());
         assert!(compacted["data"].get("source_event_sequences").is_none());
         assert!(compacted["data"].get("preserved_sections").is_none());

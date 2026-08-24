@@ -51,6 +51,33 @@ struct DesktopDaemon {
     last_state: Option<DaemonLifecycleState>,
 }
 
+fn clear_local_session_state(
+    session_id: &mut Option<String>,
+    replay_cursor: &mut u64,
+    pending_ack_cursor: &mut Option<u64>,
+    presentation: &mut DesktopCanonicalPresentation,
+) {
+    presentation.reset();
+    *session_id = None;
+    *replay_cursor = 0;
+    *pending_ack_cursor = None;
+}
+
+fn reset_local_session_state(
+    session_id: &mut Option<String>,
+    replay_cursor: &mut u64,
+    pending_ack_cursor: &mut Option<u64>,
+    presentation: &mut DesktopCanonicalPresentation,
+) {
+    clear_local_session_state(
+        session_id,
+        replay_cursor,
+        pending_ack_cursor,
+        presentation,
+    );
+    presentation.push_transient(FrontendTransientEvent::NewSession);
+}
+
 struct RuntimeEntry {
     repo: PathBuf,
     client_id: String,
@@ -312,10 +339,12 @@ impl RuntimeEntry {
         };
         for event in events {
             if matches!(event, FrontendTransientEvent::NewSession) {
-                self.presentation.reset();
-                self.session_id = None;
-                self.replay_cursor = 0;
-                self.pending_ack_cursor = None;
+                clear_local_session_state(
+                    &mut self.session_id,
+                    &mut self.replay_cursor,
+                    &mut self.pending_ack_cursor,
+                    &mut self.presentation,
+                );
             }
             self.presentation.push_transient(event);
         }
@@ -511,6 +540,15 @@ pub fn runtime_command(
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<(), String> {
     registry.with_entry(&runtime_id, |entry| {
+        if input.trim() == "/new" && entry.session_id.is_none() {
+            reset_local_session_state(
+                &mut entry.session_id,
+                &mut entry.replay_cursor,
+                &mut entry.pending_ack_cursor,
+                &mut entry.presentation,
+            );
+            return Ok(());
+        }
         let command = if input.trim() == "/new" {
             FrontendCommand::NewSession
         } else {
@@ -524,10 +562,12 @@ pub fn runtime_command(
             return Err("daemon returned an unexpected command result".to_owned());
         }
         if matches!(&acknowledgement.result, FrontendControlResult::CommandAccepted { command, .. } if command == "new_session") {
-            entry.session_id = None;
-            entry.replay_cursor = 0;
-            entry.pending_ack_cursor = None;
-            entry.presentation.reset();
+            clear_local_session_state(
+                &mut entry.session_id,
+                &mut entry.replay_cursor,
+                &mut entry.pending_ack_cursor,
+                &mut entry.presentation,
+            );
         }
         Ok(())
     })
@@ -637,6 +677,7 @@ fn execution_root(repo: &Path) -> PathBuf {
     repo.join(".medusa").join("executions")
 }
 
+#[cfg(test)]
 fn latest_web_artifact(repo: &Path) -> Result<Option<PathBuf>, String> {
     let snapshot = web_artifact_snapshot(repo);
     Ok(snapshot
@@ -767,8 +808,7 @@ fn verify_provider_route(
         // `/models` discovery resource. Its curated catalog is the authoritative model list,
         // so a configured catalog model can pass startup verification without a billable probe.
         Err(ModelDiscoveryError::Unsupported)
-            if entry.id == "minimax"
-                && entry.known_models.iter().any(|candidate| *candidate == model) =>
+            if entry.id == "minimax" && entry.known_models.contains(&model) =>
         {
             return Ok(());
         }
@@ -827,6 +867,7 @@ pub fn runtime_configure_model(
         Some(api_key) => Some(api_key.clone()),
         None => credentials.load(&provider)?,
     };
+    let next_base_url = prepared_profile.profile().base_url.clone();
 
     verify_provider_route(&prepared_profile, &provider, &model, api_key.as_deref())?;
 
@@ -835,6 +876,7 @@ pub fn runtime_configure_model(
         entry.dispatch(FrontendCommand::ConfigureModel {
             provider: Some(provider.clone()),
             model: model.clone(),
+            base_url: next_base_url.clone(),
         })?;
         entry.dispatch(FrontendCommand::SetEffort {
             effort: effort_name.clone(),
@@ -878,6 +920,7 @@ fn restore_runtime_profile(
         entry.dispatch(FrontendCommand::ConfigureModel {
             provider: Some(profile.provider.clone()),
             model: profile.model.clone(),
+            base_url: profile.base_url.clone(),
         })?;
         entry.dispatch(FrontendCommand::SetEffort {
             effort: effort.to_owned(),
@@ -934,6 +977,34 @@ mod tests {
     #[test]
     fn desktop_client_identity_is_stable_for_cursor_reconnect() {
         assert_eq!(DESKTOP_CLIENT_ID, "desktop-primary");
+    }
+
+    #[test]
+    fn resetting_an_unattached_session_clears_stale_projection_and_notifies_frontend() {
+        let mut session_id = Some("stale-session".to_owned());
+        let mut replay_cursor = 17;
+        let mut pending_ack_cursor = Some(17);
+        let mut presentation = DesktopCanonicalPresentation::new();
+        presentation.push_transient(FrontendTransientEvent::Notice {
+            title: "stale".to_owned(),
+            details: vec![],
+        });
+
+        reset_local_session_state(
+            &mut session_id,
+            &mut replay_cursor,
+            &mut pending_ack_cursor,
+            &mut presentation,
+        );
+
+        assert_eq!(session_id, None);
+        assert_eq!(replay_cursor, 0);
+        assert_eq!(pending_ack_cursor, None);
+        assert!(matches!(
+            presentation.try_event(),
+            Some(DesktopRuntimeEvent::NewSession)
+        ));
+        assert!(presentation.try_event().is_none());
     }
 
     #[test]

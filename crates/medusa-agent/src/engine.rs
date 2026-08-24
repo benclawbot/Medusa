@@ -187,12 +187,7 @@ pub struct AgentEngine<P> {
 }
 
 fn refreshed_repository_revision(repo: &Path) -> Option<String> {
-    let mut graph = medusa_intelligence::RepositoryGraph::open(repo).ok()?;
-    if graph.freshness() != medusa_intelligence::RepositoryGraphFreshness::Current {
-        graph.refresh().ok()?;
-    }
-    (graph.freshness() == medusa_intelligence::RepositoryGraphFreshness::Current)
-        .then(|| graph.snapshot().repository_revision.clone())
+    crate::agent_scope::repository_revision(repo)
 }
 
 fn stale_revision_error(name: &str, current_revision: &str) -> MedusaError {

@@ -590,6 +590,7 @@ impl ModelModal {
             effort: self.effort,
             api_key: (self.requires_api_key() && !self.api_key.is_empty())
                 .then(|| self.api_key.clone()),
+            base_url: None,
         }
     }
 

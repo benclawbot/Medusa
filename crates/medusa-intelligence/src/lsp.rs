@@ -6,9 +6,9 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Stdio},
 };
 
+use medusa_core::hidden_command;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use medusa_core::hidden_command;
 
 /// Configuration for one language-server process.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

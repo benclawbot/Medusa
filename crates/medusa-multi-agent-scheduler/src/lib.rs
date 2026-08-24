@@ -286,9 +286,7 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         && (broad_scope || scope.effective.len() > 2 || high_risk_language)
     {
         RiskLevel::High
-    } else if strategy == ExecutionStrategy::CoordinatedMutation
-        && scope.effective.len() == 1
-    {
+    } else if strategy == ExecutionStrategy::CoordinatedMutation && scope.effective.len() == 1 {
         RiskLevel::Low
     } else if strategy == ExecutionStrategy::CoordinatedMutation || repository_relevant {
         RiskLevel::Medium
@@ -1908,7 +1906,11 @@ mod tests {
         assert_eq!(planned.scope.resolution, ScopeResolution::Resolved);
         assert_eq!(planned.scope.effective, vec!["index.html".to_owned()]);
         assert_eq!(
-            planned.task(TaskKind::Implementation).unwrap().task.write_paths,
+            planned
+                .task(TaskKind::Implementation)
+                .unwrap()
+                .task
+                .write_paths,
             vec!["index.html".to_owned()]
         );
         assert_eq!(planned.lane, ExecutionLane::FastMutation);

@@ -171,6 +171,7 @@ fn controller_exercises_non_agent_command_lifecycle() {
             model: "MiniMax-M3".into(),
             effort: Effort::Medium,
             api_key: Some("temporary".into()),
+            base_url: None,
         })
         .expect("configure model");
     let configured = collect(&controller, 2);

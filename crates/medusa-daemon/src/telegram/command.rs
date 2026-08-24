@@ -85,6 +85,7 @@ pub(crate) fn map_message(
             FrontendCommand::ConfigureModel {
                 provider: None,
                 model: required(arguments, "usage: /model <model>")?.to_owned(),
+                base_url: None,
             },
         ),
         Some("/effort") => forward(

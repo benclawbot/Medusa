@@ -5,11 +5,11 @@ use std::{
 };
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};
-use medusa_core::learning_policy::LearningAdmissionPolicy;
+use medusa_core::{hidden_command, learning_policy::LearningAdmissionPolicy};
 use medusa_intelligence::{RepositoryGraph, RepositoryGraphFreshness, ReviewImpact};
 use medusa_multi_agent_scheduler::{
     CancellationAuthority, ExecutionLane, ExecutionLedger, ExecutionStrategy, LedgerTaskState,
-    PlannedTask, PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker,
+    PlannedTask, PlannerInput, PlanningIntent, PlanningResult, Schedule, Task, TaskKind, Worker,
     apply_repository_graph_evidence, plan_typed, schedule,
 };
 use serde::{Deserialize, Serialize};
@@ -90,10 +90,33 @@ pub fn plan_for_repository(
     repo: &Path,
     draft: &PromptDraft,
 ) -> Result<ProductionExecutionPlan, &'static str> {
+    // Classify short conversations before walking the workspace. Conversation intent grants no
+    // repository authority, so enumerating build trees here only delays the first model turn.
+    let initial_planning = plan_typed(PlannerInput {
+        objective: draft.text.clone(),
+        attachment_count: draft.attachments.len(),
+        repository_paths: Vec::new(),
+    })?;
+    if initial_planning.intent == PlanningIntent::Conversation {
+        return build_execution_plan(draft, initial_planning);
+    }
+
+    let mut repository_paths = repository_paths(repo);
+    repository_paths.extend(
+        initial_planning
+            .scope
+            .requested
+            .iter()
+            .filter(|candidate| repo.join(candidate).exists())
+            .cloned(),
+    );
+    repository_paths.sort();
+    repository_paths.dedup();
+
     let planning = plan_typed(PlannerInput {
         objective: draft.text.clone(),
         attachment_count: draft.attachments.len(),
-        repository_paths: repository_paths(repo),
+        repository_paths,
     })?;
     let planning = enrich_plan_from_repository_graph(repo, planning)?;
     build_execution_plan(draft, planning)
@@ -150,6 +173,9 @@ fn enrich_plan_from_repository_graph(
     repo: &Path,
     planning: PlanningResult,
 ) -> Result<PlanningResult, &'static str> {
+    if planning.intent == PlanningIntent::Conversation {
+        return apply_repository_graph_evidence(planning, Vec::new(), false, false);
+    }
     let Ok(graph) = RepositoryGraph::open(repo) else {
         return apply_repository_graph_evidence(planning, Vec::new(), false, false);
     };
@@ -536,6 +562,10 @@ fn workers_for(tasks: &[Task]) -> Vec<Worker> {
 }
 
 fn repository_paths(repo: &Path) -> Vec<String> {
+    if let Some(paths) = git_repository_paths(repo) {
+        return paths;
+    }
+
     fn visit(root: &Path, current: &Path, paths: &mut BTreeSet<String>) {
         if paths.len() >= 4_096 {
             return;
@@ -549,11 +579,7 @@ fn repository_paths(repo: &Path) -> Vec<String> {
                 continue;
             };
             let relative = relative.to_string_lossy().replace('\\', "/");
-            if relative == ".git"
-                || relative.starts_with(".git/")
-                || relative == ".medusa"
-                || relative.starts_with(".medusa/")
-            {
+            if should_skip_repository_tree(&relative) {
                 continue;
             }
             paths.insert(relative);
@@ -565,6 +591,46 @@ fn repository_paths(repo: &Path) -> Vec<String> {
     let mut paths = BTreeSet::new();
     visit(repo, repo, &mut paths);
     paths.into_iter().collect()
+}
+
+fn git_repository_paths(repo: &Path) -> Option<Vec<String>> {
+    if !repo.join(".git").exists() {
+        return None;
+    }
+    let output = hidden_command("git")
+        .args(["ls-files", "--cached", "-z"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut paths = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).replace('\\', "/"))
+        .filter(|path| !should_skip_repository_tree(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Some(paths)
+}
+
+fn should_skip_repository_tree(relative: &str) -> bool {
+    relative.split('/').any(|component| {
+        matches!(
+            component,
+            ".git"
+                | ".medusa"
+                | "target"
+                | "node_modules"
+                | ".venv"
+                | "dist"
+                | "build"
+                | "coverage"
+        )
+    })
 }
 
 fn digest<T: Serialize>(value: &T) -> String {
@@ -583,6 +649,113 @@ mod tests {
             ..PromptDraft::default()
         };
         assert_eq!(plan(&draft).unwrap().mode, ExecutionMode::Direct);
+    }
+
+    #[test]
+    fn project_conversation_does_not_build_repository_graph() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let git = |args: &[&str]| {
+            let status = medusa_core::hidden_command("git")
+                .args(args)
+                .current_dir(directory.path())
+                .status()
+                .expect("run git");
+            assert!(status.success(), "git command failed: {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "medusa-tests@example.invalid"]);
+        git(&["config", "user.name", "Medusa tests"]);
+        fs::write(directory.path().join("README.md"), "fixture\n").expect("write fixture");
+        git(&["add", "README.md"]);
+        git(&["commit", "-qm", "fixture"]);
+
+        let draft = PromptDraft {
+            text: "Hello, explain this concept".to_owned(),
+            ..PromptDraft::default()
+        };
+        assert_eq!(
+            plan_for_repository(directory.path(), &draft)
+                .expect("plan project conversation")
+                .mode,
+            ExecutionMode::Direct
+        );
+        assert!(!directory
+            .path()
+            .join(".medusa/cache/repository-graph-v1.json")
+            .exists());
+    }
+
+    #[test]
+    fn repository_path_discovery_skips_generated_trees() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(directory.path().join("target/debug")).expect("target tree");
+        fs::create_dir_all(directory.path().join("packages/tool/target/debug"))
+            .expect("nested target tree");
+        fs::create_dir_all(directory.path().join("node_modules/pkg")).expect("node tree");
+        fs::write(directory.path().join("target/debug/generated.rs"), "").expect("target file");
+        fs::write(
+            directory.path().join("packages/tool/target/debug/generated.rs"),
+            "",
+        )
+        .expect("nested target file");
+        fs::write(directory.path().join("node_modules/pkg/index.js"), "").expect("node file");
+        fs::write(directory.path().join("src.rs"), "").expect("source file");
+
+        let paths = repository_paths(directory.path());
+        assert!(paths.iter().any(|path| path == "src.rs"));
+        assert!(!paths.iter().any(|path| {
+            path == "target"
+                || path.starts_with("target/")
+                || path.starts_with("packages/tool/target/")
+                || path == "node_modules"
+                || path.starts_with("node_modules/")
+        }));
+    }
+
+    #[test]
+    fn git_repository_path_discovery_uses_tracked_and_unignored_files() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let git = |args: &[&str]| {
+            let status = hidden_command("git")
+                .args(args)
+                .current_dir(directory.path())
+                .status()
+                .expect("run git");
+            assert!(status.success(), "git command failed: {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "medusa-tests@example.invalid"]);
+        git(&["config", "user.name", "Medusa tests"]);
+        fs::write(directory.path().join(".gitignore"), "target/\nignored-cache/\n")
+            .expect("gitignore");
+        fs::write(directory.path().join("src.rs"), "").expect("tracked source");
+        fs::write(directory.path().join("notes.txt"), "").expect("untracked source");
+        fs::create_dir_all(directory.path().join("target/debug")).expect("target tree");
+        fs::write(directory.path().join("target/debug/generated.rs"), "")
+            .expect("generated file");
+        fs::create_dir_all(directory.path().join("ignored-cache")).expect("ignored tree");
+        fs::write(directory.path().join("ignored-cache/state.json"), "")
+            .expect("ignored file");
+        git(&["add", ".gitignore", "src.rs"]);
+        git(&["commit", "-qm", "fixture"]);
+
+        let paths = repository_paths(directory.path());
+        assert!(paths.iter().any(|path| path == "src.rs"));
+        assert!(!paths.iter().any(|path| path == "notes.txt"));
+        assert!(!paths.iter().any(|path| path.starts_with("target/")));
+        assert!(!paths
+            .iter()
+            .any(|path| path.starts_with("ignored-cache/")));
+
+        let planned = plan_for_repository(
+            directory.path(),
+            &PromptDraft {
+                text: "Repair notes.txt".to_owned(),
+                ..PromptDraft::default()
+            },
+        )
+        .expect("plan untracked path");
+        assert_eq!(planned.planning.scope.effective, vec!["notes.txt"]);
     }
 
     #[test]

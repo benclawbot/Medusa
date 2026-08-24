@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use medusa_core::hidden_command;
 use medusa_agent::session_browser::replay_events;
+use medusa_core::hidden_command;
 pub use medusa_improvement::behavioral_metrics;
 pub use medusa_improvement::behavioral_outcome::{
     BEHAVIORAL_OUTCOME_SCHEMA_VERSION, BehavioralComplexityBand, BehavioralModelExecutionV1,

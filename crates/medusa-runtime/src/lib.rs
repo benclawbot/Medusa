@@ -1259,6 +1259,14 @@ fn should_capture_review_baseline(general_chat: bool, resuming_pending_question:
     !general_chat && !resuming_pending_question
 }
 
+fn should_capture_review_baseline_for_plan(
+    general_chat: bool,
+    resuming_pending_question: bool,
+    repository_work: bool,
+) -> bool {
+    !general_chat && !resuming_pending_question && repository_work
+}
+
 fn execution_plan_for_prompt(
     repo: &Path,
     draft: &PromptDraft,
@@ -1306,12 +1314,18 @@ fn run_prompt(
         .is_some_and(|session| session.pending_question.is_some());
     let general_chat = is_general_chat_request(&draft.text, draft.attachments.len());
     let turn_instruction = general_chat.then_some(GENERAL_CHAT_TURN_INSTRUCTION);
-    if should_capture_review_baseline(general_chat, resuming_pending_question) {
+    let selected_skill = state.pending_skill.clone();
+    let execution_plan = execution_plan_for_prompt(&state.repo, &draft, general_chat)?;
+    let repository_work = execution_plan.planning.intent
+        != medusa_multi_agent_scheduler::PlanningIntent::Conversation;
+    if should_capture_review_baseline_for_plan(
+        general_chat,
+        resuming_pending_question,
+        repository_work,
+    ) {
         crate::review::capture_review_baseline(&state.repo)
             .map_err(|error| RuntimeError::agent(error.to_string()))?;
     }
-    let selected_skill = state.pending_skill.clone();
-    let execution_plan = execution_plan_for_prompt(&state.repo, &draft, general_chat)?;
     let coordinated =
         execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated;
     let analysis_host = Arc::new(crate::analysis_tool::RuntimeAnalysisHost::new(

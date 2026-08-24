@@ -4,8 +4,8 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -32,21 +32,24 @@ impl StaticVerificationServer {
             return Ok(None);
         }
 
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .map_err(|error| format!("cannot start automatic browser verification server: {error}"))?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|error| format!("cannot configure automatic browser verification server: {error}"))?;
-        let address = listener
-            .local_addr()
-            .map_err(|error| format!("cannot read automatic browser verification address: {error}"))?;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+            format!("cannot start automatic browser verification server: {error}")
+        })?;
+        listener.set_nonblocking(true).map_err(|error| {
+            format!("cannot configure automatic browser verification server: {error}")
+        })?;
+        let address = listener.local_addr().map_err(|error| {
+            format!("cannot read automatic browser verification address: {error}")
+        })?;
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let thread_root = root.clone();
         let thread = thread::Builder::new()
             .name("medusa-static-verifier".to_owned())
             .spawn(move || run_server(listener, thread_root, thread_stop))
-            .map_err(|error| format!("cannot launch automatic browser verification server: {error}"))?;
+            .map_err(|error| {
+                format!("cannot launch automatic browser verification server: {error}")
+            })?;
 
         Ok(Some(Self {
             address,
@@ -78,15 +81,17 @@ impl StaticVerificationServer {
             .map_err(|error| format!("cannot read generated index.html response: {error}"))?;
         let response = String::from_utf8(response)
             .map_err(|error| format!("generated index.html response was not UTF-8: {error}"))?;
-        let (header, body) = response
-            .split_once("\r\n\r\n")
-            .ok_or_else(|| "generated index.html response had no HTTP header boundary".to_owned())?;
+        let (header, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
+            "generated index.html response had no HTTP header boundary".to_owned()
+        })?;
         let status = header
             .split_whitespace()
             .nth(1)
             .ok_or_else(|| "generated index.html response had no HTTP status".to_owned())?
             .parse::<u16>()
-            .map_err(|error| format!("generated index.html response had invalid HTTP status: {error}"))?;
+            .map_err(|error| {
+                format!("generated index.html response had invalid HTTP status: {error}")
+            })?;
         Ok((status, body.to_owned()))
     }
 }
@@ -121,7 +126,11 @@ fn serve(mut stream: TcpStream, root: &Path) {
     let mut request = [0_u8; MAX_REQUEST_BYTES];
     let bytes = stream.read(&mut request).unwrap_or(0);
     let request = String::from_utf8_lossy(&request[..bytes]);
-    let mut fields = request.lines().next().unwrap_or_default().split_whitespace();
+    let mut fields = request
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace();
     let method = fields.next().unwrap_or_default();
     let target = fields.next().unwrap_or_default();
     let head = method == "HEAD";
@@ -165,10 +174,9 @@ fn requested_file(root: &Path, target: &str) -> Option<PathBuf> {
     if relative.is_empty() {
         return Some(root.join("index.html"));
     }
-    if relative
-        .split('/')
-        .any(|component| component.is_empty() || component == "." || component == ".." || component.contains('\\'))
-    {
+    if relative.split('/').any(|component| {
+        component.is_empty() || component == "." || component == ".." || component.contains('\\')
+    }) {
         return None;
     }
 

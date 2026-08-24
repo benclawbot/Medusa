@@ -7,7 +7,17 @@ pub use core::*;
 pub mod mutation_dag;
 pub mod speculation;
 
-const SCOPED_READ_ONLY_PHRASES: &[&str] = &["without changing", "without modifying"];
+// These clauses can protect paths adjacent to an affirmative coding request. Normalize them
+// before the core planner classifies intent so "create X; do not modify any other file" does not
+// accidentally turn the whole request into a read-only plan.
+const SCOPED_READ_ONLY_PHRASES: &[&str] = &[
+    "without changing",
+    "without modifying",
+    "do not change",
+    "do not modify",
+    "don't change",
+    "don't modify",
+];
 const ADVISORY_MUTATION_PHRASES: &[&str] = &[
     "analyze how to",
     "describe how to",
@@ -172,4 +182,37 @@ fn planning_fingerprint(result: &PlanningResult) -> String {
     ))
     .unwrap_or_default();
     hex::encode(Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scoped_do_not_modify_clause_preserves_mutation_intent() {
+        let planned = plan_typed(PlannerInput {
+            objective:
+                "Create a simple webpage in index.html with fs_write; do not modify any other file"
+                    .to_owned(),
+            attachment_count: 0,
+            repository_paths: Vec::new(),
+        })
+        .expect("scoped protection clause should still permit the requested artifact");
+
+        assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedMutation);
+        assert_eq!(planned.scope.effective, vec!["index.html".to_owned()]);
+    }
+
+    #[test]
+    fn unqualified_do_not_modify_request_remains_read_only() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Inspect the repository and do not modify any files".to_owned(),
+            attachment_count: 0,
+            repository_paths: vec!["src/lib.rs".to_owned()],
+        })
+        .expect("read-only request should still be plannable");
+
+        assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedReadOnly);
+        assert_eq!(planned.scope.resolution, ScopeResolution::NotRequested);
+    }
 }

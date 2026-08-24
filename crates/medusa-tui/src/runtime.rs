@@ -489,6 +489,7 @@ impl DaemonRuntimeState {
             model,
             effort,
             api_key,
+            base_url,
         } = configuration;
         if provider != "openai-oauth" {
             self.sync_credential(&provider, api_key)?;
@@ -518,6 +519,7 @@ impl DaemonRuntimeState {
         let acknowledgement = self.dispatch(FrontendCommand::ConfigureModel {
             provider: Some(provider.clone()),
             model: model.clone(),
+            base_url,
         })?;
         if !matches!(
             acknowledgement.result,

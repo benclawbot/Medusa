@@ -72,13 +72,13 @@ use pull_requests::runtime_create_draft_pull_request;
 use review::{runtime_apply_review_action, runtime_export_review_audit, runtime_read_review};
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
-    runtime_configure_model, runtime_poll, runtime_recovery_action, runtime_resume, runtime_start,
-    runtime_find_web_artifact, runtime_open_web_artifact, runtime_submit,
+    runtime_configure_model, runtime_find_web_artifact, runtime_open_web_artifact, runtime_poll,
+    runtime_recovery_action, runtime_resume, runtime_start, runtime_submit,
 };
 use sessions::{runtime_list_sessions, runtime_read_session};
+use tauri::Manager;
 use voice::{desktop_establish_realtime_session, desktop_realtime_capability};
 use worktree::runtime_read_worktree;
-use tauri::Manager;
 
 pub fn daemon_config() -> Result<medusa_config::Config, String> {
     config::active_config()
@@ -153,7 +153,10 @@ pub fn run() -> tauri::Result<()> {
         ])
         .build(tauri::generate_context!())?
         .run(|app_handle, event| {
-            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
                 if let Some(registry) = app_handle.try_state::<RuntimeRegistry>() {
                     registry.shutdown_all();
                 }

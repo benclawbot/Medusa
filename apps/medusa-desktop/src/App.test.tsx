@@ -477,6 +477,41 @@ it("keeps diagnostics behind an explicit Session details control", async () => {
   expect(screen.getByRole("complementary", { name: "Session details" })).toBeInTheDocument();
 });
 
+it("shows a gateway-authenticated OAuth credential as ready in Session details", async () => {
+  vi.mocked(loadSharedConfiguration).mockResolvedValue({
+    revision: 13,
+    activeProfile: "default",
+    connection: "chatgpt-oauth",
+    provider: "openai-oauth",
+    model: "gpt-5.6-luna",
+    effort: "medium",
+    auth: "none",
+    baseUrl: "http://127.0.0.1:10531/v1",
+    configured: true,
+    credentialConfigured: true,
+  });
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-oauth", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{
+      type: "settings",
+      model: "gpt-5.6-luna",
+      effort: "medium",
+      planMode: false,
+      credentialConfigured: false,
+    }])
+    .mockResolvedValue([]);
+
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  await waitFor(() => expect(pollRuntime).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: "Session details" }));
+
+  const panel = await screen.findByRole("complementary", { name: "Session details" });
+  expect(within(panel).getByText("Ready")).toBeInTheDocument();
+  expect(within(panel).queryByText("Missing")).not.toBeInTheDocument();
+});
+
 it("renders normalized usage metrics from the runtime event", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   vi.mocked(pollRuntime)

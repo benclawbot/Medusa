@@ -240,10 +240,7 @@ mod tests {
             .expect("response");
         });
 
-        let client = AsyncClient::builder()
-            .http1_only()
-            .build()
-            .expect("client");
+        let client = AsyncClient::builder().http1_only().build().expect("client");
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_for_worker = Arc::clone(&cancel);
         let (done_sender, done_receiver) = channel();
@@ -269,9 +266,11 @@ mod tests {
             .expect("stream completion should not wait on the sender")
             .expect("stream request");
         assert_eq!(response.blocks.len(), 1);
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, ProviderStreamEvent::Completed { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ProviderStreamEvent::Completed { .. }))
+        );
         cancel.store(true, Ordering::SeqCst);
         server.join().expect("server");
     }

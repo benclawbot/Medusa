@@ -8,6 +8,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_agent::AgentUpdate;
+use medusa_config::provider_catalog_entry;
 use medusa_protocol::EventPayload;
 use medusa_provider::{ImageSource, MessageBlock};
 use serde_json::Value;
@@ -58,12 +59,23 @@ pub(super) fn configure_model(
             SUPPORTED_PROVIDERS.join(", ")
         )));
     }
+    let provider_changed = state.config.model.provider != configuration.provider;
+    if provider_changed {
+        if let Some(entry) = provider_catalog_entry(&configuration.provider) {
+            // Provider routes own their authentication mode. In particular, the local
+            // ChatGPT OAuth gateway must stay credentialless at the OpenAI transport layer;
+            // retaining the previous API-key mode makes the gateway look like an unconfigured
+            // repository endpoint and fails before the request is sent.
+            state.config.model.auth = entry.default_auth.to_owned();
+        }
+    }
     state.config.model.protocol = protocol_for_provider(&configuration.provider).to_owned();
     state.config.model.context_window_tokens = model_context_window_tokens(
         &configuration.provider,
         &configuration.model,
         state.base_config.model.context_window_tokens,
     );
+    state.config.model.base_url = configuration.base_url;
     state.config.model.provider = configuration.provider;
     state.config.model.name = configuration.model;
     state.effort = configuration.effort;

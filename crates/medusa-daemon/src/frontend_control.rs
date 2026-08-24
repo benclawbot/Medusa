@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_config::Config;
+use medusa_config::{Config, provider_catalog_entry, provider_runtime_protocol};
 use medusa_core::hidden_command;
 use medusa_protocol::frontend::{
     ApprovalDecision, AttachmentMode as FrontendAttachmentMode, FrontendCommand,
@@ -631,12 +631,26 @@ impl FrontendControlPlane {
                     replay_equivalent: health.replay.equivalent,
                 })
             }
-            FrontendCommand::ConfigureModel { provider, model } => {
+            FrontendCommand::ConfigureModel {
+                provider,
+                model,
+                base_url,
+            } => {
+                let provider_changed = provider
+                    .as_deref()
+                    .is_some_and(|next| next != self.config.model.provider);
                 let provider = provider
                     .clone()
                     .unwrap_or_else(|| self.config.model.provider.clone());
+                let next_base_url = next_model_base_url(
+                    &provider,
+                    base_url.clone(),
+                    &self.config.model.provider,
+                    self.config.model.base_url.as_deref(),
+                );
                 let effort = current_effort(&self.config);
-                let configuration = self.model_configuration(&provider, model, effort);
+                let configuration =
+                    self.model_configuration(&provider, model, effort, next_base_url.clone());
                 if let Some(session_id) = envelope.session_id.as_deref() {
                     self.authorize_control(session_id, &envelope.client_id)?;
                     self.controller(session_id)?
@@ -645,6 +659,12 @@ impl FrontendControlPlane {
                 self.config.model.provider = provider;
                 self.config.model.name = model.clone();
                 self.config.model.protocol = protocol_for_provider(&self.config.model.provider);
+                if provider_changed {
+                    if let Some(entry) = provider_catalog_entry(&self.config.model.provider) {
+                        self.config.model.auth = entry.default_auth.to_owned();
+                    }
+                }
+                self.config.model.base_url = next_base_url;
                 Ok(FrontendControlResult::CommandAccepted {
                     session_id: envelope.session_id.clone().unwrap_or_default(),
                     command: "configure_model".to_owned(),
@@ -656,6 +676,7 @@ impl FrontendControlPlane {
                     &self.config.model.provider,
                     &self.config.model.name,
                     effort,
+                    self.config.model.base_url.clone(),
                 );
                 if let Some(session_id) = envelope.session_id.as_deref() {
                     self.authorize_control(session_id, &envelope.client_id)?;
@@ -797,6 +818,7 @@ impl FrontendControlPlane {
                 &self.config.model.provider,
                 &self.config.model.name,
                 effort,
+                self.config.model.base_url.clone(),
             ))
             .map_err(Into::into)
     }
@@ -806,12 +828,14 @@ impl FrontendControlPlane {
         provider: &str,
         model: &str,
         effort: Effort,
+        base_url: Option<String>,
     ) -> ModelConfiguration {
         ModelConfiguration {
             provider: provider.to_owned(),
             model: model.to_owned(),
             effort,
             api_key: self.credentials.get(provider).cloned(),
+            base_url,
         }
     }
 
@@ -939,10 +963,46 @@ fn turns_for_effort(effort: Effort) -> u32 {
 }
 
 fn protocol_for_provider(provider: &str) -> String {
-    match provider {
-        "anthropic" | "anthropic-compatible" => "anthropic".to_owned(),
-        _ => "openai".to_owned(),
+    provider_runtime_protocol(provider)
+        .unwrap_or("openai")
+        .to_owned()
+}
+
+fn next_model_base_url(
+    provider: &str,
+    requested_base_url: Option<String>,
+    current_provider: &str,
+    current_base_url: Option<&str>,
+) -> Option<String> {
+    if requested_base_url.is_some() {
+        return requested_base_url;
     }
+
+    let same_catalog_route = match (
+        provider_catalog_entry(provider),
+        provider_catalog_entry(current_provider),
+    ) {
+        (Some(next), Some(current)) => {
+            next.connection == current.connection
+                && next.profile_provider == current.profile_provider
+        }
+        _ => provider == current_provider,
+    };
+
+    provider_catalog_entry(provider).map_or_else(
+        || {
+            same_catalog_route
+                .then(|| current_base_url.map(str::to_owned))
+                .flatten()
+        },
+        |entry| {
+            if entry.custom_values && same_catalog_route {
+                current_base_url.map(str::to_owned)
+            } else {
+                entry.base_url.map(str::to_owned)
+            }
+        },
+    )
 }
 
 fn parse_recovery_operation(value: &str) -> Result<RecoveryOperation, FrontendControlError> {
@@ -1074,6 +1134,28 @@ mod tests {
         assert!(!command_is_cacheable(&FrontendCommand::PollTransient));
         assert!(!command_is_cacheable(&FrontendCommand::ShowSessionActions));
         assert!(command_is_cacheable(&FrontendCommand::CancelTurn));
+    }
+
+    #[test]
+    fn switching_from_oauth_to_minimax_clears_the_oauth_gateway_route() {
+        let next = next_model_base_url(
+            "minimax",
+            None,
+            "openai-oauth",
+            Some("http://127.0.0.1:10531/v1"),
+        );
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn explicit_custom_endpoint_wins_when_configuring_a_provider() {
+        let next = next_model_base_url(
+            "anthropic-compatible",
+            Some("https://gateway.example/v1".to_owned()),
+            "openai-oauth",
+            Some("http://127.0.0.1:10531/v1"),
+        );
+        assert_eq!(next.as_deref(), Some("https://gateway.example/v1"));
     }
 
     #[test]

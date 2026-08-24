@@ -1212,7 +1212,7 @@ export function App() {
                       <div><dt>Model</dt><dd>{settings.model}</dd></div>
                       <div><dt>Effort</dt><dd>{settings.effort.replace("effort:", "")}</dd></div>
                       <div><dt>Mode</dt><dd>{settings.planMode ? "Plan" : "Full"}</dd></div>
-                      <div><dt>Credential</dt><dd>{settings.credentialConfigured ? "Ready" : "Missing"}</dd></div>
+                      <div><dt>Credential</dt><dd>{settings.credentialConfigured || oauthAuthenticatedProvider === provider ? "Ready" : "Missing"}</dd></div>
                     </dl>
                   </section>
                   <section className="details-section">

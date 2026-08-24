@@ -33,6 +33,7 @@ pub struct ModelConfiguration {
     pub model: String,
     pub effort: Effort,
     pub api_key: Option<String>,
+    pub base_url: Option<String>,
 }
 
 impl std::fmt::Debug for ModelConfiguration {
@@ -43,6 +44,7 @@ impl std::fmt::Debug for ModelConfiguration {
             .field("model", &self.model)
             .field("effort", &self.effort)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("base_url", &self.base_url)
             .finish()
     }
 }
@@ -1140,6 +1142,7 @@ mod tests {
             model: "claude".to_owned(),
             effort: Effort::Medium,
             api_key: Some("secret".to_owned()),
+            base_url: None,
         };
         let debug = format!("{configuration:?}");
         assert!(debug.contains("<redacted>"));

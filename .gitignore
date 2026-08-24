@@ -7,3 +7,4 @@ architecture-policy-report.md
 /apps/medusa-desktop/node_modules/
 /apps/medusa-desktop/dist/
 /apps/medusa-desktop/src-tauri/target/
+/browser/node_modules/

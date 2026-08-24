@@ -17,7 +17,7 @@ use std::{
 
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::Mode;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId, hidden_command};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -905,13 +905,18 @@ fn repository_identity(repo: &Path) -> MedusaResult<String> {
         .into_owned())
 }
 
-fn repository_revision(repo: &Path) -> Option<String> {
-    let mut graph = medusa_intelligence::RepositoryGraph::open(repo).ok()?;
-    if graph.freshness() != medusa_intelligence::RepositoryGraphFreshness::Current {
-        graph.refresh().ok()?;
+pub(crate) fn repository_revision(repo: &Path) -> Option<String> {
+    let output = hidden_command("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    (graph.freshness() == medusa_intelligence::RepositoryGraphFreshness::Current)
-        .then(|| graph.snapshot().repository_revision.clone())
+    let revision = String::from_utf8(output.stdout).ok()?;
+    let revision = revision.trim();
+    (!revision.is_empty()).then(|| revision.to_owned())
 }
 
 fn contract_path(repo: &Path, session_id: &str) -> PathBuf {
@@ -1016,6 +1021,38 @@ mod tests {
             &accepted,
             &policy(Some(&["fs_read"]), Some(&["src/lib.rs"]), true)
         ));
+    }
+
+    #[test]
+    fn repository_revision_reads_git_head_without_building_the_repository_graph() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let git = |args: &[&str]| {
+            let status = hidden_command("git")
+                .args(args)
+                .current_dir(repo.path())
+                .status()
+                .expect("run git");
+            assert!(status.success(), "git command failed: {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "medusa-tests@example.invalid"]);
+        git(&["config", "user.name", "Medusa tests"]);
+        fs::write(repo.path().join("README.md"), "fixture\n").expect("write fixture");
+        git(&["add", "README.md"]);
+        git(&["commit", "-qm", "fixture"]);
+
+        let expected = String::from_utf8(
+            hidden_command("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(repo.path())
+                .output()
+                .expect("read git head")
+                .stdout,
+        )
+        .expect("git head utf8")
+        .trim()
+        .to_owned();
+        assert_eq!(repository_revision(repo.path()), Some(expected));
     }
 
     #[test]

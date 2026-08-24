@@ -97,6 +97,8 @@ pub enum FrontendCommand {
     ConfigureModel {
         provider: Option<String>,
         model: String,
+        #[serde(default)]
+        base_url: Option<String>,
     },
     SetEffort {
         effort: String,

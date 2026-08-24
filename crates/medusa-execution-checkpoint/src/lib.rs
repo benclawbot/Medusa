@@ -724,12 +724,7 @@ mod tests {
             changed_strategy: "update the implementation against the trait".into(),
             environment_fingerprint: digest("env"),
         };
-        let previous = capsule(
-            "capsule-1",
-            Some("failure"),
-            Some(previous_hypothesis),
-        )
-        .unwrap();
+        let previous = capsule("capsule-1", Some("failure"), Some(previous_hypothesis)).unwrap();
         let next_hypothesis = RetryHypothesis {
             failure_fingerprint: digest("failure"),
             previous_capsule_fingerprint: previous.fingerprint.clone(),

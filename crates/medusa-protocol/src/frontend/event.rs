@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{ProtocolVersion, CURRENT_PROTOCOL_VERSION};
+use crate::{CURRENT_PROTOCOL_VERSION, ProtocolVersion};
 
 #[cfg(test)]
 use super::FRONTEND_PROTOCOL_VERSION;

@@ -56,14 +56,13 @@ pub(crate) fn execute_verification_command_cancellable(
 
 pub(crate) fn required_browser_verification(repo: &Path) -> MedusaResult<VerificationResult> {
     let automatic_server = if std::env::var_os("MEDUSA_BROWSER_VERIFY_URL").is_none() {
-        static_verification_server::StaticVerificationServer::start(repo)
-            .map_err(|error| {
-                MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Environment,
-                    format!("UI changes require automatic browser verification: {error}"),
-                )
-            })?
+        static_verification_server::StaticVerificationServer::start(repo).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!("UI changes require automatic browser verification: {error}"),
+            )
+        })?
     } else {
         None
     };
@@ -79,10 +78,7 @@ pub(crate) fn required_browser_verification(repo: &Path) -> MedusaResult<Verific
         })?,
     };
     let command = std::env::var("MEDUSA_BROWSERD").unwrap_or_else(|_| "medusa-browserd".into());
-    let mut client = match BrowserClient::spawn_with_env(
-        &command,
-        &[("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route.as_str())],
-    ) {
+    let mut client = match BrowserClient::spawn_with_env(&command, &browserd_environment(&route)) {
         Ok(client) => client,
         Err(error) if automatic_server.is_some() => {
             let server = automatic_server
@@ -338,6 +334,13 @@ fn read_and_remove(path: &Path) -> MedusaResult<Vec<u8>> {
     Ok(bytes)
 }
 
+fn browserd_environment(route: &str) -> [(&str, &str); 2] {
+    [
+        ("MEDUSA_BROWSER_VERIFY_URL", route),
+        ("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route),
+    ]
+}
+
 fn decode_base64(input: &str) -> MedusaResult<Vec<u8>> {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = Vec::new();
@@ -483,19 +486,34 @@ mod tests {
         )
         .expect("index");
 
-        let server = static_verification_server::StaticVerificationServer::start(
-            directory.path(),
-        )
-        .expect("server")
-        .expect("index should enable automatic verification");
+        let server = static_verification_server::StaticVerificationServer::start(directory.path())
+            .expect("server")
+            .expect("index should enable automatic verification");
         assert!(server.route().starts_with("http://127.0.0.1:"));
         assert_eq!(
             static_verification_server::fetch_for_test(&server),
-            (200, "<!doctype html><title>Medusa test page</title>".to_owned())
+            (
+                200,
+                "<!doctype html><title>Medusa test page</title>".to_owned()
+            )
         );
         assert_eq!(
             server.probe().expect("static verification probe"),
-            (200, "<!doctype html><title>Medusa test page</title>".to_owned())
+            (
+                200,
+                "<!doctype html><title>Medusa test page</title>".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn browserd_environment_forwards_the_route_as_both_url_and_origin() {
+        let route = "http://127.0.0.1:4173/";
+        let environment = browserd_environment(route);
+        assert_eq!(environment[0], ("MEDUSA_BROWSER_VERIFY_URL", route));
+        assert_eq!(
+            environment[1],
+            ("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route)
         );
     }
 }

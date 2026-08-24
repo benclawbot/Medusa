@@ -464,8 +464,8 @@ mod tests {
     #[test]
     fn desktop_marks_no_auth_routes_ready_for_model_selection() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let entries = provider_catalog_for(&ProviderProfileCatalog::at(directory.path()))
-            .expect("catalog");
+        let entries =
+            provider_catalog_for(&ProviderProfileCatalog::at(directory.path())).expect("catalog");
         let omniroute = entries
             .iter()
             .find(|entry| entry.profile_provider == "auto/coding")

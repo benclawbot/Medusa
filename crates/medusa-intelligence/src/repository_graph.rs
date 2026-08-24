@@ -303,7 +303,10 @@ fn file_metadata(
 }
 
 fn git(repo: &Path, args: &[&str]) -> MedusaResult<String> {
-    let output = hidden_command("git").args(args).current_dir(repo).output()?;
+    let output = hidden_command("git")
+        .args(args)
+        .current_dir(repo)
+        .output()?;
     if !output.status.success() {
         return Err(internal(format!(
             "git {} failed: {}",

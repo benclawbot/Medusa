@@ -11,7 +11,10 @@ pub(crate) fn checkpoint(repo: &Path, message: &str) -> MedusaResult<String> {
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
-    let output = hidden_command("git").args(args).current_dir(repo).output()?;
+    let output = hidden_command("git")
+        .args(args)
+        .current_dir(repo)
+        .output()?;
     if output.status.success() {
         Ok(())
     } else {

@@ -105,9 +105,7 @@ impl OpenAiStreamAccumulator {
         let mut blocks = Vec::new();
         let visible_text = crate::strip_hidden_reasoning(&self.text);
         if !visible_text.is_empty() {
-            blocks.push(ResponseBlock::Text {
-                text: visible_text,
-            });
+            blocks.push(ResponseBlock::Text { text: visible_text });
         }
         blocks.extend(self.tool_blocks.clone());
         let response = ModelResponse {
@@ -344,10 +342,17 @@ mod tests {
             .finish_at_eof(&mut sink)
             .expect("finish at eof")
             .expect("response");
-        assert_eq!(response.blocks, vec![ResponseBlock::Text { text: "hello".into() }]);
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, ProviderStreamEvent::Completed { .. })));
+        assert_eq!(
+            response.blocks,
+            vec![ResponseBlock::Text {
+                text: "hello".into()
+            }]
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ProviderStreamEvent::Completed { .. }))
+        );
     }
 
     #[test]

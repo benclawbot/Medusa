@@ -39,6 +39,14 @@ fn general_chat_preparation_does_not_scan_or_capture_repository_state() {
 }
 
 #[test]
+fn project_conversation_does_not_capture_a_review_baseline() {
+    assert!(!should_capture_review_baseline_for_plan(false, false, false));
+    assert!(should_capture_review_baseline_for_plan(false, false, true));
+    assert!(!should_capture_review_baseline_for_plan(true, false, true));
+    assert!(!should_capture_review_baseline_for_plan(false, true, true));
+}
+
+#[test]
 fn command_processing_does_not_wait_for_capability_discovery() {
     use std::{
         sync::{Arc, Mutex, mpsc},
@@ -530,6 +538,7 @@ fn model_picker_configuration_updates_provider_model_effort_and_session_key() {
             model: "claude-sonnet-4-6".to_owned(),
             effort: Effort::Low,
             api_key: Some("session-secret".to_owned()),
+            base_url: Some("https://gateway.example/v1".to_owned()),
         },
         &sender,
     )
@@ -537,6 +546,10 @@ fn model_picker_configuration_updates_provider_model_effort_and_session_key() {
 
     assert_eq!(state.config.model.provider, "anthropic");
     assert_eq!(state.config.model.name, "claude-sonnet-4-6");
+    assert_eq!(
+        state.config.model.base_url.as_deref(),
+        Some("https://gateway.example/v1")
+    );
     assert_eq!(state.config.agent.max_turns, 64);
     assert_eq!(state.session_api_key.as_deref(), Some("session-secret"));
     assert!(matches!(
@@ -550,6 +563,43 @@ fn model_picker_configuration_updates_provider_model_effort_and_session_key() {
     ));
     let notice = receiver.recv().expect("configuration notice");
     assert!(!format!("{notice:?}").contains("session-secret"));
+}
+
+#[test]
+fn model_picker_switches_route_authentication_mode() {
+    let directory = tempdir().expect("temporary directory");
+    let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+    let (sender, _receiver) = mpsc::channel();
+
+    configure_model(
+        &mut state,
+        ModelConfiguration {
+            provider: "openai-oauth".to_owned(),
+            model: "gpt-5".to_owned(),
+            effort: Effort::Medium,
+            api_key: None,
+            base_url: Some("http://127.0.0.1:10531/v1".to_owned()),
+        },
+        &sender,
+    )
+    .expect("switch to OAuth route");
+
+    assert_eq!(state.config.model.auth, "none");
+
+    configure_model(
+        &mut state,
+        ModelConfiguration {
+            provider: "minimax".to_owned(),
+            model: "MiniMax-M2.7".to_owned(),
+            effort: Effort::Medium,
+            api_key: None,
+            base_url: None,
+        },
+        &sender,
+    )
+    .expect("switch back to direct route");
+
+    assert_eq!(state.config.model.auth, "api-key");
 }
 
 #[test]

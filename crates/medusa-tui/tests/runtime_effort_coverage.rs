@@ -61,6 +61,7 @@ fn model_effort_can_be_configured_before_first_session() {
             model: "MiniMax-M3".to_owned(),
             effort: Effort::High,
             api_key: None,
+            base_url: None,
         })
         .expect("pre-session model configuration must not require a session id");
 

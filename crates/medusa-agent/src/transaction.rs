@@ -5,7 +5,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command, repository_mutation};
+use medusa_core::{
+    ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command, repository_mutation,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

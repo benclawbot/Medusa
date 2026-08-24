@@ -148,6 +148,7 @@ fn resumed_owner_can_drive_frontend_control_commands_idempotently() {
         FrontendCommand::ConfigureModel {
             provider: Some("anthropic".to_owned()),
             model: "coverage-model".to_owned(),
+            base_url: None,
         },
         FrontendCommand::SetEffort {
             effort: "low".to_owned(),

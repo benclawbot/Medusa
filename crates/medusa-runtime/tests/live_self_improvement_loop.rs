@@ -178,7 +178,9 @@ fn live_completion(provider: &impl ModelProvider, system: &str, user: &str) -> S
                 }],
             }],
             tools: Vec::new(),
-            max_tokens: 256,
+            // MiniMax M2.7 spends part of the bounded completion budget on hidden reasoning;
+            // leave enough room for the visible self-improvement assessment on later turns.
+            max_tokens: 1024,
             temperature_milli: 0,
         })
         .expect("live MiniMax completion");
