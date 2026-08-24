@@ -17,7 +17,11 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
 fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let program = program.as_ref();
+    #[cfg(windows)]
     let mut command = Command::new(program);
+    #[cfg(not(windows))]
+    let command = Command::new(program);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
     command
