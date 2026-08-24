@@ -36,9 +36,15 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         clipboard,
     )?;
     let identity = UiIdentity::for_repo(&options.repo);
-    let runtime = runtime_for_options(&options).map_err(runtime_error)?;
+    let mut runtime = runtime_for_options(&options).map_err(runtime_error)?;
     let mut terminal = TerminalGuard::enter()?;
-    run_loop(terminal.stdout(), &options, &identity, &mut app, &runtime)
+    run_loop(
+        terminal.stdout(),
+        &options,
+        &identity,
+        &mut app,
+        &mut runtime,
+    )
 }
 
 fn runtime_for_options(
@@ -110,7 +116,7 @@ pub(super) fn run_loop(
     options: &TuiOptions,
     identity: &UiIdentity,
     app: &mut AppState,
-    runtime: &RuntimeController,
+    runtime: &mut RuntimeController,
 ) -> io::Result<ExitReason> {
     let _ = runtime.ensure_daemon();
     let mut daemon = DaemonMonitor::new(options.socket_path());
@@ -163,7 +169,7 @@ pub(super) fn run_loop(
     options: &TuiOptions,
     identity: &UiIdentity,
     app: &mut AppState,
-    runtime: &RuntimeController,
+    runtime: &mut RuntimeController,
 ) -> io::Result<ExitReason> {
     let mut last_frame: Option<Vec<StyledLine>> = None;
     let mut last_ctrl_c = None;
@@ -300,7 +306,7 @@ fn session_control_action(
 
 pub(super) fn handle_app_action(
     app: &mut AppState,
-    runtime: &RuntimeController,
+    runtime: &mut RuntimeController,
     terminal_event: Event,
 ) -> io::Result<bool> {
     let action = app.handle_event(terminal_event).map_err(app_error)?;
@@ -309,7 +315,7 @@ pub(super) fn handle_app_action(
 
 fn handle_action(
     app: &mut AppState,
-    runtime: &RuntimeController,
+    runtime: &mut RuntimeController,
     action: AppAction,
 ) -> io::Result<bool> {
     match action {
@@ -323,6 +329,24 @@ fn handle_action(
             Ok(false)
         }
         AppAction::Submit(draft) => {
+            if draft.attachments.is_empty() && is_continuation_intent(&draft.text) {
+                match RuntimeController::start_continue_latest(app.repository().to_path_buf()) {
+                    Ok(resumed) => {
+                        *runtime = resumed;
+                        app.status = "resuming latest task".to_owned();
+                    }
+                    Err(error) => {
+                        app.restore_rejected_submission(draft)?;
+                        app.transcript.push(TranscriptEntry::System(format!(
+                            "error: could not resume latest task: {}",
+                            user_visible_runtime_error(&error.to_string())
+                        )));
+                        app.status = "resume unavailable; draft restored".to_owned();
+                        return Ok(false);
+                    }
+                }
+            }
+
             let bytes = draft.text.len();
             let attachments = draft.attachments.len();
             match runtime.submit(draft.clone()) {
@@ -335,8 +359,10 @@ fn handle_action(
                 }
                 Err(error) => {
                     app.restore_rejected_submission(draft)?;
-                    app.transcript
-                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.transcript.push(TranscriptEntry::System(format!(
+                        "error: {}",
+                        user_visible_runtime_error(&error.to_string())
+                    )));
                     app.status = "submission rejected; draft restored".to_owned();
                 }
             }
@@ -352,8 +378,10 @@ fn handle_action(
                     app.status = "continuing with your answer".to_owned();
                 }
                 Err(error) => {
-                    app.transcript
-                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.transcript.push(TranscriptEntry::System(format!(
+                        "error: {}",
+                        user_visible_runtime_error(&error.to_string())
+                    )));
                     app.status = "answer rejected".to_owned();
                 }
             }
@@ -365,8 +393,10 @@ fn handle_action(
                     app.status = "command running".to_owned();
                 }
                 Err(error) => {
-                    app.transcript
-                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.transcript.push(TranscriptEntry::System(format!(
+                        "error: {}",
+                        user_visible_runtime_error(&error.to_string())
+                    )));
                     app.status = "command rejected".to_owned();
                 }
             }
@@ -378,14 +408,55 @@ fn handle_action(
                     app.status = "updating model configuration".to_owned();
                 }
                 Err(error) => {
-                    app.transcript
-                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.transcript.push(TranscriptEntry::System(format!(
+                        "error: {}",
+                        user_visible_runtime_error(&error.to_string())
+                    )));
                     app.status = "model configuration rejected".to_owned();
                 }
             }
             Ok(false)
         }
         AppAction::None | AppAction::Redraw => Ok(false),
+    }
+}
+
+fn is_continuation_intent(input: &str) -> bool {
+    let normalized = input
+        .trim()
+        .trim_matches(|character: char| character.is_ascii_punctuation())
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "go" | "go on" | "continue" | "continue on" | "proceed" | "resume" | "finish" | "finish it"
+    )
+}
+
+fn is_internal_notice(title: &str) -> bool {
+    let normalized = title.trim().to_ascii_lowercase();
+    normalized.starts_with("recovery ")
+        || normalized.starts_with("background daemon ")
+        || normalized.starts_with("checkpoint ")
+}
+
+fn user_visible_runtime_error(error: &str) -> String {
+    let visible = error
+        .lines()
+        .filter(|line| {
+            let normalized = line.trim_start().to_ascii_lowercase();
+            !normalized.starts_with("recovery:")
+                && !normalized.starts_with("checkpoint:")
+                && !normalized.starts_with("checkpoint ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_owned();
+    if visible.is_empty() {
+        "operation failed; Medusa kept the latest durable state".to_owned()
+    } else {
+        visible
     }
 }
 
@@ -510,6 +581,9 @@ pub(super) fn drain_runtime_events(
                 );
             }
             RuntimeEvent::Notice { title, details } => {
+                if is_internal_notice(&title) {
+                    continue;
+                }
                 let status = title.to_ascii_lowercase();
                 app.record_activity(TranscriptActivity {
                     id: None,
@@ -525,12 +599,12 @@ pub(super) fn drain_runtime_events(
             RuntimeEvent::Compacted { message } => {
                 app.compact_transcript(message);
             }
-            RuntimeEvent::Completed { session_id } => {
+            RuntimeEvent::Completed { session_id: _ } => {
                 app.record_activity(TranscriptActivity {
                     id: None,
                     kind: TranscriptActivityKind::Done,
                     title: "Task completed".to_owned(),
-                    details: vec![format!("session {session_id}")],
+                    details: Vec::new(),
                 });
                 app.status = "completed".to_owned();
                 app.finish_run();
@@ -564,7 +638,7 @@ pub(super) fn drain_runtime_events(
                     id: None,
                     kind: TranscriptActivityKind::Error,
                     title: "Task failed".to_owned(),
-                    details: vec![error],
+                    details: vec![user_visible_runtime_error(&error)],
                 });
                 app.status = if retry_draft.is_some() {
                     "agent failed; draft restored".to_owned()
@@ -601,4 +675,57 @@ pub(super) fn ctrl_l_redraw(event: &Event) -> bool {
                 && key.code == KeyCode::Char('l')
                 && key.modifiers.contains(KeyModifiers::CONTROL)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_intents_are_exact_and_conservative() {
+        for input in [
+            "go",
+            "GO",
+            "go on",
+            "continue",
+            "continue on",
+            "proceed",
+            "resume",
+            "finish",
+            "finish it",
+            " continue! ",
+        ] {
+            assert!(is_continuation_intent(input), "{input}");
+        }
+        for input in [
+            "go fix tests",
+            "continue with a new feature",
+            "resume issue 12",
+            "finished",
+            "",
+        ] {
+            assert!(!is_continuation_intent(input), "{input}");
+        }
+    }
+
+    #[test]
+    fn internal_recovery_notices_are_hidden() {
+        assert!(is_internal_notice("Recovery available"));
+        assert!(is_internal_notice("Recovery completed"));
+        assert!(is_internal_notice("Background daemon recovered"));
+        assert!(is_internal_notice("Checkpoint created"));
+        assert!(!is_internal_notice("Configuration updated"));
+    }
+
+    #[test]
+    fn recovery_bookkeeping_is_removed_from_failures() {
+        let visible = user_visible_runtime_error(
+            "tool failed\nRecovery: cp-123; session abc\ncheckpoint: cp-123",
+        );
+        assert_eq!(visible, "tool failed");
+        assert_eq!(
+            user_visible_runtime_error("Recovery: cp-123"),
+            "operation failed; Medusa kept the latest durable state"
+        );
+    }
 }
