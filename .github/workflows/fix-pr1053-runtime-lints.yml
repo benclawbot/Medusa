@@ -49,13 +49,19 @@ jobs:
 
           path = Path('crates/medusa-runtime/src/component_runtime.rs')
           text = path.read_text()
-          lock_old = '.lock().expect("desired-state lock")'
-          lock_count = text.count(lock_old)
-          if lock_count != 4:
-              raise SystemExit(f'component_runtime.rs: expected 4 desired-state lock expects, found {lock_count}')
+          inline_lock = '.lock().expect("desired-state lock")'
+          multiline_lock = '.lock()\n            .expect("desired-state lock")'
+          if text.count(inline_lock) != 2:
+              raise SystemExit(f'component_runtime.rs: expected 2 inline desired-state lock expects, found {text.count(inline_lock)}')
+          if text.count(multiline_lock) != 2:
+              raise SystemExit(f'component_runtime.rs: expected 2 multiline desired-state lock expects, found {text.count(multiline_lock)}')
           text = text.replace(
-              lock_old,
+              inline_lock,
               '.lock().unwrap_or_else(std::sync::PoisonError::into_inner)',
+          )
+          text = text.replace(
+              multiline_lock,
+              '.lock()\n            .unwrap_or_else(std::sync::PoisonError::into_inner)',
           )
           path.write_text(text)
 
