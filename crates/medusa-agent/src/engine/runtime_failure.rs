@@ -101,7 +101,23 @@ fn fresh_retry_messages(
     let mut fresh = messages
         .iter()
         .filter(|message| message.role == Role::User)
-        .cloned()
+        .filter_map(|message| {
+            let content = message
+                .content
+                .iter()
+                .filter(|block| {
+                    matches!(
+                        block,
+                        MessageBlock::Text { .. } | MessageBlock::Image { .. }
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            (!content.is_empty()).then_some(Message {
+                role: Role::User,
+                content,
+            })
+        })
         .collect::<Vec<_>>();
     fresh.push(Message {
         role: Role::User,
@@ -257,18 +273,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fresh_retry_context_drops_assistant_reasoning_and_keeps_user_requirements() {
+    fn fresh_retry_context_drops_assistant_reasoning_and_tool_results() {
+        let user_requirement = Message {
+            role: Role::User,
+            content: vec![MessageBlock::Text {
+                text: "Keep the public API stable".to_owned(),
+            }],
+        };
         let messages = vec![
-            Message {
-                role: Role::User,
-                content: vec![MessageBlock::Text {
-                    text: "Keep the public API stable".to_owned(),
-                }],
-            },
+            user_requirement.clone(),
             Message {
                 role: Role::Assistant,
                 content: vec![MessageBlock::Text {
                     text: "failed reasoning trace".to_owned(),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![MessageBlock::ToolResult {
+                    tool_use_id: "tool-1".to_owned(),
+                    content: "stale compiler output".to_owned(),
+                    is_error: true,
                 }],
             },
         ];
@@ -279,12 +304,23 @@ mod tests {
         );
         let fresh = fresh_retry_messages(&messages, &error, "try a different bounded strategy");
         assert_eq!(fresh.len(), 2);
-        assert_eq!(fresh[0], messages[0]);
+        assert_eq!(fresh[0], user_requirement);
         assert_eq!(fresh[1].role, Role::User);
         assert!(matches!(
             fresh[1].content.as_slice(),
             [MessageBlock::Text { text }] if text.contains("Fresh failure-recovery context")
                 && text.contains("compiler rejected the attempt")
         ));
+        assert!(
+            fresh
+                .iter()
+                .flat_map(|message| &message.content)
+                .all(|block| {
+                    !matches!(
+                        block,
+                        MessageBlock::ToolUse { .. } | MessageBlock::ToolResult { .. }
+                    )
+                })
+        );
     }
 }
