@@ -459,9 +459,13 @@ fn is_continuation_intent(input: &str) -> bool {
 
 fn is_internal_notice(title: &str) -> bool {
     let normalized = title.trim().to_ascii_lowercase();
-    normalized.starts_with("recovery ")
-        || normalized.starts_with("background daemon ")
-        || normalized.starts_with("checkpoint ")
+    matches!(
+        normalized.as_str(),
+        "recovery available"
+            | "recovery completed"
+            | "background daemon recovered"
+            | "checkpoint created"
+    )
 }
 
 fn user_visible_runtime_error(error: &str) -> String {
@@ -469,9 +473,7 @@ fn user_visible_runtime_error(error: &str) -> String {
         .lines()
         .filter(|line| {
             let normalized = line.trim_start().to_ascii_lowercase();
-            !normalized.starts_with("recovery:")
-                && !normalized.starts_with("checkpoint:")
-                && !normalized.starts_with("checkpoint ")
+            !normalized.starts_with("recovery:") && !normalized.starts_with("checkpoint:")
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -758,6 +760,8 @@ mod tests {
         assert!(is_internal_notice("Recovery completed"));
         assert!(is_internal_notice("Background daemon recovered"));
         assert!(is_internal_notice("Checkpoint created"));
+        assert!(!is_internal_notice("Recovery action failed closed"));
+        assert!(!is_internal_notice("Checkpoint restore failed"));
         assert!(!is_internal_notice("Configuration updated"));
     }
 
@@ -770,6 +774,12 @@ mod tests {
         assert_eq!(
             user_visible_runtime_error("Recovery: cp-123"),
             "operation failed; Medusa kept the latest durable state"
+        );
+        assert_eq!(
+            user_visible_runtime_error(
+                "checkpoint cursor is beyond the canonical journal while creating its payload"
+            ),
+            "checkpoint cursor is beyond the canonical journal while creating its payload"
         );
     }
 }
