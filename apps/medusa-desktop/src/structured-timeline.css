@@ -1,186 +1,193 @@
-.timeline-header-actions,
-.timeline-group-heading,
-.timeline-verification-heading,
-.timeline-density-label,
-.timeline-status,
-.timeline-jump-latest,
-.timeline-following {
-  display: flex;
+/* DeepSeek-style plan surface: stable to-dos, not an execution log. */
+
+[data-medusa-todos] {
+  width: min(900px, 100%);
+  margin: 0 auto 8px;
+}
+
+.todo-panel {
+  overflow: hidden;
+  border: 1px solid var(--medusa-border-strong, var(--line-strong));
+  border-radius: 14px;
+  background: var(--medusa-panel-solid, var(--surface));
+  box-shadow: 0 5px 18px rgba(24, 24, 27, 0.04);
+}
+
+.todo-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-}
-
-.timeline-header-actions {
   gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  background: transparent;
+  padding: 0 13px;
+  color: var(--medusa-ink, var(--text));
+  text-align: left;
 }
 
-.timeline-density-label {
-  gap: 5px;
-  color: var(--muted);
+.todo-summary:hover {
+  background: rgba(113, 113, 122, 0.045);
 }
 
-.timeline-density-label select {
-  width: auto;
-  min-width: 104px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-soft);
-  padding: 5px 24px 5px 8px;
-  color: var(--text);
-  font-size: 0.74rem;
-}
-
-.timeline-group,
-.timeline-verification {
-  display: grid;
+.todo-heading {
+  display: inline-flex;
+  align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
 
-.timeline-group-heading,
-.timeline-verification-heading {
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 0.76rem;
+.todo-heading strong {
+  font-size: 0.83rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
 }
 
-.timeline-verification-heading {
-  justify-content: flex-start;
-  color: var(--green);
+.todo-heading svg {
+  color: var(--medusa-muted, var(--muted));
 }
 
-.timeline-status {
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--surface-soft);
-  padding: 3px 7px;
-  color: var(--muted);
-  font-size: 0.67rem;
-  font-weight: 700;
-  text-transform: capitalize;
+.todo-counts {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--medusa-muted, var(--muted));
+  font-size: 0.77rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.timeline-status.running {
-  background: var(--purple-soft);
-  color: var(--purple);
+.todo-counts span {
+  margin: 0 3px;
+  opacity: 0.65;
 }
 
-.timeline-status.succeeded {
-  background: var(--green-soft);
-  color: var(--green);
+.todo-chevron {
+  color: var(--medusa-muted, var(--muted));
+  transition: transform 140ms ease;
 }
 
-.timeline-status.failed,
-.timeline-status.blocked {
-  background: #fff1f2;
-  color: var(--danger);
+.todo-panel.expanded .todo-chevron {
+  transform: rotate(180deg);
 }
 
-.timeline-activity-card.succeeded .timeline-activity-icon {
-  background: var(--green-soft);
-  color: var(--green);
+.todo-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border-top: 1px solid var(--medusa-border, var(--line));
+  padding: 7px 13px 9px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(113, 113, 122, 0.42) transparent;
 }
 
-.timeline-activity-card.failed .timeline-activity-icon,
-.timeline-activity-card.blocked .timeline-activity-icon {
-  background: #fff1f2;
-  color: var(--danger);
-}
-
-.timeline-activity-card.running {
-  border-color: rgba(90, 56, 222, 0.26);
-}
-
-.timeline-activity-card.failed,
-.timeline-activity-card.blocked {
-  border-color: rgba(220, 38, 38, 0.24);
-}
-
-.verification-card {
+.todo-row {
   display: grid;
+  grid-template-columns: 19px minmax(0, 1fr);
+  align-items: center;
   gap: 8px;
-  border: 1px solid rgba(26, 127, 86, 0.2);
-  border-radius: 11px;
-  background: rgba(236, 253, 245, 0.62);
-  padding: 11px 12px;
+  min-height: 31px;
+  color: var(--medusa-ink, var(--text));
+  font-size: 0.8rem;
 }
 
-.verification-card.failed {
-  border-color: rgba(220, 38, 38, 0.24);
-  background: #fff7f7;
-}
-
-.verification-card > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.verification-card strong {
-  font-size: 0.84rem;
-}
-
-.verification-card span {
-  color: var(--green);
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: capitalize;
-}
-
-.verification-card.failed span {
-  color: var(--danger);
-}
-
-.verification-card ul {
+.todo-status {
   display: grid;
-  gap: 4px;
-  margin: 0;
-  padding-left: 18px;
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.72rem;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  color: #a1a1aa;
 }
 
-.timeline-jump-latest {
-  position: sticky;
-  z-index: 4;
-  bottom: 12px;
-  width: max-content;
-  margin: 0 auto 10px;
-  gap: 7px;
-  border: 1px solid rgba(90, 56, 222, 0.2);
-  border-radius: 999px;
-  background: var(--purple);
-  box-shadow: 0 8px 28px rgba(50, 35, 120, 0.2);
-  padding: 8px 12px;
-  color: #fff;
-  font-size: 0.76rem;
-  font-weight: 700;
+.todo-row.completed .todo-status {
+  color: var(--medusa-success, var(--green));
 }
 
-.timeline-following {
-  width: max-content;
-  margin: -7px auto 10px;
-  gap: 4px;
-  color: var(--muted);
-  font-size: 0.68rem;
+.todo-row.inProgress .todo-status {
+  color: #557dd8;
 }
 
-@media (max-width: 640px) {
-  .timeline-header {
-    align-items: flex-start;
-    flex-direction: column;
+.todo-row.failed .todo-status {
+  color: var(--medusa-danger, var(--danger));
+}
+
+.todo-row.pending .todo-status svg {
+  stroke-dasharray: 2.5 2.5;
+}
+
+.todo-status-spinner {
+  width: 15px;
+  height: 15px;
+  border: 1.6px solid currentColor;
+  border-left-color: transparent;
+  border-radius: 50%;
+  animation: todo-spin 0.9s linear infinite;
+}
+
+.todo-row-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-row.completed .todo-row-text {
+  color: var(--medusa-muted, var(--muted));
+}
+
+@keyframes todo-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Work used to mirror every input/tool/status event into a verbose side log.
+   Remove that view while preserving Session details and Rendered webpage. */
+.work-panel-toggle {
+  display: none !important;
+}
+
+body .app-shell.medusa-shell:has(.side-panel-slot .work-log) {
+  grid-template-columns: 232px minmax(560px, 1fr) !important;
+}
+
+body .app-shell.medusa-shell.rail-collapsed:has(.side-panel-slot .work-log) {
+  grid-template-columns: 68px minmax(560px, 1fr) !important;
+}
+
+.side-panel-slot:has(.work-log) {
+  display: none !important;
+}
+
+@media (max-width: 1120px) {
+  body .app-shell.medusa-shell:has(.side-panel-slot .work-log),
+  body .app-shell.medusa-shell.rail-collapsed:has(.side-panel-slot .work-log) {
+    grid-template-columns: 210px minmax(500px, 1fr) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  [data-medusa-todos] {
+    margin-bottom: 7px;
   }
 
-  .timeline-header-actions {
-    width: 100%;
-    justify-content: space-between;
+  .todo-summary {
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  .timeline-status {
-    display: none;
+  .todo-counts {
+    font-size: 0.72rem;
+  }
+
+  body .app-shell.medusa-shell:has(.side-panel-slot .work-log),
+  body .app-shell.medusa-shell.rail-collapsed:has(.side-panel-slot .work-log) {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .todo-status-spinner {
+    animation: none;
+    border-left-color: currentColor;
+  }
+
+  .todo-chevron {
+    transition: none;
   }
 }

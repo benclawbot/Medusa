@@ -1,184 +1,113 @@
-import {
-  Activity,
-  CheckCircle2,
-  ChevronDown,
-  Circle,
-  OctagonX,
-  Play,
-  ShieldCheck,
-} from "lucide-react";
-import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { CheckCircle2, ChevronDown, Circle, ListChecks, OctagonX } from "lucide-react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   getTimelineSnapshot,
   subscribeTimeline,
   type PlanStep,
-  type RuntimeActivity,
-  type RuntimeEvent,
 } from "./runtime";
-import { emptyTimelineSnapshot, type TimelineEvent } from "./timeline/model";
-import { reduceTimelineEvents } from "./timeline/reducer";
 
-function PlanIcon({ status }: { status: PlanStep["status"] }) {
-  if (status === "completed") return <CheckCircle2 size={15} />;
-  if (status === "failed") return <OctagonX size={15} />;
-  if (status === "inProgress") return <Play size={14} />;
-  return <Circle size={13} />;
+export interface TodoCounts {
+  completed: number;
+  inProgress: number;
+  pending: number;
 }
 
-function ActivityIcon({ event }: { event: TimelineEvent }) {
-  if (event.status === "failed") return <OctagonX size={15} />;
-  if (event.status === "succeeded") return <CheckCircle2 size={15} />;
-  if (event.kind === "verification") return <ShieldCheck size={15} />;
-  return <Activity size={15} />;
-}
+/**
+ * The DeepSeek harness presents its plan as a stable ordered to-do list: the
+ * task titles stay put while only their status changes. Keep that same model
+ * here instead of deriving user-facing rows from noisy tool/activity events.
+ */
+export function summarizePlan(plan: PlanStep[]): TodoCounts {
+  let completed = 0;
+  let inProgress = 0;
 
-function useTranscriptTarget(): HTMLElement | null {
-  const [target, setTarget] = useState<HTMLElement | null>(null);
+  for (const step of plan) {
+    if (step.status === "completed") completed += 1;
+    else if (step.status === "inProgress") inProgress += 1;
+  }
 
-  useEffect(() => {
-    let frame = 0;
-    const resolve = () => {
-      const transcript = document.querySelector<HTMLElement>(".transcript");
-      if (transcript) {
-        setTarget(transcript);
-        return;
-      }
-      frame = window.requestAnimationFrame(resolve);
-    };
-    resolve();
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
-  return target;
-}
-
-function useTimelineTarget(): HTMLElement | null {
-  const [target, setTarget] = useState<HTMLElement | null>(null);
-
-  useEffect(() => {
-    let frame = 0;
-    const resolve = () => {
-      const anchor = document.querySelector<HTMLElement>(".timeline-anchor");
-      if (anchor) {
-        setTarget(anchor);
-        return;
-      }
-      frame = window.requestAnimationFrame(resolve);
-    };
-    resolve();
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
-  return target;
-}
-
-function useScrollGuard(target: HTMLElement | null, revision: number) {
-  const [following, setFollowing] = useState(true);
-  const originalScrollTo = useRef<HTMLElement["scrollTo"]>();
-
-  useEffect(() => {
-    if (!target) return;
-    const threshold = 72;
-    const nearBottom = () => target.scrollHeight - target.scrollTop - target.clientHeight <= threshold;
-    const updateFollowing = () => setFollowing(nearBottom());
-    const nativeScrollTo = target.scrollTo.bind(target);
-    originalScrollTo.current = nativeScrollTo;
-    target.scrollTo = ((optionsOrX?: ScrollToOptions | number, y?: number) => {
-      if (!nearBottom()) return;
-      if (typeof optionsOrX === "number") nativeScrollTo(optionsOrX, y ?? 0);
-      else nativeScrollTo(optionsOrX);
-    }) as HTMLElement["scrollTo"];
-    target.addEventListener("scroll", updateFollowing, { passive: true });
-    updateFollowing();
-    return () => {
-      target.removeEventListener("scroll", updateFollowing);
-      target.scrollTo = nativeScrollTo;
-    };
-  }, [target]);
-
-  useEffect(() => {
-    if (!target || !following) return;
-    window.requestAnimationFrame(() => {
-      originalScrollTo.current?.({ top: target.scrollHeight, behavior: "smooth" });
-    });
-  }, [target, following, revision]);
-
-  const jumpToLatest = () => {
-    if (!target) return;
-    originalScrollTo.current?.({ top: target.scrollHeight, behavior: "smooth" });
-    setFollowing(true);
+  return {
+    completed,
+    inProgress,
+    pending: plan.length - completed - inProgress,
   };
-
-  return { following, jumpToLatest };
 }
 
-function toStructuredEvents(plan: PlanStep[], activities: RuntimeActivity[], busy: boolean) {
-  const runtimeEvents: RuntimeEvent[] = [
-    ...(busy ? [{ type: "started" } as RuntimeEvent] : []),
-    { type: "plan", steps: plan },
-    ...activities.map((activity): RuntimeEvent => ({ type: "activity", activity })),
-  ];
-  return reduceTimelineEvents(emptyTimelineSnapshot, runtimeEvents);
+function TodoStatusIcon({ status }: { status: PlanStep["status"] }) {
+  if (status === "completed") return <CheckCircle2 size={16} />;
+  if (status === "inProgress") return <span className="todo-status-spinner" aria-hidden="true" />;
+  if (status === "failed") return <OctagonX size={16} />;
+  return <Circle size={15} />;
+}
+
+/**
+ * Mount directly above the composer card. A dedicated mount keeps the to-do
+ * surface out of the transcript, so tool-call churn never pushes chat content.
+ */
+function useTodoTarget(): HTMLElement | null {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    let frame = 0;
+    const resolve = () => {
+      const composer = document.querySelector<HTMLElement>(".composer-wrap");
+      const card = composer?.querySelector<HTMLElement>(".composer-card");
+      if (composer && card) {
+        let mount = composer.querySelector<HTMLElement>("[data-medusa-todos]");
+        if (!mount) {
+          mount = document.createElement("div");
+          mount.dataset.medusaTodos = "true";
+          composer.insertBefore(mount, card);
+        }
+        setTarget(mount);
+        return;
+      }
+      frame = window.requestAnimationFrame(resolve);
+    };
+
+    resolve();
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  return target;
 }
 
 export function DesktopTimelineBridge() {
-  const transcript = useTranscriptTarget();
-  const target = useTimelineTarget();
-  const legacySnapshot = useSyncExternalStore(subscribeTimeline, getTimelineSnapshot, getTimelineSnapshot);
-  const structured = useMemo(
-    () => toStructuredEvents(legacySnapshot.plan, legacySnapshot.activities, legacySnapshot.busy),
-    [legacySnapshot.plan, legacySnapshot.activities, legacySnapshot.busy],
-  );
-  const { following, jumpToLatest } = useScrollGuard(transcript, structured.revision);
+  const target = useTodoTarget();
+  const snapshot = useSyncExternalStore(subscribeTimeline, getTimelineSnapshot, getTimelineSnapshot);
+  const [expanded, setExpanded] = useState(false);
+  const counts = useMemo(() => summarizePlan(snapshot.plan), [snapshot.plan]);
 
-  const visibleEvents = useMemo(
-    () => (structured.events ?? []).slice(-18),
-    [structured.events],
-  );
-  const activityEvents = visibleEvents.filter((event) => event.kind === "activity" || event.kind === "verification");
-
-  if (!target || (!structured.plan.length && !structured.events.length && !structured.busy)) return null;
+  if (!target || snapshot.plan.length === 0) return null;
 
   return createPortal(
-    <>
-      <section className="conversation-timeline" aria-label="Live execution timeline" aria-live="polite">
-        {!!structured.plan.length && (
-          <div className="timeline-plan" aria-label="Execution plan">
-            {structured.plan.map((item, index) => (
-              <div className={`timeline-plan-step ${item.status}`} key={`${item.title}-${index}`}>
-                <span className="timeline-node" aria-hidden="true"><PlanIcon status={item.status} /></span>
-                <span>{item.title}</span>
-              </div>
-            ))}
-          </div>
-        )}
+    <section className={`todo-panel${expanded ? " expanded" : ""}`} aria-label="To-dos">
+      <button
+        type="button"
+        className="todo-summary"
+        aria-expanded={expanded}
+        aria-controls="medusa-todo-list"
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className="todo-heading"><ListChecks size={16} aria-hidden="true" /><strong>To-dos</strong></span>
+        <span className="todo-counts">
+          {counts.completed} completed <span aria-hidden="true">·</span> {counts.inProgress} in progress <span aria-hidden="true">·</span> {counts.pending} pending
+        </span>
+        <ChevronDown className="todo-chevron" size={17} aria-hidden="true" />
+      </button>
 
-        {!!activityEvents.length && (
-          <section className="timeline-activity" aria-label="Tool calls">
-            {activityEvents.map((event) => (
-              <div className={`timeline-activity-row ${event.status}`} key={event.id}>
-                <span className="timeline-activity-icon" aria-hidden="true"><ActivityIcon event={event} /></span>
-                <span className="timeline-activity-title">{event.title}</span>
-                {!!event.details[0] && <span className="timeline-activity-detail">{event.details[0]}</span>}
-              </div>
-            ))}
-          </section>
-        )}
-
-        {structured.busy && (
-          <div className="timeline-progress" aria-label="Work in progress" role="progressbar">
-            <span />
-          </div>
-        )}
-      </section>
-
-      {!following && (
-        <button type="button" className="timeline-jump-latest" onClick={jumpToLatest}>
-          <ChevronDown size={15} /> New activity below
-        </button>
+      {expanded && (
+        <div id="medusa-todo-list" className="todo-list" role="list">
+          {snapshot.plan.map((step, index) => (
+            <div className={`todo-row ${step.status}`} role="listitem" key={`${step.title}-${index}`}>
+              <span className="todo-status" aria-hidden="true"><TodoStatusIcon status={step.status} /></span>
+              <span className="todo-row-text" title={step.title}>{step.title}</span>
+            </div>
+          ))}
+        </div>
       )}
-    </>,
+    </section>,
     target,
   );
 }
