@@ -96,13 +96,23 @@ jobs:
           path.write_text(text)
           PY
           cargo fmt --all
-      - name: Commit fixes
+          git diff --check
+      - name: Commit fixes through GitHub contents API
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-runtime/src/workspace_worker_manager.rs crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/component_runtime.rs
-          git diff --cached --check
-          git commit -m 'fix(runtime): satisfy production lint policy'
-          git push origin HEAD:${GITHUB_REF_NAME}
+          for path in \
+            crates/medusa-runtime/src/workspace_worker_manager.rs \
+            crates/medusa-runtime/src/lib.rs \
+            crates/medusa-runtime/src/component_runtime.rs
+          do
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_REF_NAME" --jq .sha)"
+            content="$(base64 -w0 "$path")"
+            gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$path" \
+              -f message='fix(runtime): satisfy production lint policy' \
+              -f content="$content" \
+              -f sha="$sha" \
+              -f branch="$GITHUB_REF_NAME"
+          done
