@@ -77,6 +77,13 @@ fn status() -> MedusaResult<DesktopUpdateStatus> {
 
 fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()> {
     let target_sha = validate_target_sha(target_sha)?;
+    emit_progress(
+        app,
+        "preparing",
+        0,
+        None,
+        "Preparing the verified desktop update…",
+    );
     let updater = MainBranchUpdater::public()?;
     let latest_main_sha = updater.latest_main()?.sha;
     if latest_main_sha != target_sha {
@@ -107,9 +114,13 @@ fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()>
     );
 
     let mut last_percent = 0_u64;
+    let restart = Restart {
+        detached: true,
+        ..Restart::default()
+    };
     updater.schedule_main_desktop_install(
         &executable,
-        &Restart::default(),
+        &restart,
         parent_pid,
         |completed, total| {
             let should_emit = match total {
@@ -141,14 +152,14 @@ fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()>
         "installing",
         1,
         Some(1),
-        "Download verified; staging the update…",
+        "Download verified; preparing the final replacement…",
     );
     emit_progress(
         app,
-        "restarting",
-        1,
-        Some(1),
-        "Update ready; restarting Medusa Desktop…",
+        "replacing",
+        99,
+        Some(100),
+        "The update is ready. Medusa Desktop will close briefly while the application is replaced, then reopen automatically…",
     );
     Ok(())
 }

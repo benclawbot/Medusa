@@ -139,6 +139,7 @@ fn release_channel(
             repo.to_string_lossy().into_owned(),
             "--continue".to_owned(),
         ],
+        detached: false,
         sequence_file: Some(repo.join(".medusa/update-sequence")),
         rollout_sequence: Some(release.rollout_sequence),
     };

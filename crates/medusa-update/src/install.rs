@@ -15,6 +15,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use crate::model::invalid;
 
 pub const HEALTH_FILE_ENV: &str = "MEDUSA_UPDATE_HEALTH_FILE";
+const HEALTH_CHECK_ATTEMPTS: usize = 600;
 
 /// Whether a binary may be self-replaced or is owned by a package manager.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +48,9 @@ impl InstallLocation {
 #[derive(Clone, Debug, Default)]
 pub struct Restart {
     pub arguments: Vec<String>,
+    /// Launch the replacement as an independent desktop process rather than sharing the
+    /// updater helper's console.
+    pub detached: bool,
     /// Commit this rollout sequence only after the replacement acknowledges startup.
     pub sequence_file: Option<PathBuf>,
     pub rollout_sequence: Option<u64>,
@@ -300,7 +304,7 @@ chmod 755 "$target" || rollback
 MEDUSA_UPDATE_HEALTH_FILE="$health" "$target" {arguments} &
 child=$!
 i=0
-while [ "$i" -lt 100 ]; do
+while [ "$i" -lt {health_check_attempts} ]; do
   if [ -s "$health" ]; then
     if [ -n "$sequence_file" ]; then
       printf '%s\n' "$sequence_value" > "$sequence_file.tmp" || rollback
@@ -322,6 +326,7 @@ rollback
         state = shell_quote_path(state),
         health = shell_quote_path(health),
         lock = shell_quote_path(lock),
+        health_check_attempts = HEALTH_CHECK_ATTEMPTS,
     )
 }
 
@@ -352,6 +357,15 @@ fn windows_replace_script(
         .rollout_sequence
         .map(|value| powershell_quote(&value.to_string()))
         .unwrap_or_else(|| powershell_quote(""));
+    let start_process = if restart.detached {
+        format!(
+            "return Start-Process -FilePath $target -ArgumentList @({arguments}) -WorkingDirectory $workingDirectory -PassThru"
+        )
+    } else {
+        format!(
+            "return Start-Process -FilePath $target -ArgumentList @({arguments}) -WorkingDirectory $workingDirectory -PassThru -NoNewWindow"
+        )
+    };
     format!(
         r##"$ErrorActionPreference = 'Stop'
 $parentPid = {parent_pid}
@@ -363,13 +377,17 @@ $health = {health}
 $lock = {lock}
 $sequenceFile = {sequence_file}
 $sequenceValue = {sequence_value}
+function Start-UpdatedProcess {{
+  $workingDirectory = Split-Path -Parent $target
+  {start_process}
+}}
 function Restore-Previous([object]$Child) {{
   if ($null -ne $Child) {{ Stop-Process -Id $Child.Id -Force -ErrorAction SilentlyContinue }}
   Remove-Item $target -Force -ErrorAction SilentlyContinue
   if (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}
   Set-Content -LiteralPath $state -Value 'rolled-back' -Encoding ascii
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
-  Start-Process -FilePath $target -ArgumentList @({arguments}) -NoNewWindow
+  Start-UpdatedProcess | Out-Null
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
   exit 1
 }}
@@ -388,9 +406,9 @@ try {{
 $child = $null
 try {{
   $env:{health_env} = $health
-  $child = Start-Process -FilePath $target -ArgumentList @({arguments}) -PassThru -NoNewWindow
+  $child = Start-UpdatedProcess
   Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
-  for ($i = 0; $i -lt 100; $i++) {{
+  for ($i = 0; $i -lt {health_check_attempts}; $i++) {{
     if (Test-Path -LiteralPath $health) {{
       if ($sequenceFile) {{
         Set-Content -LiteralPath "$sequenceFile.tmp" -Value $sequenceValue -Encoding ascii
@@ -418,6 +436,8 @@ Restore-Previous $child
         health = powershell_quote_path(health),
         lock = powershell_quote_path(lock),
         health_env = HEALTH_FILE_ENV,
+        start_process = start_process,
+        health_check_attempts = HEALTH_CHECK_ATTEMPTS,
     )
 }
 
@@ -660,6 +680,7 @@ mod tests {
     fn scripts_require_health_and_contain_rollback() {
         let restart = Restart {
             arguments: vec!["--repo".into(), "repository with spaces".into()],
+            detached: false,
             sequence_file: Some(PathBuf::from("sequence file")),
             rollout_sequence: Some(42),
         };
@@ -693,10 +714,26 @@ mod tests {
         assert!(windows.contains("rolled-back"));
         assert!(windows.contains("Start-Process"));
         assert!(windows.contains("-NoNewWindow"));
-        assert!(windows.matches("-NoNewWindow").count() >= 2);
+        assert!(windows.matches("-NoNewWindow").count() >= 1);
+        assert!(windows.contains("-WorkingDirectory"));
         assert!(windows.contains("Restore-Previous"));
         assert!(windows.contains("sequence file"));
         assert!(windows.contains("42"));
+
+        let detached_windows = windows_replace_script(
+            42,
+            Path::new(r"C:\bin\previous.exe"),
+            Path::new(r"C:\bin\medusa.exe"),
+            Path::new(r"C:\bin\new.exe"),
+            Path::new(r"C:\bin\state"),
+            Path::new(r"C:\bin\health"),
+            Path::new(r"C:\bin\lock"),
+            &Restart {
+                detached: true,
+                ..restart
+            },
+        );
+        assert!(!detached_windows.contains("-NoNewWindow"));
     }
 
     #[test]
