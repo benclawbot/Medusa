@@ -460,6 +460,33 @@ mod tests {
     }
 
     #[test]
+    fn missing_command_is_environment_error() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let error = execute_verification_command(
+            directory.path(),
+            "medusa-command-that-does-not-exist-1073",
+            &[],
+        )
+        .expect_err("missing command");
+        assert_eq!(error.category, ErrorCategory::Environment);
+        assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+    }
+
+    #[test]
+    fn spawned_non_zero_command_is_tool_execution_result() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let result = execute_verification_command(
+            directory.path(),
+            "rustc",
+            &["--medusa-invalid-option-1073".to_owned()],
+        )
+        .expect("spawned command");
+        assert!(!result.passed);
+        assert!(!result.timed_out);
+        assert_ne!(result.exit_code, Some(0));
+    }
+
+    #[test]
     fn pre_cancelled_command_does_not_execute() {
         let directory = tempfile::tempdir().expect("tempdir");
         let cancellation = AtomicBool::new(true);
