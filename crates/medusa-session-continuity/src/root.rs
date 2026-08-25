@@ -1,7 +1,10 @@
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+    thread,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -11,6 +14,11 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 pub const CODING_TRAJECTORY_SCHEMA_VERSION: u32 = 1;
 const MAX_TRAJECTORY_ITEMS: usize = 256;
 const MAX_TRAJECTORY_TEXT_BYTES: usize = 32 * 1024;
+const LOCK_RETRY_ATTEMPTS: usize = 10_000;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(1);
+const RENAME_RETRY_ATTEMPTS: usize = 8;
+const RENAME_RETRY_DELAY: Duration = Duration::from_millis(2);
+static TEMPORARY_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -619,8 +627,19 @@ impl ContinuityStore {
         &self,
         session_id: impl Into<String>,
     ) -> Result<ContinuitySession, ContinuityError> {
+        let _lock = self.acquire_lock()?;
+        match fs::metadata(&self.path) {
+            Ok(_) => {
+                return Err(ContinuityError::Io(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("session already exists at {}", self.path.display()),
+                )));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         let session = ContinuitySession::new(session_id);
-        self.persist(&session)?;
+        self.persist_new(&session)?;
         Ok(session)
     }
 
@@ -852,6 +871,7 @@ impl ContinuityStore {
     where
         F: FnOnce(&mut ContinuitySession) -> Result<SessionEventKind, ContinuityError>,
     {
+        let _lock = self.acquire_lock()?;
         let mut session = self.load()?;
         if let Some(existing) = session.event(event_id) {
             if existing.client_id == client_id
@@ -893,23 +913,162 @@ impl ContinuityStore {
         Ok(ApplyOutcome::Applied(session))
     }
 
+    fn persist_new(&self, session: &ContinuitySession) -> Result<(), ContinuityError> {
+        self.persist_with_mode(session, PersistMode::CreateNew)
+    }
+
     fn persist(&self, session: &ContinuitySession) -> Result<(), ContinuityError> {
+        self.persist_with_mode(session, PersistMode::Replace)
+    }
+
+    fn persist_with_mode(
+        &self,
+        session: &ContinuitySession,
+        mode: PersistMode,
+    ) -> Result<(), ContinuityError> {
         validate(session)?;
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
-        let temp = self.path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(session)?;
-        {
-            let mut file = fs::File::create(&temp)?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
+        let (temp, write_result) = loop {
+            let temp = self.unique_temporary_path();
+            match OpenOptions::new().write(true).create_new(true).open(&temp) {
+                Ok(mut file) => {
+                    let result = (|| -> io::Result<()> {
+                        file.write_all(&bytes)?;
+                        file.sync_all()
+                    })();
+                    break (temp, result);
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    // The counter is process-wide, but a stale file from a prior process may
+                    // still use the same name. Pick another unique path instead of truncating it.
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&temp);
+            return Err(error.into());
         }
-        fs::rename(&temp, &self.path)?;
+
+        let install_result = match mode {
+            PersistMode::CreateNew => {
+                // A hard link is the portable no-replace primitive: unlike rename on Unix, it
+                // cannot overwrite a session that appeared after the initial existence check.
+                fs::hard_link(&temp, &self.path)
+            }
+            PersistMode::Replace => rename_with_retry(&temp, &self.path),
+        };
+        if let Err(error) = install_result {
+            let _ = fs::remove_file(&temp);
+            return Err(error.into());
+        }
+        let _ = fs::remove_file(&temp);
         if let Ok(directory) = fs::File::open(parent) {
             let _ = directory.sync_all();
         }
         Ok(())
     }
+
+    fn unique_temporary_path(&self) -> PathBuf {
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("session.json");
+        let counter = TEMPORARY_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        self.path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()))
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        let mut path = self.path.as_os_str().to_os_string();
+        path.push(".lock");
+        PathBuf::from(path)
+    }
+
+    fn acquire_lock(&self) -> Result<ContinuityLock, ContinuityError> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let lock_path = self.lock_path();
+        for _ in 0..LOCK_RETRY_ATTEMPTS {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(mut lock_file) => {
+                    let result = (|| -> io::Result<()> {
+                        writeln!(lock_file, "pid={}", std::process::id())?;
+                        lock_file.sync_all()
+                    })();
+                    if let Err(error) = result {
+                        let _ = fs::remove_file(&lock_path);
+                        return Err(error.into());
+                    }
+                    return Ok(ContinuityLock { path: lock_path });
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::AlreadyExists
+                            | io::ErrorKind::Interrupted
+                            | io::ErrorKind::PermissionDenied
+                            | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    thread::sleep(LOCK_RETRY_DELAY);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(ContinuityError::Io(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("timed out waiting for session lock {}", lock_path.display()),
+        )))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PersistMode {
+    CreateNew,
+    Replace,
+}
+
+#[derive(Debug)]
+struct ContinuityLock {
+    path: PathBuf,
+}
+
+impl Drop for ContinuityLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
+    for attempt in 0..RENAME_RETRY_ATTEMPTS {
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if attempt + 1 < RENAME_RETRY_ATTEMPTS
+                    && matches!(
+                        error.kind(),
+                        io::ErrorKind::AlreadyExists
+                            | io::ErrorKind::Interrupted
+                            | io::ErrorKind::PermissionDenied
+                            | io::ErrorKind::WouldBlock
+                    ) =>
+            {
+                thread::sleep(RENAME_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("rename retry loop always returns before exhaustion")
 }
 
 fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, ContinuityError> {
@@ -1024,6 +1183,8 @@ fn validate(session: &ContinuitySession) -> Result<(), ContinuityError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     fn task(step: &str, status: Option<&str>) -> AuthoritativeTaskState {
         AuthoritativeTaskState {
@@ -1062,6 +1223,107 @@ mod tests {
             .expect("attach")
             .session()
             .clone()
+    }
+
+    #[test]
+    fn concurrent_create_refuses_duplicate_session() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = Arc::new(temp.path().join("session.json"));
+        let barrier = Arc::new(Barrier::new(16));
+        let handles = (0..16)
+            .map(|_| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    ContinuityStore::new(path.as_ref().clone()).create("session-1")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("create thread"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 15);
+        assert!(results.iter().all(|result| {
+            result.as_ref().err().is_none_or(|error| {
+                matches!(
+                    error,
+                    ContinuityError::Io(io_error)
+                        if io_error.kind() == io::ErrorKind::AlreadyExists
+                )
+            })
+        }));
+        assert_eq!(
+            ContinuityStore::new(path.as_ref().clone())
+                .load()
+                .unwrap()
+                .session_id,
+            "session-1"
+        );
+    }
+
+    #[test]
+    fn concurrent_updates_reject_stale_writers_without_clobbering_state() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = Arc::new(temp.path().join("session.json"));
+        let store = ContinuityStore::new(path.as_ref().clone());
+        let initial = store.create("session-1").expect("create");
+        let owner = attach(
+            &store,
+            initial.revision,
+            "tui",
+            ClientKind::Tui,
+            AttachmentMode::Owner,
+            "attach",
+            1,
+        );
+        let barrier = Arc::new(Barrier::new(16));
+        let handles = (0..16)
+            .map(|index| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                let expected_revision = owner.revision;
+                thread::spawn(move || {
+                    barrier.wait();
+                    ContinuityStore::new(path.as_ref().clone()).mutate(MutationRequest {
+                        client_id: "tui".to_owned(),
+                        expected_revision,
+                        occurred_at_unix_ms: 10 + index,
+                        event_id: format!("concurrent-{index}"),
+                        event: SessionEventKind::TaskStateChanged {
+                            state: format!("state-{index}"),
+                        },
+                        task: task(&format!("state-{index}"), None),
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("update thread"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Ok(ApplyOutcome::Applied(_))))
+                .count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(ContinuityError::StaleRevision { .. })))
+                .count(),
+            15
+        );
+        let final_session = store.load().expect("final session");
+        assert_eq!(final_session.revision, owner.revision + 1);
+        assert_eq!(final_session.events.len(), owner.events.len() + 1);
     }
 
     #[test]
