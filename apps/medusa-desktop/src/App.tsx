@@ -635,12 +635,29 @@ export function App() {
         window.localStorage.removeItem("medusa.desktop.repo");
         started = await startRuntime();
       }
-      return configureStartedRuntime(started, {
-        provider: configuration.provider,
-        model: configuration.model,
-        effort: configuration.effort,
-        expectedRevision: configuration.revision,
-      });
+      if (disposed) {
+        void closeRuntime(started.runtimeId);
+        return undefined;
+      }
+      // Publish the runtime before provider verification/configuration. The
+      // daemon may need to start or recover, but that must not make the
+      // composer unavailable or make the whole window appear hung.
+      setRuntimeId(started.runtimeId);
+      setRepo(started.repo);
+      try {
+        return await configureStartedRuntime(started, {
+          provider: configuration.provider,
+          model: configuration.model,
+          effort: configuration.effort,
+          expectedRevision: configuration.revision,
+        });
+      } catch (cause) {
+        if (!disposed) {
+          setRuntimeId(undefined);
+          setRepo("");
+        }
+        throw cause;
+      }
     };
     void start()
       .then((started) => {
@@ -649,8 +666,6 @@ export function App() {
           void closeRuntime(started.runtimeId);
           return;
         }
-        setRuntimeId(started.runtimeId);
-        setRepo(started.repo);
       })
       .catch((cause) => {
         if (!disposed) setError(String(cause));
@@ -667,14 +682,9 @@ export function App() {
   const openProject = async () => {
     const selected = await open({ directory: true, multiple: false, title: "Open a Medusa project" });
     if (typeof selected !== "string") return;
+    let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
     try {
-      const started = await configureStartedRuntime(await startRuntime(selected), {
-        provider,
-        model,
-        effort,
-        expectedRevision: sharedConfiguration?.revision ?? 0,
-      });
-      await refreshConfiguration();
+      started = await startRuntime(selected);
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo(started.repo);
@@ -689,20 +699,23 @@ export function App() {
       setSidePanelView("work");
       setError(undefined);
       window.localStorage.setItem("medusa.desktop.repo", started.repo);
-    } catch (cause) {
-      setError(String(cause));
-    }
-  };
-
-  const openGeneralChat = async () => {
-    try {
-      const started = await configureStartedRuntime(await startRuntime(), {
+      await configureStartedRuntime(started, {
         provider,
         model,
         effort,
         expectedRevision: sharedConfiguration?.revision ?? 0,
       });
       await refreshConfiguration();
+    } catch (cause) {
+      if (started) setRuntimeId(undefined);
+      setError(String(cause));
+    }
+  };
+
+  const openGeneralChat = async () => {
+    let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
+    try {
+      started = await startRuntime();
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo("");
@@ -717,7 +730,15 @@ export function App() {
       setSidePanelView("work");
       setError(undefined);
       window.localStorage.removeItem("medusa.desktop.repo");
+      await configureStartedRuntime(started, {
+        provider,
+        model,
+        effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
+      });
+      await refreshConfiguration();
     } catch (cause) {
+      if (started) setRuntimeId(undefined);
       setError(String(cause));
     }
   };
@@ -838,6 +859,14 @@ export function App() {
         attachments: suppliedAttachments,
       },
     ]);
+    if (submitsTurn) {
+      setLastRequest({ text, attachments: suppliedAttachments });
+    }
+    // Clear the composer as soon as the request is captured. The runtime may
+    // take a while to configure the provider or accept the request, and the
+    // user should be free to see that the turn was sent or start steering it.
+    setPrompt("");
+    setAttachments([]);
     try {
       if (clean.startsWith("/") && suppliedAttachments.length === 0) {
         await runRuntimeCommand(runtimeId, clean);
@@ -848,15 +877,12 @@ export function App() {
           attachments: suppliedAttachments,
           revision: Date.now(),
         });
-        setLastRequest({ text, attachments: suppliedAttachments });
         setMessages((current) => [
           ...current.map((message) => message.id === userMessageId
             ? { ...message, queued: disposition === "queued" }
             : message),
         ]);
       }
-      setPrompt("");
-      setAttachments([]);
       if (submitsTurn) setPendingSubmit(false);
     } catch (cause) {
       if (submitsTurn) {

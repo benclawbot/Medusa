@@ -374,6 +374,7 @@ impl RuntimeEntry {
 pub struct RuntimeRegistry {
     next_id: AtomicU64,
     entries: Mutex<BTreeMap<String, Arc<Mutex<RuntimeEntry>>>>,
+    shutdown_supervisors: Mutex<BTreeMap<String, DaemonSupervisor>>,
 }
 
 impl RuntimeRegistry {
@@ -388,10 +389,8 @@ impl RuntimeRegistry {
         );
         let web_artifact_baseline = web_artifact_snapshot(&repo);
         let launch = DaemonLaunch::for_current_executable().map_err(|error| error.to_string())?;
-        let mut supervisor = DaemonSupervisor::new(&repo, launch);
-        let lifecycle = supervisor
-            .ensure_running()
-            .map_err(|error| error.to_string())?;
+        let supervisor = DaemonSupervisor::new(&repo, launch);
+        let shutdown_supervisor = supervisor.clone();
         let entry = Arc::new(Mutex::new(RuntimeEntry {
             repo,
             client_id: DESKTOP_CLIENT_ID.to_owned(),
@@ -402,13 +401,19 @@ impl RuntimeRegistry {
             presentation: DesktopCanonicalPresentation::new(),
             daemon: DesktopDaemon {
                 supervisor,
-                last_state: Some(lifecycle.state),
+                last_state: None,
             },
         }));
-        self.entries
+        let mut entries = self
+            .entries
             .lock()
-            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
-            .insert(id.clone(), entry);
+            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?;
+        let mut shutdown_supervisors = self
+            .shutdown_supervisors
+            .lock()
+            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?;
+        entries.insert(id.clone(), entry);
+        shutdown_supervisors.insert(id.clone(), shutdown_supervisor);
         Ok(RuntimeStartResponse {
             runtime_id: id,
             repo: displayed_repo,
@@ -437,15 +442,15 @@ impl RuntimeRegistry {
     ///
     /// The daemon is launched detached so it can survive a renderer restart. That
     /// is useful during normal recovery, but it must not make a closed desktop keep
-    /// provider work or child processes alive.
+    /// provider work or child processes alive. Shutdown handles live outside the
+    /// entry locks because an active frontend request may hold one while it waits
+    /// for a long-running provider operation.
     pub fn shutdown_all(&self) {
-        let Ok(entries) = self.entries.lock() else {
+        let Ok(mut supervisors) = self.shutdown_supervisors.lock() else {
             return;
         };
-        for entry in entries.values() {
-            if let Ok(mut entry) = entry.lock() {
-                let _ = entry.daemon.supervisor.shutdown_now();
-            }
+        for supervisor in supervisors.values_mut() {
+            let _ = supervisor.shutdown_now();
         }
     }
 }
@@ -485,15 +490,19 @@ pub fn runtime_close(
     runtime_id: String,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<(), String> {
-    let entry = registry
+    registry
         .entries
         .lock()
         .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
         .remove(&runtime_id)
         .ok_or_else(|| format!("runtime {runtime_id} does not exist"))?;
-    if let Ok(mut entry) = entry.lock() {
-        let _ = entry.daemon.supervisor.shutdown_now();
-    }
+    let mut supervisor = registry
+        .shutdown_supervisors
+        .lock()
+        .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
+        .remove(&runtime_id)
+        .ok_or_else(|| format!("runtime {runtime_id} shutdown handle does not exist"))?;
+    let _ = supervisor.shutdown_now();
     Ok(())
 }
 
@@ -977,6 +986,63 @@ mod tests {
     #[test]
     fn desktop_client_identity_is_stable_for_cursor_reconnect() {
         assert_eq!(DESKTOP_CLIENT_ID, "desktop-primary");
+    }
+
+    #[test]
+    fn runtime_start_registers_before_daemon_readiness() {
+        let directory = crate::tempdir().expect("tempdir");
+        let registry = RuntimeRegistry::default();
+        let response = registry
+            .insert(directory.path().to_path_buf(), directory.path().display().to_string())
+            .expect("runtime registration");
+        let entry = registry
+            .entries
+            .lock()
+            .expect("entries lock")
+            .get(&response.runtime_id)
+            .cloned()
+            .expect("runtime entry");
+
+        assert!(entry.lock().expect("entry lock").daemon.last_state.is_none());
+    }
+
+    #[test]
+    fn shutdown_all_does_not_wait_for_an_active_runtime_entry() {
+        let directory = crate::tempdir().expect("tempdir");
+        let supervisor = DaemonSupervisor::observe_only(directory.path());
+        let entry = Arc::new(Mutex::new(RuntimeEntry {
+            repo: directory.path().to_path_buf(),
+            client_id: DESKTOP_CLIENT_ID.to_owned(),
+            session_id: None,
+            replay_cursor: 0,
+            pending_ack_cursor: None,
+            web_artifact_baseline: BTreeMap::new(),
+            presentation: DesktopCanonicalPresentation::new(),
+            daemon: DesktopDaemon {
+                supervisor: supervisor.clone(),
+                last_state: Some(DaemonLifecycleState::Degraded),
+            },
+        }));
+        let registry = RuntimeRegistry::default();
+        registry
+            .entries
+            .lock()
+            .expect("entries lock")
+            .insert("runtime-1".to_owned(), Arc::clone(&entry));
+        registry
+            .shutdown_supervisors
+            .lock()
+            .expect("shutdown handles lock")
+            .insert("runtime-1".to_owned(), supervisor);
+        let _active_request = entry.lock().expect("entry lock");
+
+        let started = std::time::Instant::now();
+        registry.shutdown_all();
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "shutdown must not wait for an active runtime request"
+        );
     }
 
     #[test]

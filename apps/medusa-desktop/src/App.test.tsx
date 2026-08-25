@@ -169,6 +169,24 @@ it("starts a general chat without requiring a project", async () => {
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
 });
 
+it("keeps the composer usable while initial runtime configuration is pending", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  let resolveConfiguration: () => void = () => undefined;
+  vi.mocked(configureRuntime).mockReturnValue(new Promise<undefined>((resolve) => {
+    resolveConfiguration = () => resolve(undefined);
+  }));
+  render(<App />);
+
+  const composer = await screen.findByPlaceholderText("Ask Medusa anything…");
+  await waitFor(() => expect(composer).toBeEnabled());
+  expect(configureRuntime).toHaveBeenCalledWith(
+    "runtime-general",
+    expect.objectContaining({ provider: "minimax", model: "MiniMax-M3" }),
+  );
+
+  resolveConfiguration();
+});
+
 it("keeps the empty chat quiet and starts the composer at one line", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);
@@ -341,6 +359,7 @@ it("switches to the stop button while Enter submission is still in flight", asyn
   fireEvent.keyDown(composer, { key: "Enter", shiftKey: false });
 
   expect(await screen.findByRole("button", { name: "Stop active turn" })).toBeInTheDocument();
+  expect(composer).toHaveValue("");
   resolveSubmit("started");
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
 });

@@ -128,6 +128,7 @@ impl DaemonLifecycle {
 type Launcher = Arc<dyn Fn(&DaemonPaths) -> MedusaResult<()> + Send + Sync + 'static>;
 
 /// Repository-scoped lifecycle owner shared by terminal and desktop frontends.
+#[derive(Clone)]
 pub struct DaemonSupervisor {
     paths: DaemonPaths,
     launcher: Option<Launcher>,
