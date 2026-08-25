@@ -2,8 +2,7 @@ name: Phase 1 high-severity fix
 
 on:
   push:
-    branches:
-      - fix/high-severity-verified-findings
+    branches: [fix/high-severity-verified-findings]
 
 permissions:
   contents: write
@@ -12,30 +11,26 @@ jobs:
   patch-and-verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: fix/high-severity-verified-findings
           fetch-depth: 0
-
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
         with:
           components: rustfmt,clippy
-
       - name: Apply narrow source fixes and regression tests
         shell: python
         run: |
           from pathlib import Path
 
-          def replace(path, old, new):
+          def rep(path, old, new):
               p = Path(path)
               text = p.read_text()
               if old not in text:
-                  raise SystemExit(f"expected source pattern not found in {path}: {old[:120]!r}")
+                  raise SystemExit(f"expected source pattern missing in {path}")
               p.write_text(text.replace(old, new, 1))
 
-          # Backslash traversal must be normalized before validation; protected paths are case-insensitive.
-          replace(
-              "crates/medusa-capabilities/src/explicit.rs",
+          rep("crates/medusa-capabilities/src/explicit.rs",
               '''            let raw = raw.split('\\t').next().unwrap_or(raw).trim();
             if raw == "/dev/null" {
                 continue;
@@ -60,43 +55,25 @@ jobs:
             if raw.is_empty() || raw.starts_with('/') || raw.split('/').any(|part| part == "..") {
                 return Err(invalid("unified_diff contains an unsafe path"));
             }
-            paths.insert(normalize_path(Path::new(raw)));'''
-          )
-          replace(
-              "crates/medusa-capabilities/src/explicit.rs",
-              '''fn protected_path(path: &Path) -> bool {
-    let p = normalize_path(path);
-    [''',
-              '''fn protected_path(path: &Path) -> bool {
-    let p = normalize_path(path).to_ascii_lowercase();
-    ['''
-          )
-          replace(
-              "crates/medusa-capabilities/src/explicit.rs",
-              '''    #[test]
-    fn duplicate_improvement_ids_are_rejected() {''',
+            paths.insert(normalize_path(Path::new(raw)));''')
+          rep("crates/medusa-capabilities/src/explicit.rs",
+              'fn protected_path(path: &Path) -> bool {\n    let p = normalize_path(path);',
+              'fn protected_path(path: &Path) -> bool {\n    let p = normalize_path(path).to_ascii_lowercase();')
+          rep("crates/medusa-capabilities/src/explicit.rs",
+              '    #[test]\n    fn duplicate_improvement_ids_are_rejected() {',
               '''    #[test]
     fn diff_paths_reject_backslash_traversal_and_protected_paths_ignore_case() {
         let traversal = "--- a/..\\\\secrets.txt\\n+++ b/..\\\\secrets.txt";
         assert!(paths_from_unified_diff(traversal).is_err());
         assert!(protected_path(Path::new("CRATES/MEDUSA-AGENT/SRC/POLICY.RS")));
     }
-
     #[test]
-    fn duplicate_improvement_ids_are_rejected() {'''
-          )
+    fn duplicate_improvement_ids_are_rejected() {''')
 
-          # Recovery snapshots must reject rooted/prefixed and Windows drive-letter paths cross-platform.
-          replace(
-              "crates/medusa-recovery-coordinator/src/preflight.rs",
-              '''use std::collections::{BTreeMap, BTreeSet};''',
-              '''use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Component, Path},
-};'''
-          )
-          replace(
-              "crates/medusa-recovery-coordinator/src/preflight.rs",
+          rep("crates/medusa-recovery-coordinator/src/preflight.rs",
+              'use std::collections::{BTreeMap, BTreeSet};',
+              'use std::{collections::{BTreeMap, BTreeSet}, path::{Component, Path}};')
+          rep("crates/medusa-recovery-coordinator/src/preflight.rs",
               '''fn validate_path(path: &str) -> Result<(), RecoveryPreflightError> {
     let unsafe_path = path.is_empty()
         || path.starts_with('/')
@@ -111,47 +88,31 @@ jobs:
 }''',
               '''fn validate_path(path: &str) -> Result<(), RecoveryPreflightError> {
     let normalized = path.replace('\\\\', "/");
-    let has_windows_drive_prefix = normalized.as_bytes().get(1) == Some(&b':')
-        && normalized
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphabetic);
+    let bytes = normalized.as_bytes();
+    let drive = bytes.get(1) == Some(&b':')
+        && bytes.first().is_some_and(u8::is_ascii_alphabetic);
     let unsafe_component = Path::new(&normalized).components().any(|component| {
         matches!(component, Component::Prefix(_) | Component::RootDir | Component::ParentDir)
     });
-    let unsafe_path = normalized.is_empty()
-        || has_windows_drive_prefix
-        || unsafe_component
-        || normalized.contains('\\0');
-    if unsafe_path {
+    if normalized.is_empty() || drive || unsafe_component || normalized.contains('\\0') {
         Err(RecoveryPreflightError::UnsafePath(path.to_owned()))
     } else {
         Ok(())
     }
-}'''
-          )
-          replace(
-              "crates/medusa-recovery-coordinator/src/preflight.rs",
-              '''    #[test]
-    fn preview_is_file_level_deterministic_and_non_mutating() {''',
+}''')
+          rep("crates/medusa-recovery-coordinator/src/preflight.rs",
+              '    #[test]\n    fn preview_is_file_level_deterministic_and_non_mutating() {',
               '''    #[test]
     fn rejects_rooted_parent_and_drive_letter_paths() {
         for path in ["../secret", "..\\\\secret", "/etc/passwd", "C:\\\\secret", "c:/secret"] {
-            assert!(matches!(
-                validate_path(path),
-                Err(RecoveryPreflightError::UnsafePath(_))
-            ), "{path}");
+            assert!(matches!(validate_path(path), Err(RecoveryPreflightError::UnsafePath(_))), "{path}");
         }
         assert!(validate_path("src/lib.rs").is_ok());
     }
-
     #[test]
-    fn preview_is_file_level_deterministic_and_non_mutating() {'''
-          )
+    fn preview_is_file_level_deterministic_and_non_mutating() {''')
 
-          # A changed hunk is precisely what revert targets; only current fingerprint drift should reject it.
-          replace(
-              "crates/medusa-review-model/src/model.rs",
+          rep("crates/medusa-review-model/src/model.rs",
               '''    if hunk.current_fingerprint != expected_hunk_fingerprint
         || hunk.base_fingerprint != hunk.current_fingerprint
     {
@@ -159,46 +120,32 @@ jobs:
     }''',
               '''    if hunk.current_fingerprint != expected_hunk_fingerprint {
         return Err(ReviewActionRejection::WorkingTreeDrift);
-    }'''
-          )
-          replace(
-              "crates/medusa-review-model/src/model.rs",
-              '''    #[test]
-    fn ambiguous_hunk_fails_closed() {''',
+    }''')
+          rep("crates/medusa-review-model/src/model.rs",
+              '    #[test]\n    fn ambiguous_hunk_fails_closed() {',
               '''    #[test]
     fn modified_hunk_is_revertible_but_hunk_drift_is_rejected() {
         let mut changed = file("src/lib.rs", ChangeOrigin::Medusa);
         changed.hunks[0].base_fingerprint = "hunk-base".into();
         changed.hunks[0].current_fingerprint = "hunk-current".into();
         let view = snapshot(vec![changed]);
-        assert!(view
-            .authorize(ReviewActionRequest::RevertHunk {
-                path: "src/lib.rs".into(),
-                hunk_id: "hunk-1".into(),
-                expected_snapshot_id: "snapshot-1".into(),
-                expected_file_fingerprint: "file-v1".into(),
-                expected_hunk_fingerprint: "hunk-current".into(),
-            })
-            .is_ok());
-        assert_eq!(
-            view.authorize(ReviewActionRequest::RevertHunk {
-                path: "src/lib.rs".into(),
-                hunk_id: "hunk-1".into(),
-                expected_snapshot_id: "snapshot-1".into(),
-                expected_file_fingerprint: "file-v1".into(),
-                expected_hunk_fingerprint: "stale-hunk".into(),
-            }),
-            Err(ReviewActionRejection::WorkingTreeDrift)
-        );
+        assert!(view.authorize(ReviewActionRequest::RevertHunk {
+            path: "src/lib.rs".into(), hunk_id: "hunk-1".into(),
+            expected_snapshot_id: "snapshot-1".into(),
+            expected_file_fingerprint: "file-v1".into(),
+            expected_hunk_fingerprint: "hunk-current".into(),
+        }).is_ok());
+        assert_eq!(view.authorize(ReviewActionRequest::RevertHunk {
+            path: "src/lib.rs".into(), hunk_id: "hunk-1".into(),
+            expected_snapshot_id: "snapshot-1".into(),
+            expected_file_fingerprint: "file-v1".into(),
+            expected_hunk_fingerprint: "stale-hunk".into(),
+        }), Err(ReviewActionRejection::WorkingTreeDrift));
     }
-
     #[test]
-    fn ambiguous_hunk_fails_closed() {'''
-          )
+    fn ambiguous_hunk_fails_closed() {''')
 
-          # OpenAI reasoning-family chat completions use max_completion_tokens and reject temperature.
-          replace(
-              "crates/medusa-provider/src/openai.rs",
+          rep("crates/medusa-provider/src/openai.rs",
               '''        let mut body = json!({
             "model": self.model,
             "messages": messages,
@@ -218,25 +165,18 @@ jobs:
         } else {
             body["max_tokens"] = json!(request.max_tokens);
             body["temperature"] = json!(f64::from(request.temperature_milli) / 1000.0);
-        }'''
-          )
-          replace(
-              "crates/medusa-provider/src/openai.rs",
-              '''impl ModelProvider for OpenAiProvider {''',
+        }''')
+          rep("crates/medusa-provider/src/openai.rs",
+              'impl ModelProvider for OpenAiProvider {',
               '''fn uses_reasoning_chat_parameters(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
-    model.starts_with("gpt-5")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
+    model.starts_with("gpt-5") || model.starts_with("o1")
+        || model.starts_with("o3") || model.starts_with("o4")
 }
 
-impl ModelProvider for OpenAiProvider {'''
-          )
-          replace(
-              "crates/medusa-provider/src/openai.rs",
-              '''    #[test]
-    fn configured_streaming_never_exceeds_wire_support() {''',
+impl ModelProvider for OpenAiProvider {''')
+          rep("crates/medusa-provider/src/openai.rs",
+              '    #[test]\n    fn configured_streaming_never_exceeds_wire_support() {',
               '''    #[test]
     fn reasoning_models_use_completion_limit_and_omit_temperature() {
         for model in ["gpt-5", "gpt-5-mini", "o1", "o3-mini", "o4-mini"] {
@@ -247,7 +187,6 @@ impl ModelProvider for OpenAiProvider {'''
             assert!(body.get("max_tokens").is_none(), "{model}");
             assert!(body.get("temperature").is_none(), "{model}");
         }
-
         let mut provider = test_provider(true);
         provider.model = "gpt-4.1".to_owned();
         let body = provider.request_body(&empty_request(), false).expect("request body");
@@ -255,30 +194,22 @@ impl ModelProvider for OpenAiProvider {'''
         assert_eq!(body["temperature"], 0.0);
         assert!(body.get("max_completion_tokens").is_none());
     }
-
     #[test]
-    fn configured_streaming_never_exceeds_wire_support() {'''
-          )
+    fn configured_streaming_never_exceeds_wire_support() {''')
 
-          # Any mode-disallowed tool is forced into the serial path, which applies the full execution policy gate.
-          replace(
-              "crates/medusa-agent/src/engine.rs",
+          rep("crates/medusa-agent/src/engine.rs",
               '''                    scoped_tool_names.binary_search(name).is_err()
                         || name == ANALYSIS_WORKSPACE_TOOL''',
               '''                    scoped_tool_names.binary_search(name).is_err()
                         || !tool_allowed(self.config.agent.mode, name)
-                        || name == ANALYSIS_WORKSPACE_TOOL'''
-          )
+                        || name == ANALYSIS_WORKSPACE_TOOL''')
 
       - name: Format
         run: cargo fmt --all -- --check
-
       - name: Targeted tests
         run: cargo test -p medusa-mcp-cache -p medusa-capabilities -p medusa-recovery-coordinator -p medusa-review-model -p medusa-provider -p medusa-agent
-
       - name: Workspace clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-
       - name: Commit verified fixes and remove one-shot workflow
         shell: bash
         run: |
