@@ -170,7 +170,7 @@ jobs:
           printf '%s\n' "$MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM" > "$private_key"
           cat > "$public_key" <<'PEM'
           -----BEGIN PUBLIC KEY-----
-          MCowBQYDK2VwAyEAt7PNZJQ4ieU82JGR2gY7qUjVyhXJURtVqydxunEjDAI=
+          MCowBQYDK2VwAyEA5n8mi2llW+1MqXaJ1OJh2nconJyeaZY4RrIenovECCw=
           -----END PUBLIC KEY-----
           PEM
           openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$manifest" -out "$raw_signature"

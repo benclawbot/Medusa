@@ -3,7 +3,7 @@
   "keys": [
     {
       "key_id": "medusa-release-2026-08-primary",
-      "public_key_hex": "dbe0edcd21f4dc28d18548ff361be221c0ffe1f76b0baace1118150df2798f24",
+      "public_key_hex": "232fdffd05b582b8260b68bf0c72b047fdae6eae7752f5a07a15a8580b56dfe9",
       "status": "active",
       "role": "primary",
       "first_sequence": 1,
@@ -13,7 +13,7 @@
     },
     {
       "key_id": "medusa-release-2026-08-recovery",
-      "public_key_hex": "b7b3cd64943889e53cd89191da063ba948d5ca15c9511b55ab2771ba71230c02",
+      "public_key_hex": "e67f268b69655bed4ca97689d4e261da77289c9c9e69963846b21e9e8bc4082c",
       "status": "active",
       "role": "recovery",
       "first_sequence": 1,

@@ -1,6 +1,6 @@
 [package]
 name = "medusa-desktop"
-version = "1.0.3"
+version = "1.0.4"
 description = "Zeus-derived desktop interface for the Medusa runtime"
 authors = ["benclawbot"]
 edition = "2024"
