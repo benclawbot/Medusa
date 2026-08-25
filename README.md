@@ -12,11 +12,13 @@ The product model is **Plan, Execute Safely, Recover**:
 - **Execute Safely.** Read-only teammates scout the work. Git mutation can use a conflict-aware bounded implementation DAG with isolated worktrees; ordinary directories use one isolated content-addressed snapshot implementer. Review, independent verification, authorization, and integration remain separate runtime authorities.
 - **Recover.** Sessions, plans, events, approvals, worker leases, immutable candidates, delegation contracts, agent scopes, effective model-request manifests, transactions, verification, and recovery state live under `.medusa` as durable authority. Interruption, cancellation, or crash never gets rewritten as success.
 
-**Status (v1.0.0, `main`):** CLI, TUI, desktop application, daemon, shared runtime, bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, effective model-request manifests, deterministic request reconstruction, certified tool execution, verified self-update, and repository-enforced engineering policy are shipped. Voice and Telegram implementation foundations are present but their real account/hardware acceptance remains quarantined. Browser model actions are readiness-gated preview with a certified dispatcher; they require explicit opt-in and are not default-enabled. The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
+**Status (v1.0.2, `main`):
+- **CLI, TUI, desktop application, daemon, telegram access, shared runtime**
+- Bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, effective model-request manifests, deterministic request reconstruction, certified tool execution, verified self-update, and repository-enforced engineering policy are shipped.
+
+The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
 
 The runtime also contains an accepted **transactional component-runtime contract** for safe incremental harness evolution: stable component generations, scoped host context, resource ownership, reversible effect journals, declarative dependencies, committed-versus-target provider views, ordered retirement, versioned desired state with compare-and-swap updates, health-validated replacement, containment-bound capabilities, validated self-modification proposals, explicit external-commit semantics, and deterministic fault/invariant checks. This is an adoption seam, not a claim that every production subsystem has already been migrated to component lifecycle management.
-
-**Out of scope today:** autonomous nested delegation, unconstrained model-driven agent teams, direct agent mutation of runtime registries or protected authorities, consensus voting, distributed multi-host mutation transactions, non-Git parallel mutation, and any browser, voice, or remote-frontend claim that lacks its required authenticated live evidence.
 
 ---
 
@@ -66,9 +68,9 @@ The interface changes presentation and interaction style; it does not create a s
 | **CLI** | Shipped | Automation, CI/CD, scripts, diagnostics, workspace utilities, headless objectives. |
 | **Terminal UI (TUI)** | Shipped | Interactive coding, general chat, documentation, analysis, plans, approvals, activity, sessions, recovery, metrics, keyboard-first workflows. |
 | **Desktop application** | Shipped | Graphical workspace with sessions, chat, plans, activity, settings, review, attachments, usage, and voice controls. |
-| **Telegram frontend** | Foundation shipped; live acceptance pending | Remote session attachment, mobile status/control, approvals, progressive rendering, files, voice notes, Mini App voice surface. |
+| **Telegram frontend** | Shipped | Remote session attachment, mobile status/control, approvals, progressive rendering, files, voice notes, Mini App voice surface. |
 | **Daemon** | Shipped | Bounded concurrency, reconnect, cancel-and-drain, IPC control plane for other clients. |
-| **Full-duplex voice** | Foundation shipped; live acceptance pending | Provider-neutral realtime core; microphone streaming remains gated to an established supported route. |
+| **Full-duplex voice** | Shipped | Provider-neutral realtime core; microphone streaming remains gated to an established supported route. |
 
 ### CLI
 
@@ -143,7 +145,7 @@ The desktop app is a Tauri/React shell over the same Medusa runtime. It provides
 
 ### Telegram
 
-Telegram is a frontend to the same authoritative Medusa session, not a separate bot-owned agent. The repository implementation includes progressive rendering, action cards, approvals, durable session attachment/control, files and voice-note handling, and the Mini App voice surface. Real bot/chat/Mini App acceptance remains part of the live evidence tracked by issue [#719](https://github.com/benclawbot/Medusa/issues/719).
+Telegram is a frontend to the same authoritative Medusa session, not a separate bot-owned agent. The repository implementation includes progressive rendering, action cards, approvals, durable session attachment/control, files and voice-note handling, and the Mini App voice surface.
 
 See [Telegram](docs/TELEGRAM.md) for setup, service operation, and Mini App wiring.
 
@@ -151,7 +153,6 @@ See [Telegram](docs/TELEGRAM.md) for setup, service operation, and Mini App wiri
 
 Medusa has one provider-neutral realtime voice model rather than a separate voice agent for each frontend. It includes bounded input/output audio queues, partial/final transcripts, voice activity, tool/approval states, reconnect behavior, deterministic resource cleanup, and barge-in that stops spoken output without implicitly cancelling the coding task.
 
-The OpenAI Realtime transport is capability-gated. Live evidence requires the active `openai-oauth` route and an existing ChatGPT login whose trusted account state can establish the bounded Realtime credential flow. Until real account/audio evidence completes issue [#719](https://github.com/benclawbot/Medusa/issues/719), that route remains `external-acceptance-pending` in [`docs/provider-support.json`](docs/provider-support.json).
 
 ## Installation
 
@@ -228,10 +229,6 @@ The canonical selectable-route, support-tier, credential, live-dogfood, protocol
 | OpenAI-compatible | custom endpoint | OpenAI-compatible | `MEDUSA_API_KEY` plus configured endpoint |
 | OmniRoute | managed route | OpenAI-compatible | managed external route |
 | Local runtime | local route | OpenAI-compatible | user-operated local runtime |
-
-MiniMax is the default direct route. Its runtime protocol, provider profile, support manifest, and scheduled live dogfood route are aligned on MiniMax's Anthropic-compatible endpoint. Native MiniMax/Anthropic-style text streaming is supported by the provider path, with cancellation and bounded response handling preserved.
-
-MiniMax API-key profiles stay on the MiniMax route; they are not reclassified as OpenAI OAuth. Model context-window metadata is provider-scoped so a model label used through another provider does not accidentally inherit an unrelated vendor limit.
 
 ChatGPT OAuth is supplied through the separately distributed `openai-oauth` loopback gateway. Medusa can reuse an existing OAuth credential, start or adopt the authenticated local gateway when the route is selected, and validate discovered models without reading the gateway credential file directly. See [ChatGPT OAuth](docs/CHATGPT-OAUTH.md):
 
