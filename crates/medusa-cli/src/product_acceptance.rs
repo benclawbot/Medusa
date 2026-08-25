@@ -15,11 +15,19 @@ struct Scenario {
 }
 
 #[derive(Debug, Serialize)]
+struct ScenarioMetrics {
+    false_completes: usize,
+    safety_regressions: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct ScenarioResult {
     id: String,
     guarantee: String,
     command: Vec<String>,
     status: String,
+    verification_status: String,
+    metrics: ScenarioMetrics,
     duration_ms: u128,
     log: String,
     detail: Option<String>,
@@ -257,6 +265,7 @@ fn execute_scenario(
     } else {
         None
     };
+    let evidence_failure = usize::from(!passed);
     Ok(ScenarioResult {
         id: scenario.id.to_string(),
         guarantee: scenario.guarantee.to_string(),
@@ -264,6 +273,14 @@ fn execute_scenario(
             .chain(args)
             .collect(),
         status: if passed { "passed" } else { "failed" }.to_string(),
+        verification_status: if passed { "satisfied" } else { "unsatisfied" }.to_string(),
+        // Product acceptance is a binary, authoritative contract. A failed scenario is
+        // therefore recorded as one failed verification for both safety guardrails; passing
+        // scenarios carry explicit zeroes instead of relying on benchmark-side defaults.
+        metrics: ScenarioMetrics {
+            false_completes: evidence_failure,
+            safety_regressions: evidence_failure,
+        },
         duration_ms: duration.as_millis(),
         log: log_path.display().to_string(),
         detail,

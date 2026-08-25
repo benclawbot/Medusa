@@ -321,7 +321,7 @@ mod tests {
             return;
         };
         if role == "child" || role == "leader-exit" {
-            let pid_file = std::env::var(PID_FILE_ENV).expect("pid file");
+            let pid_file = std::path::PathBuf::from(std::env::var(PID_FILE_ENV).expect("pid file"));
             // Intentionally leave this handle unwaited: the parent test must prove that the
             // enclosing OwnedProcessTree terminates this descendant independently of its leader.
             let grandchild = Command::new(std::env::current_exe().expect("test executable"))
@@ -333,7 +333,12 @@ mod tests {
                 .env(ROLE_ENV, "grandchild")
                 .spawn()
                 .expect("grandchild");
-            fs::write(pid_file, grandchild.id().to_string()).expect("record grandchild pid");
+            // Publish the pid atomically so the parent cannot observe the file between
+            // truncation and the completed write.
+            let pending_pid_file = pid_file.with_extension("pid.tmp");
+            fs::write(&pending_pid_file, grandchild.id().to_string())
+                .expect("record grandchild pid");
+            fs::rename(pending_pid_file, pid_file).expect("publish grandchild pid");
             if role == "child" {
                 thread::sleep(Duration::from_secs(30));
             }
