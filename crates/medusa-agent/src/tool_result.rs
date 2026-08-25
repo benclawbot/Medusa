@@ -93,11 +93,11 @@ pub struct CanonicalToolResultV1 {
 }
 
 impl CanonicalToolResultV1 {
-    #[must_use]
+    #[must_use = "use the canonical result or handle serialization failure"]
     pub fn from_receipt(
         receipt: &Value,
         result: &Result<String, medusa_core::MedusaError>,
-    ) -> Self {
+    ) -> medusa_core::MedusaResult<Self> {
         let receipt_outcome = match receipt
             .get("outcome")
             .and_then(Value::as_str)
@@ -159,16 +159,15 @@ impl CanonicalToolResultV1 {
                     .collect()
             })
             .unwrap_or_default();
-        let material = serde_json::to_vec(&(&outcome, &value, &artifact_refs, &evidence_refs))
-            .unwrap_or_default();
-        Self {
+        let material = serde_json::to_vec(&(&outcome, &value, &artifact_refs, &evidence_refs))?;
+        Ok(Self {
             schema_version: CANONICAL_TOOL_RESULT_SCHEMA_VERSION,
             outcome,
             value,
             source_fingerprint: digest(&material),
             artifact_refs,
             evidence_refs,
-        }
+        })
     }
 
     #[must_use]
@@ -309,7 +308,8 @@ mod tests {
             "evidence_refs": ["evidence-1"]
         });
         let canonical =
-            CanonicalToolResultV1::from_receipt(&receipt, &Ok("hello world".to_owned()));
+            CanonicalToolResultV1::from_receipt(&receipt, &Ok("hello world".to_owned()))
+                .expect("canonical result");
         assert_eq!(canonical.outcome, CanonicalToolOutcome::Success);
         assert_eq!(canonical.machine_projection()["value"]["kind"], "text");
         assert_eq!(
@@ -327,7 +327,8 @@ mod tests {
     fn denied_errors_remain_denied_in_every_projection() {
         let receipt = json!({"outcome": "denied"});
         let error = MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, "denied");
-        let canonical = CanonicalToolResultV1::from_receipt(&receipt, &Err(error));
+        let canonical =
+            CanonicalToolResultV1::from_receipt(&receipt, &Err(error)).expect("canonical result");
         assert_eq!(canonical.outcome, CanonicalToolOutcome::Denied);
         assert_eq!(canonical.machine_projection()["outcome"], "denied");
         assert_eq!(canonical.model_projection(100)["outcome"], "denied");
@@ -341,7 +342,8 @@ mod tests {
             ErrorCategory::Execution,
             "failed",
         );
-        let canonical = CanonicalToolResultV1::from_receipt(&receipt, &Err(error));
+        let canonical =
+            CanonicalToolResultV1::from_receipt(&receipt, &Err(error)).expect("canonical result");
         assert_eq!(canonical.outcome, CanonicalToolOutcome::Failed);
         assert_eq!(canonical.machine_projection()["outcome"], "failed");
     }
@@ -352,7 +354,8 @@ mod tests {
         let canonical = CanonicalToolResultV1::from_receipt(
             &receipt,
             &Ok("prefix SECRET_TOKEN suffix and a long tail".to_owned()),
-        );
+        )
+        .expect("canonical result");
         let policy = ToolProjectionPolicy::bounded(12)
             .with_redactions(["SECRET_TOKEN"])
             .with_expansion_handle("artifact://shell_run/1");
@@ -386,7 +389,8 @@ mod tests {
         let canonical = CanonicalToolResultV1::from_receipt(
             &receipt,
             &Ok(r#"{"count":3,"items":["a","b"]}"#.to_owned()),
-        );
+        )
+        .expect("canonical result");
         assert_eq!(
             canonical.machine_projection()["value"]["kind"],
             "structured"
@@ -405,7 +409,8 @@ mod tests {
         let canonical = CanonicalToolResultV1::from_receipt(
             &json!({"outcome": "success"}),
             &Ok(result.to_owned()),
-        );
+        )
+        .expect("canonical result");
         assert_eq!(
             canonical.artifact_refs,
             vec![".medusa/artifacts/shell_run_deadbeef.txt"]

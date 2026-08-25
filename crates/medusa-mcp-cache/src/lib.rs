@@ -72,9 +72,9 @@ impl ServerConfig {
     }
 
     #[must_use]
-    pub fn fingerprint(&self) -> String {
-        let bytes = serde_json::to_vec(self).unwrap_or_default();
-        hex::encode(Sha256::digest(bytes))
+    pub fn fingerprint(&self) -> Result<String, &'static str> {
+        let bytes = serde_json::to_vec(self).map_err(|_| "MCP server config serialization failed")?;
+        Ok(hex::encode(Sha256::digest(bytes)))
     }
 }
 
@@ -136,10 +136,10 @@ impl SchemaSnapshot {
         if tools.windows(2).any(|items| items[0].name == items[1].name) {
             return Err("tool names must be unique per server");
         }
-        let schema_fingerprint = fingerprint_tools(&tools);
+        let schema_fingerprint = fingerprint_tools(&tools)?;
         Ok(Self {
             server_id: config.id.clone(),
-            server_config_fingerprint: config.fingerprint(),
+            server_config_fingerprint: config.fingerprint()?,
             protocol_version,
             server_version,
             fetched_at,
@@ -150,10 +150,14 @@ impl SchemaSnapshot {
     }
 
     #[must_use]
-    pub fn is_fresh_for(&self, config: &ServerConfig, now: OffsetDateTime) -> bool {
-        self.server_id == config.id
-            && self.server_config_fingerprint == config.fingerprint()
-            && now < self.expires_at
+    pub fn is_fresh_for(
+        &self,
+        config: &ServerConfig,
+        now: OffsetDateTime,
+    ) -> Result<bool, &'static str> {
+        Ok(self.server_id == config.id
+            && self.server_config_fingerprint == config.fingerprint()?
+            && now < self.expires_at)
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -173,7 +177,7 @@ impl SchemaSnapshot {
         {
             return Err("tool schemas must be uniquely sorted by name");
         }
-        if self.schema_fingerprint != fingerprint_tools(&self.tools) {
+        if self.schema_fingerprint != fingerprint_tools(&self.tools)? {
             return Err("schema fingerprint does not match tool schemas");
         }
         Ok(())
@@ -255,7 +259,7 @@ impl McpManager {
             .servers
             .get_mut(&snapshot.server_id)
             .ok_or("schema references an unregistered MCP server")?;
-        if snapshot.server_config_fingerprint != entry.config.fingerprint() {
+        if snapshot.server_config_fingerprint != entry.config.fingerprint()? {
             return Err("schema was fetched for a different server configuration");
         }
         entry.schema = Some(snapshot);
@@ -272,10 +276,10 @@ impl McpManager {
             .servers
             .get(server_id)
             .ok_or("MCP server is not registered")?;
-        let fresh_schema = entry
-            .schema
-            .as_ref()
-            .is_some_and(|schema| schema.is_fresh_for(&entry.config, now));
+        let fresh_schema = match entry.schema.as_ref() {
+            Some(schema) => schema.is_fresh_for(&entry.config, now)?,
+            None => false,
+        };
         let connected = entry.connection.state == ConnectionState::Ready;
 
         Ok(match (requires_live_connection, connected, fresh_schema) {
@@ -392,9 +396,9 @@ impl McpManager {
     }
 }
 
-fn fingerprint_tools(tools: &[ToolSchema]) -> String {
-    let bytes = serde_json::to_vec(tools).unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))
+fn fingerprint_tools(tools: &[ToolSchema]) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(tools).map_err(|_| "MCP tool schema serialization failed")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

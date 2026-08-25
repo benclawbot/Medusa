@@ -16,7 +16,7 @@ use medusa_improvement::{
 use time::OffsetDateTime;
 
 fn graph() -> ProvenanceGraph {
-    let mut graph = ProvenanceGraph::empty();
+    let mut graph = ProvenanceGraph::empty().expect("empty graph");
     graph
         .insert(ProvenanceObservation {
             id: "user-correction-observation".into(),

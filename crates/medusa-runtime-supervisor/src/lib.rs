@@ -69,7 +69,7 @@ impl SupervisorState {
             sequence: 0,
             fingerprint: String::new(),
         };
-        state.seal();
+        state.seal()?;
         Ok(state)
     }
 
@@ -152,7 +152,7 @@ impl SupervisorState {
             .sequence
             .checked_add(1)
             .ok_or("supervisor sequence overflow")?;
-        self.seal();
+        self.seal()?;
         Ok(())
     }
 
@@ -173,7 +173,7 @@ impl SupervisorState {
         {
             require_digest(digest)?;
         }
-        if self.fingerprint != self.calculate_fingerprint() {
+        if self.fingerprint != self.calculate_fingerprint()? {
             return Err("supervisor fingerprint does not match state");
         }
         Ok(())
@@ -193,15 +193,17 @@ impl SupervisorState {
         )
     }
 
-    fn calculate_fingerprint(&self) -> String {
+    fn calculate_fingerprint(&self) -> Result<String, &'static str> {
         let mut copy = self.clone();
         copy.fingerprint.clear();
-        let bytes = serde_json::to_vec(&copy).unwrap_or_default();
-        hex::encode(Sha256::digest(bytes))
+        let bytes =
+            serde_json::to_vec(&copy).map_err(|_| "failed to serialize supervisor state")?;
+        Ok(hex::encode(Sha256::digest(bytes)))
     }
 
-    fn seal(&mut self) {
-        self.fingerprint = self.calculate_fingerprint();
+    fn seal(&mut self) -> Result<(), &'static str> {
+        self.fingerprint = self.calculate_fingerprint()?;
+        Ok(())
     }
 }
 

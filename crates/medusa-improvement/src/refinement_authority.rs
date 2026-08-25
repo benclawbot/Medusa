@@ -836,18 +836,22 @@ struct DurableApprovalAuthority<'a> {
 }
 
 impl ApprovalAuthority for DurableApprovalAuthority<'_> {
-    fn authorizes(&self, proposal: &RefinementProposal, receipt: &ApprovalReceipt) -> bool {
+    fn authorizes(
+        &self,
+        proposal: &RefinementProposal,
+        receipt: &ApprovalReceipt,
+    ) -> Result<bool, serde_json::Error> {
         let key = (
             proposal.id.clone(),
             proposal.version,
             receipt.receipt_id.clone(),
         );
         let Some(binding) = self.approvals.get(&key) else {
-            return false;
+            return Ok(false);
         };
-        binding.proposal_digest == proposal_digest(proposal).unwrap_or_default()
-            && binding.receipt_digest == receipt_digest(receipt).unwrap_or_default()
-            && binding.actor_class.approver() == receipt.approver
+        Ok(binding.proposal_digest == proposal_digest(proposal)?
+            && binding.receipt_digest == receipt_digest(receipt)?
+            && binding.actor_class.approver() == receipt.approver)
     }
 }
 

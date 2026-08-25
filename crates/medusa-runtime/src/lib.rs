@@ -1443,8 +1443,10 @@ fn run_prompt(
                 crate::production_orchestrator::projection(ledger),
             ));
         }
-        let speculation_policy =
-            medusa_multi_agent_scheduler::speculation::policy_for(&execution_plan.planning);
+        let speculation_policy = medusa_multi_agent_scheduler::speculation::policy_for(
+            &execution_plan.planning,
+        )
+        .map_err(RuntimeError::agent)?;
         let preflight = if crate::production_orchestrator::uses_deterministic_preflight(
             &execution_plan,
         ) {

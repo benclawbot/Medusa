@@ -530,7 +530,7 @@ impl RefinementJournal {
             .entries
             .last()
             .map_or_else(|| GENESIS_HASH.to_owned(), |entry| entry.hash.clone());
-        let hash = entry_hash(sequence, recorded_at, &previous_hash, &event);
+        let hash = entry_hash(sequence, recorded_at, &previous_hash, &event)?;
         self.entries.push(JournalEntry {
             sequence,
             recorded_at,
@@ -553,7 +553,7 @@ impl RefinementJournal {
                     entry.recorded_at,
                     &entry.previous_hash,
                     &entry.event,
-                )
+                )?
             {
                 return Err(RefinementError::CorruptJournal);
             }
@@ -1039,14 +1039,14 @@ fn entry_hash(
     recorded_at: OffsetDateTime,
     previous_hash: &str,
     event: &RefinementEvent,
-) -> String {
-    let event = serde_json::to_vec(event).unwrap_or_default();
+) -> Result<String, RefinementError> {
+    let event = serde_json::to_vec(event).map_err(|_| RefinementError::CorruptJournal)?;
     let mut hasher = Sha256::new();
     hasher.update(sequence.to_le_bytes());
     hasher.update(recorded_at.unix_timestamp_nanos().to_le_bytes());
     hasher.update(previous_hash.as_bytes());
     hasher.update(event);
-    hex::encode(hasher.finalize())
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(test)]

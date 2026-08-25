@@ -310,7 +310,7 @@ pub fn context_for_task(
         &contract,
         &planned.context_fingerprint,
         CancellationAuthority::RuntimeController,
-    ));
+    ))?;
     Ok(ContextPacket {
         task_id: task_id.to_owned(),
         objective,
@@ -378,7 +378,7 @@ pub fn open_ledger(
     if session_id.trim().is_empty() {
         return Err("durable execution ledger requires a session identity".to_owned());
     }
-    let execution_key = digest(&(session_id, &plan.fingerprint));
+    let execution_key = digest(&(session_id, &plan.fingerprint)).map_err(str::to_owned)?;
     let path = repo
         .join(".medusa")
         .join("executions")
@@ -480,7 +480,7 @@ pub fn persist_outcome(
         fs::create_dir_all(directory)?;
     }
     let outcome = PersistedOutcome {
-        objective_fingerprint: digest(&draft.text),
+        objective_fingerprint: digest(&draft.text).map_err(std::io::Error::other)?,
         plan_fingerprint: plan.fingerprint.clone(),
         verified,
         failed,
@@ -633,9 +633,9 @@ fn should_skip_repository_tree(relative: &str) -> bool {
     })
 }
 
-fn digest<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    format!("{:x}", Sha256::digest(bytes))
+fn digest<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "failed to serialize production state")?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

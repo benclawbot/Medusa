@@ -182,10 +182,10 @@ fn review_packet<P: ModelProvider>(
         max_tokens: config.model.max_output_tokens.min(MAX_REVIEW_OUTPUT_TOKENS),
         temperature_milli: 0,
     };
-    let request_fingerprint = hash(&request);
+    let request_fingerprint = hash(&request)?;
     let reviewer_session_id = format!(
         "parent-review-{}",
-        hash(&(packet.transaction_id.as_str(), request_fingerprint.as_str()))
+        hash(&(packet.transaction_id.as_str(), request_fingerprint.as_str()))?
     );
 
     if let Some(existing) = load_journal(&packet.journal_path)? {
@@ -362,7 +362,7 @@ fn load_journal(path: &Path) -> Result<Option<ParentReviewJournal>, String> {
 fn persist_journal(path: &Path, journal: &mut ParentReviewJournal) -> Result<(), String> {
     journal.updated_at_unix_ms = now_unix_ms();
     journal.fingerprint.clear();
-    journal.fingerprint = hash(&*journal);
+    journal.fingerprint = hash(&*journal)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
@@ -398,7 +398,7 @@ fn validate_journal(journal: &ParentReviewJournal) -> Result<(), String> {
         || journal.provider.trim().is_empty()
         || journal.model.trim().is_empty()
         || journal.tools_advertised
-        || fingerprint != hash(&canonical)
+        || fingerprint != hash(&canonical)?
     {
         return Err("durable parent-review journal is incomplete or corrupted".to_owned());
     }
@@ -434,9 +434,9 @@ fn is_blank(value: Option<&str>) -> bool {
     value.is_none_or(|value| value.trim().is_empty())
 }
 
-fn hash(value: &impl Serialize) -> String {
-    let encoded = serde_json::to_vec(value).unwrap_or_default();
-    format!("{:x}", Sha256::digest(encoded))
+fn hash(value: &impl Serialize) -> Result<String, String> {
+    let encoded = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
 }
 
 fn now_unix_ms() -> i64 {

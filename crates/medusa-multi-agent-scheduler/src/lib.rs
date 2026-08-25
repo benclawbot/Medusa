@@ -309,7 +309,7 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         high_risk_language,
     );
     let model_turn_budget = model_turn_budget_for(lane, multi_step_mutation_language);
-    let tasks = planned_tasks(strategy, &scope);
+    let tasks = planned_tasks(strategy, &scope)?;
     let required_capabilities = tasks
         .iter()
         .flat_map(|task| task.task.capabilities.iter().cloned())
@@ -331,8 +331,8 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         tasks,
         fingerprint: String::new(),
     };
-    apply_speculation_flags(&mut result);
-    result.fingerprint = planning_fingerprint(&result);
+    apply_speculation_flags(&mut result)?;
+    result.fingerprint = planning_fingerprint(&result)?;
     result.validate()?;
     Ok(result)
 }
@@ -355,9 +355,9 @@ pub fn apply_repository_graph_evidence(
                 planned.kind,
                 &planned.title,
                 CancellationAuthority::RuntimeController,
-            ));
+            ))?;
         }
-        result.fingerprint = planning_fingerprint(&result);
+        result.fingerprint = planning_fingerprint(&result)?;
         result.validate()?;
         return Ok(result);
     }
@@ -384,19 +384,19 @@ pub fn apply_repository_graph_evidence(
         result.model_turn_budget = model_turn_budget(ExecutionLane::FullOrchestration);
     }
 
-    apply_speculation_flags(&mut result);
-    result.fingerprint = planning_fingerprint(&result);
+    apply_speculation_flags(&mut result)?;
+    result.fingerprint = planning_fingerprint(&result)?;
     result.validate()?;
     Ok(result)
 }
 
 impl PlanningResult {
     pub fn validate(&self) -> Result<(), &'static str> {
-        let current_fingerprint = self.fingerprint == planning_fingerprint(self);
+        let current_fingerprint = self.fingerprint == planning_fingerprint(self)?;
         let legacy_fingerprint = self.lane == ExecutionLane::FullOrchestration
             && self.lane_rationale == default_lane_rationale()
             && self.model_turn_budget == ModelTurnBudget::default()
-            && self.fingerprint == legacy_planning_fingerprint(self);
+            && self.fingerprint == legacy_planning_fingerprint(self)?;
         if self.confidence_milli > 1_000
             || self.requested_outcomes.is_empty()
             || self
@@ -482,7 +482,7 @@ impl PlanningResult {
                     planned.kind,
                     &planned.title,
                     planned.cancellation_authority,
-                ))
+                ))?
             {
                 return Err("planned task context fingerprint does not match its contract");
             }
@@ -592,7 +592,7 @@ fn model_turn_budget_for(lane: ExecutionLane, multi_step_mutation: bool) -> Mode
     budget
 }
 
-fn apply_speculation_flags(result: &mut PlanningResult) {
+fn apply_speculation_flags(result: &mut PlanningResult) -> Result<(), &'static str> {
     let eligible = result.lane == ExecutionLane::StandardMutation
         && result.risk == RiskLevel::Medium
         && result.confidence_milli >= 850
@@ -610,13 +610,17 @@ fn apply_speculation_flags(result: &mut PlanningResult) {
             planned.kind,
             &planned.title,
             CancellationAuthority::RuntimeController,
-        ));
+        ))?;
     }
+    Ok(())
 }
 
-fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<PlannedTask> {
+fn planned_tasks(
+    strategy: ExecutionStrategy,
+    scope: &RepositoryScope,
+) -> Result<Vec<PlannedTask>, &'static str> {
     if strategy == ExecutionStrategy::Direct {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut tasks = vec![
         planned_task(
@@ -626,7 +630,7 @@ fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<Pl
             Vec::new(),
             vec!["analysis".to_owned()],
             Vec::new(),
-        ),
+        )?,
         planned_task(
             "risk-review",
             TaskKind::RiskReview,
@@ -634,7 +638,7 @@ fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<Pl
             Vec::new(),
             vec!["risk-review".to_owned()],
             Vec::new(),
-        ),
+        )?,
     ];
     if strategy == ExecutionStrategy::CoordinatedMutation {
         tasks.push(planned_task(
@@ -644,7 +648,7 @@ fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<Pl
             vec!["analyze".to_owned(), "risk-review".to_owned()],
             vec!["coding".to_owned()],
             scope.effective.clone(),
-        ));
+        )?);
         tasks.push(planned_task(
             "review",
             TaskKind::Review,
@@ -652,7 +656,7 @@ fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<Pl
             vec!["implement".to_owned()],
             vec!["review".to_owned()],
             Vec::new(),
-        ));
+        )?);
         tasks.push(planned_task(
             "verify",
             TaskKind::Verification,
@@ -660,7 +664,7 @@ fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<Pl
             vec!["review".to_owned()],
             vec!["verification".to_owned()],
             Vec::new(),
-        ));
+        )?);
     } else {
         tasks.push(planned_task(
             "review",
@@ -669,9 +673,9 @@ fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<Pl
             vec!["analyze".to_owned(), "risk-review".to_owned()],
             vec!["review".to_owned()],
             Vec::new(),
-        ));
+        )?);
     }
-    tasks
+    Ok(tasks)
 }
 
 fn planned_task(
@@ -681,7 +685,7 @@ fn planned_task(
     dependencies: Vec<String>,
     capabilities: Vec<String>,
     write_paths: Vec<String>,
-) -> PlannedTask {
+) -> Result<PlannedTask, &'static str> {
     let task = Task {
         id: id.to_owned(),
         dependencies,
@@ -689,16 +693,16 @@ fn planned_task(
         write_paths,
         speculative: false,
     };
-    PlannedTask {
-        context_fingerprint: hash(&(&task, kind, title, CancellationAuthority::RuntimeController)),
+    Ok(PlannedTask {
+        context_fingerprint: hash(&(&task, kind, title, CancellationAuthority::RuntimeController))?,
         task,
         kind,
         title: title.to_owned(),
         cancellation_authority: CancellationAuthority::RuntimeController,
-    }
+    })
 }
 
-fn planning_fingerprint(result: &PlanningResult) -> String {
+fn planning_fingerprint(result: &PlanningResult) -> Result<String, &'static str> {
     hash(&(
         result.intent,
         &result.requested_outcomes,
@@ -715,7 +719,7 @@ fn planning_fingerprint(result: &PlanningResult) -> String {
     ))
 }
 
-fn legacy_planning_fingerprint(result: &PlanningResult) -> String {
+fn legacy_planning_fingerprint(result: &PlanningResult) -> Result<String, &'static str> {
     hash(&(
         result.intent,
         &result.requested_outcomes,
@@ -938,7 +942,7 @@ impl ExecutionLedger {
                 fingerprint: String::new(),
             },
         };
-        ledger.refresh();
+        ledger.refresh()?;
         ledger.persist()?;
         Ok(ledger)
     }
@@ -1111,7 +1115,7 @@ bundle={}",
     pub fn validate(&self) -> Result<(), String> {
         if self.state.schema_version != 1
             || self.state.tasks.len() != self.state.states.len()
-            || self.state.fingerprint != ledger_fingerprint(&self.state)
+            || self.state.fingerprint != ledger_fingerprint(&self.state)?
         {
             return Err("durable execution ledger is incomplete or corrupted".to_owned());
         }
@@ -1128,12 +1132,13 @@ bundle={}",
 
     fn commit(&mut self) -> Result<(), String> {
         self.state.revision = self.state.revision.saturating_add(1);
-        self.refresh();
+        self.refresh()?;
         self.persist()
     }
 
-    fn refresh(&mut self) {
-        self.state.fingerprint = ledger_fingerprint(&self.state);
+    fn refresh(&mut self) -> Result<(), String> {
+        self.state.fingerprint = ledger_fingerprint(&self.state).map_err(str::to_owned)?;
+        Ok(())
     }
 
     fn persist(&self) -> Result<(), String> {
@@ -1156,7 +1161,7 @@ bundle={}",
     }
 }
 
-fn ledger_fingerprint(state: &DurableExecutionLedger) -> String {
+fn ledger_fingerprint(state: &DurableExecutionLedger) -> Result<String, &'static str> {
     hash(&(
         state.schema_version,
         &state.plan_fingerprint,
@@ -1261,7 +1266,7 @@ pub fn schedule(tasks: Vec<Task>, workers: Vec<Worker>) -> Result<Schedule, &'st
     }
 
     Ok(Schedule {
-        fingerprint: hash(&waves),
+        fingerprint: hash(&waves)?,
         waves,
     })
 }
@@ -1349,7 +1354,7 @@ impl DynamicSchedule {
             max_attempts,
             fingerprint: String::new(),
         };
-        schedule.refresh();
+        schedule.refresh()?;
         Ok(schedule)
     }
 
@@ -1411,14 +1416,14 @@ impl DynamicSchedule {
                 speculative: task.speculative,
             });
         }
-        self.refresh();
+        self.refresh()?;
         Ok(assignments)
     }
 
     pub fn complete(&mut self, task_id: &str, worker_id: &str) -> Result<(), &'static str> {
         self.running_attempt(task_id, worker_id)?;
         self.states.insert(task_id.to_owned(), TaskState::Succeeded);
-        self.refresh();
+        self.refresh()?;
         Ok(())
     }
 
@@ -1443,7 +1448,7 @@ impl DynamicSchedule {
             }
         };
         self.states.insert(task_id.to_owned(), state);
-        self.refresh();
+        self.refresh()?;
         Ok(())
     }
 
@@ -1452,7 +1457,7 @@ impl DynamicSchedule {
             Some(TaskState::Succeeded) => {
                 self.states
                     .insert(task_id.to_owned(), TaskState::Pending { attempts: 0 });
-                self.refresh();
+                self.refresh()?;
                 Ok(())
             }
             Some(_) => Err("only a succeeded task can be reopened"),
@@ -1485,7 +1490,7 @@ impl DynamicSchedule {
                 self.states.insert(task_id, TaskState::Pending { attempts });
             }
         }
-        self.refresh();
+        self.refresh()?;
         Ok(())
     }
 
@@ -1545,7 +1550,7 @@ impl DynamicSchedule {
         if self.max_attempts == 0 || self.tasks.len() != self.states.len() {
             return Err("dynamic schedule state is incomplete");
         }
-        let expected = hash(&(&self.tasks, &self.workers, &self.states, self.max_attempts));
+        let expected = hash(&(&self.tasks, &self.workers, &self.states, self.max_attempts))?;
         if expected != self.fingerprint {
             return Err("dynamic schedule fingerprint does not match its contents");
         }
@@ -1574,8 +1579,9 @@ impl DynamicSchedule {
             .collect()
     }
 
-    fn refresh(&mut self) {
-        self.fingerprint = hash(&(&self.tasks, &self.workers, &self.states, self.max_attempts));
+    fn refresh(&mut self) -> Result<(), &'static str> {
+        self.fingerprint = hash(&(&self.tasks, &self.workers, &self.states, self.max_attempts))?;
+        Ok(())
     }
 }
 
@@ -1677,9 +1683,9 @@ fn supports(worker: &Worker, task: &Task) -> bool {
         .all(|capability| worker.capabilities.binary_search(capability).is_ok())
 }
 
-fn hash<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))
+fn hash<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "failed to serialize scheduler state")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

@@ -3,12 +3,12 @@
 #[cfg(windows)]
 extern crate self as flatbuffers;
 
+mod flatbuffer_builder;
+
 #[cfg(windows)]
 // SAFETY: reviewed Windows composable-sandbox FFI; see the checked allowlist.
 #[allow(unsafe_code)]
 mod base_container;
-#[cfg(windows)]
-mod flatbuffer_builder;
 // SAFETY: reviewed native process-identity FFI is isolated in this low-level crate.
 #[allow(unsafe_code)]
 mod process_identity;

@@ -85,6 +85,8 @@ pub enum CoordinatorError {
     InvalidTransition,
     #[error("transaction fingerprint mismatch")]
     FingerprintMismatch,
+    #[error("failed to serialize transaction state: {0}")]
+    Serialization(String),
 }
 
 #[derive(Debug, Default)]
@@ -133,7 +135,7 @@ impl TransactionCoordinator {
             checkpoint_fingerprint: None,
             decision_fingerprint: String::new(),
         };
-        record.decision_fingerprint = fingerprint_record(&record);
+        record.decision_fingerprint = fingerprint_record(&record)?;
         self.records.insert(transaction_id.clone(), record);
         self.votes.remove(&transaction_id);
         self.records
@@ -154,7 +156,7 @@ impl TransactionCoordinator {
             return Err(CoordinatorError::InvalidTransition);
         }
         record.phase = next;
-        record.decision_fingerprint = fingerprint_record(record);
+        record.decision_fingerprint = fingerprint_record(record)?;
         Ok(record)
     }
 
@@ -179,7 +181,7 @@ impl TransactionCoordinator {
         record.barrier_fingerprint = barrier;
         record.rollback_journal_fingerprint = rollback;
         record.checkpoint_fingerprint = checkpoint;
-        record.decision_fingerprint = fingerprint_record(record);
+        record.decision_fingerprint = fingerprint_record(record)?;
         Ok(record)
     }
 
@@ -253,7 +255,7 @@ impl TransactionCoordinator {
             .records
             .get(transaction_id)
             .ok_or(CoordinatorError::FingerprintMismatch)?;
-        if record.decision_fingerprint != fingerprint_record(record) {
+        if record.decision_fingerprint != fingerprint_record(record)? {
             return Err(CoordinatorError::FingerprintMismatch);
         }
         Ok(())
@@ -292,9 +294,10 @@ fn validate_fingerprint(value: &str) -> Result<(), CoordinatorError> {
     Ok(())
 }
 
-fn fingerprint_record(record: &TransactionRecord) -> String {
+fn fingerprint_record(record: &TransactionRecord) -> Result<String, CoordinatorError> {
     let mut clone = record.clone();
     clone.decision_fingerprint.clear();
-    let encoded = serde_json::to_vec(&clone).unwrap_or_default();
-    hex::encode(Sha256::digest(encoded))
+    let encoded = serde_json::to_vec(&clone)
+        .map_err(|error| CoordinatorError::Serialization(error.to_string()))?;
+    Ok(hex::encode(Sha256::digest(encoded)))
 }

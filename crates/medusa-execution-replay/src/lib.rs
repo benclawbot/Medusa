@@ -72,13 +72,13 @@ impl ExecutionTrace {
             fingerprint: String::new(),
         };
         trace.validate_fields()?;
-        trace.fingerprint = trace.calculated_fingerprint();
+        trace.fingerprint = trace.calculated_fingerprint()?;
         Ok(trace)
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
         self.validate_fields()?;
-        if self.fingerprint != self.calculated_fingerprint() {
+        if self.fingerprint != self.calculated_fingerprint()? {
             return Err("execution trace fingerprint mismatch");
         }
         Ok(())
@@ -109,7 +109,7 @@ impl ExecutionTrace {
         Ok(())
     }
 
-    fn calculated_fingerprint(&self) -> String {
+    fn calculated_fingerprint(&self) -> Result<String, &'static str> {
         hash(&(
             &self.execution_id,
             &self.snapshot,
@@ -222,7 +222,7 @@ pub fn verify(
         &report.divergences,
         &report.expected_fingerprint,
         &report.actual_fingerprint,
-    ));
+    ))?;
     Ok(report)
 }
 
@@ -234,7 +234,7 @@ impl ReplayReport {
             &self.divergences,
             &self.expected_fingerprint,
             &self.actual_fingerprint,
-        ));
+        ))?;
         if self.fingerprint != expected {
             return Err("replay report fingerprint mismatch");
         }
@@ -287,9 +287,9 @@ fn validate_digest(value: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
-fn hash<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))
+fn hash<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "failed to serialize execution replay")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]
@@ -327,7 +327,7 @@ mod tests {
         let mut actual = trace();
         actual.task_outputs.insert("task-b".into(), digest('1'));
         actual.final_snapshot = digest('2');
-        actual.fingerprint = actual.calculated_fingerprint();
+        actual.fingerprint = actual.calculated_fingerprint().unwrap();
         let report = verify(&expected, &actual).unwrap();
         assert_eq!(report.divergences[0].kind, DivergenceKind::UnexpectedTask);
         assert_eq!(report.divergences[1].kind, DivergenceKind::FinalSnapshot);

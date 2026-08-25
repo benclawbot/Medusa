@@ -102,7 +102,7 @@ impl ExecutionBudget {
                 "tool-call budget exhausted",
             ));
         }
-        let digest = call_digest(tool, input);
+        let digest = call_digest(tool, input)?;
         let count = self.seen_calls.entry(digest.clone()).or_default();
         if *count >= self.max_identical_calls {
             return Err(MedusaError::new(
@@ -190,12 +190,12 @@ fn is_mutation(tool: &str) -> bool {
     )
 }
 
-fn call_digest(tool: &str, input: &serde_json::Value) -> String {
+fn call_digest(tool: &str, input: &serde_json::Value) -> MedusaResult<String> {
     let mut hasher = Sha256::new();
     hasher.update(tool.as_bytes());
     hasher.update([0]);
-    hasher.update(serde_json::to_vec(input).unwrap_or_default());
-    hex::encode(&hasher.finalize()[..8])
+    hasher.update(serde_json::to_vec(input)?);
+    Ok(hex::encode(&hasher.finalize()[..8]))
 }
 
 #[cfg(test)]

@@ -515,13 +515,13 @@ pub fn detect_metric_drift(
     }
 }
 
-#[must_use]
+#[must_use = "use the updated drift lifecycle or handle its serialization error"]
 pub fn advance_drift_lifecycle(
     previous: Option<&DriftLifecycle>,
     report: &MetricDriftReport,
     now_unix_ms: i64,
     policy: DriftLifecyclePolicy,
-) -> DriftLifecycle {
+) -> Result<DriftLifecycle, serde_json::Error> {
     let mut next = previous.cloned().unwrap_or(DriftLifecycle {
         schema_version: METRICS_SCHEMA_VERSION,
         state: DriftLifecycleState::Unknown,
@@ -530,7 +530,7 @@ pub fn advance_drift_lifecycle(
         cooldown_until_unix_ms: None,
         source_report_ids: Vec::new(),
     });
-    let report_id = digest(&serde_json::to_vec(report).unwrap_or_default());
+    let report_id = digest(&serde_json::to_vec(report)?);
     if !next.source_report_ids.contains(&report_id) {
         next.source_report_ids.push(report_id);
     }
@@ -542,7 +542,7 @@ pub fn advance_drift_lifecycle(
         .cooldown_until_unix_ms
         .is_some_and(|until| now_unix_ms < until)
     {
-        return next;
+        return Ok(next);
     }
     match report.classification {
         DriftClassification::InsufficientEvidence | DriftClassification::Confounded => {
@@ -602,7 +602,7 @@ pub fn advance_drift_lifecycle(
     } else {
         next.cooldown_until_unix_ms = None;
     }
-    next
+    Ok(next)
 }
 
 #[must_use]
@@ -1099,13 +1099,16 @@ mod tests {
             classification: DriftClassification::Improvement,
             ..regression.clone()
         };
-        let first = advance_drift_lifecycle(None, &regression, 1, policy);
+        let first = advance_drift_lifecycle(None, &regression, 1, policy).expect("lifecycle");
         assert_eq!(first.state, DriftLifecycleState::CandidateChange);
-        let confirmed = advance_drift_lifecycle(Some(&first), &regression, 2, policy);
+        let confirmed =
+            advance_drift_lifecycle(Some(&first), &regression, 2, policy).expect("lifecycle");
         assert_eq!(confirmed.state, DriftLifecycleState::ConfirmedRegression);
-        let recovering = advance_drift_lifecycle(Some(&confirmed), &improvement, 3, policy);
+        let recovering =
+            advance_drift_lifecycle(Some(&confirmed), &improvement, 3, policy).expect("lifecycle");
         assert_eq!(recovering.state, DriftLifecycleState::Recovering);
-        let resolved = advance_drift_lifecycle(Some(&recovering), &improvement, 4, policy);
+        let resolved =
+            advance_drift_lifecycle(Some(&recovering), &improvement, 4, policy).expect("lifecycle");
         assert_eq!(resolved.state, DriftLifecycleState::Resolved);
         assert!(!resolved.source_report_ids.is_empty());
     }

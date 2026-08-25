@@ -15,9 +15,13 @@ use time::macros::datetime;
 struct TestAuthority;
 
 impl ApprovalAuthority for TestAuthority {
-    fn authorizes(&self, proposal: &RefinementProposal, receipt: &ApprovalReceipt) -> bool {
-        receipt.approver == "user"
-            && receipt.receipt_id == format!("approved:{}:{}", proposal.id, proposal.version)
+    fn authorizes(
+        &self,
+        proposal: &RefinementProposal,
+        receipt: &ApprovalReceipt,
+    ) -> Result<bool, serde_json::Error> {
+        Ok(receipt.approver == "user"
+            && receipt.receipt_id == format!("approved:{}:{}", proposal.id, proposal.version))
     }
 }
 

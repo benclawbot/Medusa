@@ -304,7 +304,7 @@ impl ToolExecutionPipeline {
         request: ToolPipelineRequest,
         cancellation: &std::sync::atomic::AtomicBool,
         handler: impl FnOnce(&Value) -> MedusaResult<String>,
-    ) -> FinalToolOutcome {
+    ) -> MedusaResult<FinalToolOutcome> {
         let started = Instant::now();
         let mut stages = Vec::with_capacity(ToolPipelineStage::REQUIRED.len());
         let mut guard_receipts = Vec::with_capacity(self.guards.len());
@@ -365,7 +365,7 @@ impl ToolExecutionPipeline {
                 }
             }
         }
-        let input_fingerprint = stable_fingerprint(&input);
+        let input_fingerprint = stable_fingerprint(&input)?;
 
         stages.push(ToolPipelineStage::Guards);
         for (owner, guard_id, guard) in &self.guards {
@@ -493,7 +493,7 @@ impl ToolExecutionPipeline {
             Err(error) => (ToolOutcomeClass::Failed, None, Some(error)),
         };
 
-        finalize(FinalizeInput {
+        Ok(finalize(FinalizeInput {
             identity,
             input_fingerprint,
             outcome,
@@ -506,7 +506,7 @@ impl ToolExecutionPipeline {
             middleware_receipts,
             stages,
             elapsed: started.elapsed(),
-        })
+        }))
     }
 }
 
@@ -620,16 +620,16 @@ fn input_is_narrowing(original: &Value, candidate: &Value) -> bool {
     }
 }
 
-fn stable_fingerprint(value: &Value) -> String {
+fn stable_fingerprint(value: &Value) -> MedusaResult<String> {
     // FNV-1a is sufficient as a deterministic audit fingerprint here; this is not a credential or
     // cryptographic authorization token. Security authority remains in the guard receipts.
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let bytes = serde_json::to_vec(value)?;
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    format!("fnv1a64:{hash:016x}")
+    Ok(format!("fnv1a64:{hash:016x}"))
 }
 
 #[cfg(test)]
@@ -650,7 +650,8 @@ mod tests {
             ToolPipelineRequest::built_in("fs_read", &json!({"path":"src/lib.rs"})),
             &AtomicBool::new(false),
             |_| Ok("ok".to_owned()),
-        );
+        )
+        .expect("pipeline");
         assert_eq!(outcome.stages, ToolPipelineStage::REQUIRED);
         assert_eq!(outcome.outcome, ToolOutcomeClass::Success);
     }
@@ -669,7 +670,8 @@ mod tests {
                 handler_called.fetch_add(1, Ordering::SeqCst);
                 Ok("unsafe".to_owned())
             },
-        );
+        )
+        .expect("pipeline");
         assert_eq!(outcome.outcome, ToolOutcomeClass::Denied);
         assert_eq!(called.load(Ordering::SeqCst), 0);
         assert!(matches!(
@@ -685,7 +687,9 @@ mod tests {
         let mut request = ToolPipelineRequest::built_in("fs_write", &json!({"path":"/tmp/x"}));
         request.approval_required = true;
         request.approval_granted = true;
-        let outcome = pipeline.execute(request, &AtomicBool::new(false), |_| Ok("wrote".to_owned()));
+        let outcome = pipeline
+            .execute(request, &AtomicBool::new(false), |_| Ok("wrote".to_owned()))
+            .expect("pipeline");
         assert_eq!(outcome.outcome, ToolOutcomeClass::Denied);
     }
 
@@ -694,7 +698,9 @@ mod tests {
         let pipeline = ToolExecutionPipeline::new();
         let mut request = ToolPipelineRequest::built_in("fs_write", &json!({"path":"/tmp/x"}));
         request.approval_required = true;
-        let outcome = pipeline.execute(request, &AtomicBool::new(false), |_| Ok("wrote".to_owned()));
+        let outcome = pipeline
+            .execute(request, &AtomicBool::new(false), |_| Ok("wrote".to_owned()))
+            .expect("pipeline");
         assert_eq!(outcome.outcome, ToolOutcomeClass::Denied);
     }
 
@@ -708,7 +714,8 @@ mod tests {
                 called.fetch_add(1, Ordering::SeqCst);
                 Ok("should not run".to_owned())
             },
-        );
+        )
+        .expect("pipeline");
         assert_eq!(outcome.outcome, ToolOutcomeClass::Cancelled);
         assert!(outcome.cancelled);
         assert_eq!(outcome.stages, ToolPipelineStage::REQUIRED);
@@ -722,12 +729,14 @@ mod tests {
             ToolPipelineRequest::built_in("x", &json!({"b":2,"a":1})),
             &AtomicBool::new(false),
             |_| Ok(String::new()),
-        );
+        )
+        .expect("pipeline");
         let second = pipeline.execute(
             ToolPipelineRequest::built_in("x", &json!({"a":1,"b":2})),
             &AtomicBool::new(false),
             |_| Ok(String::new()),
-        );
+        )
+        .expect("pipeline");
         assert_eq!(first.input_fingerprint, second.input_fingerprint);
     }
 
@@ -739,7 +748,8 @@ mod tests {
             request,
             &AtomicBool::new(false),
             |_| Ok("ok".to_owned()),
-        );
+        )
+        .expect("pipeline");
         assert_eq!(outcome.identity, identity);
     }
 
@@ -756,7 +766,8 @@ mod tests {
                 ),
                 &AtomicBool::new(false),
                 |_| Ok("ok".to_owned()),
-            );
+            )
+            .expect("pipeline");
         assert_eq!(narrowed.outcome, ToolOutcomeClass::Success);
 
         let widened = ToolExecutionPipeline::new()
@@ -767,7 +778,8 @@ mod tests {
                 ToolPipelineRequest::built_in("fs_read", &json!({"path":"src/lib.rs"})),
                 &AtomicBool::new(false),
                 |_| Ok("must not run".to_owned()),
-            );
+            )
+            .expect("pipeline");
         assert_eq!(widened.outcome, ToolOutcomeClass::Denied);
     }
 
@@ -785,7 +797,8 @@ mod tests {
                 ToolPipelineRequest::built_in("x", &json!({})),
                 &AtomicBool::new(false),
                 |_| Ok("must not run".to_owned()),
-            );
+            )
+            .expect("pipeline");
         assert_eq!(pre.outcome, ToolOutcomeClass::Failed);
 
         let around = ToolExecutionPipeline::new()
@@ -800,7 +813,8 @@ mod tests {
                 ToolPipelineRequest::built_in("x", &json!({})),
                 &AtomicBool::new(false),
                 |_| Ok("must not run".to_owned()),
-            );
+            )
+            .expect("pipeline");
         assert_eq!(around.outcome, ToolOutcomeClass::Failed);
 
         let post = ToolExecutionPipeline::new()
@@ -815,7 +829,8 @@ mod tests {
                 ToolPipelineRequest::built_in("x", &json!({})),
                 &AtomicBool::new(false),
                 |_| Ok("handler success".to_owned()),
-            );
+            )
+            .expect("pipeline");
         assert_eq!(post.outcome, ToolOutcomeClass::Failed);
         assert!(post.output.is_none());
     }
@@ -832,7 +847,8 @@ mod tests {
             ToolPipelineRequest::built_in("x", &json!({})),
             &AtomicBool::new(false),
             |_| Ok("ok".to_owned()),
-        );
+        )
+        .expect("pipeline");
         assert_eq!(outcome.outcome, ToolOutcomeClass::Success);
         assert!(outcome.middleware_receipts.is_empty());
     }
@@ -857,7 +873,8 @@ mod tests {
             ToolPipelineRequest::built_in("browser_click", &json!({"selector":"#missing"})),
             &AtomicBool::new(false),
             |_| Err(source),
-        );
+        )
+        .expect("pipeline");
 
         assert_eq!(outcome.error.as_ref(), Some(&expected));
         assert_eq!(outcome.into_result(), Err(expected));
@@ -869,7 +886,8 @@ mod tests {
             ToolPipelineRequest::built_in("fs_read", &json!({"path":"x"})),
             &AtomicBool::new(false),
             |_| Ok("ok".to_owned()),
-        );
+        )
+        .expect("pipeline");
         let receipt = outcome.receipt_value().expect("receipt");
         assert_eq!(receipt["pipeline_version"], json!(TOOL_PIPELINE_VERSION));
         assert_eq!(receipt["outcome"], json!("success"));

@@ -273,7 +273,7 @@ fn render_keyboard(
             }
             intent => {
                 let command = command_for_intent(intent);
-                let group_id = callback_group_id(slot, intent);
+                let group_id = callback_group_id(slot, intent)?;
                 let callback = gateway.issue_command_callback(
                     identity,
                     session_id,
@@ -300,9 +300,12 @@ fn render_keyboard(
     }))
 }
 
-fn callback_group_id(slot: &TelegramMessageSlot, intent: &TelegramButtonIntent) -> String {
-    let slot = slot_fingerprint(slot);
-    match intent {
+fn callback_group_id(
+    slot: &TelegramMessageSlot,
+    intent: &TelegramButtonIntent,
+) -> Result<String, TelegramSessionServiceError> {
+    let slot = slot_fingerprint(slot)?;
+    Ok(match intent {
         TelegramButtonIntent::Details { reference } => {
             format!("render:{slot}:details:{}", digest_prefix(reference))
         }
@@ -314,7 +317,7 @@ fn callback_group_id(slot: &TelegramMessageSlot, intent: &TelegramButtonIntent) 
         }
         TelegramButtonIntent::CancelQueued => format!("render:{slot}:cancel"),
         TelegramButtonIntent::StartLiveVoice => format!("render:{slot}:voice"),
-    }
+    })
 }
 
 fn command_for_intent(intent: &TelegramButtonIntent) -> FrontendCommand {
@@ -338,9 +341,9 @@ fn command_for_intent(intent: &TelegramButtonIntent) -> FrontendCommand {
     }
 }
 
-fn slot_fingerprint(slot: &TelegramMessageSlot) -> String {
-    let bytes = serde_json::to_vec(slot).unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))[..24].to_owned()
+fn slot_fingerprint(slot: &TelegramMessageSlot) -> Result<String, serde_json::Error> {
+    let bytes = serde_json::to_vec(slot)?;
+    Ok(hex::encode(Sha256::digest(bytes))[..24].to_owned())
 }
 
 fn digest_prefix(value: &str) -> String {
@@ -391,21 +394,24 @@ mod tests {
             &TelegramButtonIntent::Details {
                 reference: "approval-1".to_owned(),
             },
-        );
+        )
+        .expect("callback group");
         let approve = callback_group_id(
             &approval_slot,
             &TelegramButtonIntent::Approval {
                 approval_id: "approval-1".to_owned(),
                 decision: medusa_protocol::frontend::ApprovalDecision::ApproveOnce,
             },
-        );
+        )
+        .expect("callback group");
         let deny = callback_group_id(
             &approval_slot,
             &TelegramButtonIntent::Approval {
                 approval_id: "approval-1".to_owned(),
                 decision: medusa_protocol::frontend::ApprovalDecision::Deny,
             },
-        );
+        )
+        .expect("callback group");
         assert_ne!(details, approve);
         assert_eq!(approve, deny);
 
@@ -415,14 +421,16 @@ mod tests {
             &TelegramButtonIntent::Details {
                 reference: "question-1".to_owned(),
             },
-        );
+        )
+        .expect("callback group");
         let answer = callback_group_id(
             &question_slot,
             &TelegramButtonIntent::AnswerQuestion {
                 question_id: "question-1".to_owned(),
                 value: "yes".to_owned(),
             },
-        );
+        )
+        .expect("callback group");
         assert_ne!(inspect, answer);
     }
 }

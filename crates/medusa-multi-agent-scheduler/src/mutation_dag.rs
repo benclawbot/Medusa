@@ -190,7 +190,7 @@ impl MutationDag {
             max_parallelism,
             fingerprint: String::new(),
         };
-        dag.fingerprint = dag_fingerprint(&dag);
+        dag.fingerprint = dag_fingerprint(&dag)?;
         dag.validate()?;
         if dag.maximum_runnable_width() < 2 {
             return Ok(single(
@@ -205,7 +205,7 @@ impl MutationDag {
             || self.repository_revision.trim().is_empty()
             || self.tasks.is_empty()
             || self.max_parallelism == 0
-            || self.fingerprint != dag_fingerprint(self)
+            || self.fingerprint != dag_fingerprint(self)?
         {
             return Err("mutation DAG is incomplete or corrupted");
         }
@@ -293,7 +293,7 @@ impl MutationDag {
             .ok_or("scope change references an unknown mutation task")?;
         task.resources = resources;
         *task = task.clone().canonicalize()?;
-        let resources_fingerprint = hash(&task.resources);
+        let resources_fingerprint = hash(&task.resources)?;
         let new_edges = conflict_edges(&tasks);
         let old_edges = self.conflict_edges.iter().cloned().collect::<BTreeSet<_>>();
         let introduced_conflicts = new_edges
@@ -396,7 +396,7 @@ impl IntegrationBarrier {
             accepted,
             fingerprint: String::new(),
         };
-        barrier.fingerprint = barrier_fingerprint(&barrier);
+        barrier.fingerprint = barrier_fingerprint(&barrier)?;
         Ok(barrier)
     }
 
@@ -463,16 +463,21 @@ impl BatchIntegrationReceipt {
             final_verification_fingerprint,
             fingerprint: String::new(),
         };
-        receipt.fingerprint = batch_receipt_fingerprint(&receipt);
+        receipt.fingerprint = batch_receipt_fingerprint(&receipt)?;
         Ok(receipt)
     }
 
-    #[must_use]
-    pub fn reconciles(&self, barrier: &IntegrationBarrier, primary_head: &str) -> bool {
-        self.barrier_fingerprint == barrier.fingerprint
+    #[must_use = "use the reconciliation result to verify the completed barrier"]
+    pub fn reconciles(
+        &self,
+        barrier: &IntegrationBarrier,
+        primary_head: &str,
+    ) -> Result<bool, &'static str> {
+        let fingerprint_matches = self.fingerprint == batch_receipt_fingerprint(self)?;
+        Ok(self.barrier_fingerprint == barrier.fingerprint
             && self.integrated_tasks == barrier.ordered_tasks
             && self.final_head == primary_head
-            && self.fingerprint == batch_receipt_fingerprint(self)
+            && fingerprint_matches)
     }
 }
 
@@ -627,7 +632,7 @@ fn ordered_pair<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
     }
 }
 
-fn dag_fingerprint(dag: &MutationDag) -> String {
+fn dag_fingerprint(dag: &MutationDag) -> Result<String, &'static str> {
     hash(&(
         dag.schema_version,
         &dag.repository_revision,
@@ -637,7 +642,7 @@ fn dag_fingerprint(dag: &MutationDag) -> String {
     ))
 }
 
-fn barrier_fingerprint(barrier: &IntegrationBarrier) -> String {
+fn barrier_fingerprint(barrier: &IntegrationBarrier) -> Result<String, &'static str> {
     hash(&(
         &barrier.dag_fingerprint,
         &barrier.ordered_tasks,
@@ -645,7 +650,7 @@ fn barrier_fingerprint(barrier: &IntegrationBarrier) -> String {
     ))
 }
 
-fn batch_receipt_fingerprint(receipt: &BatchIntegrationReceipt) -> String {
+fn batch_receipt_fingerprint(receipt: &BatchIntegrationReceipt) -> Result<String, &'static str> {
     hash(&(
         &receipt.barrier_fingerprint,
         &receipt.base_head,
@@ -656,11 +661,11 @@ fn batch_receipt_fingerprint(receipt: &BatchIntegrationReceipt) -> String {
     ))
 }
 
-fn hash<T: Serialize + ?Sized>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
+fn hash<T: Serialize + ?Sized>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "failed to serialize mutation DAG state")?;
     let mut digest = Sha256::new();
     digest.update(bytes);
-    hex::encode(digest.finalize())
+    Ok(hex::encode(digest.finalize()))
 }
 
 #[cfg(test)]
@@ -865,8 +870,16 @@ mod tests {
             "verification",
         )
         .expect("complete integration must produce a receipt");
-        assert!(receipt.reconciles(&barrier, "final-head"));
-        assert!(!receipt.reconciles(&barrier, "partial-head"));
+        assert!(
+            receipt
+                .reconciles(&barrier, "final-head")
+                .expect("reconcile")
+        );
+        assert!(
+            !receipt
+                .reconciles(&barrier, "partial-head")
+                .expect("reconcile")
+        );
     }
 
     #[test]

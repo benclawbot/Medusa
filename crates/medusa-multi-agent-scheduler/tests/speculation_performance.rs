@@ -22,7 +22,7 @@ fn eligible_speculation_overlaps_preflight_and_reduces_critical_path() {
         repository_paths: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()],
     })
     .expect("planning");
-    let policy = policy_for(&planning);
+    let policy = policy_for(&planning).expect("policy");
     assert!(
         policy.eligible,
         "representative medium-risk mutation must be eligible"

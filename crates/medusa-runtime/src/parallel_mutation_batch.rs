@@ -250,7 +250,7 @@ pub fn prepare_combined(
         delegation_contract_id: String::new(),
         delegation_contract_fingerprint: String::new(),
         delegation_attempt_fingerprint: String::new(),
-        session_id: format!("parallel-{}", hash(&parallel.dag_fingerprint)),
+        session_id: format!("parallel-{}", hash(&parallel.dag_fingerprint)?),
         turns: parallel
             .children
             .iter()
@@ -383,7 +383,7 @@ fn authorize_children<P: medusa_provider::ModelProvider>(
             task_id: child.task_id.clone(),
             prepared_commit: transaction.snapshot().prepared_commit.clone(),
             prepared_tree: transaction.snapshot().prepared_tree.clone(),
-            contract_fingerprint: hash(task),
+            contract_fingerprint: hash(task)?,
             dependency_fingerprints,
             verification_fingerprint: verification.fingerprint.clone(),
         });
@@ -607,9 +607,9 @@ fn persist_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     fs::rename(temporary, path).map_err(|error| error.to_string())
 }
 
-fn hash(value: &impl Serialize) -> String {
-    let encoded = serde_json::to_vec(value).unwrap_or_default();
-    format!("{:x}", Sha256::digest(encoded))
+fn hash(value: &impl Serialize) -> Result<String, String> {
+    let encoded = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
 }
 
 #[cfg(test)]

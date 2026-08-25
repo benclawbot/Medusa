@@ -77,7 +77,7 @@ pub(crate) struct CertifiedToolExecution {
 fn certified_execution(outcome: FinalToolOutcome) -> MedusaResult<CertifiedToolExecution> {
     let mut receipt = outcome.receipt_value()?;
     let result = outcome.into_result();
-    let canonical = CanonicalToolResultV1::from_receipt(&receipt, &result);
+    let canonical = CanonicalToolResultV1::from_receipt(&receipt, &result)?;
     if let Value::Object(fields) = &mut receipt {
         fields.insert(
             "canonical_result_schema_version".to_owned(),
@@ -232,7 +232,7 @@ impl ToolManager {
                 execution.canonical,
             ));
         }
-        Ok(CodeModeExecutionV1::from_children(children))
+        CodeModeExecutionV1::from_children(children)
     }
 
     pub fn execute(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
@@ -772,7 +772,7 @@ pub(crate) fn execute_tool_cancellable_with_context_and_policy_certified(
                 mutation_context,
             )
         },
-    ))
+    )?)
 }
 
 pub(crate) fn execute_tool_cancellable_with_context_and_policy(
@@ -840,7 +840,7 @@ pub(crate) fn certify_cached_tool_with_policy(
         ToolPipelineRequest::built_in(name, input),
         cancellation,
         move |_| Ok(cached_output),
-    ))
+    )?)
 }
 
 pub(crate) fn execute_engine_tool_with_policy(
@@ -864,7 +864,7 @@ pub(crate) fn execute_engine_tool_with_policy(
         request,
         cancellation,
         handler,
-    ))
+    )?)
 }
 
 pub(crate) fn execute_tool_cancellable(
@@ -922,7 +922,7 @@ pub(crate) fn execute_approved_tool_cancellable_with_policy_certified(
         |canonical_input| {
             execute_approved_tool_cancellable_unchecked(repo, name, canonical_input, cancellation)
         },
-    ))
+    )?)
 }
 
 pub(crate) fn execute_approved_tool_cancellable_with_policy(

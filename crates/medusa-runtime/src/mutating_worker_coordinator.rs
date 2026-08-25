@@ -439,7 +439,7 @@ pub fn run_speculative_implementation(
     reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<SpeculationPreparation, String> {
     let (control, events) = reporting;
-    let policy = speculation_policy_for(&plan.planning);
+    let policy = speculation_policy_for(&plan.planning).map_err(str::to_owned)?;
     if !policy.eligible {
         return Ok(SpeculationPreparation::Skipped {
             reason: policy.rationale,

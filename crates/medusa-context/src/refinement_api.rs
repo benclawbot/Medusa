@@ -112,7 +112,11 @@ pub struct JournalEntry {
 }
 
 pub trait ApprovalAuthority {
-    fn authorizes(&self, proposal: &RefinementProposal, receipt: &ApprovalReceipt) -> bool;
+    fn authorizes(
+        &self,
+        proposal: &RefinementProposal,
+        receipt: &ApprovalReceipt,
+    ) -> Result<bool, serde_json::Error>;
 }
 
 type ApprovalKey = (String, u64, String);
@@ -276,7 +280,10 @@ impl RefinementJournal {
         let proposal = self
             .proposal(&proposal_id, version)
             .ok_or(RefinementError::UnknownProposal)?;
-        if !authority.authorizes(proposal, &receipt) {
+        if !authority
+            .authorizes(proposal, &receipt)
+            .map_err(|_| RefinementError::CorruptJournal)?
+        {
             return Err(RefinementError::ApprovalRequired);
         }
         let key = approval_key(&proposal_id, version, &receipt);
@@ -312,7 +319,10 @@ impl RefinementJournal {
             let proposal = self
                 .proposal(proposal_id, *version)
                 .ok_or(RefinementError::UnknownProposal)?;
-            if !authority.authorizes(proposal, receipt) {
+            if !authority
+                .authorizes(proposal, receipt)
+                .map_err(|_| RefinementError::CorruptJournal)?
+            {
                 return Err(RefinementError::ApprovalRequired);
             }
             authorized.insert(approval_key(proposal_id, *version, receipt));
@@ -429,8 +439,12 @@ impl RefinementJournal {
 
 struct DenyAll;
 impl ApprovalAuthority for DenyAll {
-    fn authorizes(&self, _: &RefinementProposal, _: &ApprovalReceipt) -> bool {
-        false
+    fn authorizes(
+        &self,
+        _: &RefinementProposal,
+        _: &ApprovalReceipt,
+    ) -> Result<bool, serde_json::Error> {
+        Ok(false)
     }
 }
 

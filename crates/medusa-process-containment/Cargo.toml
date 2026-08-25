@@ -34,4 +34,5 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+flatbuffers_parser = { package = "flatbuffers", version = "25.12.19" }
 tempfile.workspace = true

@@ -75,18 +75,18 @@ pub struct SpeculationPolicy {
 /// Fast mutation already avoids model preflight and high-risk/full-orchestration work is
 /// intentionally ineligible. Medium-risk resolved mutations may prepare one provisional
 /// implementer when confidence is high and the write scope is exact.
-#[must_use]
-pub fn policy_for(planning: &PlanningResult) -> SpeculationPolicy {
+#[must_use = "use the policy result to enforce speculation limits"]
+pub fn policy_for(planning: &PlanningResult) -> Result<SpeculationPolicy, &'static str> {
     let budget = SpeculationBudget::default();
     let Some(implementation) = planning.task(TaskKind::Implementation) else {
-        return SpeculationPolicy {
+        return Ok(SpeculationPolicy {
             eligible: false,
             class: None,
             rationale: "speculation requires a high-confidence medium-risk mutation with exact resolved scope"
                 .to_owned(),
             budget,
             assumptions: None,
-        };
+        });
     };
     let eligible = planning.lane == ExecutionLane::StandardMutation
         && planning.risk == RiskLevel::Medium
@@ -100,14 +100,14 @@ pub fn policy_for(planning: &PlanningResult) -> SpeculationPolicy {
             .any(|path| path == "repository")
         && implementation.task.speculative;
     if !eligible {
-        return SpeculationPolicy {
+        return Ok(SpeculationPolicy {
             eligible: false,
             class: None,
             rationale: "speculation requires a high-confidence medium-risk mutation with exact resolved scope"
                 .to_owned(),
             budget,
             assumptions: None,
-        };
+        });
     }
     let mut scope = planning.scope.effective.clone();
     scope.sort();
@@ -138,15 +138,15 @@ pub fn policy_for(planning: &PlanningResult) -> SpeculationPolicy {
         &assumptions.promotion_dependencies,
         assumptions.confidence_milli,
         assumptions.risk,
-    ));
-    SpeculationPolicy {
+    ))?;
+    Ok(SpeculationPolicy {
         eligible: true,
         class: Some(SpeculationTaskClass::MediumRiskResolvedMutation),
         rationale: "resolved medium-risk scope may prepare one disposable implementer while promotion dependencies continue"
             .to_owned(),
         budget,
         assumptions: Some(assumptions),
-    }
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -273,7 +273,7 @@ impl SpeculationLedger {
                 fingerprint: String::new(),
             },
         };
-        ledger.refresh();
+        ledger.refresh()?;
         ledger.persist()?;
         Ok(ledger)
     }
@@ -449,7 +449,8 @@ impl SpeculationLedger {
                     self.record.assumptions.confidence_milli,
                     self.record.assumptions.risk,
                 ))
-            || self.record.fingerprint != record_fingerprint(&self.record)
+                .map_err(str::to_owned)?
+            || self.record.fingerprint != record_fingerprint(&self.record).map_err(str::to_owned)?
         {
             return Err("speculation ledger is incomplete or corrupted".to_owned());
         }
@@ -458,12 +459,13 @@ impl SpeculationLedger {
 
     fn commit(&mut self) -> Result<(), String> {
         self.record.revision = self.record.revision.saturating_add(1);
-        self.refresh();
+        self.refresh()?;
         self.persist()
     }
 
-    fn refresh(&mut self) {
-        self.record.fingerprint = record_fingerprint(&self.record);
+    fn refresh(&mut self) -> Result<(), String> {
+        self.record.fingerprint = record_fingerprint(&self.record).map_err(str::to_owned)?;
+        Ok(())
     }
 
     fn persist(&self) -> Result<(), String> {
@@ -486,7 +488,7 @@ impl SpeculationLedger {
     }
 }
 
-fn record_fingerprint(record: &SpeculationRecord) -> String {
+fn record_fingerprint(record: &SpeculationRecord) -> Result<String, &'static str> {
     hash(&(
         record.schema_version,
         record.class,
@@ -579,9 +581,9 @@ fn normalized(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn hash<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))
+fn hash<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "failed to serialize speculation state")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]
@@ -602,7 +604,7 @@ mod tests {
     fn only_high_confidence_medium_resolved_mutation_is_eligible() {
         let plan = medium_plan();
         assert_eq!(plan.lane, ExecutionLane::StandardMutation);
-        let policy = policy_for(&plan);
+        let policy = policy_for(&plan).expect("policy");
         assert!(policy.eligible);
         assert_eq!(policy.budget.max_concurrent_tasks, 1);
 
@@ -612,13 +614,13 @@ mod tests {
             repository_paths: vec!["src/a.rs".to_owned()],
         })
         .expect("fast plan");
-        assert!(!policy_for(&fast).eligible);
+        assert!(!policy_for(&fast).expect("policy").eligible);
     }
 
     #[test]
     fn promotion_fails_closed_on_dependency_scope_or_repository_drift() {
         let plan = medium_plan();
-        let policy = policy_for(&plan);
+        let policy = policy_for(&plan).expect("policy");
         let directory = tempfile::tempdir().expect("tempdir");
         let mut ledger = SpeculationLedger::open_or_create(
             directory.path().join("speculation.json"),
@@ -661,7 +663,7 @@ mod tests {
     #[test]
     fn waste_budget_and_crash_recovery_never_promote() {
         let plan = medium_plan();
-        let policy = policy_for(&plan);
+        let policy = policy_for(&plan).expect("policy");
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("speculation.json");
         let mut ledger = SpeculationLedger::open_or_create(&path, &policy, "repo").expect("ledger");

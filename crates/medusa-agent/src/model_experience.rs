@@ -145,14 +145,14 @@ impl ModelExperienceContractV1 {
             .collect()
     }
 
-    #[must_use]
-    pub fn fingerprint(&self) -> String {
-        let bytes = serde_json::to_vec(self).unwrap_or_default();
-        digest(&bytes)
+    #[must_use = "use the contract fingerprint or handle serialization failure"]
+    pub fn fingerprint(&self) -> Result<String, serde_json::Error> {
+        let bytes = serde_json::to_vec(self)?;
+        Ok(digest(&bytes))
     }
 
-    #[must_use]
-    pub fn diff(&self, next: &Self) -> ModelExperienceDiffV1 {
+    #[must_use = "use the contract diff or handle serialization failure"]
+    pub fn diff(&self, next: &Self) -> Result<ModelExperienceDiffV1, serde_json::Error> {
         let before = self
             .components
             .iter()
@@ -176,19 +176,22 @@ impl ModelExperienceContractV1 {
             })
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        ModelExperienceDiffV1 {
+        Ok(ModelExperienceDiffV1 {
             schema_version: MODEL_EXPERIENCE_SCHEMA_VERSION,
-            from_contract_fingerprint: self.fingerprint(),
-            to_contract_fingerprint: next.fingerprint(),
+            from_contract_fingerprint: self.fingerprint()?,
+            to_contract_fingerprint: next.fingerprint()?,
             stable_prefix_changed: self.stable_prefix_fingerprint != next.stable_prefix_fingerprint,
             request_dynamic_changed: self.request_dynamic_fingerprint
                 != next.request_dynamic_fingerprint,
             changed_components,
-        }
+        })
     }
 
-    #[must_use]
-    pub fn measurement(&self, cache: CacheObservationV1) -> ModelExperienceMeasurementV1 {
+    #[must_use = "use the measurement or handle serialization failure"]
+    pub fn measurement(
+        &self,
+        cache: CacheObservationV1,
+    ) -> Result<ModelExperienceMeasurementV1, serde_json::Error> {
         let component_bytes = self
             .components
             .iter()
@@ -215,9 +218,9 @@ impl ModelExperienceContractV1 {
         let transcript_bytes = component_bytes.get("messages").copied();
         let tool_result_bytes = component_bytes.get("tool_results").copied();
         let compaction_bytes = component_bytes.get("compaction").copied();
-        ModelExperienceMeasurementV1 {
+        Ok(ModelExperienceMeasurementV1 {
             schema_version: MODEL_EXPERIENCE_SCHEMA_VERSION,
-            contract_fingerprint: self.fingerprint(),
+            contract_fingerprint: self.fingerprint()?,
             component_bytes,
             total_bytes,
             stable_prefix_bytes,
@@ -226,7 +229,7 @@ impl ModelExperienceContractV1 {
             tool_result_bytes,
             compaction_bytes,
             cache,
-        }
+        })
     }
 }
 
@@ -346,7 +349,7 @@ mod tests {
             "tools-1",
         );
 
-        let diff = first.diff(&second);
+        let diff = first.diff(&second).expect("diff");
         assert!(!diff.stable_prefix_changed);
         assert!(diff.request_dynamic_changed);
         assert_eq!(diff.changed_components, vec!["messages", "messages-2"]);
@@ -359,7 +362,9 @@ mod tests {
             vec![component("system", 1, ComponentStability::Static)],
             "tools-1",
         );
-        let measurement = contract.measurement(CacheObservationV1::Unknown);
+        let measurement = contract
+            .measurement(CacheObservationV1::Unknown)
+            .expect("measurement");
         assert_eq!(measurement.cache, CacheObservationV1::Unknown);
         assert_eq!(measurement.total_bytes, Some(10));
         assert_eq!(measurement.stable_prefix_bytes, Some(10));
