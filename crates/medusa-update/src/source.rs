@@ -24,6 +24,9 @@ const ROLLING_ASSET_BASE: &str = "https://github.com/benclawbot/Medusa/releases/
 const ROLLING_MANIFEST_SCHEMA: &str = "medusa-main-artifact-v1";
 const ROLLING_PUBLISH_WAIT: Duration = Duration::from_secs(180);
 const ROLLING_PUBLISH_POLL: Duration = Duration::from_secs(2);
+// Keep individual requests bounded so a stalled socket cannot defeat the publication window.
+const ROLLING_REQUEST_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const ROLLING_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const SHA1_HEX_LENGTH: usize = 40;
 const SHA256_HEX_LENGTH: usize = 64;
 
@@ -38,6 +41,7 @@ pub struct MainBranchUpdater {
     client: Client,
     api_base: String,
     asset_base: String,
+    request_timeout: Duration,
     verified_revision: Mutex<Option<String>>,
 }
 
@@ -54,13 +58,30 @@ impl MainBranchUpdater {
         api_base: impl Into<String>,
         asset_base: impl Into<String>,
     ) -> MedusaResult<Self> {
+        Self::with_asset_base_and_timeouts(
+            api_base,
+            asset_base,
+            ROLLING_REQUEST_CONNECT_TIMEOUT,
+            ROLLING_REQUEST_TIMEOUT,
+        )
+    }
+
+    fn with_asset_base_and_timeouts(
+        api_base: impl Into<String>,
+        asset_base: impl Into<String>,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+    ) -> MedusaResult<Self> {
         Ok(Self {
             client: Client::builder()
                 .user_agent("medusa-updater")
+                .connect_timeout(connect_timeout)
+                .timeout(request_timeout)
                 .build()
                 .map_err(http_error)?,
             api_base: api_base.into().trim_end_matches('/').to_owned(),
             asset_base: asset_base.into().trim_end_matches('/').to_owned(),
+            request_timeout,
             verified_revision: Mutex::new(None),
         })
     }
@@ -258,11 +279,16 @@ impl MainBranchUpdater {
         deadline: Instant,
     ) -> MedusaResult<reqwest::blocking::Response> {
         loop {
-            if let Some(response) = self.asset_response_once(asset_name, revision)? {
-                return Ok(response);
-            }
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 return Err(publish_timeout(revision));
+            }
+            if let Some(response) = self.asset_response_once_with_timeout(
+                asset_name,
+                revision,
+                remaining.min(self.request_timeout),
+            )? {
+                return Ok(response);
             }
             thread::sleep(ROLLING_PUBLISH_POLL);
         }
@@ -273,9 +299,23 @@ impl MainBranchUpdater {
         asset_name: &str,
         revision: &str,
     ) -> MedusaResult<Option<Response>> {
+        self.asset_response_once_with_timeout(asset_name, revision, self.request_timeout)
+    }
+
+    fn asset_response_once_with_timeout(
+        &self,
+        asset_name: &str,
+        revision: &str,
+        timeout: Duration,
+    ) -> MedusaResult<Option<Response>> {
         let release_tag = rolling_release_tag(revision)?;
         let url = format!("{}/{}/{}", self.asset_base, release_tag, asset_name);
-        let response = self.client.get(&url).send().map_err(asset_error)?;
+        let response = self
+            .client
+            .get(&url)
+            .timeout(timeout)
+            .send()
+            .map_err(asset_error)?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -442,6 +482,7 @@ mod tests {
         io::{Read, Write},
         net::TcpListener,
         thread,
+        time::Duration,
     };
 
     use super::*;
@@ -592,6 +633,33 @@ mod tests {
                 .artifact_manifest_available("medusa-desktop-main-windows-x86_64.exe", REVISION,)
                 .expect("artifact status")
         );
+        worker.join().expect("server");
+    }
+
+    #[test]
+    fn rolling_asset_request_times_out_when_server_stalls() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            thread::sleep(Duration::from_millis(100));
+            let _ = stream.write_all(
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        });
+        let updater = MainBranchUpdater::with_asset_base_and_timeouts(
+            "http://api.invalid",
+            base,
+            Duration::from_millis(25),
+            Duration::from_millis(25),
+        )
+        .expect("client");
+
+        let error = match updater.asset_response_once("manifest.json", REVISION) {
+            Ok(_) => panic!("a stalled rolling asset request must time out"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ErrorCode::DependencyUnavailable);
         worker.join().expect("server");
     }
 
