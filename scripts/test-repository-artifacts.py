@@ -32,6 +32,8 @@ def main() -> int:
     assert_rejected("dependency-test.log", "root log")
     assert_rejected(".github/issue-447-trigger.txt", "trigger marker")
     assert_rejected(".github/release-trigger.md", "trigger marker")
+    assert_rejected("scripts/__pycache__/check-repository-artifacts.cpython-312.pyc", "generated Python artifact")
+    assert_rejected("scripts/generated.pyc", "generated Python artifact")
 
     # Intentional fixtures and durable machine-readable evidence remain valid.
     assert_admitted("tests/fixtures/provider-output.log")
@@ -40,6 +42,7 @@ def main() -> int:
     assert_admitted("benchmark-evidence.json")
     assert_admitted("docs/trigger-semantics.md")
     assert_admitted(".github/workflows/trigger-release.yml")
+    assert_admitted("scripts/fixtures/generated.py")
 
     # Keep workflow supply-chain policy inside the repository-wide CI policy gate.
     workflow_pin_tests = Path(__file__).with_name("test-workflow-action-pins.py")
