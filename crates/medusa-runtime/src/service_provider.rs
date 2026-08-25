@@ -66,11 +66,11 @@ mod tests {
             if cancel.load(Ordering::Acquire) {
                 return Err(ServiceProviderError::Cancelled);
             }
-            Ok(ServiceProviderResponse::new(
+            ServiceProviderResponse::new(
                 &self.descriptor(),
                 request.generation,
                 request.input.clone(),
-            )?)
+            )
         }
     }
 
@@ -207,11 +207,7 @@ mod tests {
             request: &ServiceProviderRequest,
             _cancel: &AtomicBool,
         ) -> Result<ServiceProviderResponse, ServiceProviderError> {
-            Ok(ServiceProviderResponse::new(
-                &self.0,
-                request.generation,
-                request.input.clone(),
-            )?)
+            ServiceProviderResponse::new(&self.0, request.generation, request.input.clone())
         }
     }
 }

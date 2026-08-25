@@ -317,16 +317,16 @@ fn serve_with_limits_and_config(
             return Err(error);
         }
     };
-    run_loop(
+    run_loop(RunLoopInput {
         listener,
         paths,
         jobs,
         processes,
         frontend,
         frontend_shutdown,
-        Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
+        shutdown: Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
         scheduler,
-    )
+    })
 }
 
 /// Starts the server in a dedicated thread with production limits.
@@ -386,16 +386,16 @@ fn spawn_with_limits_and_config(
                     return Err(error);
                 }
             };
-            run_loop(
+            run_loop(RunLoopInput {
                 listener,
                 paths,
                 jobs,
                 processes,
                 frontend,
                 frontend_shutdown,
-                server_shutdown,
+                shutdown: server_shutdown,
                 scheduler,
-            )
+            })
         })
         .map_err(|error| {
             MedusaError::new(
@@ -438,6 +438,17 @@ struct ConnectionContext {
 struct ConnectionWorkerPool {
     sender: Option<SyncSender<LocalStream>>,
     workers: Vec<thread::JoinHandle<()>>,
+}
+
+struct RunLoopInput {
+    listener: LocalListener,
+    paths: DaemonPaths,
+    jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: Arc<ProcessRegistry>,
+    frontend: Arc<Mutex<FrontendControlPlane>>,
+    frontend_shutdown: FrontendShutdownHandle,
+    shutdown: Arc<AtomicU8>,
+    scheduler: JobScheduler,
 }
 
 impl ConnectionWorkerPool {
@@ -528,16 +539,17 @@ fn connection_worker_loop(
     }
 }
 
-fn run_loop(
-    listener: LocalListener,
-    paths: DaemonPaths,
-    jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    processes: Arc<ProcessRegistry>,
-    frontend: Arc<Mutex<FrontendControlPlane>>,
-    frontend_shutdown: FrontendShutdownHandle,
-    shutdown: Arc<AtomicU8>,
-    scheduler: JobScheduler,
-) -> MedusaResult<()> {
+fn run_loop(input: RunLoopInput) -> MedusaResult<()> {
+    let RunLoopInput {
+        listener,
+        paths,
+        jobs,
+        processes,
+        frontend,
+        frontend_shutdown,
+        shutdown,
+        scheduler,
+    } = input;
     let scheduler = Arc::new(Mutex::new(scheduler));
     let context = ConnectionContext {
         paths: paths.clone(),
@@ -1309,7 +1321,7 @@ mod connection_concurrency_tests {
             let frontend_shutdown = frontend_shutdown.clone();
             let shutdown = Arc::clone(&shutdown);
             thread::spawn(move || {
-                run_loop(
+                run_loop(RunLoopInput {
                     listener,
                     paths,
                     jobs,
@@ -1318,7 +1330,7 @@ mod connection_concurrency_tests {
                     frontend_shutdown,
                     shutdown,
                     scheduler,
-                )
+                })
             })
         };
 
