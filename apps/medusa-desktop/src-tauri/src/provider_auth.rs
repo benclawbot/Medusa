@@ -177,7 +177,10 @@ mod tests {
     fn oauth_gateway_is_started_detached() {
         let (program, args) = browser_oauth_gateway_spec("openai-oauth").expect("gateway spec");
         assert_eq!(program, npx_program());
-        assert_eq!(args, ["--yes", "openai-oauth@2.0.0", "--no-open", "--detach"]);
+        assert_eq!(
+            args,
+            ["--yes", "openai-oauth@2.0.0", "--no-open", "--detach"]
+        );
     }
 
     #[test]
