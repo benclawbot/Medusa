@@ -4,6 +4,7 @@ use std::{
     time::Instant,
 };
 
+use medusa_core::storage::file_uri;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -302,18 +303,6 @@ fn repository_path(root: &Path, uri: &str) -> PathBuf {
         .strip_prefix(root)
         .unwrap_or(&absolute)
         .to_path_buf()
-}
-
-fn file_uri(path: &Path) -> String {
-    let normalized = path
-        .to_string_lossy()
-        .replace('\\', "/")
-        .replace(' ', "%20");
-    if normalized.starts_with('/') {
-        format!("file://{normalized}")
-    } else {
-        format!("file:///{normalized}")
-    }
 }
 
 #[cfg(test)]

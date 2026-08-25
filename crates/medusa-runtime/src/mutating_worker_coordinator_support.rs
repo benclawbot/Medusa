@@ -8,6 +8,7 @@ use std::{
 };
 
 use medusa_multi_agent_scheduler::Task;
+use medusa_core::storage;
 use serde::Serialize;
 
 use crate::{
@@ -239,21 +240,8 @@ pub(super) fn load_state(path: &Path) -> Result<DurableImplementationState, Stri
 }
 
 pub(super) fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "durable state path has no parent".to_owned())?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| error.to_string())?;
-    }
-    fs::rename(temporary, path).map_err(|error| error.to_string())
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    storage::atomic_write(path, &bytes).map_err(|error| error.to_string())
 }
 
 pub(super) fn now_ms() -> Result<u64, String> {

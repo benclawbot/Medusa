@@ -25,7 +25,8 @@ pub use verification::{
 };
 
 use serde::Serialize;
-use sha2::{Digest, Sha256};
+
+use medusa_core::storage;
 
 pub const SCHEMA_VERSION: u16 = 1;
 pub const DEFAULT_PAGE_SIZE: u64 = 16 * 1024;
@@ -46,13 +47,13 @@ pub enum EvidenceError {
 pub type Result<T> = std::result::Result<T, EvidenceError>;
 
 pub(crate) fn hash_bytes(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    storage::sha256_hex(bytes)
 }
 
 pub(crate) fn fingerprint(value: &impl Serialize) -> String {
-    match serde_json::to_vec(value) {
-        Ok(bytes) => hash_bytes(&bytes),
-        Err(error) => hash_bytes(
+    match storage::fingerprint_json(value) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => storage::sha256_hex(
             format!(
                 "medusa-evidence:fingerprint-serialization-error:{}:{error}",
                 std::any::type_name_of_val(value)
@@ -63,18 +64,7 @@ pub(crate) fn fingerprint(value: &impl Serialize) -> String {
 }
 
 pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| EvidenceError::Validation("evidence path has no parent".to_owned()))?;
-    std::fs::create_dir_all(parent)?;
-    let temporary = path.with_extension(format!("tmp-{}", ulid::Ulid::new()));
-    std::fs::write(&temporary, bytes)?;
-    #[cfg(windows)]
-    if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    std::fs::rename(temporary, path)?;
-    Ok(())
+    storage::atomic_write(path, bytes).map_err(EvidenceError::Io)
 }
 
 pub(crate) fn write_json_atomic(path: &std::path::Path, value: &impl Serialize) -> Result<()> {

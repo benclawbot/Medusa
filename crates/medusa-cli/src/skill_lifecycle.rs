@@ -4,6 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use medusa_core::storage;
 use serde::{Deserialize, Serialize};
 
 const ACTIVE_ROOT: &str = ".medusa/skills";
@@ -304,16 +305,8 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let content = serde_json::to_vec_pretty(value)
         .map_err(|error| format!("serialize {}: {error}", path.display()))?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, content)
-        .map_err(|error| format!("write {}: {error}", temporary.display()))?;
-    fs::rename(&temporary, path).map_err(|error| {
-        format!(
-            "replace {} with {}: {error}",
-            path.display(),
-            temporary.display()
-        )
-    })
+    storage::atomic_write(path, &content)
+        .map_err(|error| format!("write {}: {error}", path.display()))
 }
 
 fn now_epoch_seconds() -> Result<u64, String> {

@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use medusa_core::storage;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ulid::Ulid;
@@ -371,12 +373,7 @@ pub fn load(repo: &Path, reference: &WorldModelRef) -> WorldModelResult<Workspac
 pub fn persist(repo: &Path, relative_path: &Path, model: &WorkspaceModel) -> WorldModelResult<()> {
     model.validate()?;
     let path = repo.join(relative_path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(model)?)?;
-    fs::rename(temporary, path)?;
+    storage::atomic_write(&path, &serde_json::to_vec_pretty(model)?)?;
     Ok(())
 }
 

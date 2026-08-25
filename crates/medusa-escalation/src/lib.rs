@@ -5,8 +5,8 @@ mod manual;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use medusa_core::storage;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 pub use lifecycle::EscalationLifecycleEvent;
@@ -290,7 +290,7 @@ impl EscalationPacket {
             created_at: &self.created_at,
         };
         let bytes = serde_json::to_vec(&unsigned)?;
-        Ok(hex::encode(Sha256::digest(bytes)))
+        Ok(storage::sha256_hex(&bytes))
     }
 }
 

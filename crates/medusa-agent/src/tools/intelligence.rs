@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, storage::file_uri};
 use medusa_intelligence::{
     CodeIndex, LspCapabilityResult, LspClient, PatchTransaction, RepositoryGraph,
     RepositoryGraphFreshness, TextEdit, bind_guarded_rename_snapshot,
@@ -141,15 +141,6 @@ pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<St
         "operation": operation,
         "result": result,
     }))?)
-}
-
-fn file_uri(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    if normalized.starts_with('/') {
-        format!("file://{normalized}")
-    } else {
-        format!("file:///{normalized}")
-    }
 }
 
 fn language_id(path: &Path) -> &'static str {

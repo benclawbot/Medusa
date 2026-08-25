@@ -3,6 +3,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use medusa_core::storage;
 use medusa_skill::validate_package;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -469,16 +470,8 @@ fn write_manifest(directory: &Path, manifest: &Value) -> Result<(), String> {
 }
 
 fn atomic_write(path: &Path, content: &[u8]) -> Result<(), String> {
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, content)
-        .map_err(|error| format!("write {}: {error}", temporary.display()))?;
-    fs::rename(&temporary, path).map_err(|error| {
-        format!(
-            "replace {} with {}: {error}",
-            path.display(),
-            temporary.display()
-        )
-    })
+    storage::atomic_write(path, content)
+        .map_err(|error| format!("write {}: {error}", path.display()))
 }
 
 fn require_proposed(manifest: &Value) -> Result<(), String> {

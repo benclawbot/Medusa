@@ -10,7 +10,7 @@ use std::{
 };
 
 use medusa_config::ProviderProfileCatalog;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -306,17 +306,7 @@ fn load_state(path: &Path) -> MedusaResult<ProviderRuntimeState> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| store_error("provider runtime state path has no parent"))?;
-    fs::create_dir_all(parent).map_err(store_io_error)?;
-    let temporary = path.with_extension("json.tmp");
-    let mut file = fs::File::create(&temporary).map_err(store_io_error)?;
-    file.write_all(bytes).map_err(store_io_error)?;
-    file.sync_all().map_err(store_io_error)?;
-    fs::rename(&temporary, path).map_err(store_io_error)?;
-    sync_parent(path);
-    Ok(())
+    storage::atomic_write(path, bytes).map_err(store_io_error)
 }
 
 fn sync_parent(path: &Path) {

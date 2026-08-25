@@ -1,13 +1,7 @@
-use std::{
-    collections::BTreeSet,
-    fs::{self, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeSet, fs, path::Path};
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use rusqlite::Connection;
-use ulid::Ulid;
 
 pub(crate) struct LifecycleLock {
     connection: Connection,
@@ -39,30 +33,7 @@ impl Drop for LifecycleLock {
 }
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| invalid("memory path must have a parent directory"))?;
-    fs::create_dir_all(parent)?;
-
-    let temporary = temporary_path(path);
-    let result = (|| -> MedusaResult<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(bytes)?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)?;
-        sync_parent(parent)?;
-        Ok(())
-    })();
-
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    storage::atomic_write(path, bytes).map_err(Into::into)
 }
 
 pub(crate) fn durable_remove(path: &Path) -> MedusaResult<()> {
@@ -76,14 +47,6 @@ pub(crate) fn durable_remove(path: &Path) -> MedusaResult<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("memory");
-    path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::new()))
 }
 
 #[cfg(unix)]
@@ -231,24 +194,6 @@ mod tests {
         assert!(!worker.is_finished());
         drop(first);
         worker.join().expect("worker").expect("second lock");
-    }
-
-    #[test]
-    fn temporary_names_are_collision_resistant_and_same_directory() {
-        let directory = tempdir().expect("temporary directory");
-        let path = directory.path().join("memory.md");
-        let first = temporary_path(&path);
-        let second = temporary_path(&path);
-        assert_eq!(first.parent(), Some(directory.path()));
-        assert_eq!(second.parent(), Some(directory.path()));
-        assert_ne!(first, second);
-        assert!(
-            first
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with(".memory.md.")
-        );
     }
 
     fn assert_no_temporary_files(directory: &Path) {

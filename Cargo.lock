@@ -1289,8 +1289,11 @@ dependencies = [
 name = "medusa-core"
 version = "1.0.4"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror",
  "ulid",
 ]
@@ -1330,10 +1333,9 @@ dependencies = [
 name = "medusa-escalation"
 version = "1.0.4"
 dependencies = [
- "hex",
+ "medusa-core",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "time",
 ]
@@ -1342,10 +1344,9 @@ dependencies = [
 name = "medusa-evidence"
 version = "1.0.4"
 dependencies = [
- "hex",
+ "medusa-core",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
  "time",
@@ -1863,6 +1864,7 @@ dependencies = [
 name = "medusa-world-model"
 version = "1.0.4"
 dependencies = [
+ "medusa-core",
  "serde",
  "serde_json",
  "tempfile",

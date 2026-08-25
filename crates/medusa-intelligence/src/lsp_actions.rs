@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use medusa_core::storage::file_uri;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -108,7 +109,7 @@ pub fn prepare_rename(
     let result = client.request(
         "textDocument/prepareRename",
         json!({
-            "textDocument": { "uri": path_to_uri(path) },
+            "textDocument": { "uri": file_uri(path) },
             "position": position,
         }),
     )?;
@@ -129,7 +130,7 @@ pub fn rename(
     let result = client.request(
         "textDocument/rename",
         json!({
-            "textDocument": { "uri": path_to_uri(path) },
+            "textDocument": { "uri": file_uri(path) },
             "position": position,
             "newName": new_name,
         }),
@@ -153,7 +154,7 @@ pub fn code_actions(
     let result = client.request(
         "textDocument/codeAction",
         json!({
-            "textDocument": { "uri": path_to_uri(path) },
+            "textDocument": { "uri": file_uri(path) },
             "range": range,
             "context": { "diagnostics": diagnostics, "only": only },
         }),
@@ -470,15 +471,6 @@ fn uri_to_relative(root: &Path, uri: &str) -> PathBuf {
     let decoded = uri.strip_prefix("file://").unwrap_or(uri);
     let path = PathBuf::from(decoded);
     path.strip_prefix(root).unwrap_or(&path).to_path_buf()
-}
-
-fn path_to_uri(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    if normalized.starts_with('/') {
-        format!("file://{normalized}")
-    } else {
-        format!("file:///{normalized}")
-    }
 }
 
 #[cfg(test)]
