@@ -240,5 +240,8 @@ hook.write_text(
     "#!/usr/bin/env bash\n"
     "set -euo pipefail\n"
     "MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP=1 cargo test --workspace --all-features --locked\n"
+    "git reset -q HEAD -- .github/workflows/ci.yml scripts/check-repository-artifacts.py "
+    ".github/workflows/phase1-high-severity-fix.yml .github/workflows/phase1-pr-remediation.yml "
+    "scripts/apply-phase1-remediation.py\n"
 )
 hook.chmod(0o755)
