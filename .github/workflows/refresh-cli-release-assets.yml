@@ -2,7 +2,7 @@ name: Refresh CLI Release Assets
 
 on:
   workflow_run:
-    workflows: ["Publish Draft Release"]
+    workflows: ["Publish Release"]
     types: [completed]
 
 permissions:
@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   build:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -84,7 +86,9 @@ jobs:
           retention-days: 30
 
   publish:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     needs: build
     runs-on: ubuntu-latest
     permissions:

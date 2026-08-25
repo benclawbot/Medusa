@@ -48,6 +48,11 @@ def run_acceptance(output: Path, run_number: int, total_runs: int) -> dict[str, 
         f"finished with exit={completed.returncode} in {elapsed:.1f}s",
         flush=True,
     )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"product acceptance run {run_number}/{total_runs} failed with exit status "
+            f"{completed.returncode}"
+        )
     summary = output / "summary.json"
     if not summary.exists():
         raise RuntimeError(f"missing product acceptance summary: {summary}")
@@ -65,7 +70,12 @@ def score(suite: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
         for run in indexed:
             candidates = [run[item] for item in case["acceptance_ids"] if item in run]
             passed = bool(candidates) and all(item["status"] == "passed" for item in candidates)
-            duration_ms = sum(int(item.get("duration_ms", 0)) for item in candidates)
+            duration_values = [item.get("duration_ms") for item in candidates]
+            duration_ms = (
+                sum(int(value) for value in duration_values)
+                if duration_values and all(isinstance(value, (int, float)) for value in duration_values)
+                else None
+            )
             per_run.append({"passed": passed, "duration_ms": duration_ms})
         results.append({"id": case["id"], "metric": case["metric"], "runs": per_run})
 
@@ -74,34 +84,63 @@ def score(suite: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
     rollbacks = [item for item in results if item["metric"] == "successful_rollback"]
     containment = [item for item in results if item["metric"] == "containment_enforcement"]
 
-    def rate(items: list[dict[str, Any]]) -> float:
+    def rate(items: list[dict[str, Any]]) -> float | None:
         attempts = sum(len(item["runs"]) for item in items)
         passes = sum(sum(1 for run in item["runs"] if run["passed"]) for item in items)
-        return passes / attempts if attempts else 1.0
+        return passes / attempts if attempts else None
 
     fingerprints = []
     for run in runs:
         stable = [(s["id"], s["status"]) for s in run.get("scenarios", [])]
         fingerprints.append(hashlib.sha256(json.dumps(stable, sort_keys=True).encode()).hexdigest())
 
+    measured_false_completion = [
+        run.get("metrics", {}).get("false_completion_rate") for run in runs
+    ]
+    measured_manual_interventions = [
+        run.get("metrics", {}).get("manual_interventions") for run in runs
+    ]
+    false_completion_rate = (
+        sum(value for value in measured_false_completion) / len(measured_false_completion)
+        if measured_false_completion
+        and all(isinstance(value, (int, float)) for value in measured_false_completion)
+        else None
+    )
+    manual_interventions = (
+        sum(measured_manual_interventions)
+        if measured_manual_interventions
+        and all(isinstance(value, (int, float)) for value in measured_manual_interventions)
+        else None
+    )
+    containment_violations = (
+        sum(1 for item in containment for run in item["runs"] if not run["passed"])
+        if containment and runs
+        else None
+    )
+    verified_duration = [run["duration_ms"] for item in verified for run in item["runs"]]
     metrics = {
         "verified_completion_rate": rate(verified),
-        "false_completion_rate": 0.0,
+        "false_completion_rate": false_completion_rate,
         "successful_resume_rate": rate(resumes),
         "successful_rollback_rate": rate(rollbacks),
-        "containment_violations": sum(
-            1 for item in containment for run in item["runs"] if not run["passed"]
+        "containment_violations": containment_violations,
+        "manual_interventions": manual_interventions,
+        "time_to_verified_completion_ms": (
+            sum(verified_duration)
+            if verified_duration and all(value is not None for value in verified_duration)
+            else None
         ),
-        "manual_interventions": 0,
-        "time_to_verified_completion_ms": sum(
-            run["duration_ms"] for item in verified for run in item["runs"]
-        ),
-        "repeated_run_determinism": 1.0 if len(set(fingerprints)) <= 1 else 0.0,
+        "repeated_run_determinism": (
+            1.0 if len(set(fingerprints)) <= 1 else 0.0
+        ) if fingerprints else None,
     }
     thresholds = suite["thresholds"]
     failures = []
     for name, expected in thresholds.items():
         actual = metrics[name]
+        if actual is None:
+            failures.append({"metric": name, "actual": None, "threshold": expected, "reason": "missing evidence"})
+            continue
         if name in {"false_completion_rate", "containment_violations", "manual_interventions"}:
             ok = actual <= expected
         else:

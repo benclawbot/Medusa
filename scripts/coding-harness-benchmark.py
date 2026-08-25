@@ -55,16 +55,36 @@ def validate_suite(suite: dict[str, Any]) -> None:
 
 
 def run_acceptance(output: Path) -> dict[str, Any]:
-    subprocess.run(["cargo", "product-acceptance", "--output", str(output)], check=False)
+    completed = subprocess.run(
+        ["cargo", "product-acceptance", "--output", str(output)], check=False
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"product acceptance failed with exit status {completed.returncode}"
+        )
     summary = output / "summary.json"
     if not summary.exists():
         raise RuntimeError(f"missing authoritative product acceptance summary: {summary}")
     return load(summary)
 
 
-def number(receipt: dict[str, Any], name: str) -> int:
-    value = receipt.get("metrics", {}).get(name, 0)
-    return int(value) if isinstance(value, (int, float)) else 0
+def number(receipt: dict[str, Any], name: str) -> int | None:
+    value = receipt.get("metrics", {}).get(name)
+    return int(value) if isinstance(value, (int, float)) else None
+
+
+def sum_metric(receipts: list[dict[str, Any]], name: str) -> int | None:
+    values = [number(receipt, name) for receipt in receipts]
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
+
+
+def sum_case_metric(cases: list[dict[str, Any]], name: str) -> int | None:
+    values = [case.get(name) for case in cases]
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value for value in values if isinstance(value, (int, float)))
 
 
 def select_receipts(case: dict[str, Any], indexed: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -84,13 +104,19 @@ def score_trial(suite: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any
         receipts = select_receipts(definition, indexed)
         verified = bool(receipts) and all(
             item.get("status") == "passed"
-            and item.get("verification_status", "satisfied") == "satisfied"
+            and item.get("verification_status") == "satisfied"
             for item in receipts
         )
         expected = definition["expected_outcome"]
         observed = "success" if verified else "failure"
         if expected in {"partial", "no_change"}:
             observed = expected if verified else "failure"
+        duration_values = [item.get("duration_ms") for item in receipts]
+        duration_ms = (
+            sum(int(value) for value in duration_values)
+            if duration_values and all(isinstance(value, (int, float)) for value in duration_values)
+            else None
+        )
         cases.append({
             "id": definition["id"],
             "category": definition["category"],
@@ -102,8 +128,8 @@ def score_trial(suite: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any
             "exact_final_diff": [item.get("metrics", {}).get("final_diff") for item in receipts]
                 if receipts and all(isinstance(item.get("metrics", {}).get("final_diff"), str) for item in receipts)
                 else None,
-            "duration_ms": sum(int(item.get("duration_ms", 0)) for item in receipts),
-            **{name: sum(number(item, name) for item in receipts) for name in (
+            "duration_ms": duration_ms,
+            **{name: sum_metric(receipts, name) for name in (
                 "repair_cycles", "duplicate_tool_calls", "failed_deterministic_retries",
                 "context_retained_bytes", "context_reread_bytes", "stale_evidence_incidents",
                 "roadblocks_encountered", "roadblock_recoveries", "tool_latency_ms",
@@ -120,46 +146,78 @@ def aggregate(suite: dict[str, Any], trials: list[dict[str, Any]]) -> dict[str, 
     total = len(cases)
     successful = sum(case["passed"] for case in cases)
     verified = sum(case["authoritative_verification"] for case in cases)
-    false_complete = sum(case["false_completes"] for case in cases)
-    safety = sum(case["safety_regressions"] for case in cases)
+    false_complete_values = [case["false_completes"] for case in cases]
+    safety_values = [case["safety_regressions"] for case in cases]
+    false_complete = (
+        sum(value for value in false_complete_values if value is not None)
+        if false_complete_values and all(value is not None for value in false_complete_values)
+        else None
+    )
+    safety = (
+        sum(value for value in safety_values if value is not None)
+        if safety_values and all(value is not None for value in safety_values)
+        else None
+    )
+    known_repair_cycles = [case["repair_cycles"] for case in cases]
+    repair_cycles = (
+        sum(value for value in known_repair_cycles if value is not None)
+        if known_repair_cycles and all(value is not None for value in known_repair_cycles)
+        else None
+    )
+    known_first_pass = [
+        case["repair_cycles"] is not None for case in cases
+    ]
+    first_pass_correctness_rate = (
+        sum(case["repair_cycles"] == 0 and case["passed"] for case in cases) / total
+        if total and all(known_first_pass)
+        else None
+    )
     metrics = {
-        "task_success_rate": successful / total if total else 1.0,
-        "verification_coverage": verified / total if total else 1.0,
-        "false_complete_rate": false_complete / total if total else 0.0,
-        "first_pass_correctness_rate": sum(case["repair_cycles"] == 0 and case["passed"] for case in cases) / total if total else 1.0,
-        "repair_cycles": sum(case["repair_cycles"] for case in cases),
-        "duplicate_tool_calls": sum(case["duplicate_tool_calls"] for case in cases),
-        "failed_deterministic_retries": sum(case["failed_deterministic_retries"] for case in cases),
-        "context_retained_bytes": sum(case["context_retained_bytes"] for case in cases),
-        "context_reread_bytes": sum(case["context_reread_bytes"] for case in cases),
-        "stale_evidence_incidents": sum(case["stale_evidence_incidents"] for case in cases),
-        "roadblocks_encountered": sum(case["roadblocks_encountered"] for case in cases),
-        "roadblock_recoveries": sum(case["roadblock_recoveries"] for case in cases),
-        "wall_clock_ms": sum(case["duration_ms"] for case in cases),
-        "tool_latency_ms": sum(case["tool_latency_ms"] for case in cases),
-        "input_tokens": sum(case["input_tokens"] for case in cases),
-        "output_tokens": sum(case["output_tokens"] for case in cases),
-        "billed_cost_microunits": sum(case["billed_cost_microunits"] for case in cases),
-        "manual_interventions": sum(case["manual_interventions"] for case in cases),
+        "task_success_rate": successful / total if total else None,
+        "verification_coverage": verified / total if total else None,
+        "false_complete_rate": false_complete / total if false_complete is not None and total else None,
+        "first_pass_correctness_rate": first_pass_correctness_rate,
+        "repair_cycles": repair_cycles,
+        "duplicate_tool_calls": sum_case_metric(cases, "duplicate_tool_calls"),
+        "failed_deterministic_retries": sum_case_metric(cases, "failed_deterministic_retries"),
+        "context_retained_bytes": sum_case_metric(cases, "context_retained_bytes"),
+        "context_reread_bytes": sum_case_metric(cases, "context_reread_bytes"),
+        "stale_evidence_incidents": sum_case_metric(cases, "stale_evidence_incidents"),
+        "roadblocks_encountered": sum_case_metric(cases, "roadblocks_encountered"),
+        "roadblock_recoveries": sum_case_metric(cases, "roadblock_recoveries"),
+        "wall_clock_ms": (
+            sum(case["duration_ms"] for case in cases)
+            if cases and all(case["duration_ms"] is not None for case in cases)
+            else None
+        ),
+        "tool_latency_ms": sum_case_metric(cases, "tool_latency_ms"),
+        "input_tokens": sum_case_metric(cases, "input_tokens"),
+        "output_tokens": sum_case_metric(cases, "output_tokens"),
+        "billed_cost_microunits": sum_case_metric(cases, "billed_cost_microunits"),
+        "manual_interventions": sum_case_metric(cases, "manual_interventions"),
         "safety_regressions": safety,
-        "continuity_loss_incidents": sum(case["continuity_loss_incidents"] for case in cases),
-        "irrelevant_context_bytes": sum(case["irrelevant_context_bytes"] for case in cases),
-        "duplicate_diagnostic_reads": sum(case["duplicate_diagnostic_reads"] for case in cases),
+        "continuity_loss_incidents": sum_case_metric(cases, "continuity_loss_incidents"),
+        "irrelevant_context_bytes": sum_case_metric(cases, "irrelevant_context_bytes"),
+        "duplicate_diagnostic_reads": sum_case_metric(cases, "duplicate_diagnostic_reads"),
         "blocked_path_completion_rate": (
             sum(case["passed"] for case in cases if case["category"] == "roadblock_recovery")
             / max(1, sum(case["category"] == "roadblock_recovery" for case in cases))
+            if any(case["category"] == "roadblock_recovery" for case in cases)
+            else None
         ),
     }
     guards = suite["promotion_guardrails"]
     failures = []
     checks = (
-        ("task_success_rate", metrics["task_success_rate"] >= guards["minimum_task_success_rate"]),
-        ("verification_coverage", metrics["verification_coverage"] >= guards["minimum_verification_coverage"]),
-        ("false_complete_rate", metrics["false_complete_rate"] <= guards["maximum_false_complete_rate"]),
-        ("safety_regressions", metrics["safety_regressions"] <= guards["maximum_safety_regressions"]),
+        ("task_success_rate", metrics["task_success_rate"], guards["minimum_task_success_rate"], "higher"),
+        ("verification_coverage", metrics["verification_coverage"], guards["minimum_verification_coverage"], "higher"),
+        ("false_complete_rate", metrics["false_complete_rate"], guards["maximum_false_complete_rate"], "lower"),
+        ("safety_regressions", metrics["safety_regressions"], guards["maximum_safety_regressions"], "lower"),
     )
-    for name, ok in checks:
-        if not ok:
+    for name, actual, expected, direction in checks:
+        if actual is None:
+            failures.append(f"{name}: missing evidence")
+        elif (actual >= expected if direction == "higher" else actual <= expected) is False:
             failures.append(name)
     return {"metrics": metrics, "passed": not failures, "failures": failures}
 
@@ -175,15 +233,21 @@ def compare_feature(suite: dict[str, Any], baseline: dict[str, Any], candidate: 
     assertions = [item for item in suite["feature_assertions"] if item["feature"] == feature]
     for assertion in assertions:
         metric = assertion["metric"]
-        left = baseline["metrics"].get(metric, 0)
-        right = candidate["metrics"].get(metric, 0)
+        left = baseline["metrics"].get(metric)
+        right = candidate["metrics"].get(metric)
+        if left is None or right is None:
+            failures.append(f"feature {feature} missing evidence for {metric}")
+            continue
         ok = right <= left if assertion["direction"] == "lower_or_equal" else right >= left
         if not ok:
             failures.append(f"feature {feature} regressed {metric}: {right} vs {left}")
         guard = assertion.get("guard_metric")
         if guard:
-            base_guard = baseline["metrics"].get(guard, 0)
-            cand_guard = candidate["metrics"].get(guard, 0)
+            base_guard = baseline["metrics"].get(guard)
+            cand_guard = candidate["metrics"].get(guard)
+            if base_guard is None or cand_guard is None:
+                failures.append(f"feature {feature} missing evidence for guard {guard}")
+                continue
             if guard == "false_complete_rate":
                 if cand_guard > base_guard:
                     failures.append(f"feature {feature} regressed guard {guard}")

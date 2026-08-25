@@ -46,6 +46,15 @@ def main() -> int:
     assert not result["passed"]
     assert any("task_success_rate" in item for item in result["failures"])
 
+    missing = report("same-model", ["875"], irrelevant=5)
+    missing["metrics"].pop("irrelevant_context_bytes")
+    try:
+        MODULE.compare(suite, baseline, missing)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing benchmark evidence was accepted")
+
     mismatched = report("different-model", ["875"], irrelevant=5)
     try:
         MODULE.compare(suite, baseline, mismatched)

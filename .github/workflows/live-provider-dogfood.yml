@@ -55,7 +55,12 @@ jobs:
   live-provider:
     name: Live installed binary (${{ matrix.platform }})
     needs: contract
-    if: github.event_name != 'pull_request' || github.head_ref == 'agent/555-cross-platform-dogfood'
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.head_ref == 'agent/555-cross-platform-dogfood'
+      )
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
