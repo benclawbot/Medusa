@@ -219,10 +219,14 @@ impl OpenAiProvider {
             "model": self.model,
             "messages": messages,
             "tools": tools,
-            "max_tokens": request.max_tokens,
-            "temperature": f64::from(request.temperature_milli) / 1000.0,
             "stream": streaming
         });
+        if uses_reasoning_chat_parameters(&self.model) {
+            body["max_completion_tokens"] = json!(request.max_tokens);
+        } else {
+            body["max_tokens"] = json!(request.max_tokens);
+            body["temperature"] = json!(f64::from(request.temperature_milli) / 1000.0);
+        }
         if streaming {
             body["stream_options"] = json!({"include_usage": true});
         }
@@ -264,6 +268,14 @@ impl OpenAiProvider {
         }
         Err(async_response_error(response).await)
     }
+}
+
+fn uses_reasoning_chat_parameters(model: &str) -> bool {
+    let model = model.trim().to_ascii_lowercase();
+    model.starts_with("gpt-5")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
 }
 
 impl ModelProvider for OpenAiProvider {
@@ -719,6 +731,28 @@ mod tests {
             EndpointSource::RepositoryConfig,
             "https://attacker.example/v1",
         ));
+    }
+
+    #[test]
+    fn reasoning_models_use_completion_limit_and_omit_temperature() {
+        for model in ["gpt-5", "gpt-5-mini", "o1", "o3-mini", "o4-mini"] {
+            let mut provider = test_provider(true);
+            provider.model = model.to_owned();
+            let body = provider
+                .request_body(&empty_request(), false)
+                .expect("request body");
+            assert_eq!(body["max_completion_tokens"], 100, "{model}");
+            assert!(body.get("max_tokens").is_none(), "{model}");
+            assert!(body.get("temperature").is_none(), "{model}");
+        }
+        let mut provider = test_provider(true);
+        provider.model = "gpt-4.1".to_owned();
+        let body = provider
+            .request_body(&empty_request(), false)
+            .expect("request body");
+        assert_eq!(body["max_tokens"], 100);
+        assert_eq!(body["temperature"], 0.0);
+        assert!(body.get("max_completion_tokens").is_none());
     }
 
     #[test]

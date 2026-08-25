@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -168,11 +171,22 @@ fn validate_fingerprint(value: &str) -> Result<(), String> {
 }
 
 fn validate_path(path: &str) -> Result<(), RecoveryPreflightError> {
-    let unsafe_path = path.is_empty()
-        || path.starts_with('/')
-        || path.starts_with('\\')
-        || path.split(['/', '\\']).any(|component| component == "..")
-        || path.contains('\0');
+    let normalized = path.replace('\\', "/");
+    let has_windows_drive_prefix = normalized.as_bytes().get(1) == Some(&b':')
+        && normalized
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic);
+    let unsafe_component = Path::new(&normalized).components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    });
+    let unsafe_path = normalized.is_empty()
+        || has_windows_drive_prefix
+        || unsafe_component
+        || normalized.contains('\0');
     if unsafe_path {
         Err(RecoveryPreflightError::UnsafePath(path.to_owned()))
     } else {
@@ -256,6 +270,26 @@ mod tests {
             build_restore_preflight("cp", &invalid, &snapshot(1, &[]), [], true),
             Err(RecoveryPreflightError::UnsafePath(_))
         ));
+    }
+
+    #[test]
+    fn rejects_rooted_parent_and_drive_letter_paths() {
+        for path in [
+            "../secret",
+            "..\\secret",
+            "/etc/passwd",
+            "C:\\secret",
+            "c:/secret",
+        ] {
+            assert!(
+                matches!(
+                    validate_path(path),
+                    Err(RecoveryPreflightError::UnsafePath(_))
+                ),
+                "{path}"
+            );
+        }
+        assert!(validate_path("src/lib.rs").is_ok());
     }
 
     #[test]
