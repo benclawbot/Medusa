@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import subprocess
 from pathlib import Path
 
 
@@ -227,3 +228,5 @@ rep(
                         || !tool_allowed(self.config.agent.mode, name)
                         || name == ANALYSIS_WORKSPACE_TOOL''',
 )
+
+subprocess.run(["cargo", "fmt", "--all"], check=True)
