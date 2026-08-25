@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -446,12 +447,17 @@ impl RuntimeRegistry {
     /// entry locks because an active frontend request may hold one while it waits
     /// for a long-running provider operation.
     pub fn shutdown_all(&self) {
-        let Ok(mut supervisors) = self.shutdown_supervisors.lock() else {
-            return;
+        let supervisors = {
+            let Ok(supervisors) = self.shutdown_supervisors.lock() else {
+                return;
+            };
+            supervisors.values().cloned().collect::<Vec<_>>()
         };
-        for supervisor in supervisors.values_mut() {
-            let _ = supervisor.shutdown_now();
-        }
+        thread::spawn(move || {
+            for mut supervisor in supervisors {
+                let _ = supervisor.shutdown_now();
+            }
+        });
     }
 }
 
@@ -496,13 +502,16 @@ pub fn runtime_close(
         .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
         .remove(&runtime_id)
         .ok_or_else(|| format!("runtime {runtime_id} does not exist"))?;
-    let mut supervisor = registry
+    let supervisor = registry
         .shutdown_supervisors
         .lock()
         .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
         .remove(&runtime_id)
         .ok_or_else(|| format!("runtime {runtime_id} shutdown handle does not exist"))?;
-    let _ = supervisor.shutdown_now();
+    thread::spawn(move || {
+        let mut supervisor = supervisor;
+        let _ = supervisor.shutdown_now();
+    });
     Ok(())
 }
 

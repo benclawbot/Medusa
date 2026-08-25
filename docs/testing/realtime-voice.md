@@ -22,12 +22,6 @@ Run TUI voice lifecycle and interaction tests:
 cargo test -p medusa-tui voice
 ```
 
-Run desktop synthetic-media tests from `apps/medusa-desktop`:
-
-```bash
-npm test -- --run VoiceControls
-```
-
 The full repository authority remains:
 
 ```bash
@@ -50,7 +44,7 @@ Required tests prove that:
 - OAuth capability failure remains explicit and never falls back to asking for an API key;
 - protocol errors do not echo OAuth credentials, raw audio, or transcript payloads;
 - repeated connect/disconnect cycles release every registered resource and clear all buffers;
-- desktop and TUI retain text input and authoritative keyboard approval behavior while voice mode is active;
+- TUI and Telegram retain text input and authoritative approval behavior while their voice surfaces are active;
 - unsupported device, permission, remote, container, WSL, CI, headless, and capability-unavailable paths fail closed while text mode remains usable.
 
 ## Latency budgets
@@ -65,10 +59,10 @@ Windows, macOS, and Ubuntu run the shared Rust contracts. Browser media tests us
 
 ## Opt-in live smoke test
 
-A live smoke test is permitted only when an authenticated OAuth Realtime route is already configured and the operator explicitly enables it. It must:
+A live smoke test is limited to a separately supported TUI or Telegram Realtime route. It is permitted only when an authenticated OAuth Realtime route is already configured and the operator explicitly enables it. It must:
 
 1. probe capability before requesting microphone access;
-2. use the existing OAuth gateway rather than requesting an API key;
+2. use the existing supported OAuth gateway rather than requesting an API key;
 3. avoid logging credentials, raw audio, and sensitive transcripts;
 4. exercise connect, one spoken turn, one assistant audio turn, barge-in, reconnect, and close;
 5. release all device and transport handles even after failure.

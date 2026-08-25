@@ -623,6 +623,16 @@ impl RuntimeController {
         true
     }
 
+    /// Returns the cancellation flag used by the active worker.
+    ///
+    /// Frontend hosts use this only for process-level emergency shutdown. Normal
+    /// user cancellation must continue through [`Self::cancel`] so that the
+    /// durable cancellation record is written first.
+    #[must_use]
+    pub fn cancellation_token(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancel)
+    }
+
     #[must_use]
     pub fn is_busy(&self) -> bool {
         lock_submission(&self.submission).busy

@@ -312,6 +312,18 @@ it("persists the composer provider, model, and effort until changed and applies 
   expect(screen.getByRole("button", { name: /Choose provider, model, and effort/ })).toHaveTextContent("OpenAI API · gpt-5.1-codex · High");
 });
 
+it("closes the composer selector when clicking outside it", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  fireEvent.click(screen.getByRole("button", { name: /Choose provider, model, and effort/ }));
+  expect(screen.getByRole("dialog", { name: "Provider, model, and effort" })).toBeInTheDocument();
+
+  fireEvent.pointerDown(document.body);
+  expect(screen.queryByRole("dialog", { name: "Provider, model, and effort" })).not.toBeInTheDocument();
+});
+
 it("gives the icon-only send button an accessible name", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);
@@ -412,6 +424,18 @@ it("closes a newly started runtime when shared configuration is rejected", async
     expect(closeRuntime).toHaveBeenCalledWith("runtime-orphan"),
   );
   expect(screen.getByText(/configuration rejected/i)).toBeInTheDocument();
+});
+
+it("keeps the composer available when the daemon is still starting", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-starting", repo: "" });
+  vi.mocked(configureRuntime).mockRejectedValueOnce(new Error("dependency unavailable: daemon endpoint is still starting"));
+
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  await waitFor(() => expect(composer).toBeEnabled());
+  expect(closeRuntime).not.toHaveBeenCalledWith("runtime-starting");
+  expect(screen.getByText(/daemon endpoint is still starting/i)).toBeInTheDocument();
 });
 
 it("presents API keys as persistent OS-managed credentials", async () => {

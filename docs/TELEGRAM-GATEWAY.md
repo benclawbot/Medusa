@@ -120,7 +120,7 @@ A normal Bot API chat cannot provide a continuous bidirectional call stream. The
 1. The renderer creates an inline Web App button with a signed launch ticket bound to the current chat/topic/user/session.
 2. `TelegramMiniAppHttpServer` serves the client on loopback behind HTTPS reverse proxying.
 3. `/auth` verifies the launch ticket and Telegram `initData` HMAC and freshness.
-4. `/realtime` mints the same short-lived OpenAI WebRTC credential used by the desktop authenticated route.
+4. `/realtime` mints the short-lived OpenAI WebRTC credential used by the authenticated Telegram Mini App route.
 5. The browser captures microphone audio and plays assistant audio through WebRTC.
 6. Final user transcripts are submitted to `/transcript` and placed on a bounded channel.
 7. The polling/runtime owner drains that channel into `TelegramSessionService`; no second runtime owner or competing repository mutation path is created.

@@ -227,17 +227,21 @@ async function configureStartedRuntime(
     effort: Effort;
     expectedRevision: number;
   },
+  options: { preserveRuntimeOnDependencyFailure?: boolean } = {},
 ): Promise<Awaited<ReturnType<typeof startRuntime>>> {
   try {
     await configureRuntime(started.runtimeId, configuration);
     return started;
   } catch (cause) {
-    try {
-      await closeRuntime(started.runtimeId);
-    } catch (cleanupCause) {
-      throw new Error(
-        `Runtime configuration failed (${String(cause)}); cleanup also failed (${String(cleanupCause)}).`,
-      );
+    const transientDependencyFailure = String(cause).includes("dependency unavailable: daemon");
+    if (!options.preserveRuntimeOnDependencyFailure || !transientDependencyFailure) {
+      try {
+        await closeRuntime(started.runtimeId);
+      } catch (cleanupCause) {
+        throw new Error(
+          `Runtime configuration failed (${String(cause)}); cleanup also failed (${String(cleanupCause)}).`,
+        );
+      }
     }
     throw cause;
   }
@@ -309,6 +313,18 @@ export function App() {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const composerSelectorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!composerSelectorOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!composerSelectorRef.current?.contains(event.target as Node)) {
+        setComposerSelectorOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [composerSelectorOpen]);
 
   const resizeComposer = useCallback(() => {
     const composer = composerRef.current;
@@ -569,8 +585,8 @@ export function App() {
         if (transportErrorVisible.current) {
           transportErrorVisible.current = false;
           lastTransportError.current = undefined;
-          setError((current) => current?.startsWith("dependency unavailable: daemon") || current?.startsWith("daemon transport error:") ? undefined : current);
         }
+        setError((current) => current?.startsWith("dependency unavailable: daemon") || current?.startsWith("daemon transport error:") ? undefined : current);
         events.forEach(applyEvent);
         const terminalEvent = events.find((event) => event.type === "completed" || event.type === "turnFinished" || event.type === "failed" || event.type === "cancelled");
         if (terminalEvent) {
@@ -650,9 +666,9 @@ export function App() {
           model: configuration.model,
           effort: configuration.effort,
           expectedRevision: configuration.revision,
-        });
+        }, { preserveRuntimeOnDependencyFailure: true });
       } catch (cause) {
-        if (!disposed) {
+        if (!disposed && !String(cause).includes("dependency unavailable: daemon")) {
           setRuntimeId(undefined);
           setRepo("");
         }
@@ -1445,7 +1461,7 @@ export function App() {
                     rows={1}
                   />
                   <div className="composer-actions">
-                    <div className="composer-selector">
+                    <div className="composer-selector" ref={composerSelectorRef}>
                       <button
                         className="composer-selector-trigger"
                         type="button"

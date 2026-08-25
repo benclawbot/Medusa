@@ -7,6 +7,10 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use medusa_config::{Config, provider_catalog_entry, provider_runtime_protocol};
@@ -144,6 +148,27 @@ pub struct FrontendCommandAcknowledgement {
     pub result: FrontendControlResult,
 }
 
+/// Process-level cancellation handle for frontend-owned runtime workers.
+///
+/// This handle lives outside the frontend control-plane mutex so an immediate
+/// shutdown can cancel a provider call while another frontend command is still
+/// dispatching.
+#[derive(Clone, Default)]
+pub struct FrontendShutdownHandle {
+    cancellation_tokens: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
+}
+
+impl FrontendShutdownHandle {
+    pub fn cancel_all(&self) {
+        let Ok(tokens) = self.cancellation_tokens.lock() else {
+            return;
+        };
+        for token in tokens.iter() {
+            token.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CachedAcknowledgement {
     command_fingerprint: String,
@@ -159,6 +184,7 @@ pub struct FrontendControlPlane {
     acknowledgements: BTreeMap<String, CachedAcknowledgement>,
     credentials: BTreeMap<String, String>,
     artifacts: FrontendArtifactStore,
+    shutdown: FrontendShutdownHandle,
 }
 
 impl FrontendControlPlane {
@@ -173,7 +199,13 @@ impl FrontendControlPlane {
             control_clients: BTreeMap::new(),
             acknowledgements: BTreeMap::new(),
             credentials: BTreeMap::new(),
+            shutdown: FrontendShutdownHandle::default(),
         }
+    }
+
+    #[must_use]
+    pub fn shutdown_handle(&self) -> FrontendShutdownHandle {
+        self.shutdown.clone()
     }
 
     pub fn replay_events(
@@ -371,6 +403,9 @@ impl FrontendControlPlane {
                 )?;
                 let controller = self.broker.resume_owner(&daemon_client_id)?;
                 self.configure_controller(&controller, current_effort(&self.config))?;
+                if let Ok(mut tokens) = self.shutdown.cancellation_tokens.lock() {
+                    tokens.push(controller.cancellation_token());
+                }
                 self.controllers.insert(session_id.clone(), controller);
                 self.control_clients
                     .insert(session_id.clone(), envelope.client_id.clone());
@@ -388,6 +423,9 @@ impl FrontendControlPlane {
                 }
                 let controller =
                     RuntimeController::start_with_config(self.repo.clone(), self.config.clone());
+                if let Ok(mut tokens) = self.shutdown.cancellation_tokens.lock() {
+                    tokens.push(controller.cancellation_token());
+                }
                 self.configure_controller(&controller, current_effort(&self.config))?;
                 let disposition = controller.submit(PromptDraft {
                     text,

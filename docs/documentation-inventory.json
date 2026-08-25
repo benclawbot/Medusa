@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "6171b7c98b7ac9ada93a3cb3fda840c20bcd522451430104356b399fbd29b29c"
+      "sha256": "35b0693f1bec5e90e821a5d325c5348913da2e39c78dcdb14cce206f15c79ead"
     },
     {
       "path": "SECURITY.md",
@@ -111,7 +111,7 @@
     {
       "path": "docs/CHATGPT-OAUTH.md",
       "disposition": "current",
-      "sha256": "085064cf0bda68d89604510a2c90b44355123035628fd0269259e0c6cbfc9370"
+      "sha256": "a3ce8a1b6d55d7b526fcc9895ca110515048f5e81d85bc2200e489a7bcaa1a6a"
     },
     {
       "path": "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
@@ -251,7 +251,7 @@
     {
       "path": "docs/PROVIDER-SUPPORT.md",
       "disposition": "current",
-      "sha256": "be58ed300e785bb8d441c4782a5f4cac1e9dbc1bb604a28f06497fde98b4d3a6"
+      "sha256": "953c789b6ff577adc90e5c7d3c210a68184e60c0946f1c5e9f6726391073ed40"
     },
     {
       "path": "docs/PUBLIC-API-BASELINE.md",
@@ -356,7 +356,7 @@
     {
       "path": "docs/TELEGRAM-GATEWAY.md",
       "disposition": "current",
-      "sha256": "7a0adbe7d784ffcc6ea295756b487ca414b30a771d0e45713e49f61f324694cb"
+      "sha256": "c78f68fe36441b3fa15bcb934cd676fed91b842e1980feaf104ddfb1071c4338"
     },
     {
       "path": "docs/TELEGRAM.md",
@@ -569,11 +569,6 @@
       "sha256": "3308fc05b044fcabe8b4c52eaf44d32b25480cf06db8f1ffdad809907451fafa"
     },
     {
-      "path": "docs/openai-realtime-live-evidence.md",
-      "disposition": "current",
-      "sha256": "8776e52585f6fc13982d0f63756988c7c76df97223332565b37c35fc2299cdcf"
-    },
-    {
       "path": "docs/provenance-source-coverage.md",
       "disposition": "current",
       "sha256": "c1862e5b3392a627eaeb36cd5af1bb0411a5b087644d130b80f241bb577d4eb6"
@@ -666,7 +661,7 @@
     {
       "path": "docs/testing/realtime-voice.md",
       "disposition": "current",
-      "sha256": "d2412ad1d1de1c95a55e97fe8451df23917373597c74b042343bc4e34e0ec15b"
+      "sha256": "fee4eab1481031c7a719de2ed59188f9c4246b0820354d98bce7cb307a9ef75f"
     },
     {
       "path": "docs/tool-output-adapters.md",

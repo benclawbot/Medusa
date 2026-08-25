@@ -25,11 +25,11 @@ Set `MEDUSA_OAUTH_PREFLIGHT=off` to skip network verification. Medusa prints an 
 
 A real end-to-end OAuth test requires a user-authorized local gateway. Private OAuth credentials must not be copied into repository secrets. Automated contract tests exercise response parsing and failure classification without user credentials.
 
-## Realtime voice boundary
+## Desktop voice status
 
-OpenAI Realtime live evidence is available only when the active profile is the `chatgpt-oauth` connection with provider `openai-oauth` and the gateway advertises the required Realtime capability. The desktop app explains this requirement before beginning live evidence, keeps the start action disabled until the route is ready, and requests microphone permission only after a bounded short-lived Realtime credential is established.
+ChatGPT OAuth is text-only in the desktop application. The local `openai-oauth` gateway provides the authenticated REST route used by coding and chat sessions, but it does not provide the Realtime session credential required by the desktop microphone/WebRTC transport.
 
-Medusa does not request or persist a separate voice API key. Direct OpenAI API-key profiles are valid text-provider routes but are not accepted by the ChatGPT OAuth Realtime evidence flow. The current evidence status remains `external-acceptance-pending` in `docs/provider-support.json` until a real account, microphone/speaker, and sanitized result complete the acceptance issue.
+The desktop voice button, Realtime WebRTC transport, and live-evidence screen have therefore been removed. Medusa does not show or store a separate voice API-key field, and selecting ChatGPT OAuth cannot start desktop voice. Realtime voice surfaces in the TUI and Telegram gateway are separate capabilities with their own provider and live-acceptance requirements.
 
 ## OpenAI API alternative
 

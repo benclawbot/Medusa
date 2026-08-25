@@ -3,12 +3,10 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
-import { DesktopVoiceDock } from "./DesktopVoiceDock";
 import { DiffDock } from "./DiffDock";
 import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { LearningDock } from "./LearningDock";
 import { MemoryDock } from "./MemoryDock";
-import { OpenAiRealtimeLiveEvidence } from "./OpenAiRealtimeLiveEvidence";
 import { SessionDock } from "./SessionDock";
 import "./styles.css";
 import "./medusa-desktop.css";
@@ -25,10 +23,6 @@ import "./codex-experience.css";
 import "./neutral-light.css";
 import "./mobile-navigation.css";
 import "./desktop-tools.css";
-
-const liveEvidenceEnabled =
-  import.meta.env.VITE_MEDUSA_OPENAI_REALTIME_EVIDENCE === "1" ||
-  new URLSearchParams(window.location.search).get("openai-realtime-evidence") === "1";
 
 interface ErrorBoundaryState {
   error?: Error;
@@ -63,21 +57,14 @@ class DesktopErrorBoundary extends React.Component<React.PropsWithChildren, Erro
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <DesktopErrorBoundary>
-      {liveEvidenceEnabled ? (
-        <OpenAiRealtimeLiveEvidence />
-      ) : (
-        <>
-          <App />
-          <DesktopVoiceDock />
-          <DesktopTimelineBridge />
-          <SessionDock />
-          <DiffDock />
-          <MemoryDock />
-          <DesktopUpdateControl />
-          <LearningDock />
-          <EngineeringDashboardLauncher />
-        </>
-      )}
+      <App />
+      <DesktopTimelineBridge />
+      <SessionDock />
+      <DiffDock />
+      <MemoryDock />
+      <DesktopUpdateControl />
+      <LearningDock />
+      <EngineeringDashboardLauncher />
     </DesktopErrorBoundary>
   </React.StrictMode>,
 );

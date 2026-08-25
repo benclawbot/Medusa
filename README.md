@@ -67,7 +67,7 @@ The interface changes presentation and interaction style; it does not create a s
 |---|---|---|
 | **CLI** | Shipped | Automation, CI/CD, scripts, diagnostics, workspace utilities, headless objectives. |
 | **Terminal UI (TUI)** | Shipped | Interactive coding, general chat, documentation, analysis, plans, approvals, activity, sessions, recovery, metrics, keyboard-first workflows. |
-| **Desktop application** | Shipped | Graphical workspace with sessions, chat, plans, activity, settings, review, attachments, usage, and voice controls. |
+| **Desktop application** | Shipped | Graphical workspace with sessions, chat, plans, activity, settings, review, attachments, and usage. |
 | **Telegram frontend** | Shipped | Remote session attachment, mobile status/control, approvals, progressive rendering, files, voice notes, Mini App voice surface. |
 | **Daemon** | Shipped | Bounded concurrency, reconnect, cancel-and-drain, IPC control plane for other clients. |
 | **Full-duplex voice** | Shipped | Provider-neutral realtime core; microphone streaming remains gated to an established supported route. |
@@ -141,7 +141,7 @@ General-chat turns can avoid repository indexing/scanning when the task does not
 
 ### Desktop application
 
-The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, chat, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, usage telemetry, and desktop-native voice controls. Guided onboarding and model discovery consume the same canonical provider/model metadata used by the runtime.
+The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, chat, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and usage telemetry. Desktop ChatGPT OAuth is text-only: the local OAuth gateway does not expose the Realtime session credential required for microphone/WebRTC voice, so the desktop voice UI and live-evidence route are intentionally not included. Guided onboarding and model discovery consume the same canonical provider/model metadata used by the runtime.
 
 ### Telegram
 
@@ -642,7 +642,7 @@ Platform support does not imply identical containment, audio, browser, credentia
 - The transactional component runtime is an accepted and tested reference contract under incremental adoption; not every existing production service is component-managed or hot-replaceable.
 - The canonical tool-result migration is incomplete across all tool families; shell/output-envelope and related projections are migrated foundations, while remaining consumers continue to move toward one typed canonical result contract.
 - The full behavioral self-optimization loop is not claimed as end-to-end production-accepted until real canary/promotion/rollback evidence and cross-surface release integration are complete.
-- OpenAI Realtime and Telegram end-to-end acceptance still require real ChatGPT OAuth, audio hardware, bot/chat/Mini App access, and sanitized evidence under issue [#719](https://github.com/benclawbot/Medusa/issues/719).
+- Telegram end-to-end voice acceptance still requires real bot/chat/Mini App access, audio hardware, and sanitized evidence under issue [#719](https://github.com/benclawbot/Medusa/issues/719). Desktop ChatGPT OAuth voice is not shipped because the OAuth gateway does not provide the Realtime session credential required by the desktop WebRTC path.
 - ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
 - browser actions are readiness-gated preview: they are explicit opt-in, dispatched through the certified-production browser route, and not default-enabled. Set `MEDUSA_BROWSER_ENABLED=true` only with an approved `MEDUSA_BROWSER_PATH` and verified `MEDUSA_BROWSER_VERIFY_URL`; route admission, permissions, and required verification authority remain enforced.
 - Screenshot input is accepted only when the selected provider declares compatible image support and limits.
@@ -657,9 +657,9 @@ Current architecture work is focused on **adoption and completion**, not designi
 
 The behavioral-learning/Harness-inspired tracks also have substantial foundations on `main`—canonical outcome contracts, rebuildable projections, cohorts/drift foundations, Code Mode and canonical-result foundations, Model Experience/cache accounting, runtime configuration, and machine-checkable engineering policy—but remaining issue acceptance criteria must be completed before the README can claim every closed-loop adaptive behavior as production-proven.
 
-The remaining manual/live acceptance tracked for shipped-but-quarantined remote/voice functionality is:
+The remaining manual/live acceptance tracked for shipped-but-quarantined remote voice functionality is:
 
-- [#719](https://github.com/benclawbot/Medusa/issues/719) — OpenAI Realtime voice and Telegram end-to-end proof using real accounts, bot/chat access, microphone/audio hardware, and sanitized evidence.
+- [#719](https://github.com/benclawbot/Medusa/issues/719) — Telegram Mini App and voice-note end-to-end proof using real bot/chat access, microphone/audio hardware, and sanitized evidence.
 
 ## Project documentation
 

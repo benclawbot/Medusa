@@ -77,7 +77,7 @@
       "credential_environment": null,
       "default_model": "gpt-5",
       "dogfood": { "status": "not-enabled" },
-      "realtime_voice": "external-acceptance-pending"
+      "realtime_voice": "unavailable"
     },
     {
       "id": "openai-compatible",
@@ -119,11 +119,6 @@
   "non_selectable_status": {
     "test_scaffolding_only": [],
     "quarantined": [
-      {
-        "id": "openai-realtime-live-evidence",
-        "required_route": "openai-oauth",
-        "reason": "Repository tests are complete; real ChatGPT OAuth account, audio hardware, and sanitized live evidence are still required."
-      },
       {
         "id": "telegram-live-evidence",
         "reason": "Repository tests are complete; real bot, chat, Mini App, and sanitized live evidence are still required."

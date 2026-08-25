@@ -27,7 +27,9 @@ use ulid::Ulid;
 
 use crate::{
     cancellation::{append_detail, cancel_all_jobs, cancel_job, mark_job_interrupted},
-    frontend_control::{FrontendCommandAcknowledgement, FrontendControlPlane},
+    frontend_control::{
+        FrontendCommandAcknowledgement, FrontendControlPlane, FrontendShutdownHandle,
+    },
     paths::DaemonPaths,
     process::ProcessRegistry,
     protocol::{
@@ -277,10 +279,12 @@ fn serve_with_limits_and_config(
     }
     let jobs = Arc::new(Mutex::new(jobs));
     let processes = Arc::new(ProcessRegistry::default());
-    let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+    let frontend_control = FrontendControlPlane::new(
         paths.repo.clone(),
         config,
-    )));
+    );
+    let frontend_shutdown = frontend_control.shutdown_handle();
+    let frontend = Arc::new(Mutex::new(frontend_control));
     let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
     let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
         Ok(scheduler) => scheduler,
@@ -295,6 +299,7 @@ fn serve_with_limits_and_config(
         jobs,
         processes,
         frontend,
+        frontend_shutdown,
         Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
         scheduler,
     )
@@ -343,10 +348,12 @@ fn spawn_with_limits_and_config(
             }
             let jobs = Arc::new(Mutex::new(jobs));
             let processes = Arc::new(ProcessRegistry::default());
-            let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+            let frontend_control = FrontendControlPlane::new(
                 paths.repo.clone(),
                 config,
-            )));
+            );
+            let frontend_shutdown = frontend_control.shutdown_handle();
+            let frontend = Arc::new(Mutex::new(frontend_control));
             let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
             let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
                 Ok(scheduler) => scheduler,
@@ -361,6 +368,7 @@ fn spawn_with_limits_and_config(
                 jobs,
                 processes,
                 frontend,
+                frontend_shutdown,
                 server_shutdown,
                 scheduler,
             )
@@ -502,6 +510,7 @@ fn run_loop(
     jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
     processes: Arc<ProcessRegistry>,
     frontend: Arc<Mutex<FrontendControlPlane>>,
+    frontend_shutdown: FrontendShutdownHandle,
     shutdown: Arc<AtomicU8>,
     scheduler: JobScheduler,
 ) -> MedusaResult<()> {
@@ -542,6 +551,13 @@ fn run_loop(
         }
         Ok(())
     })();
+    if shutdown.load(Ordering::SeqCst) == SHUTDOWN_IMMEDIATE {
+        // Cancel provider work before joining connection workers. A frontend
+        // request can hold the control-plane mutex while waiting for a model;
+        // without this out-of-band signal, closing the desktop waits for the
+        // provider timeout instead of stopping promptly.
+        frontend_shutdown.cancel_all();
+    }
     let connection_result = connections.shutdown();
     let (cancellation_result, scheduler_result) = match lock_scheduler(&scheduler) {
         Ok(mut scheduler) => {
@@ -1248,10 +1264,12 @@ mod connection_concurrency_tests {
         fs::create_dir_all(&paths.directory).expect("daemon directory");
         let jobs = Arc::new(Mutex::new(BTreeMap::new()));
         let processes = Arc::new(ProcessRegistry::default());
-        let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+        let frontend_control = FrontendControlPlane::new(
             paths.repo.clone(),
             Config::default(),
-        )));
+        );
+        let frontend_shutdown = frontend_control.shutdown_handle();
+        let frontend = Arc::new(Mutex::new(frontend_control));
         let listener = LocalListener::bind(&paths.socket).expect("bind daemon listener");
         let scheduler = start_scheduler(&paths, &jobs, &processes, DaemonLimits::default())
             .expect("start scheduler");
@@ -1265,10 +1283,18 @@ mod connection_concurrency_tests {
             let jobs = Arc::clone(&jobs);
             let processes = Arc::clone(&processes);
             let frontend = Arc::clone(&frontend);
+            let frontend_shutdown = frontend_shutdown.clone();
             let shutdown = Arc::clone(&shutdown);
             thread::spawn(move || {
                 run_loop(
-                    listener, paths, jobs, processes, frontend, shutdown, scheduler,
+                    listener,
+                    paths,
+                    jobs,
+                    processes,
+                    frontend,
+                    frontend_shutdown,
+                    shutdown,
+                    scheduler,
                 )
             })
         };

@@ -86,23 +86,6 @@ button:disabled {
   opacity: 0.72;
 }
 
-/* The developer-only Realtime evidence surface uses its own dark card. Keep
-   its actions readable even though the light desktop theme normalizes buttons. */
-main.realtime-evidence button.realtime-evidence-button,
-main.realtime-evidence button.realtime-evidence-button:hover:not(:disabled),
-main.realtime-evidence button.realtime-evidence-button:active:not(:disabled) {
-  border: 1px solid #2f81f7 !important;
-  background: #1f6feb !important;
-  color: #ffffff !important;
-  box-shadow: none !important;
-}
-
-main.realtime-evidence button.realtime-evidence-button:disabled {
-  border-color: #484f58 !important;
-  background: #30363d !important;
-  color: #8b949e !important;
-}
-
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
@@ -122,7 +105,6 @@ summary:focus-visible,
 .icon-button,
 .composer-icon-button,
 .send-button,
-.voice-entry,
 .cancel-button,
 .retry-button,
 .primary-action,
@@ -148,7 +130,6 @@ summary:focus-visible,
 .icon-button,
 .composer-icon-button,
 .send-button,
-.voice-entry,
 .memory-dock-close,
 .engineering-close,
 .session-dock-actions button {
@@ -171,16 +152,14 @@ summary:focus-visible,
 
 .new-session,
 .composer-icon-button,
-.send-button,
-.voice-entry {
+.send-button {
   color: #333333 !important;
   background: #ffffff !important;
 }
 
 .new-session:hover:not(:disabled),
 .composer-icon-button:hover:not(:disabled),
-.send-button:hover:not(:disabled),
-.voice-entry:hover:not(:disabled) {
+.send-button:hover:not(:disabled) {
   background: #eeeeee !important;
 }
 
@@ -220,7 +199,6 @@ kbd,
 .approval-card,
 .recovery-dock-content,
 .desktop-update-card,
-.voice-controls,
 .session-details-panel {
   border-color: var(--border) !important;
   color: var(--text) !important;

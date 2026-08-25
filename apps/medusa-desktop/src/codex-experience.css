@@ -465,8 +465,7 @@ kbd,
 .engineering-shell,
 .diff-dock-panel,
 .session-dock-panel,
-.desktop-update-card,
-.voice-controls {
+.desktop-update-card {
   border-radius: var(--medusa-radius-md) !important;
 }
 
@@ -476,9 +475,7 @@ kbd,
 .dashboard-actions button,
 .learning-actions button,
 .learning-header-actions button,
-.desktop-update-actions button,
-.voice-actions button,
-.voice-devices button {
+.desktop-update-actions button {
   border-radius: var(--medusa-radius-sm) !important;
 }
 
@@ -489,34 +486,6 @@ kbd,
 .learning-launcher,
 .engineering-menu-button {
   display: none !important;
-}
-
-/* Match the reference's quiet circular microphone action. */
-.desktop-voice-dock {
-  right: 24px;
-  bottom: 22px;
-}
-
-.voice-entry {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  min-width: 48px;
-  height: 48px;
-  min-height: 48px;
-  border: 0;
-  border-radius: 50%;
-  padding: 0;
-  overflow: hidden;
-  color: #fff;
-  background: var(--medusa-blue);
-  font-size: 0;
-  box-shadow: 0 8px 24px rgba(47, 124, 246, 0.28);
-}
-
-.voice-entry svg {
-  width: 21px;
-  height: 21px;
 }
 
 @media (max-width: 760px) {
