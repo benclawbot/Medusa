@@ -71,7 +71,7 @@ impl ServerConfig {
         Ok(())
     }
 
-    #[must_use]
+    #[must_use = "inspect the cache fingerprint result"]
     pub fn fingerprint(&self) -> Result<String, &'static str> {
         let bytes = serde_json::to_vec(self).map_err(|_| "MCP server config serialization failed")?;
         Ok(hex::encode(Sha256::digest(bytes)))
@@ -149,7 +149,7 @@ impl SchemaSnapshot {
         })
     }
 
-    #[must_use]
+    #[must_use = "inspect whether the cached server configuration is fresh"]
     pub fn is_fresh_for(
         &self,
         config: &ServerConfig,

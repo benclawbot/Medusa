@@ -50,7 +50,7 @@ pub mod result_cache {
             })
         }
 
-        #[must_use]
+        #[must_use = "inspect the cache fingerprint result"]
         pub fn fingerprint(&self) -> Result<String, &'static str> {
             let bytes =
                 serde_json::to_vec(self).map_err(|_| "MCP cache key serialization failed")?;
