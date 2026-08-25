@@ -176,8 +176,7 @@ pub struct CodeModeExecutionV1 {
 }
 
 impl CodeModeExecutionV1 {
-    #[must_use]
-    pub fn from_children(mut children: Vec<CodeModeChildResultV1>) -> Self {
+    pub fn from_children(mut children: Vec<CodeModeChildResultV1>) -> MedusaResult<Self> {
         let outcome = if children
             .iter()
             .all(|child| child.canonical.outcome == CanonicalToolOutcome::Success)
@@ -208,8 +207,7 @@ impl CodeModeExecutionV1 {
                     )
                 })
                 .collect::<Vec<_>>(),
-        )
-        .unwrap_or_default();
+        )?;
         let execution_fingerprint = digest(&material);
         for child in &mut children {
             child.parent_execution_fingerprint = Some(execution_fingerprint.clone());
@@ -225,13 +223,13 @@ impl CodeModeExecutionV1 {
                 "parent_execution_fingerprint": child.parent_execution_fingerprint,
             })).collect::<Vec<_>>(),
         });
-        Self {
+        Ok(Self {
             schema_version: CODE_MODE_SCHEMA_VERSION,
             outcome,
             children,
             model_projection,
             execution_fingerprint: digest(&material),
-        }
+        })
     }
 }
 

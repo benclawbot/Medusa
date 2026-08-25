@@ -4,10 +4,10 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::EscalationPacket;
+use medusa_core::storage;
 
 /// One repository input that changed after an escalation packet was exported.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -137,9 +137,7 @@ pub fn import_advice(
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, bytes)?;
-    fs::rename(temporary, path)
+    storage::atomic_write(path, bytes)
 }
 
 fn json_io_error(error: serde_json::Error) -> std::io::Error {
@@ -160,7 +158,7 @@ fn safe_name(value: &str) -> String {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    storage::sha256_hex(bytes)
 }
 
 #[cfg(test)]

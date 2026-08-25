@@ -450,10 +450,11 @@ fn paths_from_unified_diff(diff: &str) -> MedusaResult<BTreeSet<String>> {
             if raw == "/dev/null" {
                 continue;
             }
-            let raw = raw
+            let normalized = raw.replace('\\', "/");
+            let raw = normalized
                 .strip_prefix("a/")
-                .or_else(|| raw.strip_prefix("b/"))
-                .unwrap_or(raw);
+                .or_else(|| normalized.strip_prefix("b/"))
+                .unwrap_or(&normalized);
             if raw.is_empty() || raw.starts_with('/') || raw.split('/').any(|part| part == "..") {
                 return Err(invalid("unified_diff contains an unsafe path"));
             }
@@ -474,7 +475,7 @@ fn normalize_path(path: &Path) -> String {
 }
 
 fn protected_path(path: &Path) -> bool {
-    let p = normalize_path(path);
+    let p = normalize_path(path).to_ascii_lowercase();
     [
         ".github/workflows",
         ".medusa/policy",
@@ -608,6 +609,15 @@ mod tests {
             "--- a/crates/medusa-agent/src/policy.rs\n+++ b/crates/medusa-agent/src/policy.rs"
                 .into();
         assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn diff_paths_reject_backslash_traversal_and_protected_paths_ignore_case() {
+        let traversal = "--- a/..\\secrets.txt\n+++ b/..\\secrets.txt";
+        assert!(paths_from_unified_diff(traversal).is_err());
+        assert!(protected_path(Path::new(
+            "CRATES/MEDUSA-AGENT/SRC/POLICY.RS"
+        )));
     }
     #[test]
     fn duplicate_improvement_ids_are_rejected() {

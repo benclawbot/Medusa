@@ -61,12 +61,13 @@ class LiveModelSelectionTests(unittest.TestCase):
     def test_tui_summary_model_is_read_from_written_profile(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config_home = Path(raw)
-            medusa = config_home / "medusa"
-            medusa.mkdir()
-            (medusa / "provider.toml").write_text(
-                'provider = "minimax"\nmodel = "MiniMax-M2.7"\n', encoding="utf-8"
-            )
+            TUI.write_profile(config_home, "MiniMax-M2.7")
             self.assertEqual(TUI.configured_model(config_home), "MiniMax-M2.7")
+
+    def test_tui_unknown_model_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            with self.assertRaisesRegex(ValueError, "unsupported MiniMax model"):
+                TUI.write_profile(Path(raw), "typo-model")
 
     def test_tui_durable_request_models_capture_effective_model(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

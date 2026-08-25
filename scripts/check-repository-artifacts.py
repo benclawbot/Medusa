@@ -16,6 +16,10 @@ def violations(paths: list[str]) -> list[str]:
     problems: list[str] = []
     for raw in paths:
         path = PurePosixPath(raw)
+        if "__pycache__" in path.parts or path.suffix.lower() in {".pyc", ".pyo"}:
+            problems.append(f"generated Python artifact is tracked: {raw}")
+            continue
+
         if len(path.parts) == 1 and path.suffix == ".log":
             problems.append(f"transient root log is tracked: {raw}")
             continue

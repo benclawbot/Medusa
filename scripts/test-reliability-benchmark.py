@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -25,6 +26,7 @@ def summary(status: str = "passed") -> dict:
     ]
     return {
         "schema_version": 1,
+        "metrics": {"false_completion_rate": 0.0, "manual_interventions": 0},
         "scenarios": [
             {"id": item, "status": status, "duration_ms": 10, "log": f"{item}.log"}
             for item in ids
@@ -39,6 +41,17 @@ def main() -> int:
     assert report["metrics"]["verified_completion_rate"] == 1.0
     assert report["metrics"]["false_completion_rate"] == 0.0
     assert report["metrics"]["repeated_run_determinism"] == 1.0
+
+    empty = MODULE.score(suite, [])
+    assert not empty["passed"]
+    assert empty["metrics"]["verified_completion_rate"] is None
+
+    unmeasured = summary()
+    unmeasured.pop("metrics")
+    report = MODULE.score(suite, [unmeasured, summary()])
+    assert not report["passed"]
+    assert any(item["metric"] == "false_completion_rate" for item in report["failures"])
+    assert report["metrics"]["false_completion_rate"] is None
 
     failed = summary()
     failed["scenarios"][0]["status"] = "failed"
@@ -57,6 +70,23 @@ def main() -> int:
         output = Path(directory)
         (output / "report.md").write_text(MODULE.markdown(report), encoding="utf-8")
         assert "Reliability and recovery benchmark results" in (output / "report.md").read_text()
+
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory)
+        (output / "summary.json").write_text(json.dumps(summary()), encoding="utf-8")
+        original_run = MODULE.subprocess.run
+        try:
+            MODULE.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+                args[0], 17
+            )
+            try:
+                MODULE.run_acceptance(output, 1, 1)
+            except RuntimeError as error:
+                assert "exit status 17" in str(error)
+            else:
+                raise AssertionError("failed product acceptance was accepted")
+        finally:
+            MODULE.subprocess.run = original_run
 
     print("reliability-benchmark-fixtures-ok")
     return 0

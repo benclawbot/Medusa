@@ -27,7 +27,7 @@ impl ExecutionEvent {
             fingerprint: String::new(),
         };
         event.validate_fields()?;
-        event.fingerprint = event.calculate_fingerprint();
+        event.fingerprint = event.calculate_fingerprint()?;
         Ok(event)
     }
 
@@ -42,7 +42,7 @@ impl ExecutionEvent {
         Ok(())
     }
 
-    fn calculate_fingerprint(&self) -> String {
+    fn calculate_fingerprint(&self) -> Result<String, CheckpointError> {
         hash_json(&(
             self.sequence,
             &self.kind,
@@ -54,7 +54,7 @@ impl ExecutionEvent {
     pub fn verify(&self) -> Result<(), CheckpointError> {
         self.validate_fields()?;
         validate_sha256(&self.fingerprint)?;
-        if self.fingerprint != self.calculate_fingerprint() {
+        if self.fingerprint != self.calculate_fingerprint()? {
             return Err(CheckpointError::FingerprintMismatch);
         }
         Ok(())
@@ -91,7 +91,7 @@ impl ExecutionCheckpoint {
             fingerprint: String::new(),
         };
         checkpoint.validate_fields()?;
-        checkpoint.fingerprint = checkpoint.calculate_fingerprint();
+        checkpoint.fingerprint = checkpoint.calculate_fingerprint()?;
         Ok(checkpoint)
     }
 
@@ -113,7 +113,7 @@ impl ExecutionCheckpoint {
         Ok(())
     }
 
-    fn calculate_fingerprint(&self) -> String {
+    fn calculate_fingerprint(&self) -> Result<String, CheckpointError> {
         hash_json(&(
             &self.execution_id,
             self.sequence,
@@ -127,7 +127,7 @@ impl ExecutionCheckpoint {
     pub fn verify(&self) -> Result<(), CheckpointError> {
         self.validate_fields()?;
         validate_sha256(&self.fingerprint)?;
-        if self.fingerprint != self.calculate_fingerprint() {
+        if self.fingerprint != self.calculate_fingerprint()? {
             return Err(CheckpointError::FingerprintMismatch);
         }
         Ok(())
@@ -393,7 +393,7 @@ impl StepCapsule {
             fingerprint: String::new(),
         };
         capsule.validate_fields()?;
-        capsule.fingerprint = capsule.calculate_fingerprint();
+        capsule.fingerprint = capsule.calculate_fingerprint()?;
         Ok(capsule)
     }
 
@@ -438,7 +438,7 @@ impl StepCapsule {
         Ok(())
     }
 
-    fn calculate_fingerprint(&self) -> String {
+    fn calculate_fingerprint(&self) -> Result<String, CheckpointError> {
         hash_json(&(
             &self.capsule_id,
             &self.execution_id,
@@ -461,7 +461,7 @@ impl StepCapsule {
     pub fn verify(&self) -> Result<(), CheckpointError> {
         self.validate_fields()?;
         validate_sha256(&self.fingerprint)?;
-        if self.fingerprint != self.calculate_fingerprint() {
+        if self.fingerprint != self.calculate_fingerprint()? {
             return Err(CheckpointError::FingerprintMismatch);
         }
         Ok(())
@@ -522,6 +522,8 @@ pub enum CheckpointError {
     InvalidFingerprint,
     #[error("fingerprint does not match canonical state")]
     FingerprintMismatch,
+    #[error("failed to serialize checkpoint state: {0}")]
+    Serialization(String),
     #[error("event sequence is not contiguous")]
     NonContiguousEventSequence,
     #[error("event hash chain is broken")]
@@ -577,9 +579,10 @@ fn validate_sha256(value: &str) -> Result<(), CheckpointError> {
     Ok(())
 }
 
-fn hash_json<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))
+fn hash_json<T: Serialize>(value: &T) -> Result<String, CheckpointError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| CheckpointError::Serialization(error.to_string()))?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]
@@ -666,7 +669,7 @@ mod tests {
         log.append_event("scheduled", digest("schedule")).unwrap();
         let mut value = checkpoint(&log, 1);
         value.last_event_fingerprint = Some(digest("other"));
-        value.fingerprint = value.calculate_fingerprint();
+        value.fingerprint = value.calculate_fingerprint().unwrap();
         assert_eq!(
             log.add_checkpoint(value),
             Err(CheckpointError::CheckpointEventMismatch)
@@ -780,7 +783,7 @@ mod tests {
         };
         let mut next = capsule("capsule-2", Some("failure"), Some(hypothesis)).unwrap();
         next.allowed_paths.push("../outside-authority".into());
-        next.fingerprint = next.calculate_fingerprint();
+        next.fingerprint = next.calculate_fingerprint().unwrap();
         assert_eq!(
             next.verify_retry_from(&previous),
             Err(CheckpointError::RetryAuthorityMismatch)

@@ -459,7 +459,11 @@ pub fn compile_effective_config_with_registry(
         model_output_chars: config.model_output_chars,
         service_provider: &config.service_provider,
     })
-    .unwrap_or_default();
+    .map_err(|error| {
+        vec![format!(
+            "failed to fingerprint runtime configuration: {error}"
+        )]
+    })?;
     let fingerprint = Sha256::digest(canonical)
         .iter()
         .map(|byte| format!("{byte:02x}"))

@@ -386,9 +386,21 @@ fn correction_turns(session: &AgentSession) -> Vec<ConversationTurn> {
 pub(super) fn provenance_graph(session: &AgentSession) -> MedusaResult<ProvenanceGraph> {
     let policy = policy_for(&session.repo)?;
     if !policy.capture_enabled() {
-        return Ok(ProvenanceGraph::empty());
+        return ProvenanceGraph::empty().map_err(|error| {
+            medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                format!("typed provenance initialization failed: {error}"),
+            )
+        });
     }
-    let mut graph = ProvenanceGraph::empty();
+    let mut graph = ProvenanceGraph::empty().map_err(|error| {
+        medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PersistenceFailed,
+            medusa_core::ErrorCategory::Persistence,
+            format!("typed provenance initialization failed: {error}"),
+        )
+    })?;
     let repository = repository_identity(&session.repo);
     let revision = repository_revision(&session.repo);
     for event in &session.events {

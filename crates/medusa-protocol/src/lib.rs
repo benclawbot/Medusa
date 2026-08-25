@@ -42,6 +42,36 @@ impl ProtocolVersion {
     }
 }
 
+/// Validates an untrusted session identifier before it is used in a filesystem path.
+///
+/// Session identifiers are the canonical `ses-` prefix followed by an uppercase Crockford
+/// Base32 ULID. Keeping this check at the protocol boundary prevents path-consuming callers from
+/// independently accepting separators, traversal components, drive prefixes, or non-canonical
+/// identifier spellings.
+pub fn validate_session_id(value: &str) -> Result<(), &'static str> {
+    const PREFIX: &str = "ses-";
+    const ULID_LENGTH: usize = 26;
+
+    let Some(raw) = value.strip_prefix(PREFIX) else {
+        return Err("session identifier must use the ses-ULID format");
+    };
+    if raw.len() != ULID_LENGTH {
+        return Err("session identifier must use the ses-ULID format");
+    }
+    if raw.as_bytes().first().is_none_or(|byte| *byte > b'7') {
+        return Err("session identifier has an invalid ULID timestamp");
+    }
+    if !raw
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte.is_ascii_uppercase())
+    {
+        return Err("session identifier contains an invalid character");
+    }
+    SessionId::parse(value)
+        .map(|_| ())
+        .map_err(|_| "session identifier contains an invalid ULID")
+}
+
 /// Event actor.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
@@ -491,6 +521,28 @@ mod tests {
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect("event")
+    }
+
+    #[test]
+    fn session_id_validator_accepts_canonical_ids_and_rejects_path_payloads() {
+        let valid = SessionId::new().to_string();
+        assert!(validate_session_id(&valid).is_ok());
+
+        for malicious in [
+            "",
+            " ",
+            "../outside",
+            r"..\outside",
+            "/absolute",
+            r"C:\outside",
+            "ses-invalid/child",
+            "ses-01ARZ3NDEKTSV4RRFFQ69G5FAV?",
+        ] {
+            assert!(
+                validate_session_id(malicious).is_err(),
+                "malicious session id should be rejected: {malicious:?}"
+            );
+        }
     }
 
     proptest! {

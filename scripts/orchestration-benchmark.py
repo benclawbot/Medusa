@@ -16,7 +16,13 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def run_acceptance(output: Path) -> dict[str, Any]:
-    subprocess.run(["cargo", "product-acceptance", "--output", str(output)], check=False)
+    completed = subprocess.run(
+        ["cargo", "product-acceptance", "--output", str(output)], check=False
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"product acceptance failed with exit status {completed.returncode}"
+        )
     summary = output / "summary.json"
     if not summary.exists():
         raise RuntimeError(f"missing product acceptance summary: {summary}")
@@ -31,10 +37,10 @@ def percentile(values: list[int], percentile_value: float) -> int:
     return ordered[index]
 
 
-def numeric(scenario: dict[str, Any], name: str) -> int:
+def numeric(scenario: dict[str, Any], name: str) -> int | None:
     metrics = scenario.get("metrics", {})
-    value = metrics.get(name, 0)
-    return int(value) if isinstance(value, (int, float)) else 0
+    value = metrics.get(name)
+    return int(value) if isinstance(value, (int, float)) else None
 
 
 def score(suite: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -42,9 +48,10 @@ def score(suite: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
     trajectories: list[dict[str, Any]] = []
     durations: list[int] = []
     first_passes = 0
+    first_pass_observations: list[bool | None] = []
     successful = 0
     verification_satisfied = 0
-    safety_regressions = 0
+    safety_observations: list[int | None] = []
     derived_metrics = {"first_pass_success_rate", "median_duration_ms", "p95_duration_ms"}
     totals = {
         name: 0 for name in suite["reported_tradeoffs"] if name not in derived_metrics
@@ -55,22 +62,43 @@ def score(suite: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
         for run in indexed:
             selected = [run[item] for item in definition["acceptance_ids"] if item in run]
             passed = bool(selected) and all(item.get("status") == "passed" for item in selected)
-            duration_ms = sum(int(item.get("duration_ms", 0)) for item in selected)
-            first_pass = passed and all(numeric(item, "attempts") <= 1 for item in selected)
-            verified = passed and all(
-                item.get("verification_status", "satisfied") == "satisfied" for item in selected
+            duration_values = [item.get("duration_ms") for item in selected]
+            duration_ms = (
+                sum(int(value) for value in duration_values)
+                if duration_values and all(isinstance(value, (int, float)) for value in duration_values)
+                else None
             )
-            safety = sum(numeric(item, "safety_regressions") for item in selected)
-            durations.append(duration_ms)
+            attempt_values = [numeric(item, "attempts") for item in selected]
+            first_pass = (
+                passed and all(value <= 1 for value in attempt_values)
+                if attempt_values and all(value is not None for value in attempt_values)
+                else None
+            )
+            verified = passed and all(
+                item.get("verification_status") == "satisfied" for item in selected
+            )
+            safety_values = [numeric(item, "safety_regressions") for item in selected]
+            safety = (
+                sum(value for value in safety_values if value is not None)
+                if safety_values and all(value is not None for value in safety_values)
+                else None
+            )
+            if duration_ms is not None:
+                durations.append(duration_ms)
+            first_pass_observations.append(first_pass)
+            safety_observations.append(safety)
             successful += int(passed)
-            first_passes += int(first_pass)
+            first_passes += int(first_pass is True)
             verification_satisfied += int(verified)
-            safety_regressions += safety
             for name in totals:
-                if name == "critical_path_latency_ms":
-                    totals[name] += max([numeric(item, name) for item in selected] or [duration_ms])
-                else:
-                    totals[name] += sum(numeric(item, name) for item in selected)
+                values = [numeric(item, name) for item in selected]
+                if not values or any(value is None for value in values):
+                    totals[name] = None
+                elif totals[name] is not None:
+                    if name == "critical_path_latency_ms":
+                        totals[name] += max(values)
+                    else:
+                        totals[name] += sum(values)
             per_run.append({
                 "passed": passed,
                 "first_pass": first_pass,
@@ -81,19 +109,33 @@ def score(suite: dict[str, Any], runs: list[dict[str, Any]]) -> dict[str, Any]:
         trajectories.append({"id": definition["id"], "runs": per_run})
 
     attempts = len(suite["scenarios"]) * len(runs)
+    safety_regressions = (
+        sum(value for value in safety_observations if value is not None)
+        if safety_observations and all(value is not None for value in safety_observations)
+        else None
+    )
+    if not runs:
+        totals = {name: None for name in totals}
     metrics: dict[str, Any] = {
-        "task_success_rate": successful / attempts if attempts else 1.0,
-        "first_pass_success_rate": first_passes / attempts if attempts else 1.0,
-        "verification_coverage": verification_satisfied / attempts if attempts else 1.0,
+        "task_success_rate": successful / attempts if attempts else None,
+        "first_pass_success_rate": (
+            first_passes / attempts
+            if attempts and all(value is not None for value in first_pass_observations)
+            else None
+        ),
+        "verification_coverage": verification_satisfied / attempts if attempts else None,
         "safety_regressions": safety_regressions,
-        "median_duration_ms": int(statistics.median(durations)) if durations else 0,
-        "p95_duration_ms": percentile(durations, 0.95),
+        "median_duration_ms": int(statistics.median(durations)) if durations else None,
+        "p95_duration_ms": percentile(durations, 0.95) if durations else None,
         **totals,
     }
     invariants = suite["release_invariants"]
     failures = []
     for name, expected in invariants.items():
         actual = metrics[name]
+        if actual is None:
+            failures.append({"metric": name, "actual": None, "required": expected, "reason": "missing evidence"})
+            continue
         ok = actual <= expected if name == "safety_regressions" else actual >= expected
         if not ok:
             failures.append({"metric": name, "actual": actual, "required": expected})

@@ -66,11 +66,11 @@ mod tests {
             if cancel.load(Ordering::Acquire) {
                 return Err(ServiceProviderError::Cancelled);
             }
-            Ok(ServiceProviderResponse::new(
+            ServiceProviderResponse::new(
                 &self.descriptor(),
                 request.generation,
                 request.input.clone(),
-            ))
+            )
         }
     }
 
@@ -207,11 +207,7 @@ mod tests {
             request: &ServiceProviderRequest,
             _cancel: &AtomicBool,
         ) -> Result<ServiceProviderResponse, ServiceProviderError> {
-            Ok(ServiceProviderResponse::new(
-                &self.0,
-                request.generation,
-                request.input.clone(),
-            ))
+            ServiceProviderResponse::new(&self.0, request.generation, request.input.clone())
         }
     }
 }
@@ -430,8 +426,11 @@ pub struct ServiceProviderResponse {
 }
 
 impl ServiceProviderResponse {
-    #[must_use]
-    pub fn new(descriptor: &ServiceProviderDescriptor, generation: u64, output: Value) -> Self {
+    pub fn new(
+        descriptor: &ServiceProviderDescriptor,
+        generation: u64,
+        output: Value,
+    ) -> Result<Self, ServiceProviderError> {
         let material = serde_json::to_vec(&(
             descriptor.service_id.as_str(),
             descriptor.provider_id.as_str(),
@@ -440,19 +439,19 @@ impl ServiceProviderResponse {
             generation,
             &output,
         ))
-        .unwrap_or_default();
+        .map_err(|error| ServiceProviderError::Serialization(error.to_string()))?;
         let evidence_fingerprint = Sha256::digest(material)
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
-        Self {
+        Ok(Self {
             schema_version: SERVICE_PROVIDER_SCHEMA_VERSION,
             service_id: descriptor.service_id.clone(),
             provider_id: descriptor.provider_id.clone(),
             generation,
             output,
             evidence_fingerprint,
-        }
+        })
     }
 }
 
@@ -470,6 +469,8 @@ pub trait ServiceProvider: Send + Sync {
 
 #[derive(Debug, Error)]
 pub enum ServiceProviderError {
+    #[error("service provider response serialization failed: {0}")]
+    Serialization(String),
     #[error("invalid service/provider identity `{value}`")]
     InvalidIdentity { value: String },
     #[error("invalid descriptor for provider `{provider_id}`")]

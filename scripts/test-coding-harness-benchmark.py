@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("coding-harness-benchmark.py")
@@ -25,6 +27,8 @@ def receipt(identifier: str) -> dict:
             "context_reread_bytes": 10,
             "input_tokens": 20,
             "output_tokens": 10,
+            "false_completes": 0,
+            "safety_regressions": 0,
         },
     }
 
@@ -46,6 +50,7 @@ def make(suite: dict, source: dict, variant: str = "current-production") -> dict
 
 
 def main() -> int:
+    assert MODULE.number({}, "manual_interventions") is None
     suite = json.loads(Path("benchmarks/coding-harness-suite-v1.json").read_text(encoding="utf-8"))
     MODULE.validate_suite(suite)
     assert any(item.get("forced_compaction") for item in suite["scenarios"])
@@ -61,6 +66,15 @@ def main() -> int:
     assert first["identity"]["repository_revision"] != "unknown"
     assert first["identity"]["suite_sha256"] == MODULE.sha256(suite)
     assert first["metrics"]["verification_coverage"] == 1.0
+    assert first["metrics"]["false_complete_rate"] == 0.0
+
+    unmeasured = summary()
+    for item in unmeasured["scenarios"]:
+        item["metrics"].pop("false_completes")
+        item["metrics"].pop("safety_regressions")
+    unmeasured_report = make(suite, unmeasured)
+    assert not unmeasured_report["passed"]
+    assert any("missing evidence" in item for item in unmeasured_report["failures"])
 
     broken = summary()
     broken["scenarios"][0]["verification_status"] = "missing"
@@ -88,6 +102,23 @@ def main() -> int:
     regression_source["scenarios"][0]["status"] = "failed"
     regression = make(suite, regression_source, "evidence-ranked-context")
     assert MODULE.compare_feature(suite, baseline, regression, "875")
+
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory)
+        (output / "summary.json").write_text(json.dumps(summary()), encoding="utf-8")
+        original_run = MODULE.subprocess.run
+        try:
+            MODULE.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+                args[0], 17
+            )
+            try:
+                MODULE.run_acceptance(output)
+            except RuntimeError as error:
+                assert "exit status 17" in str(error)
+            else:
+                raise AssertionError("failed product acceptance was accepted")
+        finally:
+            MODULE.subprocess.run = original_run
 
     print("coding-harness-benchmark-fixtures-ok")
     return 0

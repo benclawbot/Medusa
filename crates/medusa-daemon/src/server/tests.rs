@@ -46,103 +46,41 @@ fn wait_for_state(client: &DaemonClient, job_id: &str, expected: JobState) -> Jo
 }
 
 #[cfg(unix)]
+const PYTHON: &str = "python3";
+#[cfg(windows)]
+const PYTHON: &str = "python.exe";
+
+fn python_command(
+    script: &str,
+    extra_args: impl IntoIterator<Item = String>,
+) -> (String, Vec<String>) {
+    let mut args = vec!["-c".to_owned(), script.to_owned()];
+    args.extend(extra_args);
+    (PYTHON.to_owned(), args)
+}
+
 fn delayed_command() -> (String, Vec<String>) {
-    (
-        "sh".to_owned(),
-        vec![
-            "-c".to_owned(),
-            "sleep 0.3; printf done > finished.txt; printf verified-daemon-reconnect".to_owned(),
-        ],
+    python_command(
+        "import pathlib,time; time.sleep(0.3); pathlib.Path('finished.txt').write_text('done'); print('verified-daemon-reconnect', end='')",
+        [],
     )
 }
 
-#[cfg(windows)]
-fn delayed_command() -> (String, Vec<String>) {
-    (
-        "powershell.exe".to_owned(),
-        vec![
-            "-NoProfile".to_owned(),
-            "-NonInteractive".to_owned(),
-            "-Command".to_owned(),
-            "Start-Sleep -Milliseconds 300; Set-Content -NoNewline -Path finished.txt -Value done; [Console]::Write('verified-daemon-reconnect')"
-                .to_owned(),
-        ],
-    )
-}
-
-#[cfg(unix)]
 fn blocking_command() -> (String, Vec<String>) {
-    (
-        "sh".to_owned(),
-        vec!["-c".to_owned(), "sleep 10".to_owned()],
-    )
+    python_command("import time; time.sleep(10)", [])
 }
 
-#[cfg(windows)]
-fn blocking_command() -> (String, Vec<String>) {
-    (
-        "powershell.exe".to_owned(),
-        vec![
-            "-NoProfile".to_owned(),
-            "-NonInteractive".to_owned(),
-            "-Command".to_owned(),
-            "Start-Sleep -Seconds 10".to_owned(),
-        ],
-    )
-}
-
-#[cfg(unix)]
 fn marker_command(marker: &Path) -> (String, Vec<String>) {
-    (
-        "sh".to_owned(),
-        vec![
-            "-c".to_owned(),
-            "printf should-not-run > \"$1\"".to_owned(),
-            "medusa-marker".to_owned(),
-            marker.to_string_lossy().into_owned(),
-        ],
+    python_command(
+        "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('should-not-run')",
+        [marker.to_string_lossy().into_owned()],
     )
 }
 
-#[cfg(windows)]
-fn marker_command(marker: &Path) -> (String, Vec<String>) {
-    (
-        "powershell.exe".to_owned(),
-        vec![
-            "-NoProfile".to_owned(),
-            "-NonInteractive".to_owned(),
-            "-Command".to_owned(),
-            "Set-Content -NoNewline -LiteralPath $args[0] -Value should-not-run".to_owned(),
-            marker.to_string_lossy().into_owned(),
-        ],
-    )
-}
-
-#[cfg(unix)]
 fn descendant_command(marker: &Path) -> (String, Vec<String>) {
-    (
-        "sh".to_owned(),
-        vec![
-            "-c".to_owned(),
-            "(sleep 1; printf orphan > \"$1\") & wait".to_owned(),
-            "medusa-descendant".to_owned(),
-            marker.to_string_lossy().into_owned(),
-        ],
-    )
-}
-
-#[cfg(windows)]
-fn descendant_command(marker: &Path) -> (String, Vec<String>) {
-    (
-        "powershell.exe".to_owned(),
-        vec![
-            "-NoProfile".to_owned(),
-            "-NonInteractive".to_owned(),
-            "-Command".to_owned(),
-            "$target=$args[0]; Start-Process powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', \"Start-Sleep -Milliseconds 1000; Set-Content -NoNewline -LiteralPath '$target' -Value orphan\")"
-                .to_owned(),
-            marker.to_string_lossy().into_owned(),
-        ],
+    python_command(
+        r#"import pathlib,subprocess,sys,time; subprocess.Popen([sys.executable,"-c","import pathlib,sys,time; time.sleep(1); pathlib.Path(sys.argv[1]).write_text('orphan')",sys.argv[1]]); time.sleep(1)"#,
+        [marker.to_string_lossy().into_owned()],
     )
 }
 

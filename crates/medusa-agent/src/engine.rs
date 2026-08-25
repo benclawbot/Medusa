@@ -230,7 +230,7 @@ fn journal_certified_tool_execution(
     execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<()> {
     let scope = crate::agent_scope::load_published_scope_ref(&session.repo, session.id.as_str())?;
-    let canonical = crate::tool_result::CanonicalToolResultV1::from_receipt(&receipt, result);
+    let canonical = crate::tool_result::CanonicalToolResultV1::from_receipt(&receipt, result)?;
     append_event(
         session,
         Actor::Coordinator,
@@ -416,10 +416,10 @@ fn model_experience_component(
     value: &impl serde::Serialize,
     privacy_class: PrivacyClass,
     max_bytes: Option<u64>,
-) -> ModelExperienceComponentV1 {
-    let serialized = serde_json::to_vec(value).unwrap_or_default();
+) -> MedusaResult<ModelExperienceComponentV1> {
+    let serialized = serde_json::to_vec(value)?;
     let bytes = u64::try_from(serialized.len()).unwrap_or(u64::MAX);
-    ModelExperienceComponentV1 {
+    Ok(ModelExperienceComponentV1 {
         id: id.to_owned(),
         version: "1".to_owned(),
         insertion_order: order,
@@ -444,13 +444,13 @@ fn model_experience_component(
         privacy_class,
         max_bytes,
         fingerprint: effective_request::fragment_fingerprint(&String::from_utf8_lossy(&serialized)),
-    }
+    })
 }
 
 fn model_experience_contract(
     phase: ProviderExecutionPhase,
     request: &ModelRequest,
-) -> ModelExperienceContractV1 {
+) -> MedusaResult<ModelExperienceContractV1> {
     let components = vec![
         model_experience_component(
             "system",
@@ -460,7 +460,7 @@ fn model_experience_contract(
             &request.system,
             PrivacyClass::SecretExcluded,
             Some(256 * 1024),
-        ),
+        )?,
         model_experience_component(
             "messages",
             1,
@@ -469,7 +469,7 @@ fn model_experience_contract(
             &request.messages,
             PrivacyClass::UserContent,
             Some(2 * 1024 * 1024),
-        ),
+        )?,
         model_experience_component(
             "tools",
             2,
@@ -478,7 +478,7 @@ fn model_experience_contract(
             &request.tools,
             PrivacyClass::Public,
             Some(512 * 1024),
-        ),
+        )?,
         model_experience_component(
             "response_budget",
             3,
@@ -487,18 +487,21 @@ fn model_experience_contract(
             &(&request.max_tokens, &request.temperature_milli),
             PrivacyClass::Public,
             None,
-        ),
+        )?,
     ];
-    let tool_schema_fingerprint = effective_request::fragment_fingerprint(
-        &serde_json::to_string(&request.tools).unwrap_or_default(),
-    );
-    ModelExperienceContractV1::new(format!("{phase:?}"), components, tool_schema_fingerprint)
+    let tool_schema_fingerprint =
+        effective_request::fragment_fingerprint(&serde_json::to_string(&request.tools)?);
+    Ok(ModelExperienceContractV1::new(
+        format!("{phase:?}"),
+        components,
+        tool_schema_fingerprint,
+    ))
 }
 
 fn attach_model_experience_measurement(
     mut usage: serde_json::Value,
     contract: &ModelExperienceContractV1,
-) -> serde_json::Value {
+) -> MedusaResult<serde_json::Value> {
     let cache = if usage.get("provenance").and_then(serde_json::Value::as_str)
         == Some("provider_reported")
     {
@@ -516,18 +519,14 @@ fn attach_model_experience_measurement(
     } else {
         CacheObservationV1::Unknown
     };
-    let measurement = contract.measurement(cache);
+    let measurement = contract.measurement(cache)?;
     if let Some(fields) = usage.as_object_mut() {
         fields.insert(
             "model_experience_measurement".to_owned(),
-            serde_json::to_value(measurement).unwrap_or_else(|_| {
-                serde_json::json!({
-                    "schema_version": crate::model_experience::MODEL_EXPERIENCE_SCHEMA_VERSION
-                })
-            }),
+            serde_json::to_value(measurement)?,
         );
     }
-    usage
+    Ok(usage)
 }
 
 #[cfg(test)]
@@ -545,6 +544,7 @@ mod model_experience_usage_tests {
                 temperature_milli: 0,
             },
         )
+        .expect("contract")
     }
 
     #[test]
@@ -556,7 +556,8 @@ mod model_experience_usage_tests {
                 "cache_creation_input_tokens": 8,
             }),
             &contract(),
-        );
+        )
+        .expect("measurement");
         assert_eq!(
             usage["model_experience_measurement"]["cache"]["status"],
             "observed"
@@ -577,7 +578,8 @@ mod model_experience_usage_tests {
                 "cache_creation_input_tokens": 0,
             }),
             &contract(),
-        );
+        )
+        .expect("measurement");
         assert_eq!(
             usage["model_experience_measurement"]["cache"]["status"],
             "unknown"
@@ -1241,7 +1243,7 @@ impl<P: ModelProvider> AgentEngine<P> {
     ) -> MedusaResult<()> {
         let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
         let summary_model_experience =
-            model_experience_contract(ProviderExecutionPhase::Summarization, &summary_request);
+            model_experience_contract(ProviderExecutionPhase::Summarization, &summary_request)?;
         let summary_provenance = BTreeMap::from([
             (
                 "compaction_v2_system".to_owned(),
@@ -1256,12 +1258,12 @@ impl<P: ModelProvider> AgentEngine<P> {
         self.bind_runtime_config_provenance(&mut summary_provenance);
         summary_provenance.insert(
             "model_experience_contract".to_owned(),
-            summary_model_experience.fingerprint(),
+            summary_model_experience.fingerprint()?,
         );
         summary_provenance.insert(
             "model_experience_total_bytes".to_owned(),
             summary_model_experience
-                .measurement(CacheObservationV1::Unknown)
+                .measurement(CacheObservationV1::Unknown)?
                 .total_bytes
                 .map_or_else(|| "unknown".to_owned(), |bytes| bytes.to_string()),
         );
@@ -1326,7 +1328,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         attach_model_experience_measurement(
                             serde_json::to_value(turn_usage).map_err(json_error)?,
                             &summary_model_experience,
-                        ),
+                        )?,
                     ),
                 )?;
                 session.updated_at = OffsetDateTime::now_utc();
@@ -1634,10 +1636,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             max_tokens: max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
-        let model_experience = model_experience_contract(phase, &request);
+        let model_experience = model_experience_contract(phase, &request)?;
         assembly_provenance.insert(
             "model_experience_contract".to_owned(),
-            model_experience.fingerprint(),
+            model_experience.fingerprint()?,
         );
         assembly_provenance.insert(
             "model_experience_estimated_tokens".to_owned(),
@@ -1646,7 +1648,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string()),
         );
         let model_experience_measurement =
-            model_experience.measurement(CacheObservationV1::Unknown);
+            model_experience.measurement(CacheObservationV1::Unknown)?;
         assembly_provenance.insert(
             "model_experience_total_bytes".to_owned(),
             model_experience_measurement
@@ -1865,7 +1867,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 attach_model_experience_measurement(
                     serde_json::to_value(turn_usage).map_err(json_error)?,
                     &model_experience,
-                ),
+                )?,
             ),
             &mut observer,
         )?;

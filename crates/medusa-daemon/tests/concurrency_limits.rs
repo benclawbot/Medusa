@@ -37,27 +37,19 @@ fn wait_for_state(client: &DaemonClient, job_id: &str, expected: JobState) -> Jo
 }
 
 #[cfg(unix)]
+const PYTHON: &str = "python3";
+#[cfg(windows)]
+const PYTHON: &str = "python.exe";
+
 fn delayed_command(label: &str, milliseconds: u64) -> (String, Vec<String>) {
-    let seconds = milliseconds / 1_000;
-    let remainder = milliseconds % 1_000;
     (
-        "sh".to_owned(),
+        PYTHON.to_owned(),
         vec![
             "-c".to_owned(),
-            format!("sleep {seconds}.{remainder:03}; printf {label}"),
-        ],
-    )
-}
-
-#[cfg(windows)]
-fn delayed_command(label: &str, milliseconds: u64) -> (String, Vec<String>) {
-    (
-        "powershell.exe".to_owned(),
-        vec![
-            "-NoProfile".to_owned(),
-            "-NonInteractive".to_owned(),
-            "-Command".to_owned(),
-            format!("Start-Sleep -Milliseconds {milliseconds}; [Console]::Write('{label}')"),
+            "import sys,time; time.sleep(float(sys.argv[2])); print(sys.argv[1], end='')"
+                .to_owned(),
+            label.to_owned(),
+            format!("{}", milliseconds as f64 / 1_000.0),
         ],
     )
 }

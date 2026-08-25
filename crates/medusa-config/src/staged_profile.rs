@@ -1,10 +1,9 @@
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -425,22 +424,8 @@ fn profile_path(root: &Path, active_profile: &str) -> PathBuf {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| store_error("configuration persistence path has no parent"))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| store_error(format!("create {}: {error}", parent.display())))?;
-    let temporary = path.with_extension("toml.tmp");
-    let mut file = fs::File::create(&temporary)
-        .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-    file.write_all(bytes)
-        .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-    file.sync_all()
-        .map_err(|error| store_error(format!("sync {}: {error}", temporary.display())))?;
-    fs::rename(&temporary, path)
-        .map_err(|error| store_error(format!("replace {}: {error}", path.display())))?;
-    sync_parent(path);
-    Ok(())
+    storage::atomic_write(path, bytes)
+        .map_err(|error| store_error(format!("write {}: {error}", path.display())))
 }
 
 fn remove_if_exists(path: &Path) -> MedusaResult<()> {

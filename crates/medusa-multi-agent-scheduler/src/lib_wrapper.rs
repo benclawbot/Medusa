@@ -79,7 +79,7 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         return Err("typed planning result changed the accepted objective shape");
     }
     result.requested_outcomes[0] = original_objective;
-    result.fingerprint = planning_fingerprint(&result);
+    result.fingerprint = planning_fingerprint(&result)?;
     result.validate()?;
     Ok(result)
 }
@@ -165,7 +165,7 @@ fn repository_path_exists(candidate: &str, repository_paths: &[String]) -> bool 
     })
 }
 
-fn planning_fingerprint(result: &PlanningResult) -> String {
+fn planning_fingerprint(result: &PlanningResult) -> Result<String, &'static str> {
     let bytes = serde_json::to_vec(&(
         result.intent,
         &result.requested_outcomes,
@@ -180,8 +180,8 @@ fn planning_fingerprint(result: &PlanningResult) -> String {
         result.model_turn_budget,
         &result.tasks,
     ))
-    .unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))
+    .map_err(|_| "failed to serialize planning result")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

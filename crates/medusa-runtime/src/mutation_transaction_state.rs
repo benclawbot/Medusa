@@ -7,6 +7,7 @@ use std::{
 };
 
 use medusa_agent::authoritative_verification_for_components_at;
+use medusa_core::storage;
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_review_model::PARENT_REVIEW_RESPONSE_REQUIREMENT;
 pub use medusa_review_model::ParentReviewDecision;
@@ -176,7 +177,7 @@ impl MutationTransaction {
             &input.task_id,
             &input.base_head,
             &input.worker.id,
-        ));
+        ))?;
         let mut transaction = Self {
             root: root.to_path_buf(),
             path,
@@ -209,7 +210,7 @@ impl MutationTransaction {
                 fingerprint: String::new(),
             },
         };
-        transaction.refresh();
+        transaction.refresh()?;
         transaction.persist()?;
         transaction.prepare(&manager, input)?;
         Ok(transaction)
@@ -274,7 +275,7 @@ impl MutationTransaction {
             rationale,
             fingerprint: String::new(),
         };
-        receipt.fingerprint = receipt_fingerprint(&receipt);
+        receipt.fingerprint = receipt_fingerprint(&receipt)?;
         self.state.review = Some(receipt);
         self.state.verification = None;
         self.state.authorization = None;
@@ -412,7 +413,7 @@ impl MutationTransaction {
             authority,
             fingerprint: String::new(),
         };
-        receipt.fingerprint = verification_fingerprint(&receipt);
+        receipt.fingerprint = verification_fingerprint(&receipt)?;
         self.state.verification = Some(receipt);
         self.transition(MutationLifecycle::Verified, None)
     }
@@ -474,7 +475,7 @@ impl MutationTransaction {
             verification_fingerprint: verification.fingerprint.clone(),
             fingerprint: String::new(),
         };
-        authorization.fingerprint = authorization_fingerprint(&authorization);
+        authorization.fingerprint = authorization_fingerprint(&authorization)?;
         self.state.authorization = Some(authorization);
         self.transition(MutationLifecycle::IntegrationAuthorized, None)
     }
@@ -503,7 +504,7 @@ impl MutationTransaction {
             .ok_or_else(|| "authorized transaction has no authorization receipt".to_owned())?;
         if authorization.commit != self.state.prepared_commit
             || authorization.base_head != self.state.base_head
-            || authorization.fingerprint != authorization_fingerprint(authorization)
+            || authorization.fingerprint != authorization_fingerprint(authorization)?
         {
             self.fail("integration authorization does not match the prepared commit".to_owned())?;
             return Err("integration authorization does not match the prepared commit".to_owned());
@@ -696,7 +697,7 @@ impl MutationTransaction {
         self.state.prepared_tree = tree;
         self.state.changed_paths = changed_paths;
         self.state.changed_components = changed_components;
-        self.state.patch_fingerprint = hash(&patch);
+        self.state.patch_fingerprint = hash(&patch)?;
         self.state.scope_fingerprint = changed_scope_fingerprint(&self.state.changed_components);
         self.state.implementation_summary = input.implementation_summary;
         self.state.worktree_verification_evidence = input.worktree_verification_evidence;
@@ -704,7 +705,7 @@ impl MutationTransaction {
         self.state.implementation_evidence_fingerprint = hash(&(
             &self.state.implementation_summary,
             &self.state.worktree_verification_evidence,
-        ));
+        ))?;
         self.state.review = None;
         self.state.verification = None;
         self.state.authorization = None;
@@ -782,12 +783,13 @@ impl MutationTransaction {
         self.state.lifecycle = lifecycle;
         self.state.last_error = last_error;
         self.state.revision = self.state.revision.saturating_add(1);
-        self.refresh();
+        self.refresh()?;
         self.persist()
     }
 
-    fn refresh(&mut self) {
-        self.state.fingerprint = transaction_fingerprint(&self.state);
+    fn refresh(&mut self) -> Result<(), String> {
+        self.state.fingerprint = transaction_fingerprint(&self.state)?;
+        Ok(())
     }
 
     fn persist(&self) -> Result<(), String> {
@@ -802,7 +804,7 @@ impl MutationTransaction {
             || self.state.task_id.trim().is_empty()
             || self.state.base_head.trim().is_empty()
             || self.state.worker.id.trim().is_empty()
-            || self.state.fingerprint != transaction_fingerprint(&self.state)
+            || self.state.fingerprint != transaction_fingerprint(&self.state)?
         {
             return Err("durable mutation transaction is incomplete or corrupted".to_owned());
         }
@@ -818,7 +820,7 @@ impl MutationTransaction {
             return Err("prepared mutation transaction is missing immutable review inputs".to_owned());
         }
         if let Some(review) = self.state.review.as_ref()
-            && review.fingerprint != receipt_fingerprint(review)
+            && review.fingerprint != receipt_fingerprint(review)?
         {
             return Err("parent review receipt fingerprint is invalid".to_owned());
         }
@@ -826,13 +828,13 @@ impl MutationTransaction {
             worktree.validate().map_err(|error| error.to_string())?;
         }
         if let Some(verification) = self.state.verification.as_ref()
-            && (verification.fingerprint != verification_fingerprint(verification)
+            && (verification.fingerprint != verification_fingerprint(verification)?
                 || verification.authority.validate().is_err())
         {
             return Err("independent verification receipt fingerprint is invalid".to_owned());
         }
         if let Some(authorization) = self.state.authorization.as_ref()
-            && authorization.fingerprint != authorization_fingerprint(authorization)
+            && authorization.fingerprint != authorization_fingerprint(authorization)?
         {
             return Err("integration authorization fingerprint is invalid".to_owned());
         }
@@ -862,51 +864,38 @@ pub fn fail_transaction(
     Ok(())
 }
 
-fn transaction_fingerprint(state: &MutationTransactionSnapshot) -> String {
+fn transaction_fingerprint(state: &MutationTransactionSnapshot) -> Result<String, String> {
     let mut canonical = state.clone();
     canonical.fingerprint.clear();
     hash(&canonical)
 }
 
-fn receipt_fingerprint(receipt: &ParentReviewReceipt) -> String {
+fn receipt_fingerprint(receipt: &ParentReviewReceipt) -> Result<String, String> {
     let mut canonical = receipt.clone();
     canonical.fingerprint.clear();
     hash(&canonical)
 }
 
-fn verification_fingerprint(receipt: &IndependentVerificationReceipt) -> String {
+fn verification_fingerprint(receipt: &IndependentVerificationReceipt) -> Result<String, String> {
     let mut canonical = receipt.clone();
     canonical.fingerprint.clear();
     hash(&canonical)
 }
 
-fn authorization_fingerprint(authorization: &IntegrationAuthorization) -> String {
+fn authorization_fingerprint(authorization: &IntegrationAuthorization) -> Result<String, String> {
     let mut canonical = authorization.clone();
     canonical.fingerprint.clear();
     hash(&canonical)
 }
 
-fn hash<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    format!("{:x}", Sha256::digest(bytes))
+fn hash<T: Serialize>(value: &T) -> Result<String, String> {
+    let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "durable transaction path has no parent".to_owned())?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| error.to_string())?;
-    }
-    fs::rename(temporary, path).map_err(|error| error.to_string())
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    storage::atomic_write(path, &bytes).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

@@ -33,7 +33,9 @@ jobs:
       - name: Validate engineering policy schema
         run: python3 scripts/engineering-policy.py validate --policy .github/engineering-policy.json --root .
       - name: Resolve required engineering checks with frozen authority
-        if: github.event_name == 'pull_request'
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

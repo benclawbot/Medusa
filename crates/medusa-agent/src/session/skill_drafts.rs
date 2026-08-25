@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 
 const MINIMUM_CONFIDENCE_MILLI: u16 = 700;
@@ -367,9 +367,7 @@ fn normalized(value: &str) -> String {
 }
 
 fn atomic_write(path: &Path, content: &[u8]) -> MedusaResult<()> {
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, content)?;
-    fs::rename(temporary, path)?;
+    storage::atomic_write(path, content)?;
     Ok(())
 }
 

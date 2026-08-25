@@ -50,9 +50,11 @@ pub mod result_cache {
             })
         }
 
-        #[must_use]
-        pub fn fingerprint(&self) -> String {
-            fingerprint(&serde_json::to_vec(self).unwrap_or_default())
+        #[must_use = "inspect the cache fingerprint result"]
+        pub fn fingerprint(&self) -> Result<String, &'static str> {
+            let bytes =
+                serde_json::to_vec(self).map_err(|_| "MCP cache key serialization failed")?;
+            Ok(fingerprint(&bytes))
         }
     }
 
@@ -120,7 +122,7 @@ pub mod result_cache {
         pub fn invalidate_schema(&mut self, schema_fingerprint: &str) -> usize {
             let before = self.entries.len();
             self.entries
-                .retain(|key, _| key.schema_fingerprint == schema_fingerprint);
+                .retain(|key, _| key.schema_fingerprint != schema_fingerprint);
             before - self.entries.len()
         }
 
@@ -225,6 +227,30 @@ pub mod result_cache {
                     .expect("non-cacheable")
             );
             assert_eq!(cache.get(&non_cacheable, now), None);
+        }
+
+        #[test]
+        fn invalidate_schema_removes_only_matching_schema_entries() {
+            let now = datetime!(2026-07-26 08:00 UTC);
+            let mut cache = ResultCache::default();
+            let schema_a = key(json!({"q":"rust"}), "schema-a", "1");
+            let schema_b = key(json!({"q":"rust"}), "schema-b", "1");
+            for cache_key in [schema_a.clone(), schema_b.clone()] {
+                cache
+                    .insert(
+                        cache_key,
+                        json!({"items":[1]}),
+                        now,
+                        Duration::minutes(5),
+                        false,
+                        true,
+                    )
+                    .expect("insert");
+            }
+
+            assert_eq!(cache.invalidate_schema("schema-a"), 1);
+            assert_eq!(cache.get(&schema_a, now), None);
+            assert_eq!(cache.get(&schema_b, now), Some(json!({"items":[1]})));
         }
     }
 }

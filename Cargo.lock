@@ -571,6 +571,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
+name = "flatbuffers"
+version = "25.12.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35f6839d7b3b98adde531effaf34f0c2badc6f4735d26fe74709d8e513a96ef3"
+dependencies = [
+ "bitflags 2.13.1",
+ "rustc_version",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1139,6 +1149,7 @@ dependencies = [
  "medusa-provider",
  "medusa-skill",
  "medusa-testkit",
+ "medusa-tool-policy",
  "medusa-worker-leases",
  "medusa-workers",
  "medusa-world-model",
@@ -1288,8 +1299,11 @@ dependencies = [
 name = "medusa-core"
 version = "1.0.4"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
+ "tempfile",
  "thiserror",
  "ulid",
 ]
@@ -1313,6 +1327,7 @@ dependencies = [
  "medusa-runtime-supervisor",
  "medusa-session-continuity",
  "medusa-testkit",
+ "medusa-tool-policy",
  "medusa-wakeup",
  "reqwest",
  "serde",
@@ -1328,10 +1343,9 @@ dependencies = [
 name = "medusa-escalation"
 version = "1.0.4"
 dependencies = [
- "hex",
+ "medusa-core",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "time",
 ]
@@ -1340,10 +1354,9 @@ dependencies = [
 name = "medusa-evidence"
 version = "1.0.4"
 dependencies = [
- "hex",
+ "medusa-core",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
  "time",
@@ -1440,6 +1453,7 @@ name = "medusa-hardening"
 version = "1.0.4"
 dependencies = [
  "medusa-core",
+ "medusa-protocol",
  "proptest",
  "serde",
  "serde_json",
@@ -1561,6 +1575,7 @@ dependencies = [
 name = "medusa-process-containment"
 version = "1.0.4"
 dependencies = [
+ "flatbuffers",
  "libc",
  "tempfile",
  "windows",
@@ -1860,6 +1875,7 @@ dependencies = [
 name = "medusa-world-model"
 version = "1.0.4"
 dependencies = [
+ "medusa-core",
  "serde",
  "serde_json",
  "tempfile",

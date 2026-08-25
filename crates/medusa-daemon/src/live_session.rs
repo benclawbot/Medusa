@@ -10,6 +10,7 @@ use medusa_agent::session_browser::{SessionSummary, list_sessions};
 use medusa_protocol::{
     EventEnvelope,
     frontend::{FrontendEventEnvelope, FrontendKind, project_event},
+    validate_session_id,
 };
 use medusa_runtime::attachment::session::{
     AttachmentMode, ClientKind, ContinuitySession, RuntimeAttachRequest, RuntimeSessionAttachment,
@@ -104,6 +105,7 @@ impl LiveSessionBroker {
         &mut self,
         mut request: RuntimeAttachRequest,
     ) -> Result<LiveSessionAttachmentView, LiveSessionBrokerError> {
+        validate_session_id(&request.session_id).map_err(invalid_session_id)?;
         let store = ContinuityStore::new(
             self.repo
                 .join(".medusa/continuity")
@@ -122,6 +124,7 @@ impl LiveSessionBroker {
         &mut self,
         request: RuntimeAttachRequest,
     ) -> Result<LiveSessionAttachmentView, LiveSessionBrokerError> {
+        validate_session_id(&request.session_id).map_err(invalid_session_id)?;
         if let Some(existing) = self.attachments.get(&request.client_id)
             && existing.session.id.to_string() != request.session_id
         {
@@ -344,6 +347,10 @@ pub enum LiveSessionBrokerError {
     Session(String),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
+}
+
+fn invalid_session_id(reason: &str) -> LiveSessionBrokerError {
+    LiveSessionBrokerError::Session(format!("invalid live-session session identifier: {reason}"))
 }
 
 #[cfg(test)]
@@ -590,5 +597,28 @@ mod tests {
             ))
             .expect_err("session switch must fail");
         assert!(error.to_string().contains("already bound"));
+    }
+
+    #[test]
+    fn rejects_malicious_session_ids_before_continuity_path_access() {
+        let repository = tempfile::tempdir().expect("repository");
+        let mut broker = LiveSessionBroker::new(repository.path().to_path_buf());
+        let error = broker
+            .attach_current(request(
+                "../../outside",
+                "malicious-client",
+                ClientKind::Daemon,
+                AttachmentMode::ReadOnly,
+                0,
+                0,
+                "attach-malicious",
+            ))
+            .expect_err("path traversal session id must be rejected");
+        assert!(matches!(
+            error,
+            LiveSessionBrokerError::Session(reason)
+                if reason.contains("invalid live-session session identifier")
+        ));
+        assert!(!repository.path().join(".medusa").exists());
     }
 }

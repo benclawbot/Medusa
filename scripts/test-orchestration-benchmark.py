@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import tempfile
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("orchestration-benchmark.py")
@@ -31,18 +33,27 @@ def summary(status: str = "passed") -> dict:
                 "input_tokens": 10,
                 "output_tokens": 5,
                 "cache_hits": 1,
+                "safety_regressions": 0,
             },
         } for item in sorted(ids)],
     }
 
 
 def main() -> int:
+    assert MODULE.numeric({}, "attempts") is None
     suite = json.loads(Path("benchmarks/orchestration-suite.json").read_text(encoding="utf-8"))
     report = MODULE.score(suite, [summary(), summary()])
     assert report["passed"]
     assert report["metrics"]["task_success_rate"] == 1.0
     assert report["metrics"]["verification_coverage"] == 1.0
     assert report["metrics"]["total_tool_calls"] > 0
+
+    unmeasured = summary()
+    for item in unmeasured["scenarios"]:
+        item["metrics"].pop("safety_regressions")
+    report = MODULE.score(suite, [unmeasured, summary()])
+    assert not report["passed"]
+    assert any(item["reason"] == "missing evidence" for item in report["failures"])
 
     failed = summary()
     failed["scenarios"][0]["status"] = "failed"
@@ -57,6 +68,24 @@ def main() -> int:
     assert report["metrics"]["safety_regressions"] == 1
 
     assert "No arbitrary improvement percentage" in MODULE.markdown(report)
+
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory)
+        (output / "summary.json").write_text(json.dumps(summary()), encoding="utf-8")
+        original_run = MODULE.subprocess.run
+        try:
+            MODULE.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
+                args[0], 17
+            )
+            try:
+                MODULE.run_acceptance(output)
+            except RuntimeError as error:
+                assert "exit status 17" in str(error)
+            else:
+                raise AssertionError("failed product acceptance was accepted")
+        finally:
+            MODULE.subprocess.run = original_run
+
     print("orchestration-benchmark-fixtures-ok")
     return 0
 

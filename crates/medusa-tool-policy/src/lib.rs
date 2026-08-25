@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ToolEffect {
@@ -186,6 +187,192 @@ impl ToolRegistry {
     }
 }
 
+/// Command admission rules shared by every path that can submit an executable.
+///
+/// The execution boundary is intentionally centralized here.  Callers still own their
+/// containment, cancellation, and role-bound execution policy, but they must not maintain a
+/// second list of commands that are unsafe to launch.  The default policy is deliberately
+/// extensible so a newly identified command can be denied by the policy owner without changing
+/// every caller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandPolicy {
+    denied_programs: BTreeSet<String>,
+    denied_fragments: BTreeSet<String>,
+}
+
+/// Convenience name for callers that refer to executable authorization as a tool policy.
+pub type ToolPolicy = CommandPolicy;
+
+impl Default for CommandPolicy {
+    fn default() -> Self {
+        Self {
+            denied_programs: [
+                "rm",
+                "sudo",
+                "doas",
+                "shutdown",
+                "reboot",
+                "halt",
+                "poweroff",
+                "mkfs",
+                "dd",
+                "mount",
+                "umount",
+                "chown",
+                "chmod",
+                "kill",
+                "pkill",
+                "killall",
+                "systemctl",
+                "launchctl",
+                "reg",
+                "reg.exe",
+                "sc",
+                "sc.exe",
+                "netsh",
+                "curl",
+                "wget",
+                "nc",
+                "ncat",
+                "socat",
+                "ssh",
+                "scp",
+                "sftp",
+                "rsync",
+                "env",
+                "printenv",
+                "set",
+                "bash",
+                "sh",
+                "zsh",
+                "fish",
+                "cmd",
+                "cmd.exe",
+                "powershell",
+                "powershell.exe",
+                "pwsh",
+                "pwsh.exe",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            denied_fragments: [
+                "curl | sh",
+                "curl|sh",
+                "wget | sh",
+                "wget|sh",
+                "/etc/shadow",
+                "/etc/passwd",
+                ".ssh/",
+                "id_rsa",
+                "id_ed25519",
+                "authorization:",
+                "api_key",
+                "api-key",
+                "secret_access_key",
+                "disable-defender",
+                "set-mppreference",
+                "tamper protection",
+                "endpoint protection",
+                "--no-verify",
+                "--force-with-lease",
+                "--force",
+                " -f ",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        }
+    }
+}
+
+impl CommandPolicy {
+    /// Returns a policy that starts with the canonical hard-denial rules.
+    #[must_use]
+    pub fn canonical() -> Self {
+        Self::default()
+    }
+
+    /// Adds a program basename to this policy's deny set.
+    #[must_use]
+    pub fn deny_program(mut self, program: impl AsRef<str>) -> Self {
+        self.denied_programs
+            .insert(normalize_program(program.as_ref()));
+        self
+    }
+
+    /// Adds a case-insensitive argument fragment to this policy's deny set.
+    #[must_use]
+    pub fn deny_fragment(mut self, fragment: impl AsRef<str>) -> Self {
+        self.denied_fragments
+            .insert(fragment.as_ref().to_ascii_lowercase());
+        self
+    }
+
+    /// Returns whether a command is admitted by this policy.
+    #[must_use]
+    pub fn allows(&self, program: &str, args: &[String]) -> bool {
+        self.validate(program, args).is_ok()
+    }
+
+    /// Validates an executable and its arguments against the canonical policy.
+    pub fn validate(&self, program: &str, args: &[String]) -> Result<(), String> {
+        if program.trim().is_empty() {
+            return Err("empty executable is denied by the tool policy".to_owned());
+        }
+
+        let basename = normalize_program(program);
+        if self.denied_programs.contains(&basename) {
+            return Err(format!("hard-denied command: {program}"));
+        }
+
+        let normalized_args = args.join(" ").to_ascii_lowercase();
+        if self
+            .denied_fragments
+            .iter()
+            .any(|fragment| normalized_args.contains(fragment.as_str()))
+        {
+            return Err(format!("hard-denied command arguments: {program}"));
+        }
+
+        let normalized_program = basename
+            .strip_suffix(".exe")
+            .or_else(|| basename.strip_suffix(".com"))
+            .or_else(|| basename.strip_suffix(".cmd"))
+            .or_else(|| basename.strip_suffix(".bat"))
+            .unwrap_or(&basename);
+        if normalized_program == "git" {
+            let first = args.first().map(String::as_str).unwrap_or_default();
+            if matches!(first, "push" | "clean" | "reset" | "reflog" | "gc")
+                || (first == "config"
+                    && args
+                        .iter()
+                        .any(|arg| arg == "--global" || arg == "--system"))
+                || args
+                    .iter()
+                    .any(|arg| arg == "--force" || arg == "--force-with-lease")
+            {
+                return Err(format!("denied Git mutation: git {}", args.join(" ")));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Applies the canonical command policy without requiring callers to construct a policy value.
+pub fn validate_shell_command(program: &str, args: &[String]) -> Result<(), String> {
+    CommandPolicy::default().validate(program, args)
+}
+
+fn normalize_program(program: &str) -> String {
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase()
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct OutputEnvelope {
     pub mode: OutputMode,
@@ -230,6 +417,51 @@ pub fn compact_failures(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_policy_allows_contained_toolchains() {
+        let policy = CommandPolicy::default();
+        for program in ["cargo", "python", "node", "ruby"] {
+            assert!(policy.validate(program, &[]).is_ok(), "{program}");
+        }
+    }
+
+    #[test]
+    fn command_policy_denies_established_dangerous_tools() {
+        let policy = CommandPolicy::default();
+        for program in ["rm", "sudo", "curl", "bash", "powershell.exe"] {
+            assert!(policy.validate(program, &[]).is_err(), "{program}");
+        }
+    }
+
+    #[test]
+    fn command_policy_classifies_paths_by_case_insensitive_basename() {
+        let policy = CommandPolicy::default();
+        for program in ["/usr/bin/RM", "/tmp/PowerShell.EXE"] {
+            assert!(policy.validate(program, &[]).is_err(), "{program}");
+        }
+    }
+
+    #[test]
+    fn command_policy_covers_newly_introduced_dangerous_tools() {
+        let policy = CommandPolicy::default();
+        assert!(policy.validate("doas", &[]).is_err());
+        assert!(policy.validate("socat", &[]).is_err());
+    }
+
+    #[test]
+    fn command_policy_changes_are_applied_without_callers_reimplementing_rules() {
+        let policy = CommandPolicy::default()
+            .deny_program("new-dangerous-tool")
+            .deny_fragment("new-sensitive-flag");
+        assert!(policy.validate("new-dangerous-tool", &[]).is_err());
+        assert!(
+            policy
+                .validate("cargo", &["new-sensitive-flag".to_owned()])
+                .is_err()
+        );
+        assert!(policy.validate("new-safe-tool", &[]).is_ok());
+    }
 
     fn metadata(name: &str, latency_ms: u64, output_tokens: u64) -> ToolMetadata {
         ToolMetadata {

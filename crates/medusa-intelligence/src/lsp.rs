@@ -6,7 +6,7 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Stdio},
 };
 
-use medusa_core::hidden_command;
+use medusa_core::{hidden_command, storage::file_uri};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -146,7 +146,7 @@ impl LspClient {
         self.stdout = Some(BufReader::new(stdout));
         self.child = Some(child);
 
-        let root_uri = path_to_file_uri(&self.config.workspace_root);
+        let root_uri = file_uri(&self.config.workspace_root);
         let mut params = json!({
             "processId": std::process::id(),
             "rootUri": root_uri,
@@ -307,15 +307,6 @@ fn read_lsp_message(reader: &mut impl BufRead) -> Result<Value, LspError> {
     Ok(serde_json::from_slice(&body)?)
 }
 
-fn path_to_file_uri(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/");
-    if normalized.starts_with('/') {
-        format!("file://{normalized}")
-    } else {
-        format!("file:///{normalized}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,7 +334,7 @@ mod tests {
 
     #[test]
     fn file_uri_normalizes_windows_separators() {
-        assert_eq!(path_to_file_uri(Path::new("C:\\repo")), "file:///C:/repo");
-        assert_eq!(path_to_file_uri(Path::new("/repo")), "file:///repo");
+        assert_eq!(file_uri(Path::new("C:\\repo")), "file:///C:/repo");
+        assert_eq!(file_uri(Path::new("/repo")), "file:///repo");
     }
 }

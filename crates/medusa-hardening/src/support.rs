@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -123,12 +123,7 @@ pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> MedusaResult<(
 }
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes)?;
-    fs::rename(temporary, path)?;
+    storage::atomic_write(path, bytes)?;
     Ok(())
 }
 

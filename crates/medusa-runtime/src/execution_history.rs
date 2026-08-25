@@ -192,7 +192,8 @@ fn historical_from_events(
         execution_id: session_id.to_owned(),
         sequence: 0,
         values: BTreeMap::new(),
-    });
+    })
+    .map_err(RuntimeError::agent)?;
     let target = reduce(session_id, &events[..cursor_index]);
     let mut store = TimeTravelStore::default();
     store

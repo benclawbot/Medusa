@@ -14,7 +14,7 @@ jobs:
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate repository artifact hygiene
@@ -23,6 +23,7 @@ jobs:
           set -euo pipefail
           python3 scripts/test-repository-artifacts.py
           python3 scripts/check-repository-artifacts.py
+          python3 scripts/test-ci-workflow-contract.py
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
@@ -86,10 +87,12 @@ jobs:
       - name: Resolve changed Rust packages
         id: changed_rust
         shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           python3 scripts/test-changed-rust-packages.py
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
           cargo_args="$(python3 scripts/changed-rust-packages.py --base FETCH_HEAD --format cargo-args)"
           echo "cargo_args=$cargo_args" >> "$GITHUB_OUTPUT"
           if [[ -n "$cargo_args" ]]; then
@@ -115,6 +118,14 @@ jobs:
           if-no-files-found: error
       - name: Assert authoritative validation preserved Cargo.lock
         run: git diff --exit-code -- Cargo.lock
+      - name: Full workspace target lint
+        shell: bash
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Full workspace tests
+        shell: bash
+        env:
+          MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
+        run: cargo test --workspace --all-features --locked -- --nocapture
 
   supply-chain:
     name: Dependency policy
@@ -180,9 +191,11 @@ jobs:
         id: dependency_metrics_compare
         if: github.event_name == 'pull_request'
         shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -o pipefail
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
           git worktree add ../dependency-base FETCH_HEAD
           cargo metadata --manifest-path ../dependency-base/Cargo.toml --locked --format-version 1 >/dev/null
           python3 scripts/dependency-metrics.py measure \

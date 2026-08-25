@@ -564,7 +564,7 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
- "crypto-common 0.1.7",
+ "crypto-common 0.1.6",
  "inout",
 ]
 
@@ -693,9 +693,9 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "crypto-common"
-version = "0.1.7"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
+checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
  "typenum",
@@ -880,7 +880,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer 0.10.4",
- "crypto-common 0.1.7",
+ "crypto-common 0.1.6",
  "subtle",
 ]
 
@@ -1419,9 +1419,9 @@ dependencies = [
 
 [[package]]
 name = "generic-array"
-version = "0.14.7"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
+checksum = "4bb6743198531e02858aeaea5398fcc883e71851fcbcb5a2f773e2fb6cb1edf2"
 dependencies = [
  "typenum",
  "version_check",
@@ -2370,6 +2370,7 @@ dependencies = [
  "medusa-protocol",
  "medusa-provider",
  "medusa-skill",
+ "medusa-tool-policy",
  "medusa-worker-leases",
  "medusa-workers",
  "medusa-world-model",
@@ -2458,8 +2459,10 @@ dependencies = [
 name = "medusa-core"
 version = "1.0.4"
 dependencies = [
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "ulid",
 ]
@@ -2481,6 +2484,7 @@ dependencies = [
  "medusa-runtime",
  "medusa-runtime-supervisor",
  "medusa-session-continuity",
+ "medusa-tool-policy",
  "medusa-wakeup",
  "reqwest 0.12.28",
  "serde",
@@ -2521,10 +2525,9 @@ dependencies = [
 name = "medusa-escalation"
 version = "1.0.4"
 dependencies = [
- "hex",
+ "medusa-core",
  "serde",
  "serde_json",
- "sha2",
  "time",
 ]
 
@@ -2532,10 +2535,9 @@ dependencies = [
 name = "medusa-evidence"
 version = "1.0.4"
 dependencies = [
- "hex",
+ "medusa-core",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.20",
  "time",
  "ulid",
@@ -2933,6 +2935,7 @@ dependencies = [
 name = "medusa-world-model"
 version = "1.0.4"
 dependencies = [
+ "medusa-core",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

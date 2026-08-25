@@ -3,12 +3,17 @@
 #[cfg(windows)]
 extern crate self as flatbuffers;
 
+// SAFETY: reviewed FlatBuffers parser accessors are verifier-bound and isolated in this module.
+// The builder is consumed by the Windows sandbox path; Linux/macOS retain the parser regression
+// test but do not construct production builders.
+#[cfg_attr(not(windows), allow(dead_code))]
+#[allow(unsafe_code)]
+mod flatbuffer_builder;
+
 #[cfg(windows)]
 // SAFETY: reviewed Windows composable-sandbox FFI; see the checked allowlist.
 #[allow(unsafe_code)]
 mod base_container;
-#[cfg(windows)]
-mod flatbuffer_builder;
 // SAFETY: reviewed native process-identity FFI is isolated in this low-level crate.
 #[allow(unsafe_code)]
 mod process_identity;

@@ -357,9 +357,7 @@ fn authorize_hunk_revert(
         .iter()
         .find(|hunk| hunk.id == hunk_id)
         .ok_or(ReviewActionRejection::HunkNotFound)?;
-    if hunk.current_fingerprint != expected_hunk_fingerprint
-        || hunk.base_fingerprint != hunk.current_fingerprint
-    {
+    if hunk.current_fingerprint != expected_hunk_fingerprint {
         return Err(ReviewActionRejection::WorkingTreeDrift);
     }
     if hunk.ambiguous {
@@ -455,6 +453,34 @@ mod tests {
             expected_hunk_fingerprint: "hunk-v1".into(),
         });
         assert_eq!(result, Err(ReviewActionRejection::AmbiguousHunk));
+    }
+
+    #[test]
+    fn modified_hunk_is_revertible_but_hunk_drift_is_rejected() {
+        let mut changed = file("src/lib.rs", ChangeOrigin::Medusa);
+        changed.hunks[0].base_fingerprint = "hunk-base".into();
+        changed.hunks[0].current_fingerprint = "hunk-current".into();
+        let view = snapshot(vec![changed]);
+        assert!(
+            view.authorize(ReviewActionRequest::RevertHunk {
+                path: "src/lib.rs".into(),
+                hunk_id: "hunk-1".into(),
+                expected_snapshot_id: "snapshot-1".into(),
+                expected_file_fingerprint: "file-v1".into(),
+                expected_hunk_fingerprint: "hunk-current".into(),
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            view.authorize(ReviewActionRequest::RevertHunk {
+                path: "src/lib.rs".into(),
+                hunk_id: "hunk-1".into(),
+                expected_snapshot_id: "snapshot-1".into(),
+                expected_file_fingerprint: "file-v1".into(),
+                expected_hunk_fingerprint: "stale-hunk".into(),
+            }),
+            Err(ReviewActionRejection::WorkingTreeDrift)
+        );
     }
 
     #[test]

@@ -38,7 +38,7 @@ impl WorkerLease {
             now_ms,
             now_ms,
             timeout_ms,
-        ));
+        ))?;
         Ok(Self {
             worker_id,
             task_id,
@@ -65,7 +65,7 @@ impl WorkerLease {
             rebuilt.acquired_at_ms,
             self.heartbeat_at_ms,
             rebuilt.timeout_ms,
-        ));
+        ))?;
         if expected != self.fingerprint {
             return Err("lease fingerprint does not match contents");
         }
@@ -88,7 +88,7 @@ impl WorkerLease {
             self.acquired_at_ms,
             self.heartbeat_at_ms,
             self.timeout_ms,
-        ));
+        ))?;
         Ok(())
     }
 
@@ -121,7 +121,7 @@ impl LeaseRegistry {
             }
         }
         let leases = by_task.into_values().collect::<Vec<_>>();
-        let fingerprint = hash(&leases);
+        let fingerprint = hash(&leases)?;
         Ok(Self {
             leases,
             fingerprint,
@@ -183,9 +183,9 @@ pub fn deterministic_reassignment(
         .ok_or("no replacement worker is available")
 }
 
-fn hash<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    hex::encode(Sha256::digest(bytes))
+fn hash<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "failed to serialize worker lease")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]

@@ -4,19 +4,25 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
-import pty
 import select
 import shutil
 import signal
 import stat
 import struct
 import subprocess
-import termios
 import time
 from pathlib import Path
+
+try:
+    import fcntl
+    import pty
+    import termios
+except ImportError:  # pragma: no cover - the live TUI runs on Linux CI only.
+    fcntl = None
+    pty = None
+    termios = None
 
 EXPECTED = "MEDUSA_TUI_MINIMAX_OK"
 EXPECTED_SOURCE = (
@@ -39,19 +45,26 @@ PROMPT = (
     f"before integration. After fs_write succeeds, the implementation task must return exactly {EXPECTED}."
 )
 DEFAULT_TIMEOUT_SECONDS = 600
+KNOWN_MINIMAX_MODELS = {
+    "MiniMax-M3",
+    "MiniMax-M2.7",
+    "MiniMax-M2.7-highspeed",
+    "MiniMax-M2.5",
+}
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--model", default="MiniMax-M3")
     parser.add_argument(
         "--timeout-seconds",
         type=int,
         default=int(os.environ.get("LIVE_TUI_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)),
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def run(command: list[str], cwd: Path, timeout: int = 120) -> subprocess.CompletedProcess[bytes]:
@@ -65,7 +78,10 @@ def run(command: list[str], cwd: Path, timeout: int = 120) -> subprocess.Complet
     )
 
 
-def write_profile(config_home: Path) -> None:
+def write_profile(config_home: Path, model: str) -> None:
+    if model not in KNOWN_MINIMAX_MODELS:
+        allowed = ", ".join(sorted(KNOWN_MINIMAX_MODELS))
+        raise ValueError(f"unsupported MiniMax model {model!r}; expected one of: {allowed}")
     medusa = config_home / "medusa"
     medusa.mkdir(parents=True, exist_ok=True)
     (medusa / "provider.toml").write_text(
@@ -73,7 +89,7 @@ def write_profile(config_home: Path) -> None:
             [
                 'connection = "direct"',
                 'provider = "minimax"',
-                'model = "MiniMax-M3"',
+                f'model = "{model}"',
                 'speed = "balanced"',
                 'reasoning = "medium"',
                 'auth = "api-key"',
@@ -131,6 +147,8 @@ def initialize_repository(repo: Path) -> None:
 
 
 def launch_tui(binary: Path, repo: Path, env: dict[str, str]) -> tuple[int, int]:
+    if fcntl is None or pty is None or termios is None:
+        raise RuntimeError("the live TUI requires a POSIX pseudo-terminal")
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(repo)
@@ -285,8 +303,8 @@ def assert_secret_absent(roots: list[Path], secret: str) -> None:
                 continue
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     binary = args.binary.resolve()
     api_key = os.environ.get("MINIMAX_API_KEY", "")
     if args.timeout_seconds <= 0 or not binary.is_file() or not api_key:
@@ -301,7 +319,7 @@ def main() -> int:
     home.mkdir(parents=True)
     initialize_repository(repo)
     config_home = home / ".config"
-    write_profile(config_home)
+    write_profile(config_home, args.model)
     model = configured_model(config_home)
 
     env = os.environ.copy()

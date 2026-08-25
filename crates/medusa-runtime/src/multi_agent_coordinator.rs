@@ -23,7 +23,7 @@ use medusa_agent::{
     DelegationContractStore, WorkerExecutionController, bind_session_to_delegation,
 };
 use medusa_config::{Config, Mode};
-use medusa_core::{SessionId, hidden_command};
+use medusa_core::{SessionId, hidden_command, storage};
 use medusa_multi_agent_scheduler::{ExecutionLane, Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerState};
@@ -1119,21 +1119,8 @@ fn excluded_path(path: &str) -> bool {
 }
 
 fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "coordinator state path has no parent".to_owned())?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| error.to_string())?;
-    }
-    fs::rename(temporary, path).map_err(|error| error.to_string())
+    let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
+    storage::atomic_write(path, &bytes).map_err(|error| error.to_string())
 }
 
 fn now_ms() -> Result<u64, String> {

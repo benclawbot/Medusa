@@ -192,6 +192,102 @@ fn write_i32(bytes: &mut [u8], offset: usize, value: i32) {
 mod tests {
     use super::*;
 
+    #[derive(Clone, Copy, Debug)]
+    struct SandboxSpecification<'a> {
+        table: flatbuffers_parser::Table<'a>,
+    }
+
+    impl<'a> flatbuffers_parser::Follow<'a> for SandboxSpecification<'a> {
+        type Inner = Self;
+
+        unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+            Self {
+                // SAFETY: the real FlatBuffers verifier runs before this accessor is returned.
+                table: unsafe { flatbuffers_parser::Table::new(buf, loc) },
+            }
+        }
+    }
+
+    impl flatbuffers_parser::Verifiable for SandboxSpecification<'_> {
+        fn run_verifier(
+            verifier: &mut flatbuffers_parser::Verifier<'_, '_>,
+            position: usize,
+        ) -> Result<(), flatbuffers_parser::InvalidFlatbuffer> {
+            verifier
+                .visit_table(position)?
+                .visit_field::<flatbuffers_parser::ForwardsUOffset<&str>>("version", 4, true)?
+                .visit_field::<bool>("app_container", 6, true)?
+                .visit_field::<bool>("disallow_win32k", 10, true)?
+                .visit_field::<bool>("least_privilege", 14, true)?
+                .visit_field::<flatbuffers_parser::ForwardsUOffset<
+                    flatbuffers_parser::Vector<'_, flatbuffers_parser::ForwardsUOffset<&str>>,
+                >>("read_write", 18, true)?
+                .visit_field::<flatbuffers_parser::ForwardsUOffset<
+                    flatbuffers_parser::Vector<'_, flatbuffers_parser::ForwardsUOffset<&str>>,
+                >>("read_only", 20, true)?
+                .finish();
+            Ok(())
+        }
+    }
+
+    impl<'a> SandboxSpecification<'a> {
+        fn version(&self) -> &'a str {
+            // SAFETY: this accessor is used only after root verification.
+            unsafe {
+                self.table
+                    .get::<flatbuffers_parser::ForwardsUOffset<&'a str>>(4, None)
+                    .expect("required version")
+            }
+        }
+
+        fn app_container(&self) -> bool {
+            // SAFETY: this accessor is used only after root verification.
+            unsafe { self.table.get::<bool>(6, Some(false)).unwrap() }
+        }
+
+        fn disallow_win32k(&self) -> bool {
+            // SAFETY: this accessor is used only after root verification.
+            unsafe { self.table.get::<bool>(10, Some(false)).unwrap() }
+        }
+
+        fn least_privilege(&self) -> bool {
+            // SAFETY: this accessor is used only after root verification.
+            unsafe { self.table.get::<bool>(14, Some(false)).unwrap() }
+        }
+
+        fn read_write(
+            &self,
+        ) -> flatbuffers_parser::Vector<'a, flatbuffers_parser::ForwardsUOffset<&'a str>> {
+            // SAFETY: this accessor is used only after root verification.
+            unsafe {
+                self.table
+                    .get::<flatbuffers_parser::ForwardsUOffset<
+                        flatbuffers_parser::Vector<
+                            'a,
+                            flatbuffers_parser::ForwardsUOffset<&'a str>,
+                        >,
+                    >>(18, None)
+                    .expect("required read-write paths")
+            }
+        }
+
+        fn read_only(
+            &self,
+        ) -> flatbuffers_parser::Vector<'a, flatbuffers_parser::ForwardsUOffset<&'a str>> {
+            // SAFETY: this accessor is used only after root verification.
+            unsafe {
+                self.table
+                    .get::<flatbuffers_parser::ForwardsUOffset<
+                        flatbuffers_parser::Vector<
+                            'a,
+                            flatbuffers_parser::ForwardsUOffset<&'a str>,
+                        >,
+                    >>(20, None)
+                    .expect("required read-only paths")
+            }
+        }
+    }
+
     #[test]
     fn emits_flatbuffer_header_and_identifier() {
         let mut builder = FlatBufferBuilder::new();
@@ -208,6 +304,44 @@ mod tests {
         assert_eq!(
             u32::from_le_bytes(builder.finished_data()[0..4].try_into().unwrap()),
             32
+        );
+    }
+
+    #[test]
+    fn real_flatbuffers_parser_round_trips_containment_fields() {
+        let mut builder = FlatBufferBuilder::new();
+        let version = builder.create_string("0.1.0");
+        let repository = builder.create_string(r"C:\repo");
+        let toolchain = builder.create_string(r"C:\toolchain");
+        let read_write = builder.create_vector(&[repository]);
+        let read_only = builder.create_vector(&[toolchain]);
+        let table = builder.start_table();
+        builder.push_slot_always(4, version);
+        builder.push_slot(6, true, false);
+        builder.push_slot(10, true, false);
+        builder.push_slot(14, true, false);
+        builder.push_slot_always(18, read_write);
+        builder.push_slot_always(20, read_only);
+        let table = builder.end_table(table);
+        builder.finish(table, Some("SBOX"));
+
+        let bytes = builder.finished_data();
+        assert!(flatbuffers_parser::buffer_has_identifier(
+            bytes, "SBOX", false
+        ));
+        let parsed = flatbuffers_parser::root::<SandboxSpecification<'_>>(bytes)
+            .expect("containment specification must be a valid FlatBuffer");
+        assert_eq!(parsed.version(), "0.1.0");
+        assert!(parsed.app_container());
+        assert!(parsed.disallow_win32k());
+        assert!(parsed.least_privilege());
+        assert_eq!(
+            parsed.read_write().iter().collect::<Vec<_>>(),
+            vec![r"C:\repo"]
+        );
+        assert_eq!(
+            parsed.read_only().iter().collect::<Vec<_>>(),
+            vec![r"C:\toolchain"]
         );
     }
 }

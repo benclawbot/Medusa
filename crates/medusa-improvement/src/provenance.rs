@@ -199,13 +199,12 @@ pub enum ProvenanceError {
 }
 
 impl ProvenanceGraph {
-    #[must_use]
-    pub fn empty() -> Self {
-        Self {
+    pub fn empty() -> Result<Self, ProvenanceError> {
+        Ok(Self {
             schema_version: PROVENANCE_SCHEMA_VERSION,
-            head_digest: graph_digest(&[], &[]).unwrap_or_default(),
+            head_digest: graph_digest(&[], &[])?,
             ..Self::default()
-        }
+        })
     }
 
     pub fn ingest_event(
@@ -223,7 +222,8 @@ impl ProvenanceGraph {
         event
             .validate()
             .map_err(|error| ProvenanceError::InvalidEvent(error.to_string()))?;
-        let Some(observation) = adapt_event(event, root_task_id, repository, revision, ingested_at)
+        let Some(observation) =
+            adapt_event(event, root_task_id, repository, revision, ingested_at)?
         else {
             return Ok(false);
         };
@@ -343,7 +343,7 @@ impl ProvenanceGraphStore {
                 repository.clone(),
                 revision.clone(),
                 ingested_at,
-            ) {
+            )? {
                 if self.graph.insert(observation.clone())? {
                     new_observations.push(observation);
                 }
@@ -396,7 +396,7 @@ fn adapt_event(
     repository: Option<RepositoryIdentity>,
     revision: Option<String>,
     ingested_at: OffsetDateTime,
-) -> Option<ProvenanceObservation> {
+) -> Result<Option<ProvenanceObservation>, ProvenanceError> {
     let (source, outcome, authority, summary, tool_name): (
         ProvenanceSource,
         ProvenanceOutcome,
@@ -573,7 +573,7 @@ fn adapt_event(
         | EventPayload::CancellationRequested { .. }
         | EventPayload::RuntimeTurnFinished
         | EventPayload::SessionPaused { .. }
-        | EventPayload::SessionResumed => return None,
+        | EventPayload::SessionResumed => return Ok(None),
     };
     let worker_id = match &event.actor {
         Actor::Worker(id) => Some(id.clone()),
@@ -581,7 +581,7 @@ fn adapt_event(
     };
     let source_key = source_key(source);
     let id = stable_id(source_key, &[&event.event_id.to_string()]);
-    Some(ProvenanceObservation {
+    Ok(Some(ProvenanceObservation {
         id,
         schema_version: PROVENANCE_SCHEMA_VERSION,
         session_id: event.session_id.to_string(),
@@ -610,8 +610,8 @@ fn adapt_event(
         authority,
         outcome,
         summary: bounded_label(&summary),
-        typed_payload_digest: payload_digest(&event.payload),
-    })
+        typed_payload_digest: payload_digest(&event.payload)?,
+    }))
 }
 
 fn validate_observation(observation: &ProvenanceObservation) -> Result<(), ProvenanceError> {
@@ -627,7 +627,7 @@ fn validate_observation(observation: &ProvenanceObservation) -> Result<(), Prove
 }
 
 fn read_graph(path: &Path) -> Result<ProvenanceGraph, ProvenanceError> {
-    let mut graph = ProvenanceGraph::empty();
+    let mut graph = ProvenanceGraph::empty()?;
     if !path.exists() {
         return Ok(graph);
     }
@@ -675,10 +675,8 @@ fn graph_digest(
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
-fn payload_digest(payload: &EventPayload) -> String {
-    serde_json::to_vec(payload)
-        .map(|bytes| hex::encode(Sha256::digest(bytes)))
-        .unwrap_or_default()
+fn payload_digest(payload: &EventPayload) -> Result<String, serde_json::Error> {
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(payload)?)))
 }
 
 fn stable_id(kind: &str, values: &[&str]) -> String {
@@ -801,7 +799,7 @@ mod tests {
     #[test]
     fn tool_exit_codes_are_typed_and_not_message_text() {
         let session_id = SessionId::new().to_string();
-        let mut graph = ProvenanceGraph::empty();
+        let mut graph = ProvenanceGraph::empty().expect("empty graph");
         let success = event(
             1,
             EventPayload::ToolExecutionCompleted {
@@ -871,7 +869,7 @@ mod tests {
             },
             Actor::Worker("implementer".to_owned()),
         );
-        let mut graph = ProvenanceGraph::empty();
+        let mut graph = ProvenanceGraph::empty().expect("empty graph");
         graph
             .ingest_event(
                 &worker,
@@ -997,7 +995,7 @@ mod tests {
             },
             Actor::Coordinator,
         );
-        let mut graph = ProvenanceGraph::empty();
+        let mut graph = ProvenanceGraph::empty().expect("empty graph");
         graph
             .ingest_event(
                 &source,

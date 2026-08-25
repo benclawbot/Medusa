@@ -11,6 +11,7 @@ use ulid::Ulid;
 
 pub mod learning_policy;
 pub mod repository_mutation;
+pub mod storage;
 
 /// Creates a child-process command that never opens a visible console window on Windows.
 ///

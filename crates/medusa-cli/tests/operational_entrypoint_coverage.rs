@@ -68,6 +68,9 @@ mod unix {
         assert!(summary["total"].as_u64().is_some_and(|total| total >= 7));
         for scenario in summary["scenarios"].as_array().expect("scenario array") {
             assert_eq!(scenario["status"], "passed");
+            assert_eq!(scenario["verification_status"], "satisfied");
+            assert_eq!(scenario["metrics"]["false_completes"], 0);
+            assert_eq!(scenario["metrics"]["safety_regressions"], 0);
             let log = PathBuf::from(scenario["log"].as_str().expect("scenario log"));
             assert!(log.is_file(), "missing scenario log: {}", log.display());
         }

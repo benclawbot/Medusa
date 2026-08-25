@@ -30,6 +30,13 @@ def validate_comparison(baseline: dict[str, Any], candidate: dict[str, Any]) -> 
             raise ValueError(f"comparison rejected: {field} differs")
 
 
+def metric(report: dict[str, Any], name: str) -> int | float:
+    value = report.get("metrics", {}).get(name)
+    if not isinstance(value, (int, float)):
+        raise ValueError(f"comparison rejected: missing evidence for metric {name}")
+    return value
+
+
 def compare(suite: dict[str, Any], baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     validate_comparison(baseline, candidate)
     features = set(candidate["identity"].get("harness_features", [])) - set(
@@ -40,15 +47,15 @@ def compare(suite: dict[str, Any], baseline: dict[str, Any], candidate: dict[str
         if assertion["feature"] not in features:
             continue
         name = assertion["metric"]
-        left = baseline["metrics"].get(name, 0)
-        right = candidate["metrics"].get(name, 0)
+        left = metric(baseline, name)
+        right = metric(candidate, name)
         ok = right <= left if assertion["direction"] == "lower_or_equal" else right >= left
         if not ok:
             failures.append(f"{assertion['feature']} regressed {name}: {right} vs {left}")
         guard = assertion.get("guard_metric")
         if guard:
-            before = baseline["metrics"].get(guard, 0)
-            after = candidate["metrics"].get(guard, 0)
+            before = metric(baseline, guard)
+            after = metric(candidate, guard)
             guard_ok = after <= before if guard == "false_complete_rate" else after >= before
             if not guard_ok:
                 failures.append(f"{assertion['feature']} regressed guard {guard}: {after} vs {before}")
@@ -58,8 +65,8 @@ def compare(suite: dict[str, Any], baseline: dict[str, Any], candidate: dict[str
         ("false_complete_rate", "lower"),
         ("safety_regressions", "lower"),
     ):
-        before = baseline["metrics"].get(name, 0)
-        after = candidate["metrics"].get(name, 0)
+        before = metric(baseline, name)
+        after = metric(candidate, name)
         ok = after >= before if direction == "higher" else after <= before
         if not ok:
             failures.append(f"promotion guard regressed {name}: {after} vs {before}")
