@@ -105,11 +105,7 @@ impl LiveSessionBroker {
         &mut self,
         mut request: RuntimeAttachRequest,
     ) -> Result<LiveSessionAttachmentView, LiveSessionBrokerError> {
-        validate_session_id(&request.session_id).map_err(|reason| {
-            LiveSessionBrokerError::InvalidSessionId {
-                reason: reason.to_owned(),
-            }
-        })?;
+        validate_session_id(&request.session_id).map_err(invalid_session_id)?;
         let store = ContinuityStore::new(
             self.repo
                 .join(".medusa/continuity")
@@ -128,11 +124,7 @@ impl LiveSessionBroker {
         &mut self,
         request: RuntimeAttachRequest,
     ) -> Result<LiveSessionAttachmentView, LiveSessionBrokerError> {
-        validate_session_id(&request.session_id).map_err(|reason| {
-            LiveSessionBrokerError::InvalidSessionId {
-                reason: reason.to_owned(),
-            }
-        })?;
+        validate_session_id(&request.session_id).map_err(invalid_session_id)?;
         if let Some(existing) = self.attachments.get(&request.client_id)
             && existing.session.id.to_string() != request.session_id
         {
@@ -351,12 +343,14 @@ pub enum LiveSessionBrokerError {
     },
     #[error("live-session ownership cannot be handed across sessions")]
     HandoffAcrossSessions,
-    #[error("invalid live-session session identifier: {reason}")]
-    InvalidSessionId { reason: String },
     #[error("durable session discovery failed: {0}")]
     Session(String),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
+}
+
+fn invalid_session_id(reason: &str) -> LiveSessionBrokerError {
+    LiveSessionBrokerError::Session(format!("invalid live-session session identifier: {reason}"))
 }
 
 #[cfg(test)]
@@ -622,7 +616,8 @@ mod tests {
             .expect_err("path traversal session id must be rejected");
         assert!(matches!(
             error,
-            LiveSessionBrokerError::InvalidSessionId { .. }
+            LiveSessionBrokerError::Session(reason)
+                if reason.contains("invalid live-session session identifier")
         ));
         assert!(!repository.path().join(".medusa").exists());
     }
