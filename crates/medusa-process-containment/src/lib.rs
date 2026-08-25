@@ -4,6 +4,9 @@
 extern crate self as flatbuffers;
 
 // SAFETY: reviewed FlatBuffers parser accessors are verifier-bound and isolated in this module.
+// The builder is consumed by the Windows sandbox path; Linux/macOS retain the parser regression
+// test but do not construct production builders.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[allow(unsafe_code)]
 mod flatbuffer_builder;
 
