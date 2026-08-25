@@ -46,8 +46,8 @@ fn daemon_protocol_covers_ping_list_status_submit_and_shutdown() {
 
     let Response::Submitted { job } = client
         .request(Request::Submit {
-            program: "sh".into(),
-            args: vec!["-c".into(), "printf daemon-ok".into()],
+            program: "python3".into(),
+            args: vec!["-c".into(), "print('daemon-ok', end='')".into()],
         })
         .expect("submit")
     else {

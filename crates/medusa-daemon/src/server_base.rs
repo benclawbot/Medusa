@@ -22,6 +22,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_protocol::frontend::FrontendCommandEnvelope;
+use medusa_tool_policy::validate_shell_command;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
@@ -82,6 +83,29 @@ mod request_timeout_tests {
 
         assert_eq!(request_io_timeout(&request), Duration::from_secs(600));
         assert_eq!(request_io_timeout(&Request::Ping), REQUEST_IO_TIMEOUT);
+    }
+}
+
+#[cfg(test)]
+mod submit_policy_tests {
+    use super::*;
+
+    #[test]
+    fn submit_accepts_a_canonical_toolchain() {
+        assert!(validate_program("cargo", &[]).is_ok());
+    }
+
+    #[test]
+    fn submit_denies_canonical_dangerous_tools() {
+        for program in ["rm", "sudo", "curl", "powershell.exe", "doas", "socat"] {
+            assert!(validate_program(program, &[]).is_err(), "{program}");
+        }
+    }
+
+    #[test]
+    fn submit_applies_argument_policy_changes_from_the_canonical_layer() {
+        assert!(validate_program("git", &["push".to_owned()]).is_err());
+        assert!(validate_program("cargo", &["--force".to_owned()]).is_err());
     }
 }
 
@@ -752,7 +776,7 @@ fn dispatch(
     match request {
         Request::Ping => Ok(Response::Pong),
         Request::Submit { program, args } => {
-            validate_program(&program)?;
+            validate_program(&program, &args)?;
             let now = OffsetDateTime::now_utc();
             let job = JobRecord {
                 id: format!("job-{}", Ulid::new()),
@@ -1091,15 +1115,14 @@ fn backup_path(path: &Path) -> PathBuf {
     path.with_extension("json.bak")
 }
 
-fn validate_program(program: &str) -> MedusaResult<()> {
-    if program.is_empty() || matches!(program, "rm" | "sudo" | "shutdown" | "reboot" | "mkfs") {
-        return Err(MedusaError::new(
+fn validate_program(program: &str, args: &[String]) -> MedusaResult<()> {
+    validate_shell_command(program, args).map_err(|reason| {
+        MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            format!("daemon denied program: {program}"),
-        ));
-    }
-    Ok(())
+            format!("daemon denied program: {reason}"),
+        )
+    })
 }
 
 fn lock_frontend(

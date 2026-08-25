@@ -20,6 +20,7 @@ medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
 medusa-session-continuity = { path = "../medusa-session-continuity" }
 medusa-runtime-supervisor = { path = "../medusa-runtime-supervisor" }
+medusa-tool-policy = { path = "../medusa-tool-policy" }
 medusa-wakeup = { path = "../medusa-wakeup" }
 reqwest.workspace = true
 serde.workspace = true
