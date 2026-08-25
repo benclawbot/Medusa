@@ -13,7 +13,7 @@ interface DesktopUpdateStatus {
 }
 
 interface DesktopUpdateProgress {
-  phase: "downloading" | "installing" | "restarting" | "failed" | "preparing";
+  phase: "downloading" | "installing" | "replacing" | "restarting" | "failed" | "preparing";
   completed: number;
   total?: number | null;
   message: string;
@@ -23,7 +23,8 @@ function progressPercent(progress: DesktopUpdateProgress): number {
   if (progress.total && progress.total > 0) {
     return Math.min(100, Math.round((progress.completed / progress.total) * 100));
   }
-  if (progress.phase === "installing") return 96;
+  if (progress.phase === "installing") return 92;
+  if (progress.phase === "replacing") return 99;
   if (progress.phase === "restarting") return 100;
   return 5;
 }
@@ -120,7 +121,9 @@ export function DesktopUpdateControl() {
         <span className="desktop-update-icon"><Download size={17} /></span>
         <div>
           <h3>Desktop updates</h3>
-          <p>Download and install the checked, prebuilt Medusa Desktop revision from <code>main</code>.</p>
+          <p>{updating
+            ? "Medusa Desktop stays open while the verified download is prepared."
+            : <>Download and install the checked, prebuilt Medusa Desktop revision from <code>main</code>.</>}</p>
         </div>
       </div>
 
@@ -152,6 +155,7 @@ export function DesktopUpdateControl() {
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percentage}
+            aria-valuetext={`${progress.message} ${percentage}%`}
           >
             <span style={{ width: `${percentage}%` }} />
           </div>
@@ -165,10 +169,12 @@ export function DesktopUpdateControl() {
         </button>
         <button className="primary-action" onClick={update} disabled={!status?.ready || checking || updating}>
           <Download size={14} />
-          {updating ? "Installing…" : "Update and restart"}
+          {updating
+            ? progress?.phase === "replacing" ? "Closing to update…" : "Updating…"
+            : "Update and restart"}
         </button>
       </div>
-      <small>The app verifies the exact published executable, stages it silently, and restarts automatically.</small>
+      <small>The app verifies the exact published executable and shows download progress. It closes only for the final replacement, then reopens automatically.</small>
     </section>,
     target,
   );

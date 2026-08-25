@@ -56,5 +56,19 @@ describe("DesktopUpdateControl", () => {
     });
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
     expect(screen.getByText(/Downloading the verified desktop executable/)).toBeInTheDocument();
+
+    act(() => {
+      mocks.progressListener?.({
+        payload: {
+          phase: "replacing",
+          completed: 99,
+          total: 100,
+          message: "The update is ready. Medusa Desktop will close briefly while the application is replaced, then reopen automatically…",
+        },
+      });
+    });
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "99");
+    expect(screen.getByText(/close briefly while the application is replaced/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Closing to update…" })).toBeDisabled();
   });
 });

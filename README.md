@@ -145,7 +145,7 @@ The desktop app is a Tauri/React shell over the same Medusa runtime. It provides
 
 ### Telegram
 
-Telegram is a frontend to the same authoritative Medusa session, not a separate bot-owned agent. The repository implementation includes progressive rendering, action cards, approvals, durable session attachment/control, files and voice-note handling, and the Mini App voice surface. 
+Telegram is a frontend to the same authoritative Medusa session, not a separate bot-owned agent. The repository implementation includes progressive rendering, action cards, approvals, durable session attachment/control, files and voice-note handling, and the Mini App voice surface.
 
 See [Telegram](docs/TELEGRAM.md) for setup, service operation, and Mini App wiring.
 
@@ -633,6 +633,33 @@ Canonical workflows test the Rust workspace and daemon behavior across Linux, ma
 Repository gates cover formatting, production lint, changed-package tests, documentation, dependency/security policy, architecture and engineering-policy drift, containment regressions, adversarial cases, migration/recovery checks, package smoke tests, selected live-provider scenarios, and path-triggered specialized certifications. Exhaustive all-target/workspace validation remains available in deeper nightly/manual/release contexts rather than being duplicated after every merge.
 
 Platform support does not imply identical containment, audio, browser, credential-store, or operating-system signing behavior.
+
+## Current limitations
+
+- Autonomous nested delegation, unconstrained dynamic agent teams, consensus voting, and distributed multi-host mutation transactions are not supported.
+- Conflict-aware parallel **mutation** currently requires a Git workspace; directory/ephemeral workspaces deliberately use one isolated snapshot implementer.
+- Directory mutation fails closed on symlink-bearing workspaces; use Git mutation when symlink semantics must be preserved.
+- The transactional component runtime is an accepted and tested reference contract under incremental adoption; not every existing production service is component-managed or hot-replaceable.
+- The canonical tool-result migration is incomplete across all tool families; shell/output-envelope and related projections are migrated foundations, while remaining consumers continue to move toward one typed canonical result contract.
+- The full behavioral self-optimization loop is not claimed as end-to-end production-accepted until real canary/promotion/rollback evidence and cross-surface release integration are complete.
+- OpenAI Realtime and Telegram end-to-end acceptance still require real ChatGPT OAuth, audio hardware, bot/chat/Mini App access, and sanitized evidence under issue [#719](https://github.com/benclawbot/Medusa/issues/719).
+- ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
+- browser actions are readiness-gated preview: they are explicit opt-in, dispatched through the certified-production browser route, and not default-enabled. Set `MEDUSA_BROWSER_ENABLED=true` only with an approved `MEDUSA_BROWSER_PATH` and verified `MEDUSA_BROWSER_VERIFY_URL`; route admission, permissions, and required verification authority remain enforced.
+- Screenshot input is accepted only when the selected provider declares compatible image support and limits.
+- Desktop release packages are unsigned at the operating-system level.
+- Windows command containment requires the Windows 11 composable sandbox API.
+
+## Roadmap
+
+GitHub issues are the source of truth for active work; the README does not treat closed implementation issues as future roadmap items.
+
+Current architecture work is focused on **adoption and completion**, not designing the component contract from scratch. The transactional component-runtime foundation is present on `main`; follow-on work should migrate appropriate non-authority runtime services to that contract without making fixed authorities pluggable, preserve cross-platform containment, and keep deterministic invariant/fault coverage authoritative.
+
+The behavioral-learning/Harness-inspired tracks also have substantial foundations on `main`—canonical outcome contracts, rebuildable projections, cohorts/drift foundations, Code Mode and canonical-result foundations, Model Experience/cache accounting, runtime configuration, and machine-checkable engineering policy—but remaining issue acceptance criteria must be completed before the README can claim every closed-loop adaptive behavior as production-proven.
+
+The remaining manual/live acceptance tracked for shipped-but-quarantined remote/voice functionality is:
+
+- [#719](https://github.com/benclawbot/Medusa/issues/719) — OpenAI Realtime voice and Telegram end-to-end proof using real accounts, bot/chat access, microphone/audio hardware, and sanitized evidence.
 
 ## Project documentation
 
