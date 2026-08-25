@@ -54,7 +54,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     })?;
 
     let result = (|| {
-        let mut file = file.expect("temporary file is present when its path is present");
+        let mut file = file.ok_or_else(|| {
+            io::Error::other("temporary file was not opened for its allocated path")
+        })?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
