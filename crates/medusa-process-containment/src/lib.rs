@@ -3,6 +3,8 @@
 #[cfg(windows)]
 extern crate self as flatbuffers;
 
+// SAFETY: reviewed FlatBuffers parser accessors are verifier-bound and isolated in this module.
+#[allow(unsafe_code)]
 mod flatbuffer_builder;
 
 #[cfg(windows)]

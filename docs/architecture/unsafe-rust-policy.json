@@ -14,7 +14,8 @@
       {
         "path": "crates/medusa-process-containment/src/flatbuffer_builder.rs",
         "module": "flatbuffer_builder",
-        "classification": "safe"
+        "classification": "unsafe-ffi",
+        "reason": "Uses the reviewed FlatBuffers Follow accessors only after the real verifier has validated the containment table; the unsafe parser boundary and regression test remain isolated in this low-level crate."
       },
       {
         "path": "crates/medusa-process-containment/src/base_container.rs",

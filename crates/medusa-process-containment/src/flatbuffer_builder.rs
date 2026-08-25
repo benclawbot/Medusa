@@ -189,7 +189,6 @@ fn write_i32(bytes: &mut [u8], offset: usize, value: i32) {
 }
 
 #[cfg(test)]
-#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
