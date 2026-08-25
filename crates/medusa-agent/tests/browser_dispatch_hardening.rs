@@ -76,7 +76,11 @@ fn production_browser_dispatch_hardening() {
             let cancellation = Arc::new(AtomicBool::new(false));
             let trigger = Arc::clone(&cancellation);
             let toggler = thread::spawn(move || {
-                thread::sleep(Duration::from_millis(500));
+                // Windows runners can spend more than 500 ms in the second capability
+                // discovery before the browser request is dispatched. Leave enough
+                // headroom to exercise in-flight cancellation rather than pre-dispatch
+                // cancellation, while keeping the proof bounded.
+                thread::sleep(Duration::from_secs(2));
                 trigger.store(true, Ordering::Release);
             });
             let started = Instant::now();
@@ -89,7 +93,7 @@ fn production_browser_dispatch_hardening() {
                 )
                 .expect_err("in-flight browser request must be cancellable");
             toggler.join().expect("cancellation toggler");
-            assert!(started.elapsed() < Duration::from_secs(3), "{error}");
+            assert!(started.elapsed() < Duration::from_secs(5), "{error}");
             assert_eq!(
                 error.context.get("browser_error_kind"),
                 Some(&serde_json::json!("cancelled")),
