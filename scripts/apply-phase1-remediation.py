@@ -220,13 +220,4 @@ rep(
     fn configured_streaming_never_exceeds_wire_support() {''',
 )
 
-rep(
-    "crates/medusa-agent/src/engine.rs",
-    '''                    scoped_tool_names.binary_search(name).is_err()
-                        || name == ANALYSIS_WORKSPACE_TOOL''',
-    '''                    scoped_tool_names.binary_search(name).is_err()
-                        || !tool_allowed(self.config.agent.mode, name)
-                        || name == ANALYSIS_WORKSPACE_TOOL''',
-)
-
 subprocess.run(["cargo", "fmt", "--all"], check=True)
