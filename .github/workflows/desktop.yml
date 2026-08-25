@@ -79,6 +79,19 @@ jobs:
         run: cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked --format-version 1
       - name: Check desktop formatting
         run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
+      - name: Capture desktop rustfmt patch
+        if: failure()
+        shell: bash
+        run: |
+          cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          git diff -- . ':!Cargo.lock' > desktop-rustfmt.patch
+      - name: Upload desktop rustfmt diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-rustfmt-${{ runner.os }}
+          path: desktop-rustfmt.patch
+          if-no-files-found: error
       - name: Lint desktop adapter
         shell: bash
         run: |
