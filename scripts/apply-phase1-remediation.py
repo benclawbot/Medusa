@@ -220,9 +220,6 @@ rep(
     fn configured_streaming_never_exceeds_wire_support() {''',
 )
 
-# Current main has two all-targets clippy blockers unrelated to the Phase 1
-# correctness fixes. Keep the gate strict by repairing them instead of suppressing
-# warnings or weakening clippy coverage.
 rep(
     "crates/medusa-runtime/src/lib.rs",
     '''#[cfg(test)]
@@ -234,90 +231,14 @@ fn should_capture_review_baseline(general_chat: bool, resuming_pending_question:
     "",
 )
 
-rep(
-    "crates/medusa-daemon/src/server_base.rs",
-    '''fn run_loop(
-    listener: LocalListener,
-    paths: DaemonPaths,
-    jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    processes: Arc<ProcessRegistry>,
-    frontend: Arc<Mutex<FrontendControlPlane>>,
-    frontend_shutdown: FrontendShutdownHandle,
-    shutdown: Arc<AtomicU8>,
-    scheduler: JobScheduler,
-) -> MedusaResult<()> {
-    let scheduler = Arc::new(Mutex::new(scheduler));''',
-    '''struct RunLoopState {
-    paths: DaemonPaths,
-    jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    processes: Arc<ProcessRegistry>,
-    frontend: Arc<Mutex<FrontendControlPlane>>,
-    frontend_shutdown: FrontendShutdownHandle,
-    shutdown: Arc<AtomicU8>,
-    scheduler: JobScheduler,
-}
-
-fn run_loop(listener: LocalListener, state: RunLoopState) -> MedusaResult<()> {
-    let RunLoopState {
-        paths,
-        jobs,
-        processes,
-        frontend,
-        frontend_shutdown,
-        shutdown,
-        scheduler,
-    } = state;
-    let scheduler = Arc::new(Mutex::new(scheduler));''',
-)
-rep(
-    "crates/medusa-daemon/src/server_base.rs",
-    '''    run_loop(
-        listener,
-        paths,
-        jobs,
-        processes,
-        frontend,
-        frontend_shutdown,
-        Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
-        scheduler,
-    )''',
-    '''    run_loop(
-        listener,
-        RunLoopState {
-            paths,
-            jobs,
-            processes,
-            frontend,
-            frontend_shutdown,
-            shutdown: Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
-            scheduler,
-        },
-    )''',
-)
-rep(
-    "crates/medusa-daemon/src/server_base.rs",
-    '''            run_loop(
-                listener,
-                paths,
-                jobs,
-                processes,
-                frontend,
-                frontend_shutdown,
-                server_shutdown,
-                scheduler,
-            )''',
-    '''            run_loop(
-                listener,
-                RunLoopState {
-                    paths,
-                    jobs,
-                    processes,
-                    frontend,
-                    frontend_shutdown,
-                    shutdown: server_shutdown,
-                    scheduler,
-                },
-            )''',
-)
-
 subprocess.run(["cargo", "fmt", "--all"], check=True)
+
+# The product commit is allowed only after a complete workspace test. The hook
+# lives under .git, so it is never committed and disappears with the CI runner.
+hook = Path(".git/hooks/pre-commit")
+hook.write_text(
+    "#!/usr/bin/env bash\n"
+    "set -euo pipefail\n"
+    "MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP=1 cargo test --workspace --all-features --locked\n"
+)
+hook.chmod(0o755)
