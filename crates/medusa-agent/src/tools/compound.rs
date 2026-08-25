@@ -457,7 +457,7 @@ fn source_excerpt(repo: &Path, relative: &Path) -> MedusaResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, process::Command};
+    use std::fs;
 
     use serde_json::json;
 
