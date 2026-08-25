@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::evals::{CodingTaskOutcome, oracle_digest};
+use medusa_protocol::validate_session_id;
 
 const FEEDBACK_ROOT: &str = ".medusa/improvements/session-feedback";
 
@@ -53,7 +54,9 @@ pub fn persist_session_feedback(
     repo: &Path,
     feedback: &CompletedSessionFeedback,
 ) -> Result<PathBuf, Box<dyn std::error::Error + Send + Sync>> {
-    if feedback.session_id.trim().is_empty() || feedback.objective.trim().is_empty() {
+    validate_session_id(&feedback.session_id)
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+    if feedback.objective.trim().is_empty() {
         return Err("session feedback requires an id and objective".into());
     }
     let evaluation = evaluate(feedback);
@@ -195,13 +198,15 @@ fn digest(feedback: &CompletedSessionFeedback) -> Result<String, serde_json::Err
 
 #[cfg(test)]
 mod tests {
+    use medusa_core::SessionId;
+
     use super::*;
 
     #[test]
     fn records_idempotent_feedback() {
         let directory = tempfile::tempdir().expect("tempdir");
         let feedback = CompletedSessionFeedback {
-            session_id: "session-1".to_owned(),
+            session_id: SessionId::new().to_string(),
             objective: "fix tests".to_owned(),
             turns: 4,
             evidence_count: 1,
@@ -219,7 +224,7 @@ mod tests {
     #[test]
     fn failed_verification_generates_test_discovery_hint() {
         let feedback = CompletedSessionFeedback {
-            session_id: "session-2".to_owned(),
+            session_id: SessionId::new().to_string(),
             objective: "fix tests".to_owned(),
             turns: 7,
             evidence_count: 1,
@@ -235,5 +240,22 @@ mod tests {
                 .iter()
                 .any(|hint| hint.target == "test_discovery")
         );
+    }
+
+    #[test]
+    fn rejects_path_traversal_session_ids_before_writing_feedback() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let feedback = CompletedSessionFeedback {
+            session_id: "../../outside".to_owned(),
+            objective: "fix tests".to_owned(),
+            turns: 1,
+            evidence_count: 0,
+            signals: Vec::new(),
+        };
+
+        let error = persist_session_feedback(directory.path(), &feedback)
+            .expect_err("path traversal session id must be rejected");
+        assert!(error.to_string().contains("session identifier"));
+        assert!(!directory.path().join(".medusa").exists());
     }
 }

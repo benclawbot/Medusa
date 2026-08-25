@@ -1440,6 +1440,7 @@ name = "medusa-hardening"
 version = "1.0.4"
 dependencies = [
  "medusa-core",
+ "medusa-protocol",
  "proptest",
  "serde",
  "serde_json",
