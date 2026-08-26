@@ -16,9 +16,9 @@ use sha2::{Digest, Sha256};
 
 const BUILD_PHASE_START: u8 = 5;
 const BUILD_PHASE_END: u8 = 78;
-// A fresh Windows checkout measured just over five minutes and 272 distinct
-// `Compiling` packages. Keep the estimate conservative so the bar remains
-// informative during a cold build instead of reaching its cap too early.
+// A fresh Windows build emitted 272 distinct `Compiling` packages before
+// exceeding 290 seconds in a cold environment. Keep the estimate conservative
+// so the bar remains informative instead of reaching its cap too early.
 const BUILD_ESTIMATE: Duration = Duration::from_secs(360);
 const BUILD_PIECE_ESTIMATE: usize = 272;
 const PROGRESS_WIDTH: usize = 32;
