@@ -1,6 +1,9 @@
 use std::{
+    collections::{HashSet, VecDeque},
+    io::{self, BufRead, BufReader, Read},
     path::Path,
-    sync::Mutex,
+    process::{Command, Stdio},
+    sync::{Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -20,6 +23,7 @@ use crate::{
 const GITHUB_API: &str = "https://api.github.com";
 const REPOSITORY: &str = "benclawbot/Medusa";
 const BRANCH: &str = "main";
+const REPOSITORY_URL: &str = "https://github.com/benclawbot/Medusa.git";
 const ROLLING_ASSET_BASE: &str = "https://github.com/benclawbot/Medusa/releases/download";
 const ROLLING_MANIFEST_SCHEMA: &str = "medusa-main-artifact-v1";
 const ROLLING_PUBLISH_WAIT: Duration = Duration::from_secs(180);
@@ -36,7 +40,16 @@ pub struct MainBranchRevision {
     pub sha: String,
 }
 
-/// Discovers main-branch revisions and stages exact-revision rolling prebuilt binaries.
+/// Snapshot of the local Cargo build used by the default `main` updater.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MainBuildProgress {
+    pub compiled_packages: usize,
+    pub current_package: Option<String>,
+    pub elapsed: Duration,
+}
+
+/// Discovers main-branch revisions, builds the CLI locally, and stages exact-revision
+/// rolling binaries for desktop consumers.
 pub struct MainBranchUpdater {
     client: Client,
     api_base: String,
@@ -146,6 +159,47 @@ impl MainBranchUpdater {
             rollout_sequence: None,
         };
         installer.schedule_replace(&candidate, &restart, parent_pid)
+    }
+
+    /// Builds the exact verified `main` revision in an isolated Cargo root and stages the
+    /// resulting executable for the existing rollback-aware atomic handoff.
+    pub fn build_and_schedule_main_install(
+        &self,
+        executable: &Path,
+        repo: &Path,
+        parent_pid: u32,
+        mut progress: impl FnMut(MainBuildProgress),
+    ) -> MedusaResult<ScheduledUpdate> {
+        let revision = self.verified_revision()?;
+        validate_revision(&revision)?;
+        ensure_cargo_available()?;
+
+        let workspace = tempfile::Builder::new()
+            .prefix("medusa-main-build-")
+            .tempdir()?;
+        let install_root = workspace.path().join("install");
+        let started = Instant::now();
+        let compiled_packages = run_cargo_install(&revision, &install_root, &mut progress)?;
+
+        let candidate = install_root.join("bin").join(medusa_binary_name());
+        let installer = AtomicInstaller::new(executable.to_path_buf());
+        let restart = Restart {
+            arguments: vec![
+                "--repo".to_owned(),
+                repo.to_string_lossy().into_owned(),
+                "--fresh".to_owned(),
+            ],
+            detached: false,
+            sequence_file: None,
+            rollout_sequence: None,
+        };
+        let scheduled = installer.schedule_replace(&candidate, &restart, parent_pid)?;
+        progress(MainBuildProgress {
+            compiled_packages,
+            current_package: None,
+            elapsed: started.elapsed(),
+        });
+        Ok(scheduled)
     }
 
     /// Returns whether the exact desktop executable for a verified main revision has been
@@ -419,6 +473,168 @@ fn validate_revision(revision: &str) -> MedusaResult<()> {
         return Err(invalid("GitHub returned an invalid immutable revision"));
     }
     Ok(())
+}
+
+fn cargo_install_arguments(revision: &str, install_root: &Path) -> Vec<String> {
+    vec![
+        "install".to_owned(),
+        "--git".to_owned(),
+        REPOSITORY_URL.to_owned(),
+        "--rev".to_owned(),
+        revision.to_owned(),
+        "--locked".to_owned(),
+        "--bin".to_owned(),
+        "medusa".to_owned(),
+        "--root".to_owned(),
+        install_root.to_string_lossy().into_owned(),
+        "medusa-cli".to_owned(),
+    ]
+}
+
+fn ensure_cargo_available() -> MedusaResult<()> {
+    Command::new("cargo")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(command_error)
+        .and_then(|status| {
+            status.success().then_some(()).ok_or_else(|| {
+                MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Environment,
+                    "cargo is required to update from Medusa main",
+                )
+            })
+        })
+}
+
+fn run_cargo_install(
+    revision: &str,
+    install_root: &Path,
+    progress: &mut impl FnMut(MainBuildProgress),
+) -> MedusaResult<usize> {
+    let mut child = Command::new("cargo")
+        .args(cargo_install_arguments(revision, install_root))
+        .env("CARGO_TERM_COLOR", "never")
+        .env("CARGO_TERM_PROGRESS_WHEN", "never")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(command_error)?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| command_error("cargo stdout was not captured"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| command_error("cargo stderr was not captured"))?;
+    let (sender, receiver) = mpsc::channel();
+    let stdout_reader = spawn_line_reader(stdout, sender.clone());
+    let stderr_reader = spawn_line_reader(stderr, sender);
+    let started = Instant::now();
+    let mut compiled = HashSet::new();
+    let mut output_tail = VecDeque::with_capacity(8);
+    progress(MainBuildProgress {
+        compiled_packages: 0,
+        current_package: None,
+        elapsed: Duration::ZERO,
+    });
+
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(250)) {
+            Ok(Ok(line)) => {
+                let package = cargo_compiling_package(&line);
+                if let Some(package_name) = package.as_ref() {
+                    compiled.insert(package_name.clone());
+                }
+                if !line.trim().is_empty() {
+                    if output_tail.len() == 8 {
+                        output_tail.pop_front();
+                    }
+                    output_tail.push_back(line);
+                }
+                progress(MainBuildProgress {
+                    compiled_packages: compiled.len(),
+                    current_package: package,
+                    elapsed: started.elapsed(),
+                });
+            }
+            Ok(Err(error)) => {
+                if output_tail.len() == 8 {
+                    output_tail.pop_front();
+                }
+                output_tail.push_back(format!("cargo output error: {error}"));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => progress(MainBuildProgress {
+                compiled_packages: compiled.len(),
+                current_package: None,
+                elapsed: started.elapsed(),
+            }),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    let status = child.wait().map_err(command_error)?;
+    let _ = stdout_reader.join();
+    let _ = stderr_reader.join();
+    if !status.success() {
+        let details = output_tail.into_iter().collect::<Vec<_>>().join("\n");
+        return Err(build_error(status, details));
+    }
+    Ok(compiled.len())
+}
+
+fn spawn_line_reader<R>(
+    reader: R,
+    sender: mpsc::Sender<io::Result<String>>,
+) -> thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    })
+}
+
+fn cargo_compiling_package(line: &str) -> Option<String> {
+    let line = line.trim_start();
+    let package = line.strip_prefix("Compiling ")?;
+    package.split_whitespace().next().map(str::to_owned)
+}
+
+fn medusa_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "medusa.exe"
+    } else {
+        "medusa"
+    }
+}
+
+fn build_error(status: std::process::ExitStatus, details: String) -> MedusaError {
+    let suffix = if details.is_empty() {
+        String::new()
+    } else {
+        format!(":\n{details}")
+    };
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        format!("cargo install failed with status {status}{suffix}"),
+    )
+}
+
+fn command_error(error: impl std::fmt::Display) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        format!("could not start the main-branch updater: {error}"),
+    )
 }
 
 fn publish_timeout(revision: &str) -> MedusaError {
@@ -718,8 +934,35 @@ mod tests {
     }
 
     #[test]
-    fn normal_main_updater_contains_no_source_build_command() {
-        let forbidden = ["cargo", "install"].join(" ");
-        assert!(!include_str!("source.rs").contains(&forbidden));
+    fn source_build_command_is_revision_pinned_and_isolated() {
+        let arguments = cargo_install_arguments(REVISION, Path::new(r"C:\tmp\medusa-build"));
+        assert_eq!(arguments.first().map(String::as_str), Some("install"));
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| { pair[0] == "--rev" && pair[1] == REVISION })
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| { pair[0] == "--root" && pair[1] == r"C:\tmp\medusa-build" })
+        );
+        assert!(!arguments.iter().any(|argument| argument == "--branch"));
+    }
+
+    #[test]
+    fn cargo_compiling_lines_report_package_names() {
+        assert_eq!(
+            cargo_compiling_package("   Compiling medusa-core v1.0.0"),
+            Some("medusa-core".to_owned())
+        );
+        assert_eq!(
+            cargo_compiling_package("Compiling medusa-cli v1.0.4 (path+file:///tmp)"),
+            Some("medusa-cli".to_owned())
+        );
+        assert_eq!(
+            cargo_compiling_package("Finished release [optimized]"),
+            None
+        );
     }
 }

@@ -2,15 +2,26 @@ use std::{
     fs,
     io::{self, IsTerminal, Write},
     path::Path,
+    time::{Duration, Instant},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_update::{
     AtomicInstaller, GithubReleaseClient, InstallKind, InstallLocation, MainBranchUpdater, Platform,
-    ReleaseClient, Restart, UpdateCheck, UpdateDiagnostics, UpdatePhase, UpdatePolicy,
+    MainBuildProgress, ReleaseClient, Restart, UpdateCheck, UpdateDiagnostics, UpdatePhase,
+    UpdatePolicy,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
+
+const BUILD_PHASE_START: u8 = 5;
+const BUILD_PHASE_END: u8 = 78;
+// A fresh Windows checkout measured just over five minutes and 272 distinct
+// `Compiling` packages. Keep the estimate conservative so the bar remains
+// informative during a cold build instead of reaching its cap too early.
+const BUILD_ESTIMATE: Duration = Duration::from_secs(360);
+const BUILD_PIECE_ESTIMATE: usize = 272;
+const PROGRESS_WIDTH: usize = 32;
 
 pub(super) fn run(
     repo: &Path,
@@ -113,14 +124,14 @@ fn release_channel(
         .prefix("verified-release-")
         .tempdir_in(&update_root)?;
     let archive = workspace.path().join(&artifact.name);
-    let mut progress = UpdateProgress::new();
-    progress.set(2);
+    let mut progress = UpdateProgress::new(current.to_string(), release.version.to_string());
+    progress.stage(UpdateStage::Preparing, 0, "selecting release");
 
     let download_timer = diagnostics.phase(UpdatePhase::Download);
     let report = client.download(artifact, &archive, |downloaded, total| {
         progress.download(downloaded, total, 4, 88);
     })?;
-    progress.set(90);
+    progress.stage(UpdateStage::Verifying, 90, "checksum verified");
     download_timer.finish("downloaded-and-verified", Some(report.bytes), Some(report.retries))?;
     diagnostics
         .phase(UpdatePhase::ArtifactVerification)
@@ -130,7 +141,7 @@ fn release_channel(
     let extraction_timer = diagnostics.phase(UpdatePhase::Extraction);
     let candidate = installer.extract_archive(&archive, &workspace.path().join("extract"))?;
     extraction_timer.finish("confined", None, None)?;
-    progress.set(95);
+    progress.stage(UpdateStage::Installing, 95, "archive extracted");
 
     let staging_timer = diagnostics.phase(UpdatePhase::Staging);
     let restart = Restart {
@@ -148,11 +159,15 @@ fn release_channel(
     super::request_daemon_shutdown(repo);
     installer.schedule_replace(&candidate, &restart, std::process::id())?;
     staging_timer.finish("atomic-handoff-staged", Some(artifact.bytes), None)?;
-    progress.set(98);
+    progress.stage(UpdateStage::Installing, 98, "atomic restart staged");
     diagnostics
         .phase(UpdatePhase::RestartHandoff)
         .finish("health-check-pending", None, None)?;
     progress.finish();
+    println!(
+        "Medusa update installed and staged: {}. Restarting.",
+        version_transition(&current.to_string(), &release.version.to_string())
+    );
     Ok(())
 }
 
@@ -182,19 +197,33 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
         return Ok(());
     }
 
-    let mut progress = UpdateProgress::new();
-    progress.set(2);
+    let current_version = format!(
+        "{} ({})",
+        env!("CARGO_PKG_VERSION"),
+        short_revision(current)
+    );
+    let new_version = format!(
+        "{} ({})",
+        env!("CARGO_PKG_VERSION"),
+        short_revision(&latest.sha)
+    );
+    let mut progress = UpdateProgress::new(current_version.clone(), new_version.clone());
+    progress.stage(UpdateStage::Preparing, 0, "checking Cargo");
     // Stop the repository daemon before staging so its running executable is
     // no longer locked when the detached replacement helper swaps it.
     super::request_daemon_shutdown(repo);
-    updater.schedule_main_install(
+    updater.build_and_schedule_main_install(
         &location.executable,
         repo,
         std::process::id(),
-        |downloaded, total| progress.download(downloaded, total, 4, 92),
+        |snapshot| progress.build(snapshot),
     )?;
-    progress.set(98);
+    progress.stage(UpdateStage::Installing, 98, "atomic restart staged");
     progress.finish();
+    println!(
+        "Medusa update built and staged: {}. Restarting.",
+        version_transition(&current_version, &new_version)
+    );
     Ok(())
 }
 
@@ -202,57 +231,142 @@ fn short_revision(revision: &str) -> &str {
     revision.get(..12).unwrap_or(revision)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UpdateStage {
+    Preparing,
+    Building,
+    Downloading,
+    Verifying,
+    Installing,
+    Complete,
+}
+
+impl UpdateStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Preparing => "Preparing",
+            Self::Building => "Building",
+            Self::Downloading => "Downloading",
+            Self::Verifying => "Verifying",
+            Self::Installing => "Installing",
+            Self::Complete => "Complete",
+        }
+    }
+
+    fn color(self) -> &'static str {
+        match self {
+            Self::Preparing => "\u{1b}[36m",
+            Self::Building => "\u{1b}[33m",
+            Self::Downloading => "\u{1b}[34m",
+            Self::Verifying => "\u{1b}[35m",
+            Self::Installing => "\u{1b}[32m",
+            Self::Complete => "\u{1b}[1;32m",
+        }
+    }
+}
+
 struct UpdateProgress {
     enabled: bool,
+    colors: bool,
     started: bool,
     finished: bool,
     last_percent: u8,
+    stage: UpdateStage,
+    detail: String,
+    current_version: String,
+    new_version: String,
+    download_started: Option<Instant>,
 }
 
 impl UpdateProgress {
-    fn new() -> Self {
+    fn new(current_version: String, new_version: String) -> Self {
+        let enabled = io::stderr().is_terminal();
         Self {
-            enabled: io::stderr().is_terminal(),
+            enabled,
+            colors: enabled && std::env::var_os("NO_COLOR").is_none(),
             started: false,
             finished: false,
             last_percent: u8::MAX,
+            stage: UpdateStage::Preparing,
+            detail: String::new(),
+            current_version,
+            new_version,
+            download_started: None,
         }
     }
 
     fn download(&mut self, downloaded: u64, total: Option<u64>, start: u8, end: u8) {
+        let started = *self.download_started.get_or_insert_with(Instant::now);
+        let elapsed = started.elapsed();
+        let detail = download_detail(downloaded, total, elapsed);
         let Some(total) = total.filter(|total| *total > 0) else {
-            self.set(start);
+            self.stage(UpdateStage::Downloading, start, detail);
             return;
         };
         let span = u64::from(end.saturating_sub(start));
         let fraction = downloaded.min(total).saturating_mul(span) / total;
-        self.set(start.saturating_add(fraction as u8));
+        self.stage(
+            UpdateStage::Downloading,
+            start.saturating_add(fraction as u8),
+            detail,
+        );
     }
 
-    fn set(&mut self, percent: u8) {
+    fn build(&mut self, snapshot: MainBuildProgress) {
+        let package = snapshot
+            .current_package
+            .as_deref()
+            .map(|package| format!(" · {package}"))
+            .unwrap_or_default();
+        let phase = if snapshot.compiled_packages == 0 {
+            "resolving dependencies · ".to_owned()
+        } else {
+            String::new()
+        };
+        self.stage(
+            UpdateStage::Building,
+            estimate_build_percent(snapshot.elapsed, snapshot.compiled_packages),
+            format!(
+                "{}{} crates · {} elapsed{}",
+                phase,
+                snapshot.compiled_packages,
+                format_elapsed(snapshot.elapsed),
+                package
+            ),
+        );
+    }
+
+    fn stage(&mut self, stage: UpdateStage, percent: u8, detail: impl Into<String>) {
         if !self.enabled {
             return;
         }
         let percent = percent.min(100);
-        if self.last_percent == percent {
+        let detail = detail.into();
+        if self.last_percent == percent && self.stage == stage && self.detail == detail {
             return;
         }
         self.started = true;
         self.last_percent = percent;
-        const WIDTH: usize = 28;
-        let filled = usize::from(percent) * WIDTH / 100;
+        self.stage = stage;
+        self.detail = detail;
         let mut stderr = io::stderr().lock();
         let _ = write!(
             stderr,
-            "\rUpdating Medusa [{}{}] {percent:3}%",
-            "=".repeat(filled),
-            " ".repeat(WIDTH.saturating_sub(filled))
+            "{}",
+            render_progress_line(
+                self.stage,
+                percent,
+                &self.detail,
+                &self.current_version,
+                &self.new_version,
+                self.colors,
+            )
         );
         let _ = stderr.flush();
     }
 
     fn finish(&mut self) {
-        self.set(100);
+        self.stage(UpdateStage::Complete, 100, "ready");
         if self.enabled {
             eprintln!();
         }
@@ -321,4 +435,176 @@ mod tests {
         assert_eq!(short_revision("0123456789abcdef"), "0123456789ab");
         assert_eq!(short_revision("short"), "short");
     }
+
+    #[test]
+    fn build_progress_estimate_uses_elapsed_time_and_compiled_pieces() {
+        let early = estimate_build_percent(Duration::from_secs(5), 2);
+        let more_pieces = estimate_build_percent(Duration::from_secs(5), 12);
+        let more_time = estimate_build_percent(Duration::from_secs(30), 2);
+
+        assert!(more_pieces > early);
+        assert!(more_time > early);
+        assert!(more_time < BUILD_PHASE_END);
+    }
+
+    #[test]
+    fn colored_progress_line_includes_phase_detail_and_versions() {
+        let line = render_progress_line(
+            UpdateStage::Building,
+            42,
+            "12 crates · 20s",
+            "1.0.4 (old)",
+            "1.0.4 (new)",
+            true,
+        );
+
+        assert!(line.contains("Building"));
+        assert!(line.contains("12 crates · 20s"));
+        assert!(line.contains("42%"));
+        assert!(line.contains("1.0.4 (old) → 1.0.4 (new)"));
+        assert!(line.contains("\u{1b}["));
+    }
+
+    #[test]
+    fn plain_progress_line_omits_terminal_escape_sequences() {
+        let line = render_progress_line(
+            UpdateStage::Installing,
+            92,
+            "staging atomic restart",
+            "old",
+            "new",
+            false,
+        );
+
+        assert!(line.contains("Installing"));
+        assert!(!line.contains("\u{1b}["));
+    }
+
+    #[test]
+    fn version_transition_is_explicit() {
+        assert_eq!(
+            version_transition("1.0.4 (old)", "1.0.4 (new)"),
+            "1.0.4 (old) → 1.0.4 (new)"
+        );
+    }
+
+    #[test]
+    fn download_detail_reports_rate_and_remaining_time() {
+        let detail = download_detail(512 * 1024, Some(1024 * 1024), Duration::from_secs(2));
+
+        assert!(detail.contains("512.0 KiB"));
+        assert!(detail.contains("256.0 KiB/s"));
+        assert!(detail.contains("ETA 00:02"));
+    }
+}
+
+fn estimate_build_percent(elapsed: Duration, compiled_packages: usize) -> u8 {
+    let time_ratio = elapsed.as_secs_f64() / BUILD_ESTIMATE.as_secs_f64();
+    let pieces_ratio = compiled_packages as f64 / BUILD_PIECE_ESTIMATE as f64;
+    let ratio = (time_ratio * 0.65 + pieces_ratio * 0.35).clamp(0.0, 0.98);
+    let span = f64::from(BUILD_PHASE_END - BUILD_PHASE_START);
+    BUILD_PHASE_START.saturating_add((ratio * span).round() as u8)
+}
+
+fn render_progress_line(
+    stage: UpdateStage,
+    percent: u8,
+    detail: &str,
+    current_version: &str,
+    new_version: &str,
+    colors: bool,
+) -> String {
+    let percent = percent.min(100);
+    let filled = usize::from(percent) * PROGRESS_WIDTH / 100;
+    let bar = if colors {
+        format!(
+            "{}{}\u{1b}[0m\u{1b}[2m{}\u{1b}[0m",
+            stage.color(),
+            "█".repeat(filled),
+            "░".repeat(PROGRESS_WIDTH.saturating_sub(filled))
+        )
+    } else {
+        format!(
+            "{}{}",
+            "█".repeat(filled),
+            "░".repeat(PROGRESS_WIDTH.saturating_sub(filled))
+        )
+    };
+    let prefix = if colors { "\r\u{1b}[2K" } else { "\r" };
+    let title = version_transition(current_version, new_version);
+    let percent_label = if stage == UpdateStage::Building {
+        format!("{percent:3}% est.")
+    } else {
+        format!("{percent:3}%")
+    };
+    if colors {
+        format!(
+            "{prefix}\u{1b}[1;36mUpdating Medusa\u{1b}[0m {title} [{bar}] {percent_label} · {} · {detail}",
+            stage.label()
+        )
+    } else {
+        format!(
+            "{prefix}Updating Medusa {title} [{bar}] {percent_label} · {} · {detail}",
+            stage.label()
+        )
+    }
+}
+
+fn version_transition(current: &str, new: &str) -> String {
+    format!("{current} → {new}")
+}
+
+fn download_detail(downloaded: u64, total: Option<u64>, elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs_f64().max(0.001);
+    let bytes_per_second = downloaded as f64 / seconds;
+    let rate = format_rate(bytes_per_second);
+    match total.filter(|total| *total > 0) {
+        Some(total) => {
+            let remaining = total.saturating_sub(downloaded);
+            let eta_seconds = remaining as f64 / bytes_per_second.max(0.001);
+            let eta = if bytes_per_second <= 0.0 {
+                String::new()
+            } else {
+                format!(
+                    " · ETA {}",
+                    format_elapsed(Duration::from_secs_f64(eta_seconds.min(99.0 * 60.0 * 60.0)))
+                )
+            };
+            format!(
+                "{} / {} · {}{}",
+                format_bytes(downloaded),
+                format_bytes(total),
+                rate,
+                eta
+            )
+        }
+        None => format!("{} · {}", format_bytes(downloaded), rate),
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+fn format_rate(bytes_per_second: f64) -> String {
+    if bytes_per_second <= 0.0 {
+        return String::new();
+    }
+    format!("{}/s", format_bytes(bytes_per_second as u64))
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
