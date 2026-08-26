@@ -2,7 +2,7 @@ name: Product Acceptance
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [labeled, unlabeled]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -25,7 +25,10 @@ concurrency:
 
 jobs:
   pr-smoke:
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
     name: PR smoke acceptance
     runs-on: ubuntu-latest
     steps:

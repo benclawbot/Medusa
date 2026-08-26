@@ -32,6 +32,7 @@ on:
       - 'scripts/check-provider-support.py'
       - 'scripts/live-coding-e2e.py'
       - '.github/workflows/provider-delivery-contract.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

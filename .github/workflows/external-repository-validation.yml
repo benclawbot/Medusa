@@ -1,11 +1,6 @@
 name: External Repository Validation
 
 on:
-  pull_request:
-    paths:
-      - 'validation/external-repositories/**'
-      - 'scripts/external-validation.py'
-      - 'docs/EXTERNAL-REPOSITORY-VALIDATION.md'
   workflow_dispatch:
 
 permissions:
