@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     io::{self, IsTerminal},
-    process::{Child, Command, Stdio},
+    process::Child,
 };
 
 use medusa_config::{
@@ -111,17 +111,16 @@ impl FirstRunSetupHost for CliSetupHost {
                 "provider `{provider_id}` does not expose a Medusa browser sign-in helper"
             ));
         }
-        let child = Command::new(openai_oauth::npx_program())
-            .args(openai_oauth::LOGIN_ARGS)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                format!(
-                    "could not launch browser sign-in with openai-oauth: {error}. Install Node.js and retry from Medusa"
-                )
-            })?;
+        if openai_oauth::auth_file_present() {
+            return Err(
+                "ChatGPT OAuth credentials already exist; Medusa will not launch a hidden overwrite prompt. Run `npx openai-oauth@2.0.0 login --no-open` in an interactive terminal, confirm the overwrite, and copy the printed URL into your browser to re-authenticate, then retry setup".to_owned(),
+            );
+        }
+        let child = medusa_runtime::start_openai_oauth_login().map_err(|error| {
+            format!(
+                "could not launch browser sign-in with openai-oauth: {error}. Install Node.js and retry from Medusa"
+            )
+        })?;
         Ok(Box::new(OpenAiOAuthLogin { child }))
     }
 }

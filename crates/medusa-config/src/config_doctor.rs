@@ -16,6 +16,7 @@ use super::{
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog, ProviderProfileStore,
     credential_environment,
 };
+use crate::openai_oauth;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -290,9 +291,7 @@ fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorChe
     };
     let reachable = TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok();
     let remediation = match profile.connection.as_str() {
-        "chatgpt-oauth" => {
-            "Run `npx openai-oauth@2.0.0 login` or use Sign in with browser in /settings, then refresh diagnostics."
-        }
+        "chatgpt-oauth" => oauth_gateway_remediation(openai_oauth::auth_file_present()),
         "omniroute" => {
             "Start OmniRoute on the configured loopback endpoint, then refresh diagnostics."
         }
@@ -315,6 +314,14 @@ fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorChe
         (!reachable).then_some(remediation),
         None,
     );
+}
+
+fn oauth_gateway_remediation(auth_file_present: bool) -> &'static str {
+    if auth_file_present {
+        "Start the local OAuth gateway with `npx openai-oauth@2.0.0 --no-open --detach`, then refresh diagnostics. If it remains unavailable, run `npx openai-oauth@2.0.0 login --no-open` in an interactive terminal, confirm the overwrite, and copy the printed URL into your browser to re-authenticate."
+    } else {
+        "Run `npx openai-oauth@2.0.0 login --no-open` in an interactive terminal, then copy the printed URL into your browser to sign in, then refresh diagnostics."
+    }
 }
 
 fn diagnose_credential(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorCheck>) {
@@ -478,5 +485,18 @@ mod tests {
         let serialized = serde_json::to_string(&refreshed).expect("serialize");
         assert!(!serialized.contains("api_key"));
         assert!(!serialized.contains("access_token"));
+    }
+
+    #[test]
+    fn oauth_gateway_remediation_does_not_hide_existing_credential_state() {
+        let existing = oauth_gateway_remediation(true);
+        assert!(existing.contains("--detach"));
+        assert!(existing.contains("--no-open"));
+        assert!(existing.contains("interactive terminal"));
+
+        let missing = oauth_gateway_remediation(false);
+        assert!(missing.contains("sign in"));
+        assert!(!missing.contains("--detach"));
+        assert!(missing.contains("--no-open"));
     }
 }
