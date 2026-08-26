@@ -54,6 +54,13 @@ pub(crate) fn ensure_openai_oauth_connected() -> Result<Vec<String>, String> {
     medusa_runtime::ensure_openai_oauth_connected()
 }
 
+fn credentials_ready(config: &Config) -> bool {
+    // `auth=none` is an explicit route contract, not a missing credential.
+    config.model.auth == "none"
+        || credential_environment(&config.model.provider)
+            .is_some_and(|name| env::var(name).is_ok())
+}
+
 #[derive(Debug)]
 pub enum RuntimeEvent {
     Started,
@@ -196,8 +203,7 @@ impl DaemonRuntimeState {
                     Some(format!("runtime configuration failed: {error}")),
                 ),
             };
-        let credential_configured = credential_environment(&config.model.provider)
-            .is_some_and(|name| env::var(name).is_ok());
+        let credential_configured = credentials_ready(&config);
         let initial_settings = RuntimeEvent::Settings {
             model: format!("{} / {}", config.model.provider, config.model.name),
             effort: format!("effort:{}", effort_label_for_turns(config.agent.max_turns)),
@@ -1422,6 +1428,15 @@ mod tests {
         FRONTEND_PROTOCOL_VERSION, FrontendEvent, FrontendEventEnvelope, PresentationLifecycle,
     };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn auth_none_route_is_ready_without_an_environment_credential() {
+        let mut config = Config::default();
+        config.model.provider = "openai-oauth".to_owned();
+        config.model.auth = "none".to_owned();
+
+        assert!(credentials_ready(&config));
+    }
 
     #[test]
     fn ensure_daemon_reuses_existing_daemon_before_status_poll() {

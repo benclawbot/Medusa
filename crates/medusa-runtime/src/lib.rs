@@ -1063,6 +1063,13 @@ impl RuntimeState {
     }
 
     fn settings_event(&self) -> RuntimeEvent {
+        // A route configured with auth=none is ready without a Medusa-managed
+        // API key. This includes the local ChatGPT OAuth gateway, whose
+        // credential store is owned by openai-oauth rather than this runtime.
+        let credential_configured = self.config.model.auth == "none"
+            || self.session_api_key.is_some()
+            || credential_environment(&self.config.model.provider)
+                .is_some_and(|name| env::var(name).is_ok());
         RuntimeEvent::Settings {
             model: format!(
                 "{} / {}",
@@ -1070,9 +1077,7 @@ impl RuntimeState {
             ),
             effort: format!("effort:{}", self.effort.label()),
             plan_mode: self.plan_mode,
-            credential_configured: self.session_api_key.is_some()
-                || credential_environment(&self.config.model.provider)
-                    .is_some_and(|name| env::var(name).is_ok()),
+            credential_configured,
             context_window_tokens: self.config.model.context_window_tokens,
             auto_compact_percent: self.config.model.auto_compact_percent,
         }

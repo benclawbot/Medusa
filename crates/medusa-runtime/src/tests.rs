@@ -603,6 +603,51 @@ fn model_picker_switches_route_authentication_mode() {
 }
 
 #[test]
+fn oauth_route_reports_ready_without_a_medusa_api_key() {
+    let directory = tempdir().expect("temporary directory");
+    let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+    let (sender, receiver) = mpsc::channel();
+
+    configure_model(
+        &mut state,
+        ModelConfiguration {
+            provider: "openai-oauth".to_owned(),
+            model: "gpt-5".to_owned(),
+            effort: Effort::High,
+            api_key: None,
+            base_url: Some("http://127.0.0.1:10531/v1".to_owned()),
+        },
+        &sender,
+    )
+    .expect("configure OAuth route");
+
+    assert!(matches!(
+        receiver.recv().expect("settings update"),
+        RuntimeEvent::Settings {
+            model,
+            credential_configured: true,
+            ..
+        } if model == "openai-oauth / gpt-5"
+    ));
+}
+
+#[test]
+fn api_key_route_without_a_credential_remains_unready() {
+    let directory = tempdir().expect("temporary directory");
+    let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+    state.config.model.provider = "test-provider".to_owned();
+    state.config.model.auth = "api-key".to_owned();
+
+    assert!(matches!(
+        state.settings_event(),
+        RuntimeEvent::Settings {
+            credential_configured: false,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn effort_command_updates_the_runtime_turn_budget() {
     let directory = tempdir().expect("temporary directory");
     let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
