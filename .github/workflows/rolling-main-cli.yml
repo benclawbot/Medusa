@@ -14,8 +14,126 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build rolling CLI and desktop (${{ matrix.os }})
+  build-cli:
+    name: Build rolling CLI (${{ matrix.os }})
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+      - name: Build Medusa CLI
+        run: cargo build --release --locked --bin medusa
+      - name: Package exact-revision rolling CLI asset
+        run: >-
+          python scripts/package-main-update.py
+          --revision ${{ github.sha }}
+          --binary ${{ runner.os == 'Windows' && 'target/release/medusa.exe' || 'target/release/medusa' }}
+          --output release-assets
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rolling-main-cli-${{ runner.os }}-${{ runner.arch }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-cli:
+    name: Publish rolling CLI early
+    if: github.ref == 'refs/heads/main'
+    needs: build-cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: rolling-main-cli-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify complete exact-revision CLI bundle
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: >-
+          python scripts/verify-main-update-bundle.py
+          --bundle release-assets
+          --revision "$EXPECTED_REVISION"
+          --kind cli
+      - name: Publish the immutable CLI revision release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_tag="main-${GITHUB_SHA}"
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            draft="$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            if [[ "$draft" != "true" ]]; then
+              echo "release $release_tag is already published; refusing to mutate an immutable CLI release" >&2
+              exit 1
+            fi
+          else
+            gh release create "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --draft \
+              --prerelease \
+              --title "Medusa rolling main $GITHUB_SHA" \
+              --notes "Immutable prebuilt CLI transport for main commit $GITHUB_SHA. Desktop assets are appended after their slower builds complete; stable releases remain separately signed."
+          fi
+
+          gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
+          gh release edit "$release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+
+      - name: Refresh the legacy rolling CLI alias
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view main-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create main-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "Medusa rolling main (legacy alias)" \
+              --notes "Compatibility alias for clients older than the immutable main-<sha> updater protocol."
+          fi
+
+          # The new updater never reads this mutable alias. Older clients still
+          # validate each manifest revision and digest; upload archives first so
+          # a legacy client can never accept a new manifest without its bytes.
+          for archive in release-assets/*.tar.gz release-assets/*.zip; do
+            gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do
+            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          if [[ "$(gh release view main-latest --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
+            gh release edit main-latest --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          fi
+
+  build-desktop:
+    name: Build rolling desktop (${{ matrix.os }})
     if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
@@ -42,8 +160,6 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
-      - name: Build Medusa CLI
-        run: cargo build --release --locked --bin medusa
       - name: Build Medusa Desktop frontend
         working-directory: apps/medusa-desktop
         run: npm ci && npm run build
@@ -51,12 +167,6 @@ jobs:
         run: >-
           cargo build --release --locked --manifest-path
           apps/medusa-desktop/src-tauri/Cargo.toml --bin medusa-desktop
-      - name: Package exact-revision rolling asset
-        run: >-
-          python scripts/package-main-update.py
-          --revision ${{ github.sha }}
-          --binary ${{ runner.os == 'Windows' && 'target/release/medusa.exe' || 'target/release/medusa' }}
-          --output release-assets
       - name: Package exact-revision desktop asset
         run: >-
           python scripts/package-main-desktop-update.py
@@ -65,15 +175,15 @@ jobs:
           --output release-assets
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: rolling-main-${{ runner.os }}-${{ runner.arch }}
+          name: rolling-main-desktop-${{ runner.os }}-${{ runner.arch }}
           path: release-assets
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    name: Publish immutable rolling CLI and desktop
+  publish-desktop:
+    name: Append rolling desktop assets
     if: github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build-desktop, publish-cli]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -87,10 +197,10 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: rolling-main-*
+          pattern: rolling-main-desktop-*
           path: release-assets
           merge-multiple: true
-      - name: Verify complete exact-revision bundle
+      - name: Verify complete exact-revision desktop bundle
         shell: bash
         env:
           EXPECTED_REVISION: ${{ github.sha }}
@@ -98,59 +208,38 @@ jobs:
           python scripts/verify-main-update-bundle.py
           --bundle release-assets
           --revision "$EXPECTED_REVISION"
-      - name: Publish the immutable revision release
+          --kind desktop
+      - name: Append desktop assets to the published revision release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           release_tag="main-${GITHUB_SHA}"
-          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            draft="$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
-            if [[ "$draft" != "true" ]]; then
-              echo "release $release_tag is already published; refusing to mutate an immutable release" >&2
-              exit 1
-            fi
-          else
-            gh release create "$release_tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --draft \
-              --prerelease \
-              --title "Medusa rolling main $GITHUB_SHA" \
-              --notes "Immutable prebuilt CLI and desktop transport for main commit $GITHUB_SHA. Stable releases remain separately signed."
+          if ! gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "CLI release $release_tag is missing" >&2
+            exit 1
+          fi
+          if [[ "$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
+            echo "CLI release $release_tag is still a draft" >&2
+            exit 1
           fi
 
-          # Draft release assets are not downloadable by updater clients. The
-          # release becomes visible only after every verified platform pair is
-          # uploaded, so no client can observe a partially published revision.
-          gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY" --clobber
-          gh release edit "$release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          # The CLI release is already visible. Desktop assets are appended
+          # under distinct names, so a client can only observe a complete
+          # desktop manifest after its matching bytes have been uploaded.
+          gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
 
-      - name: Refresh the legacy rolling alias for older clients
+      - name: Refresh the legacy rolling desktop alias
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if ! gh release view main-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create main-latest \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --prerelease \
-              --title "Medusa rolling main (legacy alias)" \
-              --notes "Compatibility alias for clients older than the immutable main-<sha> updater protocol."
+            echo "legacy rolling alias is missing" >&2
+            exit 1
           fi
-
-          # The new updater never reads this mutable alias. Older clients still
-          # validate each manifest revision and digest; upload archives first so
-          # a legacy client can never accept a new manifest without its bytes.
-          for archive in release-assets/*.tar.gz release-assets/*.zip; do
-            gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY" --clobber
-          done
-          for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do
-            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
-          done
           for artifact in release-assets/medusa-desktop-main-*; do
             if [[ "$artifact" != *.json ]]; then
               gh release upload main-latest "$artifact" --repo "$GITHUB_REPOSITORY" --clobber
@@ -159,6 +248,3 @@ jobs:
           for manifest in release-assets/medusa-desktop-main-*.json; do
             gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
           done
-          if [[ "$(gh release view main-latest --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
-            gh release edit main-latest --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
-          fi

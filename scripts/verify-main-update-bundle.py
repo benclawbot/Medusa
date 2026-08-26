@@ -26,6 +26,11 @@ EXPECTED_DESKTOP = {
 EXPECTED_ARTIFACTS = {**EXPECTED_ARCHIVES, **{
     f"desktop-{platform}": name for platform, name in EXPECTED_DESKTOP.items()
 }}
+EXPECTED_KINDS = {
+    "all": EXPECTED_ARTIFACTS,
+    "cli": EXPECTED_ARCHIVES,
+    "desktop": EXPECTED_DESKTOP,
+}
 MANIFEST_KEYS = {"bytes", "name", "revision", "schema", "sha256"}
 
 
@@ -37,14 +42,18 @@ def file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_bundle(bundle: Path, revision: str) -> tuple[str, ...]:
+def verify_bundle(bundle: Path, revision: str, kind: str = "all") -> tuple[str, ...]:
     if not REVISION.fullmatch(revision):
         raise ValueError("revision must be a full lowercase 40-character Git SHA")
+    try:
+        expected = EXPECTED_KINDS[kind]
+    except KeyError as exc:
+        raise ValueError(f"unknown rolling bundle kind: {kind}") from exc
     root = bundle.resolve(strict=True)
     if not root.is_dir():
         raise ValueError(f"bundle path is not a directory: {bundle}")
 
-    expected_artifacts = set(EXPECTED_ARTIFACTS.values())
+    expected_artifacts = set(expected.values())
     expected_files = expected_artifacts | {f"{name}.json" for name in expected_artifacts}
     entries = {entry.name: entry for entry in root.iterdir()}
     if set(entries) != expected_files:
@@ -101,9 +110,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--revision", required=True)
+    parser.add_argument("--kind", choices=tuple(EXPECTED_KINDS), default="all")
     args = parser.parse_args()
     try:
-        names = verify_bundle(args.bundle, args.revision)
+        names = verify_bundle(args.bundle, args.revision, args.kind)
     except (OSError, ValueError) as error:
         print(f"rolling main update bundle verification failed: {error}", file=sys.stderr)
         return 1

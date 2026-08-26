@@ -170,7 +170,7 @@
     [652, "6", "production entrypoints on canonical frontend projection", "frontend", ["commands", "events", "artifacts", "replay"], ["TUI", "CLI", "daemon", "desktop", "remote"], "completed: frontend-owned execution semantics removed"],
     [653, "0-companion", "unsafe and FFI boundary", "safety", ["unsafe allowlist", "audit evidence"], ["containment", "CI"], "completed: unscoped unsafe code removed"],
     [654, "7", "certify production behavior and delete legacy core", "architecture", ["production certification", "deletion receipts"], ["release", "parent #645"], "completed: remaining v1 authorities and compatibility paths deleted"],
-    [655, "0-companion", "verified prebuilt updater", "release", ["signed manifest v2", "release keyring", "update diagnostics", "health-checked replacement"], ["CLI", "release workflows", "Linux", "macOS", "Windows"], "completed: default source-build updater replaced"]
+    [655, "0-companion", "verified prebuilt updater", "release", ["signed manifest v2", "rolling exact-revision manifest", "release keyring", "update diagnostics", "health-checked replacement", "cached source fallback"], ["CLI", "release workflows", "Linux", "macOS", "Windows"], "completed: rolling prebuilt main path with cached source fallback"]
   ],
   "dependency_policy": {
     "forbidden_edges": [

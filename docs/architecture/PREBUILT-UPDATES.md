@@ -2,7 +2,7 @@
 
 ## Authority
 
-`medusa update --release` uses the stable GitHub release channel. The default `medusa update` path follows the latest `main` commit through the commit-scoped rolling prebuilt channel; the two paths are explicit and neither is a fallback for the other.
+`medusa update --release` uses the stable GitHub release channel. The default `medusa update` path follows the latest `main` commit through the commit-scoped rolling prebuilt channel and falls back only within that same main path to an exact-revision local build while CI publication is pending. The stable and main paths remain explicit, and a stable-release failure never redirects to main.
 
 A release is eligible only when it contains:
 
@@ -90,7 +90,7 @@ The default updater path is:
 medusa update
 ```
 
-It resolves the latest `main` commit and requests the immutable rolling release tagged `main-<commit-sha>`. The rolling workflow builds every supported platform, validates each archive and exact-revision manifest as one bundle, uploads them to a draft release, and publishes that release only after all uploads succeed. A current client never reads the mutable `main-latest` alias, so an older platform asset cannot be mistaken for the newly resolved commit. The workflow retains that alias only for older clients and uploads each archive before its matching manifest; those clients still reject stale revisions and verify the digest before staging. If the exact release or platform asset is still being published, the updater waits for the bounded publication window and leaves the current binary untouched on timeout. `medusa update --check` checks the moving target without modifying the installation.
+It resolves the latest `main` commit and first checks for the commit-scoped rolling release tagged `main-<commit-sha>`. The rolling workflow builds and verifies the three CLI archives first, publishes those exact-revision CLI assets as soon as they are ready, then builds and appends the slower desktop assets under distinct names. Each asset remains bound to the commit and is verified before staging. A client can therefore install the CLI without waiting for desktop packaging; a desktop update remains unavailable until its complete platform bundle is present. When available, the CLI streams the archive with rate/ETA progress, verifies the manifest, byte count, and SHA-256, then stages the rollback-aware atomic handoff. If CI has not published the exact artifact, the updater compiles that exact revision locally using a persistent repository-scoped Cargo target cache and reports elapsed time plus compiled-package counts. A current client never reads the mutable `main-latest` alias, so an older platform asset cannot be mistaken for the newly resolved commit. `medusa update --check` checks the moving target without modifying the installation.
 
 The stable verified prebuilt path is selected only with:
 

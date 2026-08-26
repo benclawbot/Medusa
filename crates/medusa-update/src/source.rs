@@ -1,7 +1,8 @@
 use std::{
     collections::{HashSet, VecDeque},
+    fs,
     io::{self, BufRead, BufReader, Read},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, mpsc},
     thread,
@@ -40,7 +41,7 @@ pub struct MainBranchRevision {
     pub sha: String,
 }
 
-/// Snapshot of the local Cargo build used by the default `main` updater.
+/// Snapshot of the local Cargo build used when the rolling `main` artifact is unavailable.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MainBuildProgress {
     pub compiled_packages: usize,
@@ -48,8 +49,25 @@ pub struct MainBuildProgress {
     pub elapsed: Duration,
 }
 
-/// Discovers main-branch revisions, builds the CLI locally, and stages exact-revision
-/// rolling binaries for desktop consumers.
+/// Phase reported while a revision-scoped prebuilt main artifact is being staged.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MainArtifactPhase {
+    Waiting,
+    Downloading,
+    Verifying,
+}
+
+/// Snapshot of a revision-scoped prebuilt main artifact update.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MainArtifactProgress {
+    pub phase: MainArtifactPhase,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub elapsed: Duration,
+}
+
+/// Discovers main-branch revisions, stages exact-revision rolling binaries, and can
+/// compile locally when CI has not published the requested artifact yet.
 pub struct MainBranchUpdater {
     client: Client,
     api_base: String,
@@ -127,7 +145,23 @@ impl MainBranchUpdater {
         executable: &Path,
         repo: &Path,
         parent_pid: u32,
-        progress: impl FnMut(u64, Option<u64>),
+        mut progress: impl FnMut(u64, Option<u64>),
+    ) -> MedusaResult<ScheduledUpdate> {
+        self.schedule_main_install_with_progress(executable, repo, parent_pid, |snapshot| {
+            if snapshot.phase == MainArtifactPhase::Downloading {
+                progress(snapshot.downloaded, snapshot.total);
+            }
+        })
+    }
+
+    /// Downloads, verifies, and stages a prebuilt CLI for the exact verified `main` revision,
+    /// reporting publication waits and download progress to the caller.
+    pub fn schedule_main_install_with_progress(
+        &self,
+        executable: &Path,
+        repo: &Path,
+        parent_pid: u32,
+        mut progress: impl FnMut(MainArtifactProgress),
     ) -> MedusaResult<ScheduledUpdate> {
         let revision = self.verified_revision()?;
         let platform = Platform::current().map_err(|error| {
@@ -136,14 +170,35 @@ impl MainBranchUpdater {
             ))
         })?;
         let asset_name = rolling_asset_name(platform, &revision)?;
-        let manifest = self.fetch_artifact_manifest(&asset_name, &revision)?;
+        let started = Instant::now();
+        let manifest =
+            self.fetch_artifact_manifest(&asset_name, &revision, started, &mut progress)?;
 
         let workspace = tempfile::Builder::new()
             .prefix("medusa-main-update-")
             .tempdir()?;
         let archive = workspace.path().join(&asset_name);
-        let mut response = self.asset_response(&asset_name, &revision)?;
-        copy_with_progress(&mut response, &archive, Some(manifest.bytes), progress)?;
+        let mut response =
+            self.asset_response_with_progress(&asset_name, &revision, started, &mut progress)?;
+        copy_with_progress(
+            &mut response,
+            &archive,
+            Some(manifest.bytes),
+            |downloaded, total| {
+                progress(MainArtifactProgress {
+                    phase: MainArtifactPhase::Downloading,
+                    downloaded,
+                    total,
+                    elapsed: started.elapsed(),
+                });
+            },
+        )?;
+        progress(MainArtifactProgress {
+            phase: MainArtifactPhase::Verifying,
+            downloaded: manifest.bytes,
+            total: Some(manifest.bytes),
+            elapsed: started.elapsed(),
+        });
         verify_artifact(&archive, manifest.bytes, &manifest.sha256)?;
 
         let installer = AtomicInstaller::new(executable.to_path_buf());
@@ -178,8 +233,11 @@ impl MainBranchUpdater {
             .prefix("medusa-main-build-")
             .tempdir()?;
         let install_root = workspace.path().join("install");
+        let target_dir = cargo_target_directory(repo);
+        fs::create_dir_all(&target_dir)?;
         let started = Instant::now();
-        let compiled_packages = run_cargo_install(&revision, &install_root, &mut progress)?;
+        let compiled_packages =
+            run_cargo_install(&revision, &install_root, &target_dir, &mut progress)?;
 
         let candidate = install_root.join("bin").join(medusa_binary_name());
         let installer = AtomicInstaller::new(executable.to_path_buf());
@@ -213,6 +271,18 @@ impl MainBranchUpdater {
             ))
         })?;
         let asset_name = rolling_desktop_asset_name(platform, revision)?;
+        self.artifact_manifest_available(&asset_name, revision)
+    }
+
+    /// Returns whether the exact CLI executable for a verified main revision is published.
+    pub fn main_cli_artifact_available(&self, revision: &str) -> MedusaResult<bool> {
+        validate_revision(revision)?;
+        let platform = Platform::current().map_err(|error| {
+            invalid(format!(
+                "cannot select rolling main artifact for this platform: {error}"
+            ))
+        })?;
+        let asset_name = rolling_asset_name(platform, revision)?;
         self.artifact_manifest_available(&asset_name, revision)
     }
 
@@ -270,12 +340,27 @@ impl MainBranchUpdater {
         &self,
         asset_name: &str,
         revision: &str,
+        started: Instant,
+        progress: &mut impl FnMut(MainArtifactProgress),
     ) -> MedusaResult<RollingMainArtifact> {
         let manifest_name = format!("{asset_name}.json");
         let deadline = Instant::now() + ROLLING_PUBLISH_WAIT;
         loop {
+            let mut waiting = || {
+                progress(MainArtifactProgress {
+                    phase: MainArtifactPhase::Waiting,
+                    downloaded: 0,
+                    total: None,
+                    elapsed: started.elapsed(),
+                });
+            };
             let manifest: RollingMainArtifact = self
-                .asset_response_until(&manifest_name, revision, deadline)?
+                .asset_response_until_with_progress(
+                    &manifest_name,
+                    revision,
+                    deadline,
+                    &mut waiting,
+                )?
                 .json()
                 .map_err(asset_error)?;
             validate_revision(&manifest.revision)?;
@@ -326,13 +411,43 @@ impl MainBranchUpdater {
         self.asset_response_until(asset_name, revision, Instant::now() + ROLLING_PUBLISH_WAIT)
     }
 
+    fn asset_response_with_progress(
+        &self,
+        asset_name: &str,
+        revision: &str,
+        started: Instant,
+        progress: &mut impl FnMut(MainArtifactProgress),
+    ) -> MedusaResult<reqwest::blocking::Response> {
+        let deadline = Instant::now() + ROLLING_PUBLISH_WAIT;
+        let mut waiting = || {
+            progress(MainArtifactProgress {
+                phase: MainArtifactPhase::Waiting,
+                downloaded: 0,
+                total: None,
+                elapsed: started.elapsed(),
+            });
+        };
+        self.asset_response_until_with_progress(asset_name, revision, deadline, &mut waiting)
+    }
+
     fn asset_response_until(
         &self,
         asset_name: &str,
         revision: &str,
         deadline: Instant,
     ) -> MedusaResult<reqwest::blocking::Response> {
+        self.asset_response_until_with_progress(asset_name, revision, deadline, || {})
+    }
+
+    fn asset_response_until_with_progress(
+        &self,
+        asset_name: &str,
+        revision: &str,
+        deadline: Instant,
+        mut waiting: impl FnMut(),
+    ) -> MedusaResult<reqwest::blocking::Response> {
         loop {
+            waiting();
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(publish_timeout(revision));
@@ -491,6 +606,12 @@ fn cargo_install_arguments(revision: &str, install_root: &Path) -> Vec<String> {
     ]
 }
 
+fn cargo_target_directory(repo: &Path) -> PathBuf {
+    repo.join(".medusa")
+        .join("update-cache")
+        .join("cargo-target")
+}
+
 fn ensure_cargo_available() -> MedusaResult<()> {
     Command::new("cargo")
         .arg("--version")
@@ -512,10 +633,12 @@ fn ensure_cargo_available() -> MedusaResult<()> {
 fn run_cargo_install(
     revision: &str,
     install_root: &Path,
+    target_dir: &Path,
     progress: &mut impl FnMut(MainBuildProgress),
 ) -> MedusaResult<usize> {
     let mut child = Command::new("cargo")
         .args(cargo_install_arguments(revision, install_root))
+        .env("CARGO_TARGET_DIR", target_dir)
         .env("CARGO_TERM_COLOR", "never")
         .env("CARGO_TERM_PROGRESS_WHEN", "never")
         .stdout(Stdio::piped())
@@ -829,6 +952,36 @@ mod tests {
     }
 
     #[test]
+    fn cli_artifact_status_requests_revision_scoped_manifest() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        let asset_name = rolling_asset_name(Platform::current().expect("platform"), REVISION)
+            .expect("asset name");
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0_u8; 2048];
+            let bytes = stream.read(&mut request).expect("read request");
+            let request = String::from_utf8_lossy(&request[..bytes]);
+            assert!(
+                request.starts_with(&format!("GET /main-{REVISION}/{asset_name}.json HTTP/1.1"))
+            );
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("response");
+        });
+        let updater =
+            MainBranchUpdater::with_asset_base("http://api.invalid", base).expect("client");
+        assert!(
+            !updater
+                .main_cli_artifact_available(REVISION)
+                .expect("artifact status")
+        );
+        worker.join().expect("server");
+    }
+
+    #[test]
     fn desktop_artifact_status_rejects_an_unpublished_revision_without_polling() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let base = format!("http://{}", listener.local_addr().expect("address"));
@@ -948,6 +1101,14 @@ mod tests {
                 .any(|pair| { pair[0] == "--root" && pair[1] == r"C:\tmp\medusa-build" })
         );
         assert!(!arguments.iter().any(|argument| argument == "--branch"));
+    }
+
+    #[test]
+    fn source_build_target_directory_is_repo_scoped() {
+        assert_eq!(
+            cargo_target_directory(Path::new(r"C:\repo")),
+            Path::new(r"C:\repo\.medusa\update-cache\cargo-target")
+        );
     }
 
     #[test]

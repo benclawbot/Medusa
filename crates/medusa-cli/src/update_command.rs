@@ -7,9 +7,9 @@ use std::{
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_update::{
-    AtomicInstaller, GithubReleaseClient, InstallKind, InstallLocation, MainBranchUpdater, Platform,
-    MainBuildProgress, ReleaseClient, Restart, UpdateCheck, UpdateDiagnostics, UpdatePhase,
-    UpdatePolicy,
+    AtomicInstaller, GithubReleaseClient, InstallKind, InstallLocation, MainArtifactPhase,
+    MainArtifactProgress, MainBranchUpdater, MainBuildProgress, Platform, ReleaseClient, Restart,
+    UpdateCheck, UpdateDiagnostics, UpdatePhase, UpdatePolicy,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
@@ -208,21 +208,47 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
         short_revision(&latest.sha)
     );
     let mut progress = UpdateProgress::new(current_version.clone(), new_version.clone());
-    progress.stage(UpdateStage::Preparing, 0, "checking Cargo");
+    progress.stage(UpdateStage::Preparing, 0, "checking prebuilt main artifact");
+    let strategy = main_update_strategy(updater.main_cli_artifact_available(&latest.sha)?);
     // Stop the repository daemon before staging so its running executable is
     // no longer locked when the detached replacement helper swaps it.
     super::request_daemon_shutdown(repo);
-    updater.build_and_schedule_main_install(
-        &location.executable,
-        repo,
-        std::process::id(),
-        |snapshot| progress.build(snapshot),
-    )?;
+    match strategy {
+        MainUpdateStrategy::Prebuilt => progress.stage(
+            UpdateStage::Preparing,
+            2,
+            "prebuilt main artifact ready",
+        ),
+        MainUpdateStrategy::LocalBuild => progress.stage(
+            UpdateStage::Building,
+            BUILD_PHASE_START,
+            "prebuilt artifact pending · compiling locally",
+        ),
+    }
+    match strategy {
+        MainUpdateStrategy::Prebuilt => updater.schedule_main_install_with_progress(
+            &location.executable,
+            repo,
+            std::process::id(),
+            |snapshot| progress.artifact(snapshot),
+        )?,
+        MainUpdateStrategy::LocalBuild => updater.build_and_schedule_main_install(
+            &location.executable,
+            repo,
+            std::process::id(),
+            |snapshot| progress.build(snapshot),
+        )?,
+    };
     progress.stage(UpdateStage::Installing, 98, "atomic restart staged");
     progress.finish();
+    let update_kind = match strategy {
+        MainUpdateStrategy::Prebuilt => "downloaded",
+        MainUpdateStrategy::LocalBuild => "built",
+    };
     println!(
-        "Medusa update built and staged: {}. Restarting.",
-        version_transition(&current_version, &new_version)
+        "Medusa update {} and staged: {}. Restarting.",
+        update_kind,
+        version_transition(&current_version, &new_version),
     );
     Ok(())
 }
@@ -232,8 +258,23 @@ fn short_revision(revision: &str) -> &str {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MainUpdateStrategy {
+    Prebuilt,
+    LocalBuild,
+}
+
+fn main_update_strategy(prebuilt_available: bool) -> MainUpdateStrategy {
+    if prebuilt_available {
+        MainUpdateStrategy::Prebuilt
+    } else {
+        MainUpdateStrategy::LocalBuild
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UpdateStage {
     Preparing,
+    Waiting,
     Building,
     Downloading,
     Verifying,
@@ -245,6 +286,7 @@ impl UpdateStage {
     fn label(self) -> &'static str {
         match self {
             Self::Preparing => "Preparing",
+            Self::Waiting => "Waiting",
             Self::Building => "Building",
             Self::Downloading => "Downloading",
             Self::Verifying => "Verifying",
@@ -256,6 +298,7 @@ impl UpdateStage {
     fn color(self) -> &'static str {
         match self {
             Self::Preparing => "\u{1b}[36m",
+            Self::Waiting => "\u{1b}[90m",
             Self::Building => "\u{1b}[33m",
             Self::Downloading => "\u{1b}[34m",
             Self::Verifying => "\u{1b}[35m",
@@ -334,6 +377,27 @@ impl UpdateProgress {
                 package
             ),
         );
+    }
+
+    fn artifact(&mut self, snapshot: MainArtifactProgress) {
+        match snapshot.phase {
+            MainArtifactPhase::Waiting => self.stage(
+                UpdateStage::Waiting,
+                2,
+                format!(
+                    "waiting for prebuilt main artifact · {} elapsed",
+                    format_elapsed(snapshot.elapsed)
+                ),
+            ),
+            MainArtifactPhase::Downloading => {
+                self.download(snapshot.downloaded, snapshot.total, 4, 88)
+            }
+            MainArtifactPhase::Verifying => self.stage(
+                UpdateStage::Verifying,
+                90,
+                "verifying manifest and SHA-256",
+            ),
+        }
     }
 
     fn stage(&mut self, stage: UpdateStage, percent: u8, detail: impl Into<String>) {
@@ -419,85 +483,7 @@ fn policy_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rollout_is_stable_and_bounded() {
-        let repo = Path::new("/stable/repository");
-        assert_eq!(rollout_eligible(repo, 50), rollout_eligible(repo, 50));
-        assert!(rollout_eligible(repo, 100));
-    }
-
-    #[test]
-    fn short_revision_is_bounded() {
-        assert_eq!(short_revision("0123456789abcdef"), "0123456789ab");
-        assert_eq!(short_revision("short"), "short");
-    }
-
-    #[test]
-    fn build_progress_estimate_uses_elapsed_time_and_compiled_pieces() {
-        let early = estimate_build_percent(Duration::from_secs(5), 2);
-        let more_pieces = estimate_build_percent(Duration::from_secs(5), 12);
-        let more_time = estimate_build_percent(Duration::from_secs(30), 2);
-
-        assert!(more_pieces > early);
-        assert!(more_time > early);
-        assert!(more_time < BUILD_PHASE_END);
-    }
-
-    #[test]
-    fn colored_progress_line_includes_phase_detail_and_versions() {
-        let line = render_progress_line(
-            UpdateStage::Building,
-            42,
-            "12 crates · 20s",
-            "1.0.4 (old)",
-            "1.0.4 (new)",
-            true,
-        );
-
-        assert!(line.contains("Building"));
-        assert!(line.contains("12 crates · 20s"));
-        assert!(line.contains("42%"));
-        assert!(line.contains("1.0.4 (old) → 1.0.4 (new)"));
-        assert!(line.contains("\u{1b}["));
-    }
-
-    #[test]
-    fn plain_progress_line_omits_terminal_escape_sequences() {
-        let line = render_progress_line(
-            UpdateStage::Installing,
-            92,
-            "staging atomic restart",
-            "old",
-            "new",
-            false,
-        );
-
-        assert!(line.contains("Installing"));
-        assert!(!line.contains("\u{1b}["));
-    }
-
-    #[test]
-    fn version_transition_is_explicit() {
-        assert_eq!(
-            version_transition("1.0.4 (old)", "1.0.4 (new)"),
-            "1.0.4 (old) → 1.0.4 (new)"
-        );
-    }
-
-    #[test]
-    fn download_detail_reports_rate_and_remaining_time() {
-        let detail = download_detail(512 * 1024, Some(1024 * 1024), Duration::from_secs(2));
-
-        assert!(detail.contains("512.0 KiB"));
-        assert!(detail.contains("256.0 KiB/s"));
-        assert!(detail.contains("ETA 00:02"));
-    }
-}
-
+// Helpers are kept above the test module so all-target Clippy can lint the test target.
 fn estimate_build_percent(elapsed: Duration, compiled_packages: usize) -> u8 {
     let time_ratio = elapsed.as_secs_f64() / BUILD_ESTIMATE.as_secs_f64();
     let pieces_ratio = compiled_packages as f64 / BUILD_PIECE_ESTIMATE as f64;
@@ -607,4 +593,104 @@ fn format_rate(bytes_per_second: f64) -> String {
 fn format_elapsed(duration: Duration) -> String {
     let seconds = duration.as_secs();
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rollout_is_stable_and_bounded() {
+        let repo = Path::new("/stable/repository");
+        assert_eq!(rollout_eligible(repo, 50), rollout_eligible(repo, 50));
+        assert!(rollout_eligible(repo, 100));
+    }
+
+    #[test]
+    fn short_revision_is_bounded() {
+        assert_eq!(short_revision("0123456789abcdef"), "0123456789ab");
+        assert_eq!(short_revision("short"), "short");
+    }
+
+    #[test]
+    fn build_progress_estimate_uses_elapsed_time_and_compiled_pieces() {
+        let early = estimate_build_percent(Duration::from_secs(5), 2);
+        let more_pieces = estimate_build_percent(Duration::from_secs(5), 12);
+        let more_time = estimate_build_percent(Duration::from_secs(30), 2);
+
+        assert!(more_pieces > early);
+        assert!(more_time > early);
+        assert!(more_time < BUILD_PHASE_END);
+    }
+
+    #[test]
+    fn colored_progress_line_includes_phase_detail_and_versions() {
+        let line = render_progress_line(
+            UpdateStage::Building,
+            42,
+            "12 crates · 20s",
+            "1.0.4 (old)",
+            "1.0.4 (new)",
+            true,
+        );
+
+        assert!(line.contains("Building"));
+        assert!(line.contains("12 crates · 20s"));
+        assert!(line.contains("42%"));
+        assert!(line.contains("1.0.4 (old) → 1.0.4 (new)"));
+        assert!(line.contains("\u{1b}["));
+    }
+
+    #[test]
+    fn plain_progress_line_omits_terminal_escape_sequences() {
+        let line = render_progress_line(
+            UpdateStage::Installing,
+            92,
+            "staging atomic restart",
+            "old",
+            "new",
+            false,
+        );
+
+        assert!(line.contains("Installing"));
+        assert!(!line.contains("\u{1b}["));
+    }
+
+    #[test]
+    fn version_transition_is_explicit() {
+        assert_eq!(
+            version_transition("1.0.4 (old)", "1.0.4 (new)"),
+            "1.0.4 (old) → 1.0.4 (new)"
+        );
+    }
+
+    #[test]
+    fn main_updates_prefer_prebuilt_artifacts() {
+        assert_eq!(main_update_strategy(true), MainUpdateStrategy::Prebuilt);
+        assert_eq!(main_update_strategy(false), MainUpdateStrategy::LocalBuild);
+    }
+
+    #[test]
+    fn waiting_progress_line_identifies_artifact_build_phase() {
+        let line = render_progress_line(
+            UpdateStage::Waiting,
+            2,
+            "waiting for prebuilt main artifact",
+            "1.0.4 (old)",
+            "1.0.4 (new)",
+            false,
+        );
+
+        assert!(line.contains("Waiting"));
+        assert!(line.contains("prebuilt main artifact"));
+    }
+
+    #[test]
+    fn download_detail_reports_rate_and_remaining_time() {
+        let detail = download_detail(512 * 1024, Some(1024 * 1024), Duration::from_secs(2));
+
+        assert!(detail.contains("512.0 KiB"));
+        assert!(detail.contains("256.0 KiB/s"));
+        assert!(detail.contains("ETA 00:02"));
+    }
 }

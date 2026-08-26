@@ -22,8 +22,13 @@ REVISION = "0123456789abcdef0123456789abcdef01234567"
 
 
 class MainUpdateBundleTests(unittest.TestCase):
-    def write_bundle(self, root: Path, revision: str = REVISION) -> None:
-        for name in CHECKER.EXPECTED_ARTIFACTS.values():
+    def write_bundle(
+        self,
+        root: Path,
+        revision: str = REVISION,
+        artifacts: tuple[str, ...] | None = None,
+    ) -> None:
+        for name in artifacts or tuple(CHECKER.EXPECTED_ARTIFACTS.values()):
             archive = root / name
             archive.write_bytes((name.encode("utf-8") * 32)[:1024])
             manifest = {
@@ -74,6 +79,26 @@ class MainUpdateBundleTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
                 CHECKER.verify_bundle(root, REVISION)
+
+    def test_cli_bundle_can_be_verified_before_desktop_builds_finish(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = tuple(CHECKER.EXPECTED_ARCHIVES.values())
+            self.write_bundle(root, artifacts=artifacts)
+            self.assertEqual(
+                set(CHECKER.verify_bundle(root, REVISION, "cli")),
+                set(artifacts),
+            )
+
+    def test_desktop_bundle_can_be_verified_independently(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = tuple(CHECKER.EXPECTED_DESKTOP.values())
+            self.write_bundle(root, artifacts=artifacts)
+            self.assertEqual(
+                set(CHECKER.verify_bundle(root, REVISION, "desktop")),
+                set(artifacts),
+            )
 
 
 if __name__ == "__main__":

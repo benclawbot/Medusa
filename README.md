@@ -286,7 +286,7 @@ medusa update --check
 medusa update
 ```
 
-`medusa update --check` is read-only. Source-installed binaries follow a verified exact `main` revision, compile it in an isolated Cargo root with phase-aware progress, and atomically stage the restart; the progress display includes the current and target revisions, download rate/ETA for release updates, and compiled-package counts for main builds. `medusa update --release` selects the verified prebuilt stable artifact, validates its manifest, byte count, and SHA-256, and performs the same health/rollback-aware handoff. Package-managed installations are not overwritten and instead report the relevant package-manager command.
+`medusa update --check` is read-only. Source-installed binaries follow a verified exact `main` revision and prefer its commit-scoped prebuilt artifact, showing phase-aware download, verification, and atomic-restart progress with the current and target revisions. If CI has not published that exact artifact yet, the updater compiles the revision locally with a repo-scoped Cargo target cache and reports elapsed time plus compiled-package counts. `medusa update --release` selects the verified prebuilt stable artifact, validates its manifest, byte count, and SHA-256, and performs the same health/rollback-aware handoff. Package-managed installations are not overwritten and instead report the relevant package-manager command.
 
 ## Workspace modes
 

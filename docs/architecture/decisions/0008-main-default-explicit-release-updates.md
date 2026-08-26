@@ -7,22 +7,22 @@
 
 ## Context
 
-ADR 0002 made verified prebuilt releases the default `medusa update` authority and kept the moving `main` source build behind `--channel source`. The signed release path remains the correct trust boundary for stable prebuilt artifacts, but that default couples ordinary updater use to release-manifest availability. A published release whose Ed25519 manifest authority has not yet been produced therefore blocks the default update command even when the user intends to follow current `main` development.
+ADR 0002 made verified prebuilt releases the default `medusa update` authority and kept the moving `main` source build behind `--channel source`. The signed release path remains the correct trust boundary for stable prebuilt artifacts, but the moving `main` path is published separately as an exact-revision rolling artifact. Waiting for a rolling CI publication or recompiling the full workspace on every update makes ordinary development updates unnecessarily slow.
 
-Medusa already retains a distinct `MainBranchUpdater` that resolves the moving `main` revision and builds it locally. These two update paths have different trust, dependency, and rollout models and should be selected directly in the command surface rather than through a generic channel string.
+Medusa already retains a distinct `MainBranchUpdater` that resolves the moving `main` revision, downloads its commit-scoped prebuilt artifact when available, and can build the same exact revision locally. These two update paths have different trust, dependency, and rollout models and should be selected directly in the command surface rather than through a generic channel string.
 
 ## Decision
 
-`medusa update` follows the latest `main` revision and builds it locally.
+`medusa update` follows the latest `main` revision and prefers the immutable, commit-scoped rolling prebuilt artifact. If CI has not published that exact artifact yet, it falls back within the main path to a local build pinned to the same revision. Local builds reuse a repository-scoped Cargo target cache so repeated updates compile only changed crates.
 
 `medusa update --release` selects the stable verified prebuilt release path. That path continues to require the Ed25519-signed release manifest, exact signed artifact metadata, platform matching, digest verification, confined extraction, rollout policy, and health-checked atomic replacement.
 
 The public `--channel release|source` selector is removed. `--allow-downgrade` is valid only together with `--release`.
 
-The two paths never fall back to one another:
+The stable and main paths never fall back to one another:
 
-- a source discovery or build failure does not install a release;
-- a missing, invalid, unsigned, or otherwise ineligible release does not compile `main`.
+- a main discovery, artifact, or local-build failure does not install a stable release;
+- a missing, invalid, unsigned, or otherwise ineligible stable release does not compile `main`.
 
 `--check` and `--automatic` apply to whichever path the user explicitly selected.
 
@@ -30,7 +30,8 @@ The two paths never fall back to one another:
 
 - Developers and users tracking Medusa development can use `medusa update` without depending on release-signing cadence.
 - Stable release consumers opt in explicitly with `medusa update --release` and retain the full verified-prebuilt trust model from ADR 0002.
-- The default main path requires the supported Rust/Cargo toolchain because it compiles locally.
+- The default main path normally needs only network access; the supported Rust/Cargo toolchain is required only while its exact rolling artifact is unavailable.
+- Warm local builds avoid recompiling unchanged dependencies, while cold builds retain truthful elapsed-time and compiled-package progress.
 - An unsigned release can never weaken or redirect the main update path, and a source failure can never bypass release verification.
 - Existing automation that used `--channel` must migrate to the direct command forms.
 

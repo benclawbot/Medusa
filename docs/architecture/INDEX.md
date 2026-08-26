@@ -66,7 +66,7 @@ V2 invariants:
 | Desktop | `apps/medusa-desktop` | React/Tauri application | daemon protocol v2 commands, artifacts, transient events, and canonical replay |
 | Telegram | `medusa telegram` | `medusa-daemon::telegram` | daemon-client protocol v2 commands, bounded artifacts, canonical replay, and transport-only durable state |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | typed guarded operation request, confirmation tiers, normalized receipts, and audit evidence |
-| Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
+| Update | `medusa update` | `crates/medusa-update` | Exact-revision rolling prebuilt main artifact with cached local-build fallback; verified stable release via explicit `--release` |
 
 CLI, TUI, daemon, desktop, and remote adapters share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics. Telegram microphone/audio and live operator evidence remain separately tracked external certification work; the gateway does not own execution state.
 
@@ -86,7 +86,7 @@ Executable skill packages are owned by `crates/medusa-skill` and dispatched thro
 | Evidence, artifacts, verification | production | certified-production | preserve typed source-bound receipts and content-addressed artifacts | none |
 | Daemon | production | certified-production | preserve versioned shared frontend protocol and canonical replay | none |
 | Release trust | production | certified-production | preserve signed manifest v2, protected signer, and reviewed keyring | none |
-| Self-update | production | certified-production | preserve verified prebuilt default and explicit source channel | none |
+| Self-update | production | certified-production | preserve exact-revision rolling prebuilt main updates, cached local fallback, and explicit verified release updates | none |
 | Multi-agent execution | production | certified-production | preserve bounded teammates, isolated mutation, dedicated review, and durable completion | none |
 | Browser tools | preview | certified-production | readiness-gated, explicit opt-in via `medusa-agent::ToolManager` -> `medusa-browserd`; see [`0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md) | none for certified dispatcher; product remains preview |
 | Plugins/extensions | managed | preview | managed manifests and instruction-only `SKILL.md`; executable handlers require certification | handler-specific evidence |
@@ -133,7 +133,7 @@ Repository mutation fails closed unless the prepared commit, exact changed-compo
 
 The architecture and state machine are defined in [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md) and ADR [`0002-verified-prebuilt-updates.md`](decisions/0002-verified-prebuilt-updates.md). The stable updater verifies an embedded Ed25519 key before trusting manifest metadata, selects one exact OS/architecture archive, verifies signed size and SHA-256, confines extraction, stages beside the running executable, and retains the previous binary until startup acknowledgement.
 
-`medusa update --channel source` is the sole source-build path. It is explicit and is never selected automatically or used as fallback.
+`medusa update` prefers the exact-revision rolling main artifact and uses a cached local build only while that same revision's CI artifact is unavailable. `medusa update --release` remains the explicit stable path; a stable-release failure never redirects to main.
 
 ## Known-failure compatibility fixtures
 
@@ -180,6 +180,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Decision: [`decisions/0005-transactional-mutation-lifecycle.md`](decisions/0005-transactional-mutation-lifecycle.md)
 - Decision: [`decisions/0006-authoritative-evidence-artifacts-and-verification.md`](decisions/0006-authoritative-evidence-artifacts-and-verification.md)
 - Decision: [`decisions/0007-canonical-frontend-projection.md`](decisions/0007-canonical-frontend-projection.md)
+- Decision: [`decisions/0008-main-default-explicit-release-updates.md`](decisions/0008-main-default-explicit-release-updates.md)
 - Decision: [`decisions/0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md)
 - Decision: [`decisions/0010-typed-non-authority-service-providers.md`](decisions/0010-typed-non-authority-service-providers.md)
 - Decision: [`decisions/0011-transactional-component-runtime.md`](decisions/0011-transactional-component-runtime.md)

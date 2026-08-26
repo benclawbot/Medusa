@@ -28,5 +28,6 @@ pub use model::{
     verify_artifact, verify_sha256,
 };
 pub use source::{
-    MainBranchRevision, MainBranchUpdater, MainBuildProgress, rolling_desktop_asset_name,
+    MainArtifactPhase, MainArtifactProgress, MainBranchRevision, MainBranchUpdater,
+    MainBuildProgress, rolling_desktop_asset_name,
 };
