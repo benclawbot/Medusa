@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
@@ -20,6 +21,7 @@ MANIFEST_SCHEMA = "medusa-release-manifest-v2"
 SIGNATURE_SCHEMA = "medusa-release-signature-v1"
 SIGNATURE_NAME = "medusa-release-manifest.sig.json"
 DEFAULT_KEY_ID = "medusa-release-2026-08-primary"
+RELEASE_ID = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
 
 REQUIRED_ASSETS = {
     "linux CLI archive": "medusa-cli-linux.tar.gz",
@@ -85,9 +87,13 @@ def load_versions(root: Path) -> dict[str, str]:
 def validate_tag(root: Path, tag: str) -> str:
     versions = load_versions(root)
     version = next(iter(versions.values()))
-    expected = f"v{version}"
-    if tag != expected:
-        raise EvidenceError(f"release tag must be {expected}, got {tag}")
+    release_id = tag.removeprefix("v")
+    if not RELEASE_ID.fullmatch(release_id) or not (
+        release_id == version or release_id.startswith(f"{version}.")
+    ):
+        raise EvidenceError(
+            f"release tag must be v{version} or v{version}.<iteration>, got {tag}"
+        )
     return version
 
 
@@ -256,6 +262,7 @@ def generate_manifest(
     sequence: int,
     rollout_percentage: int,
     minimum_updater_version: str,
+    release_id: str | None = None,
 ) -> dict:
     assets.mkdir(parents=True, exist_ok=True)
     excluded = {output, checksums, assets / SIGNATURE_NAME}
@@ -266,6 +273,11 @@ def generate_manifest(
         raise EvidenceError("release sequence must be positive")
     if rollout_percentage < 1 or rollout_percentage > 100:
         raise EvidenceError("rollout percentage must be in 1..=100")
+    release_id = release_id or version
+    if not RELEASE_ID.fullmatch(release_id) or not (
+        release_id == version or release_id.startswith(f"{version}.")
+    ):
+        raise EvidenceError(f"release identity must extend package version {version}")
 
     hashes = lockfile_hashes(root)
     evidence = [
@@ -295,6 +307,7 @@ def generate_manifest(
     manifest = {
         "schema": MANIFEST_SCHEMA,
         "version": version,
+        "release_id": release_id,
         "minimum_updater_version": minimum_updater_version,
         "source": {
             "repository": "benclawbot/Medusa",
@@ -446,6 +459,7 @@ def self_test() -> None:
         root = Path(raw)
         write_minimal_fixture(root)
         assert validate_tag(root, "v1.2.3") == "1.2.3"
+        assert validate_tag(root, "v1.2.3.1") == "1.2.3"
         try:
             validate_tag(root, "v1.2.4")
         except EvidenceError:
@@ -471,14 +485,33 @@ def self_test() -> None:
         manifest = assets / "medusa-release-manifest.json"
         checksums = assets / "SHA256SUMS"
         first_manifest = generate_manifest(
-            root, assets, manifest, checksums, "1.2.3", "a" * 40, 12, 100, "1.0.0"
+            root,
+            assets,
+            manifest,
+            checksums,
+            "1.2.3",
+            "a" * 40,
+            12,
+            100,
+            "1.0.0",
+            "1.2.3.1",
         )
         first_bytes = manifest.read_bytes()
         second_manifest = generate_manifest(
-            root, assets, manifest, checksums, "1.2.3", "a" * 40, 12, 100, "1.0.0"
+            root,
+            assets,
+            manifest,
+            checksums,
+            "1.2.3",
+            "a" * 40,
+            12,
+            100,
+            "1.0.0",
+            "1.2.3.1",
         )
         assert first_manifest == second_manifest
         assert first_bytes == manifest.read_bytes()
+        assert first_manifest["release_id"] == "1.2.3.1"
         assert first_manifest["source"]["cargo_lock_sha256"] == expected_hashes["cargo"]
         assert first_manifest["source"]["desktop_lock_sha256"] == expected_hashes["desktop"]
 
@@ -543,6 +576,7 @@ def parser() -> argparse.ArgumentParser:
     manifest.add_argument("--sequence", required=True, type=int)
     manifest.add_argument("--rollout-percentage", type=int, default=100)
     manifest.add_argument("--minimum-updater-version", required=True)
+    manifest.add_argument("--release-id")
 
     sign = subcommands.add_parser("sign-manifest")
     sign.add_argument("--manifest", type=Path, required=True)
@@ -578,6 +612,7 @@ def main() -> int:
                 arguments.sequence,
                 arguments.rollout_percentage,
                 arguments.minimum_updater_version,
+                arguments.release_id,
             )
             print(arguments.output)
         elif arguments.command == "sign-manifest":

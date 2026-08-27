@@ -48,10 +48,44 @@ pub(crate) const fn provider_execution_phase(mode: Mode) -> ProviderExecutionPha
     }
 }
 
+#[cfg(test)]
 pub(crate) fn system_prompt_with_context(
     mode: Mode,
     repo: &Path,
     additional_context: Option<&str>,
+) -> String {
+    match CapabilityRegistry::discover(repo) {
+        Ok(registry) => system_prompt_with_registry(mode, repo, additional_context, &registry),
+        Err(error) => {
+            system_prompt_with_discovery_error(mode, repo, additional_context, &error.to_string())
+        }
+    }
+}
+
+pub(crate) fn system_prompt_with_registry(
+    mode: Mode,
+    repo: &Path,
+    additional_context: Option<&str>,
+    registry: &CapabilityRegistry,
+) -> String {
+    system_prompt_with_capability_state(mode, repo, additional_context, Some(registry), None)
+}
+
+pub(crate) fn system_prompt_with_discovery_error(
+    mode: Mode,
+    repo: &Path,
+    additional_context: Option<&str>,
+    error: &str,
+) -> String {
+    system_prompt_with_capability_state(mode, repo, additional_context, None, Some(error))
+}
+
+fn system_prompt_with_capability_state(
+    mode: Mode,
+    repo: &Path,
+    additional_context: Option<&str>,
+    registry: Option<&CapabilityRegistry>,
+    discovery_error: Option<&str>,
 ) -> String {
     let base = if mode == Mode::ReadOnly {
         PLAN_SYSTEM_PROMPT
@@ -60,14 +94,13 @@ pub(crate) fn system_prompt_with_context(
     };
     let mut prompt = format!("{base}\n\nWorkspace: {}", repo.display());
     prompt.push_str("\n\nGENERAL CONVERSATION RULE — If the user asks casual conversation, a factual explanation, a confirmation, or research rather than repository work, answer directly in one turn. Do not inspect the repository, make a plan, or call coding/file/shell tools unless the request actually requires them. Use web tools only when current or source-linked information is needed. A clear text answer is complete; do not invent follow-up work.");
-    match CapabilityRegistry::discover(repo) {
-        Ok(registry) => {
-            prompt.push_str("\n\nRuntime capabilities (shared with every Medusa frontend):\n");
-            prompt.push_str(&registry.prompt_summary());
-        }
-        Err(error) => prompt.push_str(&format!(
+    if let Some(registry) = registry {
+        prompt.push_str("\n\nRuntime capabilities (shared with every Medusa frontend):\n");
+        prompt.push_str(&registry.prompt_summary());
+    } else if let Some(error) = discovery_error {
+        prompt.push_str(&format!(
             "\n\nRuntime capability discovery unavailable: {error}"
-        )),
+        ));
     }
     let instructions = repository_instructions(repo);
     if instructions.is_empty() {
@@ -116,6 +149,17 @@ pub(crate) fn available_tools(
             .filter(|tool| tool_allowed(mode, &tool.name))
             .collect()
     })
+}
+
+pub(crate) fn available_tools_from_registry(
+    mode: Mode,
+    registry: &CapabilityRegistry,
+) -> Vec<medusa_provider::ToolDefinition> {
+    registry
+        .model_tools(mode == Mode::ReadOnly)
+        .into_iter()
+        .filter(|tool| tool_allowed(mode, &tool.name))
+        .collect()
 }
 
 pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {

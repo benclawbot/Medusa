@@ -6,6 +6,8 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::release_id::ReleaseId;
+
 pub const MANIFEST_NAME: &str = "medusa-release-manifest.json";
 pub const SIGNATURE_NAME: &str = "medusa-release-manifest.sig.json";
 pub const MANIFEST_SCHEMA: &str = "medusa-release-manifest-v2";
@@ -146,6 +148,8 @@ pub struct RolloutPolicy {
 pub struct ReleaseManifest {
     pub schema: String,
     pub version: Version,
+    #[serde(default)]
+    pub release_id: Option<ReleaseId>,
     pub minimum_updater_version: Version,
     pub source: BuildSource,
     pub rollout: RolloutPolicy,
@@ -157,6 +161,13 @@ impl ReleaseManifest {
     pub fn validate(&self) -> Result<(), ManifestError> {
         if self.schema != MANIFEST_SCHEMA {
             return Err(ManifestError::Schema(self.schema.clone()));
+        }
+        if let Some(release_id) = &self.release_id
+            && release_id.base_version() != &self.version
+        {
+            return Err(ManifestError::InvalidField(
+                "release_id must use the manifest package version as its base".to_owned(),
+            ));
         }
         if self.source.repository != "benclawbot/Medusa" {
             return Err(ManifestError::InvalidField(
@@ -559,6 +570,7 @@ mod tests {
         ReleaseManifest {
             schema: MANIFEST_SCHEMA.to_owned(),
             version: Version::new(2, 0, 0),
+            release_id: None,
             minimum_updater_version: Version::new(1, 0, 0),
             source: BuildSource {
                 repository: "benclawbot/Medusa".to_owned(),

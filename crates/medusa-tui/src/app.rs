@@ -88,6 +88,7 @@ pub struct AppState {
     session_started_at: Instant,
     session_elapsed_seconds: u64,
     run_started_at: Option<Instant>,
+    assistant_stream_active: bool,
     draft_store: DraftStore,
     draft_key: String,
     clipboard: Arc<dyn ClipboardService>,
@@ -221,6 +222,7 @@ impl AppState {
             session_started_at: Instant::now(),
             session_elapsed_seconds: 0,
             run_started_at: None,
+            assistant_stream_active: false,
             draft_store,
             draft_key,
             clipboard,
@@ -487,6 +489,7 @@ impl AppState {
         self.question_modal = None;
         self.selection = None;
         self.selection_dragging = false;
+        self.assistant_stream_active = false;
     }
 
     pub fn compact_transcript(&mut self, message: String) {
@@ -561,10 +564,23 @@ impl AppState {
     }
 
     pub fn record_assistant_text(&mut self, text: String) {
-        let text = text.trim_end().to_owned();
-        if !text.trim().is_empty() {
-            self.transcript.push(TranscriptEntry::Assistant(text));
+        if text.trim().is_empty() {
+            return;
         }
+        if self.assistant_stream_active
+            && let Some(TranscriptEntry::Assistant(existing)) = self.transcript.last_mut()
+        {
+            if existing == &text {
+                return;
+            }
+            if text.starts_with(existing.as_str()) {
+                *existing = text;
+            } else {
+                existing.push_str(&text);
+            }
+            return;
+        }
+        self.transcript.push(TranscriptEntry::Assistant(text));
     }
 
     pub fn restore_rejected_submission(&mut self, draft: PromptDraft) -> io::Result<()> {
@@ -694,10 +710,12 @@ impl AppState {
         self.active_turn = 0;
         self.spinner_frame = 0;
         self.run_started_at = Some(Instant::now());
+        self.assistant_stream_active = true;
     }
 
     pub fn finish_run(&mut self) {
         self.run_started_at = None;
+        self.assistant_stream_active = false;
     }
 
     pub fn tick(&mut self) -> bool {

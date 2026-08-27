@@ -161,8 +161,11 @@ function renderInline(value: string, keyPrefix: string): React.ReactNode[] {
   return children;
 }
 
-export function MarkdownMessage({ text }: { text: string }) {
-  const blocks = parseMarkdown(typeof text === "string" ? text : String(text ?? ""));
+export const MarkdownMessage = React.memo(function MarkdownMessage({ text }: { text: string }) {
+  const blocks = React.useMemo(
+    () => parseMarkdown(typeof text === "string" ? text : String(text ?? "")),
+    [text],
+  );
   return (
     <div className="markdown-message">
       {blocks.map((block, index) => {
@@ -190,7 +193,7 @@ export function MarkdownMessage({ text }: { text: string }) {
       })}
     </div>
   );
-}
+});
 
 function MarkdownCodeBlock({ text, language }: { text: string; language?: string }) {
   const [copied, setCopied] = React.useState(false);

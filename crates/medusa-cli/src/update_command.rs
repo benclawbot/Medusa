@@ -9,7 +9,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_update::{
     AtomicInstaller, GithubReleaseClient, InstallKind, InstallLocation, MainArtifactPhase,
     MainArtifactProgress, MainBranchUpdater, MainBuildProgress, Platform, ReleaseClient, Restart,
-    UpdateCheck, UpdateDiagnostics, UpdatePhase, UpdatePolicy,
+    CURRENT_RELEASE_ID, ReleaseId, UpdateDiagnostics, UpdatePhase, UpdatePolicy,
 };
 use crossterm::terminal;
 use semver::Version;
@@ -72,10 +72,12 @@ fn release_channel(
             release.version, release.minimum_updater_version, updater
         )));
     }
-    if !allow_downgrade && release.version < current {
+    let current_release_id = ReleaseId::parse(CURRENT_RELEASE_ID)
+        .map_err(|error| invalid(format!("invalid current release identity: {error}")))?;
+    if !allow_downgrade && release.release_id < current_release_id {
         return Err(policy_error(format!(
-            "downgrade from {current} to {} requires --allow-downgrade",
-            release.version
+            "downgrade from {} to {} requires --allow-downgrade",
+            current_release_id, release.release_id
         )));
     }
     if !allow_downgrade
@@ -88,11 +90,7 @@ fn release_channel(
         )));
     }
 
-    if matches!(
-        UpdateCheck::compare(env!("CARGO_PKG_VERSION"), release.version.clone()),
-        UpdateCheck::UpToDate { .. }
-    ) && !allow_downgrade
-    {
+    if release.release_id <= current_release_id && !allow_downgrade {
         println!("Medusa is up to date.");
         return Ok(());
     }
@@ -100,12 +98,12 @@ fn release_channel(
     if !rollout_eligible(repo, release.rollout_percentage) {
         println!(
             "Release {} is in a {}% rollout and this installation is not selected yet.",
-            release.version, release.rollout_percentage
+            release.release_id, release.rollout_percentage
         );
         return Ok(());
     }
     if check_only {
-        println!("Verified Medusa release {} is available.", release.version);
+        println!("Verified Medusa release {} is available.", release.release_id);
         return Ok(());
     }
     require_automatic_for_unattended(automatic)?;
@@ -126,7 +124,10 @@ fn release_channel(
         .prefix("verified-release-")
         .tempdir_in(&update_root)?;
     let archive = workspace.path().join(&artifact.name);
-    let mut progress = UpdateProgress::new(current.to_string(), release.version.to_string());
+    let mut progress = UpdateProgress::new(
+        current_release_id.to_string(),
+        release.release_id.to_string(),
+    );
     progress.stage(UpdateStage::Preparing, 0, "selecting release");
 
     let download_timer = diagnostics.phase(UpdatePhase::Download);
@@ -168,7 +169,10 @@ fn release_channel(
     progress.finish();
     println!(
         "Medusa update installed and staged: {}. Restarting.",
-        version_transition(&current.to_string(), &release.version.to_string())
+        version_transition(
+            &current_release_id.to_string(),
+            &release.release_id.to_string(),
+        )
     );
     Ok(())
 }

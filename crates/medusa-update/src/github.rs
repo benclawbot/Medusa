@@ -7,18 +7,17 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::release_id::ReleaseId;
+use crate::{
+    Artifact, DownloadReport, Release,
+    manifest::{MANIFEST_NAME, Platform, SIGNATURE_NAME, TrustStore},
+    model::{invalid, verify_artifact},
+};
 use medusa_core::{MedusaResult, storage};
 use reqwest::{
     StatusCode,
     blocking::{Client, Response},
     header::{ACCEPT, ETAG, IF_NONE_MATCH, RANGE},
-};
-use semver::Version;
-
-use crate::{
-    Artifact, DownloadReport, Release,
-    manifest::{MANIFEST_NAME, Platform, SIGNATURE_NAME, TrustStore},
-    model::{invalid, verify_artifact},
 };
 
 mod support;
@@ -205,8 +204,8 @@ impl ReleaseClient for GithubReleaseClient {
                 "latest GitHub release must be published and stable",
             ));
         }
-        let tagged_version = Version::parse(release.tag_name.trim_start_matches('v'))
-            .map_err(|error| invalid(format!("release tag is not semantic version: {error}")))?;
+        let tagged_release_id = ReleaseId::parse(&release.tag_name)
+            .map_err(|error| invalid(format!("release tag is not a supported version: {error}")))?;
         let assets = release
             .assets
             .iter()
@@ -221,10 +220,15 @@ impl ReleaseClient for GithubReleaseClient {
 
         // No release field other than the two fixed bootstrap asset names is trusted before this.
         let verified = self.signed_manifest(manifest_asset, signature_asset)?;
-        if verified.manifest.version != tagged_version {
+        let signed_release_id = verified
+            .manifest
+            .release_id
+            .clone()
+            .unwrap_or_else(|| ReleaseId::from_version(&verified.manifest.version));
+        if signed_release_id != tagged_release_id {
             return Err(invalid(format!(
-                "signed version {} does not match release tag {}",
-                verified.manifest.version, release.tag_name
+                "signed release identity {} does not match release tag {}",
+                signed_release_id, release.tag_name
             )));
         }
         let artifacts = verified

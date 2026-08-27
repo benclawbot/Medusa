@@ -18,7 +18,7 @@ Medusa 1.0 source builds require Rust 1.88 or newer. Desktop and browser develop
 
 ## Release artifacts
 
-`Publish Release` validates an exact `v<workspace-version>` tag bound to the workflow SHA and contained in `main`, then independently builds:
+`Publish Release` validates an exact `v<release-version>` tag bound to the workflow SHA and contained in `main`, then independently builds:
 
 - Linux CLI archive, Debian package, and AppImage;
 - macOS CLI archive, application archive, and DMG;
@@ -39,7 +39,7 @@ The release updater fails closed while those assets are absent or invalid.
 
 The signed manifest binds:
 
-- semantic version and minimum updater version;
+- package semantic version, four-part release identity, and minimum updater version;
 - source repository and exact revision;
 - Rust toolchain and lockfile digests;
 - stable rollout sequence and percentage;

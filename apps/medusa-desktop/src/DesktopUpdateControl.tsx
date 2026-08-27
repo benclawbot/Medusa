@@ -38,15 +38,28 @@ export function DesktopUpdateControl() {
   const [error, setError] = useState<string>();
 
   useEffect(() => {
+    let frame: number | undefined;
     const findTarget = () => {
       if (typeof document !== "undefined") {
-        setTarget(document.querySelector(".settings-form"));
+        const next = document.querySelector(".settings-form");
+        setTarget((current) => current === next ? current : next);
       }
     };
     findTarget();
-    const observer = new MutationObserver(findTarget);
+    const observer = new MutationObserver(() => {
+      if (frame !== undefined) return;
+      if (typeof window === "undefined") return;
+      frame = window.requestAnimationFrame(() => {
+        frame = undefined;
+        if (typeof window === "undefined") return;
+        findTarget();
+      });
+    });
     observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frame !== undefined && typeof window !== "undefined") window.cancelAnimationFrame(frame);
+    };
   }, []);
 
   useEffect(() => {

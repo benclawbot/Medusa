@@ -311,6 +311,37 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
   let next = timelineSnapshot.runtimeId === runtimeId
     ? timelineSnapshot
     : { ...emptyTimeline, runtimeId };
+  let activities = next.activities;
+  let activitiesDirty = false;
+  let activityIndexes: Map<string, number> | undefined;
+
+  const ensureActivityIndexes = (): Map<string, number> => {
+    if (!activityIndexes) {
+      activityIndexes = new Map(
+        activities.flatMap((activity, index) => activity.id ? [[activity.id, index] as const] : []),
+      );
+    }
+    return activityIndexes;
+  };
+
+  const replaceOrAppendActivity = (activity: RuntimeActivity): void => {
+    if (!activitiesDirty) {
+      activities = [...activities];
+      activitiesDirty = true;
+    }
+    if (!activity.id) {
+      activities.push(activity);
+      return;
+    }
+    const indexes = ensureActivityIndexes();
+    const index = indexes.get(activity.id);
+    if (index === undefined) {
+      indexes.set(activity.id, activities.length);
+      activities.push(activity);
+    } else {
+      activities[index] = activity;
+    }
+  };
 
   for (const event of events) {
     switch (event.type) {
@@ -318,24 +349,23 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
         next = { ...next, busy: true };
         break;
       case "activity": {
-        const activities = [...next.activities];
-        const index = event.activity.id
-          ? activities.findIndex((item) => item.id === event.activity.id)
-          : -1;
-        if (index >= 0) activities[index] = event.activity;
-        else activities.push(event.activity);
-        next = { ...next, activities };
+        replaceOrAppendActivity(event.activity);
         break;
       }
       case "team": {
         const activeWorkerIds = new Set(
           event.snapshot.workers.map((worker) => `team:${worker.workerId}`),
         );
-        const activities = next.activities.filter(
+        const filteredActivities = activities.filter(
           (activity) =>
             !activity.id?.startsWith("team:") ||
             activeWorkerIds.has(activity.id),
         );
+        if (filteredActivities.length !== activities.length) {
+          activities = filteredActivities;
+          activitiesDirty = true;
+          activityIndexes = undefined;
+        }
         for (const worker of event.snapshot.workers) {
           const activity: RuntimeActivity = {
             id: `team:${worker.workerId}`,
@@ -354,13 +384,9 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
               worker.lastUpdate,
             ],
           };
-          const index = activities.findIndex(
-            (item) => item.id === activity.id,
-          );
-          if (index >= 0) activities[index] = activity;
-          else activities.push(activity);
+          replaceOrAppendActivity(activity);
         }
-        next = { ...next, team: event.snapshot, activities };
+        next = { ...next, team: event.snapshot };
         break;
       }
       case "plan":
@@ -375,12 +401,16 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
         break;
       case "newSession":
         next = { ...emptyTimeline, runtimeId };
+        activities = next.activities;
+        activitiesDirty = false;
+        activityIndexes = undefined;
         break;
       default:
         break;
     }
   }
 
+  if (activitiesDirty) next = { ...next, activities };
   if (next !== timelineSnapshot) publishTimeline(next);
 }
 

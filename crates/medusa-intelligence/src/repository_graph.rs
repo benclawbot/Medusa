@@ -81,9 +81,7 @@ impl RepositoryGraph {
         if let Ok(bytes) = fs::read(&cache_path)
             && let Ok(cached) = serde_json::from_slice::<RepositoryGraphSnapshot>(&bytes)
             && cached.schema_version == SCHEMA_VERSION
-            && let Ok((repository_revision, graph_revision)) = graph_identity(&repo)
-            && cached.repository_revision == repository_revision
-            && cached.graph_revision == graph_revision
+            && repository_is_current(&repo, &cached.repository_revision, &cached.graph_revision)
         {
             return Ok(Self {
                 repo,
@@ -104,6 +102,13 @@ impl RepositoryGraph {
     }
 
     pub fn refresh(&mut self) -> MedusaResult<Vec<PathBuf>> {
+        if repository_is_current(
+            &self.repo,
+            &self.snapshot.repository_revision,
+            &self.snapshot.graph_revision,
+        ) {
+            return Ok(Vec::new());
+        }
         let next = capture(&self.repo)?;
         let changed = changed_paths(&self.snapshot.files, &next.files);
         if next.graph_revision != self.snapshot.graph_revision
@@ -117,14 +122,14 @@ impl RepositoryGraph {
 
     #[must_use]
     pub fn freshness(&self) -> RepositoryGraphFreshness {
-        match graph_identity(&self.repo) {
-            Ok((revision, graph_revision))
-                if revision == self.snapshot.repository_revision
-                    && graph_revision == self.snapshot.graph_revision =>
-            {
-                RepositoryGraphFreshness::Current
-            }
-            _ => RepositoryGraphFreshness::Stale,
+        if repository_is_current(
+            &self.repo,
+            &self.snapshot.repository_revision,
+            &self.snapshot.graph_revision,
+        ) {
+            RepositoryGraphFreshness::Current
+        } else {
+            RepositoryGraphFreshness::Stale
         }
     }
 
@@ -228,6 +233,31 @@ fn capture(repo: &Path) -> MedusaResult<RepositoryGraphSnapshot> {
         index,
         semantic,
     })
+}
+
+fn repository_is_current(repo: &Path, revision: &str, graph_revision: &str) -> bool {
+    let Ok(current_revision) = git(repo, &["rev-parse", "HEAD"]) else {
+        return false;
+    };
+    if current_revision != revision {
+        return false;
+    }
+    let Ok(status) = hidden_command("git")
+        .args(["status", "--porcelain=v1", "--untracked-files=no"])
+        .current_dir(repo)
+        .output()
+    else {
+        return false;
+    };
+    if !status.status.success() {
+        return false;
+    }
+    if status.stdout.is_empty() {
+        return true;
+    }
+    graph_identity(repo)
+        .map(|(_, current_graph_revision)| current_graph_revision == graph_revision)
+        .unwrap_or(false)
 }
 
 fn graph_identity(repo: &Path) -> MedusaResult<(String, String)> {

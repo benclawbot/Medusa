@@ -14,14 +14,14 @@ export function MemoryDock() {
   useDialogFocus(open, dialogRef, close);
 
   useEffect(() => {
+    if (!open) return;
     const sync = () => setRepo(window.localStorage.getItem("medusa.desktop.repo") ?? "");
+    sync();
     window.addEventListener("focus", sync);
-    const interval = window.setInterval(sync, 500);
     return () => {
       window.removeEventListener("focus", sync);
-      window.clearInterval(interval);
     };
-  }, []);
+  }, [open]);
 
   return (
     <>

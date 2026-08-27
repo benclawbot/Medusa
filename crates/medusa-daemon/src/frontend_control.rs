@@ -104,6 +104,10 @@ pub enum FrontendControlResult {
     Transient {
         events: Vec<FrontendTransientEvent>,
     },
+    Poll {
+        transient: Vec<FrontendTransientEvent>,
+        replay: LiveSessionReplayView,
+    },
     CursorAcknowledged {
         attachment: LiveSessionAttachmentView,
     },
@@ -361,6 +365,24 @@ impl FrontendControlPlane {
                 self.authorize_control(&session_id, &envelope.client_id)?;
                 let events = self.poll_transient(&session_id)?;
                 Ok(FrontendControlResult::Transient { events })
+            }
+            FrontendCommand::Poll {
+                after_cursor,
+                acknowledge_cursor,
+            } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                if let Some(cursor) = acknowledge_cursor {
+                    self.broker.acknowledge_cursor(
+                        &envelope.client_id,
+                        *cursor,
+                        timestamp_unix_ms(envelope.timestamp),
+                        format!("{}:ack", envelope.command_id),
+                    )?;
+                }
+                let transient = self.poll_transient(&session_id)?;
+                let replay = self.replay_events(&envelope.client_id, *after_cursor)?;
+                Ok(FrontendControlResult::Poll { transient, replay })
             }
             FrontendCommand::AcknowledgeCursor { cursor } => {
                 let attachment = self.broker.acknowledge_cursor(
@@ -969,6 +991,7 @@ fn command_is_cacheable(command: &FrontendCommand) -> bool {
         FrontendCommand::ListSessions
             | FrontendCommand::Replay { .. }
             | FrontendCommand::PollTransient
+            | FrontendCommand::Poll { .. }
             | FrontendCommand::ShowSessionActions
             | FrontendCommand::ShowStatus
     )

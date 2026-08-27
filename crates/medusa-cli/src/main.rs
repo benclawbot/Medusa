@@ -49,7 +49,7 @@ use super::oauth_preflight;
 #[derive(Parser, Debug)]
 #[command(
     name = "medusa",
-    version,
+    version = medusa_update::CURRENT_RELEASE_ID,
     about = "Autonomous coding agent",
     after_help = "Run `medusa` without a subcommand to open the interactive terminal. Use `medusa config` to change provider preferences and `medusa run` for headless execution."
 )]

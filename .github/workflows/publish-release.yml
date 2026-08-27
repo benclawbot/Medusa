@@ -325,7 +325,8 @@ jobs:
             --revision "$RELEASE_SHA" \
             --sequence "$RELEASE_SEQUENCE" \
             --rollout-percentage 100 \
-            --minimum-updater-version "1.0.0"
+            --minimum-updater-version "1.0.0" \
+            --release-id "${RELEASE_TAG#v}"
       - name: Attest release assets
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
@@ -352,4 +353,4 @@ jobs:
           gh release create "$RELEASE_TAG" release-assets/* \
             --verify-tag \
             --generate-notes \
-            --title "Medusa $RELEASE_VERSION"
+            --title "Medusa ${RELEASE_TAG#v}"

@@ -57,6 +57,12 @@ pub enum FrontendCommand {
         after_cursor: u64,
     },
     PollTransient,
+    /// Acknowledge the previous durable delivery and return transient and
+    /// durable frontend events in one control-plane round trip.
+    Poll {
+        after_cursor: u64,
+        acknowledge_cursor: Option<u64>,
+    },
     NewSession,
     RunCommand {
         input: String,

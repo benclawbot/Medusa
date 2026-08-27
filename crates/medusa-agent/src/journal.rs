@@ -4,6 +4,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
+    time::SystemTime,
 };
 
 use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
@@ -22,6 +23,7 @@ const FRAME_HEADER_BYTES: usize = std::mem::size_of::<u32>() + 32;
 const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 static JOURNAL_LOCKS: OnceLock<Mutex<BTreeMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
+static JOURNAL_CACHE: OnceLock<Mutex<BTreeMap<PathBuf, CachedJournal>>> = OnceLock::new();
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +53,12 @@ enum JournalRecord {
 struct JournalState {
     events: Vec<EventEnvelope>,
     committed_snapshot: Option<AgentSession>,
+}
+
+struct CachedJournal {
+    length: u64,
+    modified: Option<SystemTime>,
+    state: Arc<JournalState>,
 }
 
 pub(crate) fn append_payload_committed(
@@ -439,8 +447,8 @@ pub(crate) fn replay_from_cursor(
     let lock = session_lock(repo, session_id);
     let _guard = lock_mutex(&lock);
     let path = journal_path(repo, session_id)?;
-    let state = read_journal(&path, session_id, true, true)?;
-    let committed = state.committed_snapshot.ok_or_else(|| {
+    let state = read_journal_cached(&path, session_id)?;
+    let committed = state.committed_snapshot.as_ref().ok_or_else(|| {
         persistence_error(format!(
             "session {session_id} journal has no committed snapshot"
         ))
@@ -503,6 +511,7 @@ fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     write_record(&mut file, &snapshot_record(session))?;
     file.sync_all()?;
     fs::rename(temporary, path)?;
+    invalidate_journal_cache(path);
     Ok(())
 }
 
@@ -531,7 +540,47 @@ fn append_records(path: &Path, records: &[JournalRecord]) -> MedusaResult<()> {
         write_record(&mut file, record)?;
     }
     file.sync_data()?;
+    invalidate_journal_cache(path);
     Ok(())
+}
+
+fn read_journal_cached(path: &Path, session_id: &SessionId) -> MedusaResult<Arc<JournalState>> {
+    let metadata = fs::metadata(path)?;
+    let length = metadata.len();
+    let modified = metadata.modified().ok();
+    let cache = JOURNAL_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Some(cached) = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(path)
+        .filter(|cached| cached.length == length && cached.modified == modified)
+    {
+        return Ok(Arc::clone(&cached.state));
+    }
+
+    let state = Arc::new(read_journal(path, session_id, true, true)?);
+    let final_metadata = fs::metadata(path)?;
+    cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(
+            path.to_path_buf(),
+            CachedJournal {
+                length: final_metadata.len(),
+                modified: final_metadata.modified().ok(),
+                state: Arc::clone(&state),
+            },
+        );
+    Ok(state)
+}
+
+fn invalidate_journal_cache(path: &Path) {
+    if let Some(cache) = JOURNAL_CACHE.get() {
+        cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(path);
+    }
 }
 
 fn write_record(file: &mut File, record: &JournalRecord) -> MedusaResult<()> {

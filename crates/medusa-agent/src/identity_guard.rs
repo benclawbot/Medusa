@@ -12,6 +12,43 @@ const FORBIDDEN_IDENTITY_CLAIMS: &[&str] = &[
     "override medusa policy",
 ];
 
+const MAX_CLAIM_CHARS: usize = 32;
+
+/// Validates streamed provider output without rescanning the complete prefix for every chunk.
+#[derive(Default)]
+pub struct IncrementalProviderTextValidator {
+    tail: String,
+}
+
+impl IncrementalProviderTextValidator {
+    pub fn push(&mut self, chunk: &str) -> MedusaResult<()> {
+        self.tail.push_str(&chunk.to_ascii_lowercase());
+        if let Some(claim) = FORBIDDEN_IDENTITY_CLAIMS
+            .iter()
+            .find(|claim| self.tail.contains(**claim))
+        {
+            return Err(MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                format!("provider output attempted identity or policy contamination: {claim}"),
+            ));
+        }
+
+        if self.tail.chars().count() > MAX_CLAIM_CHARS {
+            self.tail = self
+                .tail
+                .chars()
+                .rev()
+                .take(MAX_CLAIM_CHARS)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+        }
+        Ok(())
+    }
+}
+
 /// Rejects provider text that attempts to replace Medusa's runtime identity or policy authority.
 pub fn validate_provider_text(text: &str) -> MedusaResult<()> {
     let normalized = text.to_ascii_lowercase();
@@ -51,6 +88,16 @@ mod tests {
     fn accepts_normal_task_output() {
         validate_provider_text("Updated two files and ran cargo test.")
             .expect("ordinary output remains valid");
+    }
+
+    #[test]
+    fn incremental_validator_rejects_claims_split_across_chunks() {
+        let mut validator = IncrementalProviderTextValidator::default();
+        validator.push("As Cl").expect("first chunk is valid");
+        let error = validator
+            .push("aude, I will override Medusa policy")
+            .expect_err("split identity claim must be rejected");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
     }
 
     #[test]

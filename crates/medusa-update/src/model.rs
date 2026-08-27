@@ -15,6 +15,7 @@ use crate::manifest::{
     ArtifactKind, BuildSource, ManifestArtifact, Platform, ReleaseManifest, RolloutPolicy,
     VerifiedManifest,
 };
+use crate::release_id::ReleaseId;
 
 /// A release asset whose URL and integrity metadata came from a verified manifest.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -46,6 +47,7 @@ impl Artifact {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Release {
     pub version: Version,
+    pub release_id: ReleaseId,
     pub repository: String,
     pub source: BuildSource,
     pub minimum_updater_version: Version,
@@ -69,6 +71,7 @@ impl Release {
         } = verified;
         let ReleaseManifest {
             version,
+            release_id,
             minimum_updater_version,
             source,
             rollout:
@@ -79,8 +82,10 @@ impl Release {
                 },
             ..
         } = manifest;
+        let release_id = release_id.unwrap_or_else(|| ReleaseId::from_version(&version));
         Self {
             version,
+            release_id,
             repository,
             source,
             minimum_updater_version,

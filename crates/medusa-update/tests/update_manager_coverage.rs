@@ -11,7 +11,7 @@ use flate2::{Compression, write::GzEncoder};
 use medusa_update::{
     Architecture, ArtifactKind, AtomicInstaller, BuildSource, GithubReleaseClient, KeyStatus,
     MANIFEST_NAME, MANIFEST_SCHEMA, ManifestArtifact, ManifestSignature, OperatingSystem, Platform,
-    ReleaseClient, ReleaseEvidence, ReleaseManifest, RolloutPolicy, SIGNATURE_NAME,
+    ReleaseClient, ReleaseEvidence, ReleaseId, ReleaseManifest, RolloutPolicy, SIGNATURE_NAME,
     SIGNATURE_SCHEMA, TrustStore, TrustedKey, UpdateCheck, copy_with_progress, verify_sha256,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -55,6 +55,7 @@ fn signed_release(base: &str, payload: &[u8]) -> (TrustStore, Vec<u8>, Vec<u8>, 
     let manifest = ReleaseManifest {
         schema: MANIFEST_SCHEMA.to_owned(),
         version: Version::new(1, 2, 0),
+        release_id: Some(ReleaseId::parse("1.2.0.1").expect("release id")),
         minimum_updater_version: Version::new(1, 0, 0),
         source: BuildSource {
             repository: "benclawbot/Medusa".to_owned(),
@@ -105,7 +106,7 @@ fn signed_release(base: &str, payload: &[u8]) -> (TrustStore, Vec<u8>, Vec<u8>, 
     }])
     .expect("trust store");
     let release = serde_json::json!({
-        "tag_name": "v1.2.0",
+        "tag_name": "v1.2.0.1",
         "draft": false,
         "prerelease": false,
         "assets": [
@@ -163,6 +164,7 @@ fn discovers_verified_release_and_streams_platform_asset() {
         .latest()
         .expect("release request")
         .expect("published release");
+    assert_eq!(release.release_id.to_string(), "1.2.0.1");
     assert!(matches!(
         UpdateCheck::compare("1.1.9", release.version.clone()),
         UpdateCheck::Available { .. }

@@ -314,31 +314,23 @@ impl RuntimeEntry {
         Ok((text, ids))
     }
 
-    fn acknowledge_previous_delivery(&mut self) -> Result<(), String> {
-        let Some(cursor) = self.pending_ack_cursor.take() else {
-            return Ok(());
-        };
-        let acknowledgement = self.dispatch(FrontendCommand::AcknowledgeCursor { cursor })?;
-        if !matches!(
-            acknowledgement.result,
-            FrontendControlResult::CursorAcknowledged { .. }
-        ) {
-            return Err("daemon returned an unexpected cursor acknowledgement".to_owned());
-        }
-        Ok(())
-    }
-
     fn poll_daemon(&mut self) -> Result<(), String> {
         let Some(session_id) = self.session_id.clone() else {
             return Ok(());
         };
-        self.acknowledge_previous_delivery()?;
-
-        let transient = self.dispatch(FrontendCommand::PollTransient)?;
-        let FrontendControlResult::Transient { events } = transient.result else {
-            return Err("daemon returned an unexpected transient-event result".to_owned());
+        let acknowledge_cursor = self.pending_ack_cursor;
+        let poll = self.dispatch(FrontendCommand::Poll {
+            after_cursor: self.replay_cursor,
+            acknowledge_cursor,
+        })?;
+        let FrontendControlResult::Poll { transient, replay } = poll.result else {
+            return Err("daemon returned an unexpected combined poll result".to_owned());
         };
-        for event in events {
+        if acknowledge_cursor.is_some() {
+            self.pending_ack_cursor = None;
+        }
+        let mut reset = false;
+        for event in transient {
             if matches!(event, FrontendTransientEvent::NewSession) {
                 clear_local_session_state(
                     &mut self.session_id,
@@ -346,19 +338,13 @@ impl RuntimeEntry {
                     &mut self.pending_ack_cursor,
                     &mut self.presentation,
                 );
+                reset = true;
             }
             self.presentation.push_transient(event);
         }
-        if self.session_id.is_none() {
+        if reset || self.session_id.is_none() {
             return Ok(());
         }
-
-        let replay = self.dispatch(FrontendCommand::Replay {
-            after_cursor: self.replay_cursor,
-        })?;
-        let FrontendControlResult::Events { replay } = replay.result else {
-            return Err("daemon returned an unexpected replay result".to_owned());
-        };
         if replay.session_id != session_id {
             return Err("daemon replay switched sessions unexpectedly".to_owned());
         }

@@ -5,7 +5,6 @@ use std::{
         OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-    thread,
     time::Duration,
 };
 
@@ -72,28 +71,33 @@ where
     if cancel.load(Ordering::SeqCst) {
         return Err(cancelled_provider_error());
     }
-    thread::scope(|scope| {
-        let worker = scope.spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| {
-                    provider_response_error(format!(
-                        "could not start cancellable provider runtime: {error}"
-                    ))
-                })?;
-            runtime.block_on(async move {
-                tokio::select! {
-                    biased;
-                    () = wait_for_cancellation(cancel) => Err(cancelled_provider_error()),
-                    result = future => result,
-                }
-            })
-        });
-        worker
-            .join()
-            .map_err(|_| provider_response_error("cancellable provider request worker panicked"))?
+    let runtime = shared_provider_runtime()?;
+    runtime.block_on(async move {
+        tokio::select! {
+            biased;
+            () = wait_for_cancellation(cancel) => Err(cancelled_provider_error()),
+            result = future => result,
+        }
     })
+}
+
+fn shared_provider_runtime() -> MedusaResult<&'static tokio::runtime::Runtime> {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .thread_name("medusa-provider")
+        .build()
+        .map_err(|error| {
+            provider_response_error(format!("could not start shared provider runtime: {error}"))
+        })?;
+    let _ = RUNTIME.set(runtime);
+    RUNTIME
+        .get()
+        .ok_or_else(|| provider_response_error("shared provider runtime was not initialized"))
 }
 
 async fn wait_for_cancellation(cancel: &AtomicBool) {
@@ -296,6 +300,7 @@ mod tests {
     use std::{
         io::{Read as _, Write as _},
         net::TcpListener,
+        thread,
         time::Instant,
     };
 

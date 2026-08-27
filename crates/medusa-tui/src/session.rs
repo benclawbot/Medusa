@@ -123,21 +123,35 @@ pub(super) fn run_loop(
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let (mut daemon_jobs, mut daemon_status) = daemon.poll(app);
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
+    let mut next_animation = Instant::now();
+    let mut needs_draw = true;
     let mut last_ctrl_c = None;
 
     loop {
-        drain_runtime_events(app, runtime)?;
-        app.tick();
+        needs_draw |= drain_runtime_events(app, runtime)?;
 
         let now = Instant::now();
+        if now >= next_animation {
+            needs_draw |= app.tick();
+            next_animation = now + if app.is_running() {
+                Duration::from_millis(50)
+            } else {
+                Duration::from_millis(250)
+            };
+        }
         if now >= next_daemon_poll {
             (daemon_jobs, daemon_status) = daemon.poll(app);
             next_daemon_poll = now + DAEMON_POLL_INTERVAL;
+            needs_draw = true;
         }
 
-        draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
+        if needs_draw {
+            draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
+            needs_draw = false;
+        }
         if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
+            needs_draw = true;
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
             if let Some(action) =
@@ -178,25 +192,39 @@ pub(super) fn run_loop(
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let _ = daemon.poll(app);
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
+    let mut next_animation = Instant::now();
+    let mut needs_frame = true;
 
     loop {
-        drain_runtime_events(app, runtime)?;
-        app.tick();
+        needs_frame |= drain_runtime_events(app, runtime)?;
 
         let now = Instant::now();
+        if now >= next_animation {
+            needs_frame |= app.tick();
+            next_animation = now + if app.is_running() {
+                Duration::from_millis(50)
+            } else {
+                Duration::from_millis(250)
+            };
+        }
         if now >= next_daemon_poll {
             let _ = daemon.poll(app);
             next_daemon_poll = now + DAEMON_POLL_INTERVAL;
+            needs_frame = true;
         }
 
-        let (width, height) = size()?;
-        let frame = render_frame(identity, app, width, height);
-        if last_frame.as_ref() != Some(&frame) {
-            draw_portable_frame(stdout, width, &frame, last_frame.as_deref())?;
-            last_frame = Some(frame);
+        if needs_frame || last_frame.is_none() {
+            let (width, height) = size()?;
+            let frame = render_frame(identity, app, width, height);
+            if last_frame.as_ref() != Some(&frame) {
+                draw_portable_frame(stdout, width, &frame, last_frame.as_deref())?;
+                last_frame = Some(frame);
+            }
+            needs_frame = false;
         }
         if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
+            needs_frame = true;
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
             if let Some(action) =
@@ -513,8 +541,10 @@ fn user_visible_runtime_error(error: &str) -> String {
 pub(super) fn drain_runtime_events(
     app: &mut AppState,
     runtime: &RuntimeController,
-) -> io::Result<()> {
+) -> io::Result<bool> {
+    let mut changed = false;
     while let Some(event) = runtime.try_event().map_err(runtime_error)? {
+        changed = true;
         match event {
             RuntimeEvent::Started => {
                 app.begin_run();
@@ -701,7 +731,7 @@ pub(super) fn drain_runtime_events(
             }
         }
     }
-    Ok(())
+    Ok(changed)
 }
 
 pub(super) fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {

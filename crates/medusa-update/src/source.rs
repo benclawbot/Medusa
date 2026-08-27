@@ -710,9 +710,7 @@ fn cargo_package_count(revision: &str, workspace: &Path) -> Option<usize> {
         if !seen.insert(id.clone()) {
             continue;
         }
-        let Some(node) = nodes.get(&id) else {
-            return None;
-        };
+        let node = nodes.get(&id)?;
         for dependency in &node.deps {
             if dependency
                 .dep_kinds

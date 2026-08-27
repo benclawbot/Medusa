@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{env, sync::OnceLock, time::Duration};
 
 use medusa_config::{
     Config, DiscoveredModel, DiscoveryFailure, credential_environment, provider_catalog_entry,
@@ -80,12 +80,7 @@ pub fn discover_models(
         return Err(ModelDiscoveryError::NotAuthorized);
     }
 
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|_| ModelDiscoveryError::Offline)?;
-    let mut request = client.get(endpoint);
+    let mut request = discovery_client()?.get(endpoint);
     if let Some(api_key) = api_key {
         if catalog.id == "minimax"
             || catalog.id == "anthropic"
@@ -117,6 +112,20 @@ pub fn discover_models(
     models.sort_by(|left, right| left.id.cmp(&right.id));
     models.dedup_by(|left, right| left.id == right.id);
     Ok(models)
+}
+
+fn discovery_client() -> Result<&'static Client, ModelDiscoveryError> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|_| ModelDiscoveryError::Offline)?;
+    let _ = CLIENT.set(client);
+    CLIENT.get().ok_or(ModelDiscoveryError::Offline)
 }
 
 fn default_base_url(provider_id: &str) -> Option<&'static str> {

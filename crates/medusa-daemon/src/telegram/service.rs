@@ -953,6 +953,7 @@ impl TelegramSessionService {
             | FrontendControlResult::CommandAccepted { session_id, .. }
             | FrontendControlResult::Status { session_id, .. } => Some(session_id.clone()),
             FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),
+            FrontendControlResult::Poll { replay, .. } => Some(replay.session_id.clone()),
             FrontendControlResult::Sessions { .. }
             | FrontendControlResult::Detached { .. }
             | FrontendControlResult::Transient { .. } => None,

@@ -59,12 +59,15 @@ export function SessionDock() {
   useDialogFocus(open, dialogRef, close);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
+    if (!open) return;
+    const sync = () => {
       const next = currentRepo();
       setRepo((current) => current === next ? current : next);
-    }, 750);
-    return () => window.clearInterval(interval);
-  }, []);
+    };
+    sync();
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
+  }, [open]);
 
   useEffect(() => {
     setSelected(undefined);

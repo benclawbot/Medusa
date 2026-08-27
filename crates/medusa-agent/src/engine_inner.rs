@@ -26,11 +26,12 @@ mod runtime_failure;
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, atomic::AtomicBool},
     thread,
 };
 
+use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, Mode};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
@@ -54,7 +55,7 @@ use crate::{
     approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},
     engine_support::*,
     evidence::append_event,
-    identity_guard::validate_provider_text,
+    identity_guard::{IncrementalProviderTextValidator, validate_provider_text},
     model_experience::{
         CacheObservationV1, ComponentStability, ModelExperienceComponentV1,
         ModelExperienceContractV1, PrivacyClass,
@@ -186,6 +187,7 @@ pub struct AgentEngine<P> {
     team_context: Option<TeamMemberContext>,
     analysis_host: Option<Arc<dyn AnalysisWorkspaceHost>>,
     general_chat: bool,
+    capability_registry: Mutex<Option<(PathBuf, Arc<CapabilityRegistry>)>>,
 }
 
 fn refreshed_repository_revision(repo: &Path) -> Option<String> {
@@ -639,6 +641,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             team_context: None,
             analysis_host: None,
             general_chat: false,
+            capability_registry: Mutex::new(None),
         }
     }
 
@@ -660,6 +663,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             team_context: None,
             analysis_host: None,
             general_chat: false,
+            capability_registry: Mutex::new(None),
         }
     }
 
@@ -733,11 +737,8 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     fn scope_effective_tools(&self, repo: &Path) -> MedusaResult<Vec<String>> {
-        let mut tools = available_tools(
-            self.config.agent.mode,
-            repo,
-            &self.desktop_commander_settings,
-        )?;
+        let registry = self.capability_registry_for_repo(repo)?;
+        let mut tools = available_tools_from_registry(self.config.agent.mode, registry.as_ref());
         if let Some(team) = &self.team_context {
             tools.extend(team.definitions());
         }
@@ -780,6 +781,7 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     fn validate_scope(&self, session: &AgentSession) -> MedusaResult<AgentScopeRef> {
+        self.clear_capability_registry_cache();
         validate_agent_scope(
             &session.repo,
             session.id.as_str(),
@@ -787,6 +789,30 @@ impl<P: ModelProvider> AgentEngine<P> {
             self.execution_policy.audit_projection(),
             self.scope_effective_tools(&session.repo)?,
         )
+    }
+
+    fn capability_registry_for_repo(&self, repo: &Path) -> MedusaResult<Arc<CapabilityRegistry>> {
+        if let Ok(cache) = self.capability_registry.lock()
+            && let Some((cached_repo, registry)) = cache.as_ref()
+            && cached_repo == repo
+        {
+            return Ok(Arc::clone(registry));
+        }
+        let registry = Arc::new(CapabilityRegistry::discover_with_desktop(
+            repo.to_path_buf(),
+            &medusa_capabilities::SystemProbe,
+            self.desktop_commander_settings.clone(),
+        )?);
+        if let Ok(mut cache) = self.capability_registry.lock() {
+            *cache = Some((repo.to_path_buf(), Arc::clone(&registry)));
+        }
+        Ok(registry)
+    }
+
+    fn clear_capability_registry_cache(&self) {
+        if let Ok(mut cache) = self.capability_registry.lock() {
+            *cache = None;
+        }
     }
 
     pub fn stop_session_scope(
@@ -1554,17 +1580,25 @@ impl<P: ModelProvider> AgentEngine<P> {
                 effective_request::fragment_fingerprint(instruction),
             );
         }
+        let capability_discovery = self.capability_registry_for_repo(&session.repo);
         let mut system = if self.general_chat {
             GENERAL_CHAT_SYSTEM_PROMPT.to_owned()
         } else {
-            coding_policy::apply(
-                system_prompt_with_context(
+            let prompt = match &capability_discovery {
+                Ok(registry) => system_prompt_with_registry(
                     self.config.agent.mode,
                     &session.repo,
                     additional_system_context,
+                    registry.as_ref(),
                 ),
-                self.config.agent.mode,
-            )
+                Err(error) => system_prompt_with_discovery_error(
+                    self.config.agent.mode,
+                    &session.repo,
+                    additional_system_context,
+                    &error.to_string(),
+                ),
+            };
+            coding_policy::apply(prompt, self.config.agent.mode)
         };
         assembly_provenance.insert(
             "base_system_projection".to_owned(),
@@ -1587,11 +1621,16 @@ impl<P: ModelProvider> AgentEngine<P> {
             system.push_str("\n\n");
             system.push_str(&branch_context);
         }
-        let mut tools = available_tools(
-            self.config.agent.mode,
-            &session.repo,
-            &self.desktop_commander_settings,
-        )?;
+        let mut tools = match &capability_discovery {
+            Ok(registry) => {
+                available_tools_from_registry(self.config.agent.mode, registry.as_ref())
+            }
+            Err(_) => available_tools(
+                self.config.agent.mode,
+                &session.repo,
+                &self.desktop_commander_settings,
+            )?,
+        };
         if let Some(team) = &self.team_context {
             tools.extend(team.definitions());
         }
@@ -1709,6 +1748,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         let streaming = self.provider.capabilities().streaming;
         let mut stream_transcript = ProviderStreamTranscript::default();
         let mut streamed_text = String::new();
+        let mut stream_text_validator = IncrementalProviderTextValidator::default();
         let mut stream_text_rejected = false;
         let mut early_tool_executions = BTreeMap::<String, EarlyToolExecution>::new();
         let streaming_repo = session.repo.clone();
@@ -1738,7 +1778,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         match event {
                             ProviderStreamEvent::TextDelta { text } if !stream_text_rejected => {
                                 streamed_text.push_str(&text);
-                                if validate_provider_text(&streamed_text).is_ok() {
+                                if stream_text_validator.push(&text).is_ok() {
                                     observer(&AgentUpdate::AssistantText(text));
                                 } else {
                                     stream_text_rejected = true;

@@ -70,6 +70,7 @@ jobs:
           echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_ID=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
           echo "RELEASE_SHA=$RELEASE_SHA" >> "$GITHUB_ENV"
       - name: Download CI-produced release assets
         shell: bash
@@ -99,7 +100,8 @@ jobs:
             --revision "$RELEASE_SHA" \
             --sequence "$RELEASE_SEQUENCE" \
             --rollout-percentage 100 \
-            --minimum-updater-version "1.0.0"
+            --minimum-updater-version "1.0.0" \
+            --release-id "$RELEASE_ID"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unsigned-release-authority-${{ steps.release.outputs.sha }}
@@ -137,12 +139,12 @@ jobs:
           checksums=release-authority/SHA256SUMS
           test -s "$manifest"
           test -s "$checksums"
-          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?([+-][0-9A-Za-z.-]+)?$ ]]
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           version="${RELEASE_TAG#v}"
           jq -e --arg sha "$RELEASE_SHA" --arg version "$version" '
             .schema == "medusa-release-manifest-v2" and
-            .version == $version and
+            .release_id == $version and
             .source.repository == "benclawbot/Medusa" and
             .source.revision == $sha and
             .rollout.channel == "stable" and

@@ -120,6 +120,11 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_COMPOSER_HEIGHT = 160;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const EFFORT_ORDER: Effort[] = ["auto", "low", "medium", "high"];
+const timestampFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+});
 
 function effortOptionsForModel(provider: ProviderCatalogEntry | undefined, model: string): Effort[] {
   const metadata = provider?.models?.find((candidate) => candidate.id === model);
@@ -149,11 +154,7 @@ function basename(path: string): string {
 }
 
 function formatTimestamp(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(timestamp);
+  return timestampFormatter.format(timestamp);
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
@@ -306,10 +307,15 @@ export function App() {
   const [webArtifact, setWebArtifact] = useState<WebArtifact>();
   const [partialResult, setPartialResult] = useState(false);
   const assistantResponseInTurn = useRef(false);
+  const assistantStream = useRef<{ id: number; raw: string; text: string; createdAt: number }>();
+  const assistantDeltaFrame = useRef<number>();
   const lastTransportError = useRef<string>();
   const transportFailureCount = useRef(0);
   const transportErrorVisible = useRef(false);
   const pollBusy = useRef(false);
+  const wakePoll = useRef<(() => void) | undefined>();
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -360,14 +366,72 @@ export function App() {
     ]);
   }, []);
 
+  const flushAssistantStream = useCallback(() => {
+    if (assistantDeltaFrame.current !== undefined) {
+      window.cancelAnimationFrame(assistantDeltaFrame.current);
+      assistantDeltaFrame.current = undefined;
+    }
+    const stream = assistantStream.current;
+    if (!stream?.raw) return;
+    const text = visibleAssistantText(stream.raw);
+    stream.text = text;
+    if (!text) return;
+    assistantResponseInTurn.current = true;
+    setMessages((current) => {
+      const index = current.findIndex((message) => message.id === stream.id);
+      if (index < 0) {
+        return [...current, { id: stream.id, role: "assistant", text, createdAt: stream.createdAt }];
+      }
+      const next = [...current];
+      next[index] = { ...next[index], text };
+      return next;
+    });
+  }, []);
+
   const appendAssistantMessage = useCallback((value: string) => {
+    flushAssistantStream();
     const text = visibleAssistantText(value);
     if (!text) return;
     assistantResponseInTurn.current = true;
-    setMessages((current) => [
-      ...current,
-      { id: nextMessageId(), role: "assistant", text, createdAt: Date.now() },
-    ]);
+    const stream = assistantStream.current;
+    if (stream && (text === stream.text || text.startsWith(stream.text))) {
+      stream.text = text;
+      setMessages((current) => current.map((message) => (
+        message.id === stream.id ? { ...message, text } : message
+      )));
+      return;
+    }
+    const message = {
+      id: nextMessageId(),
+      role: "assistant" as const,
+      text,
+      createdAt: Date.now(),
+    };
+    setMessages((current) => [...current, message]);
+  }, [flushAssistantStream]);
+
+  const appendAssistantDelta = useCallback((value: string) => {
+    if (!value) return;
+    const stream = assistantStream.current ?? {
+      id: nextMessageId(),
+      raw: "",
+      text: "",
+      createdAt: Date.now(),
+    };
+    stream.raw += value;
+    assistantStream.current = stream;
+    if (assistantDeltaFrame.current === undefined) {
+      assistantDeltaFrame.current = window.requestAnimationFrame(() => {
+        assistantDeltaFrame.current = undefined;
+        flushAssistantStream();
+      });
+    }
+  }, [flushAssistantStream]);
+
+  useEffect(() => () => {
+    if (assistantDeltaFrame.current !== undefined) {
+      window.cancelAnimationFrame(assistantDeltaFrame.current);
+    }
   }, []);
 
   const copyMessage = useCallback(async (message: ConversationMessage) => {
@@ -430,10 +494,11 @@ export function App() {
         setError(undefined);
         setPartialResult(false);
         assistantResponseInTurn.current = false;
+        assistantStream.current = undefined;
         lastTransportError.current = undefined;
         break;
       case "assistantText":
-        appendAssistantMessage(event.text);
+        appendAssistantDelta(event.text);
         break;
       case "activity": {
         const activity = { ...event.activity, details: event.activity.details ?? [] };
@@ -528,6 +593,7 @@ export function App() {
         setPartialResult(false);
         setSidePanelView("work");
         assistantResponseInTurn.current = false;
+        assistantStream.current = undefined;
         lastTransportError.current = undefined;
         setBusy(false);
         break;
@@ -565,20 +631,29 @@ export function App() {
         appendAssistantMessage(`The request did not complete because the runtime reported an error:\n\n${event.message}\n\nRetry the request or inspect Work for the failed execution step. If Preview is available, it contains the partial result that was produced before the failure.`);
         break;
     }
-  }, [appendAssistantMessage, appendWorkLog, refreshConfiguration]);
+  }, [appendAssistantDelta, appendAssistantMessage, appendWorkLog, refreshConfiguration]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
-    if (transcript && typeof transcript.scrollTo === "function") {
-      transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
-    }
-  }, [messages, activities]);
+    if (!transcript || typeof transcript.scrollTo !== "function") return;
+    const distanceFromBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+    if (distanceFromBottom > 120) return;
+    transcript.scrollTo({ top: transcript.scrollHeight, behavior: busy ? "auto" : "smooth" });
+  }, [messages, activities, busy]);
 
   useEffect(() => {
     if (!runtimeId) return;
     let active = true;
-    const interval = window.setInterval(async () => {
-      if (!active || pollBusy.current) return;
+    let timer: number | undefined;
+    const schedule = (delay: number) => {
+      if (active) timer = window.setTimeout(() => void poll(), delay);
+    };
+    const poll = async () => {
+      if (!active) return;
+      if (pollBusy.current) {
+        schedule(20);
+        return;
+      }
       pollBusy.current = true;
       try {
         const events = await pollRuntime(runtimeId);
@@ -610,13 +685,29 @@ export function App() {
         }
       } finally {
         pollBusy.current = false;
+        schedule(busyRef.current ? 80 : 750);
       }
-    }, 120);
+    };
+    const wake = () => {
+      if (!active) return;
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+        timer = undefined;
+      }
+      void poll();
+    };
+    wakePoll.current = wake;
+    schedule(80);
     return () => {
       active = false;
-      window.clearInterval(interval);
+      if (wakePoll.current === wake) wakePoll.current = undefined;
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [runtimeId, applyEvent, appendAssistantMessage, refreshWebArtifact]);
+
+  useEffect(() => {
+    if (busy) wakePoll.current?.();
+  }, [busy]);
 
   useEffect(() => {
     if (!runtimeId || !prompt.trimStart().startsWith("/") || prompt.includes("\n")) {
@@ -624,17 +715,20 @@ export function App() {
       return;
     }
     let active = true;
-    void commandSuggestions(runtimeId, prompt)
-      .then((suggestions) => {
-        if (!active) return;
-        setSlashSuggestions(suggestions);
-        setSlashSelection(0);
-      })
-      .catch((cause) => {
-        if (active) setError(String(cause));
-      });
+    const timer = window.setTimeout(() => {
+      void commandSuggestions(runtimeId, prompt)
+        .then((suggestions) => {
+          if (!active) return;
+          setSlashSuggestions(suggestions);
+          setSlashSelection(0);
+        })
+        .catch((cause) => {
+          if (active) setError(String(cause));
+        });
+    }, 75);
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
   }, [runtimeId, prompt]);
 
@@ -1097,7 +1191,14 @@ export function App() {
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.total;
   const openDesktopTool = (tool: DesktopTool) => requestDesktopTool(tool);
-  const activeWorkEntry = [...workLog].reverse().find((entry) => entry.kind === "activity" && entry.status === "Working");
+  let activeWorkEntry: WorkLogEntry | undefined;
+  for (let index = workLog.length - 1; index >= 0; index -= 1) {
+    const entry = workLog[index];
+    if (entry?.kind === "activity" && entry.status === "Working") {
+      activeWorkEntry = entry;
+      break;
+    }
+  }
   const hasPartialResult = partialResult && Boolean(webArtifact);
 
   const beginSidePanelResize = (event: React.PointerEvent<HTMLButtonElement>) => {

@@ -664,17 +664,24 @@ impl DaemonRuntimeState {
         let Some(session_id) = self.session_id.clone() else {
             return Ok(());
         };
-        self.acknowledge_previous_delivery()?;
-
-        let transient = self.dispatch(FrontendCommand::PollTransient)?;
-        let FrontendControlResult::Transient { events } = transient.result else {
+        let acknowledge_cursor = self.pending_ack_cursor;
+        let poll = self.dispatch(FrontendCommand::Poll {
+            after_cursor: self.replay_cursor,
+            acknowledge_cursor,
+        })?;
+        let FrontendControlResult::Poll { transient, replay } = poll.result else {
             return Err(invalid_runtime(
-                "daemon returned an unexpected transient-event result",
+                "daemon returned an unexpected combined poll result",
             ));
         };
-        for event in events {
+        if acknowledge_cursor.is_some() {
+            self.pending_ack_cursor = None;
+        }
+        let mut reset = false;
+        for event in transient {
             if matches!(event, FrontendTransientEvent::NewSession) {
                 self.reset_session();
+                reset = true;
             }
             self.presentation.push_transient(
                 event,
@@ -682,18 +689,9 @@ impl DaemonRuntimeState {
                 self.auto_compact_percent,
             );
         }
-        if self.session_id.is_none() {
+        if reset || self.session_id.is_none() {
             return Ok(());
         }
-
-        let replay = self.dispatch(FrontendCommand::Replay {
-            after_cursor: self.replay_cursor,
-        })?;
-        let FrontendControlResult::Events { replay } = replay.result else {
-            return Err(invalid_runtime(
-                "daemon returned an unexpected replay result",
-            ));
-        };
         if replay.session_id != session_id {
             return Err(invalid_runtime(
                 "daemon replay switched sessions unexpectedly",
@@ -703,22 +701,6 @@ impl DaemonRuntimeState {
         self.presentation.push(replay.events);
         if replay.next_cursor > replay.after_cursor {
             self.pending_ack_cursor = Some(replay.next_cursor);
-        }
-        Ok(())
-    }
-
-    fn acknowledge_previous_delivery(&mut self) -> Result<(), RuntimeError> {
-        let Some(cursor) = self.pending_ack_cursor.take() else {
-            return Ok(());
-        };
-        let acknowledgement = self.dispatch(FrontendCommand::AcknowledgeCursor { cursor })?;
-        if !matches!(
-            acknowledgement.result,
-            FrontendControlResult::CursorAcknowledged { .. }
-        ) {
-            return Err(invalid_runtime(
-                "daemon returned an unexpected cursor acknowledgement",
-            ));
         }
         Ok(())
     }

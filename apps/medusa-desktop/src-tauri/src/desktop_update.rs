@@ -1,7 +1,7 @@
 use std::env;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_update::{MainBranchUpdater, Restart};
+use medusa_update::{CURRENT_RELEASE_ID, MainBranchUpdater, Restart};
 use serde::Serialize;
 use tauri::Emitter;
 
@@ -67,7 +67,7 @@ fn status() -> MedusaResult<DesktopUpdateStatus> {
     let latest_main_sha = updater.latest_main()?.sha;
     let artifact_published = updater.main_desktop_artifact_available(&latest_main_sha)?;
     Ok(DesktopUpdateStatus {
-        current_version: env!("CARGO_PKG_VERSION").to_owned(),
+        current_version: CURRENT_RELEASE_ID.to_owned(),
         latest_main_sha,
         executable: executable.display().to_string(),
         ready: artifact_published,

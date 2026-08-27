@@ -67,6 +67,10 @@ rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/benclawbot/Medusa"
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 [workspace.metadata.medusa]
 production_execution_model = "bounded-teammates-with-workspace-isolated-mutation"
 production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> workspace-isolated candidate verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence"
