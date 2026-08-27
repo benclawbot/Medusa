@@ -129,7 +129,10 @@ mod tests {
     #[test]
     fn every_production_wakeup_family_uses_the_same_trigger_request_path() {
         let families = [
-            (WakeupSource::Timer("timer".to_owned()), TriggerSourceKind::Timer),
+            (
+                WakeupSource::Timer("timer".to_owned()),
+                TriggerSourceKind::Timer,
+            ),
             (
                 WakeupSource::HeartbeatStale("worker".to_owned()),
                 TriggerSourceKind::Heartbeat,

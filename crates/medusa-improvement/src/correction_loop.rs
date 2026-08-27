@@ -27,6 +27,7 @@ use medusa_context::refinement::{
 };
 use medusa_core::learning_policy::LearningAdmissionPolicy;
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
 
 const STATE_SCHEMA_VERSION: u32 = 1;
 const MAX_EPISODES: usize = 256;
@@ -316,7 +317,9 @@ impl CorrectionLoopEngine {
         request: CorrectionLoopRequest,
         runner: &R,
     ) -> Result<CorrectionLoopReport, CorrectionLoopError> {
+        info!(session_id = %request.session_id, "improvement correction loop started");
         if !request.policy.capture_enabled() || !request.policy.automatic_proposals_enabled() {
+            info!(session_id = %request.session_id, reason = "policy_disabled", "improvement correction loop skipped");
             return Ok(CorrectionLoopReport::default());
         }
         if request.session_id.trim().is_empty() || request.objective.trim().is_empty() {
@@ -334,6 +337,7 @@ impl CorrectionLoopEngine {
         for lesson in inferred.candidates {
             let episode_id = stable_id("episode", &[&request.session_id, &lesson.id]);
             if let Some(existing) = store.find(&episode_id) {
+                info!(episode_id = %episode_id, state = ?existing.state, "improvement episode already recorded");
                 episodes.push(existing);
                 continue;
             }
@@ -366,6 +370,7 @@ impl CorrectionLoopEngine {
                     "no privacy-approved user-correction observation is linked to this session"
                         .to_owned(),
                 );
+                warn!(episode_id = %episode.id, reason = "missing_source_observation", "improvement episode blocked");
                 store.put(episode.clone())?;
                 episodes.push(episode);
                 continue;
@@ -381,6 +386,7 @@ impl CorrectionLoopEngine {
                     "scope, confidence, contradiction, or solution policy blocks durable behavior"
                         .to_owned(),
                 );
+                warn!(episode_id = %episode.id, reason = "solution_policy_blocked", "improvement episode blocked");
                 store.put(episode.clone())?;
                 episodes.push(episode);
                 continue;
@@ -397,6 +403,12 @@ impl CorrectionLoopEngine {
             episode.replay_bundle = Some(bundle);
             episode.replay = Some(replay.clone());
             if replay.decision != ReplayDecision::Validated {
+                warn!(
+                    episode_id = %episode.id,
+                    decision = ?replay.decision,
+                    diagnostics = replay.diagnostics.len(),
+                    "improvement regression replay blocked candidate"
+                );
                 episode.state = CorrectionEpisodeState::Blocked;
                 episode.blocked_reasons = replay.diagnostics.clone();
                 episode.updated_at_unix_ms = request.now_unix_ms;
@@ -418,6 +430,7 @@ impl CorrectionLoopEngine {
             episode.candidate = Some(candidate.clone());
             episode.state = CorrectionEpisodeState::Evaluated;
             publish_evaluated(repo, &candidate, &lesson, &request.provenance, &replay)?;
+            info!(episode_id = %episode.id, candidate_id = %candidate.id, "improvement candidate published for review");
             episode.state = CorrectionEpisodeState::AwaitingReview;
             episode.updated_at_unix_ms = request.now_unix_ms;
             store.put(episode.clone())?;
@@ -755,7 +768,7 @@ fn stable_id(kind: &str, values: &[&str]) -> String {
     }
     format!(
         "{kind}-{}",
-        crate::encode(sha2::Sha256::digest(input.as_bytes()))
+        hex::encode(sha2::Sha256::digest(input.as_bytes()))
     )
 }
 

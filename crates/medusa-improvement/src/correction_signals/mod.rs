@@ -272,9 +272,11 @@ fn classify(text: &str) -> Option<Classification> {
         LearningSignalKind::ReusableSuccess => 700,
     };
     let requested_outcome = requested_clause(text);
-    let ambiguity = (scope == CandidateScope::Unresolved)
-        .then(|| vec!["durable scope cannot be inferred safely from this turn alone".to_owned()])
-        .unwrap_or_default();
+    let ambiguity = if scope == CandidateScope::Unresolved {
+        vec!["durable scope cannot be inferred safely from this turn alone".to_owned()]
+    } else {
+        Vec::new()
+    };
 
     Some(Classification {
         kind,

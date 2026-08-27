@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use crate::{
     RuntimeController, RuntimeEvent, SubmissionState,
     analysis_workspace::{AnalysisDelegationKind, AnalysisOperation, AnalysisValue},
-    multi_agent_coordinator, production_orchestrator,
     invariants::RuntimeInvariantRegistry,
+    multi_agent_coordinator, production_orchestrator,
     prompt::PromptDraft,
     team_control::TeamControlPlane,
 };
@@ -214,7 +214,9 @@ impl AnalysisWorkspaceHost for RuntimeAnalysisHost {
                 )
                 .map_err(json_error)
             }
-            action => Err(invalid(format!("unsupported analysis workspace action `{action}`"))),
+            action => Err(invalid(format!(
+                "unsupported analysis workspace action `{action}`"
+            ))),
         }
     }
 }
@@ -233,7 +235,11 @@ fn parse_operation(input: &Value) -> MedusaResult<AnalysisOperation> {
         "head_lines" => AnalysisOperation::HeadLines {
             limit: optional_usize(input, "limit")?.unwrap_or(32).min(128),
         },
-        operation => return Err(invalid(format!("unsupported analysis operation `{operation}`"))),
+        operation => {
+            return Err(invalid(format!(
+                "unsupported analysis operation `{operation}`"
+            )));
+        }
     })
 }
 
@@ -302,7 +308,11 @@ fn runtime_error(error: crate::RuntimeError) -> MedusaError {
 }
 
 fn json_error(error: serde_json::Error) -> MedusaError {
-    MedusaError::new(ErrorCode::ToolExecutionFailed, ErrorCategory::Internal, error.to_string())
+    MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Internal,
+        error.to_string(),
+    )
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {

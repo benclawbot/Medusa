@@ -6,6 +6,7 @@ mod control_plane;
 pub mod frontend_control;
 mod lifecycle;
 pub mod live_session;
+pub mod observability;
 mod paths;
 #[path = "process_bounded.rs"]
 mod process;
@@ -28,6 +29,7 @@ pub use live_session::{
     LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionReplayView,
     LiveSessionSummary,
 };
+pub use observability::initialize_observability;
 pub use paths::DaemonPaths;
 pub use protocol::{
     DAEMON_PROTOCOL_VERSION, FrontendArtifactKind, FrontendArtifactUpload,

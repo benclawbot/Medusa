@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 
 use medusa_core::MedusaResult;
 use time::OffsetDateTime;
+use tracing::info;
 
 use crate::{
     engine::MemoryEngine,
@@ -45,6 +46,7 @@ impl MemoryEngine {
             )
         });
         results.truncate(limit);
+        info!(matches = results.len(), "memory retrieval completed");
         Ok(results)
     }
 }

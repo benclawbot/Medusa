@@ -75,21 +75,23 @@ fn execute_with_catalog(
             let revision = catalog.revision().map_err(RuntimeError::agent)?;
             let profiles = catalog.list().map_err(RuntimeError::agent)?;
             let mut details = vec![format!("Configuration revision: {revision}")];
-            details.extend(profiles
-                .into_iter()
-                .map(|profile| {
-                    let marker = if profile.active { "*" } else { " " };
-                    let configured = if profile.configured {
-                        "configured"
-                    } else {
-                        "not configured"
-                    };
-                    format!(
-                        "[{marker}] {} — {} / {} ({configured})",
-                        profile.name, profile.provider, profile.model
-                    )
-                })
-                .collect::<Vec<_>>());
+            details.extend(
+                profiles
+                    .into_iter()
+                    .map(|profile| {
+                        let marker = if profile.active { "*" } else { " " };
+                        let configured = if profile.configured {
+                            "configured"
+                        } else {
+                            "not configured"
+                        };
+                        format!(
+                            "[{marker}] {} — {} / {} ({configured})",
+                            profile.name, profile.provider, profile.model
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
             send_notice(events, "Provider profiles", details);
         }
         ConfigCommand::UseProfile { name } => {
@@ -231,10 +233,11 @@ fn apply_effective_model(state: &mut RuntimeState, effective: Config) -> Result<
     state.base_config.model = effective.model.clone();
     state.config.model = effective.model;
     let binding = crate::runtime_config_binding_for_repo(&state.repo, &state.config)?;
-    let effective_runtime = serde_json::from_value::<
-        crate::runtime_config::EffectiveRuntimeConfigV1,
-    >(binding.2.clone())
-    .map_err(RuntimeError::agent)?;
+    let effective_runtime =
+        serde_json::from_value::<crate::runtime_config::EffectiveRuntimeConfigV1>(
+            binding.2.clone(),
+        )
+        .map_err(RuntimeError::agent)?;
     crate::apply_runtime_route(&mut state.config, &effective_runtime)?;
     state.base_config.model = state.config.model.clone();
     state.runtime_config_fingerprint = Some(binding.1.clone());

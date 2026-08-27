@@ -151,8 +151,8 @@ impl MutationTransaction {
     ) -> Result<Self, String> {
         fs::create_dir_all(root).map_err(|error| error.to_string())?;
         let path = root.join("mutation-transaction.json");
-        let manager = WorkerManager::new(repo, root.join("worktrees"))
-            .map_err(|error| error.to_string())?;
+        let manager =
+            WorkerManager::new(repo, root.join("worktrees")).map_err(|error| error.to_string())?;
         if path.is_file() {
             let mut transaction = Self::open(&path)?;
             transaction.validate_identity(&input)?;
@@ -262,7 +262,9 @@ impl MutationTransaction {
         }
         let rationale = rationale.into();
         if reviewer_session_id.trim().is_empty() || rationale.trim().is_empty() {
-            return Err("parent review receipt requires reviewer identity and rationale".to_owned());
+            return Err(
+                "parent review receipt requires reviewer identity and rationale".to_owned(),
+            );
         }
         let mut receipt = ParentReviewReceipt {
             decision: decision.clone(),
@@ -399,7 +401,8 @@ impl MutationTransaction {
                 != changed_scope_fingerprint(&self.state.changed_components)
             || evidence.is_empty()
         {
-            let reason = "typed verification receipt does not match the prepared mutation".to_owned();
+            let reason =
+                "typed verification receipt does not match the prepared mutation".to_owned();
             self.fail(reason.clone())?;
             return Err(reason);
         }
@@ -431,12 +434,13 @@ impl MutationTransaction {
             .as_ref()
             .filter(|receipt| receipt.decision == ParentReviewDecision::Accepted)
             .ok_or_else(|| "verified mutation has no accepted parent review receipt".to_owned())?;
-        let verification = self
-            .state
-            .verification
-            .as_ref()
-            .ok_or_else(|| "verified mutation has no independent verification receipt".to_owned())?;
-        verification.authority.validate().map_err(|error| error.to_string())?;
+        let verification = self.state.verification.as_ref().ok_or_else(|| {
+            "verified mutation has no independent verification receipt".to_owned()
+        })?;
+        verification
+            .authority
+            .validate()
+            .map_err(|error| error.to_string())?;
         if review.commit != self.state.prepared_commit
             || verification.commit != self.state.prepared_commit
             || review.tree != self.state.prepared_tree
@@ -452,7 +456,9 @@ impl MutationTransaction {
             return Err("review or verification receipt was substituted".to_owned());
         }
         let manager = self.manager(repo)?;
-        let primary_head = manager.repository_head().map_err(|error| error.to_string())?;
+        let primary_head = manager
+            .repository_head()
+            .map_err(|error| error.to_string())?;
         if primary_head != self.state.base_head {
             self.state.review = None;
             self.state.verification = None;
@@ -465,7 +471,9 @@ impl MutationTransaction {
                     self.state.base_head, primary_head
                 )),
             )?;
-            return Err("primary repository drift requires review and verification again".to_owned());
+            return Err(
+                "primary repository drift requires review and verification again".to_owned(),
+            );
         }
         let mut authorization = IntegrationAuthorization {
             commit: self.state.prepared_commit.clone(),
@@ -558,7 +566,9 @@ impl MutationTransaction {
                 .commit_tree_matches_head(&self.state.prepared_commit)
                 .map_err(|error| error.to_string())?
         {
-            return Err("integrated transaction cannot be reconciled against primary HEAD".to_owned());
+            return Err(
+                "integrated transaction cannot be reconciled against primary HEAD".to_owned(),
+            );
         }
         let receipt = self
             .state
@@ -576,7 +586,9 @@ impl MutationTransaction {
     pub fn cancel(&mut self, reason: impl Into<String>) -> Result<(), String> {
         if matches!(
             self.state.lifecycle,
-            MutationLifecycle::Reconciled | MutationLifecycle::Cancelled | MutationLifecycle::Failed
+            MutationLifecycle::Reconciled
+                | MutationLifecycle::Cancelled
+                | MutationLifecycle::Failed
         ) {
             return Ok(());
         }
@@ -590,7 +602,9 @@ impl MutationTransaction {
     pub fn fail(&mut self, reason: impl Into<String>) -> Result<(), String> {
         if matches!(
             self.state.lifecycle,
-            MutationLifecycle::Reconciled | MutationLifecycle::Cancelled | MutationLifecycle::Failed
+            MutationLifecycle::Reconciled
+                | MutationLifecycle::Cancelled
+                | MutationLifecycle::Failed
         ) {
             return Ok(());
         }
@@ -607,22 +621,30 @@ impl MutationTransaction {
             MutationLifecycle::PreparedInIsolation => {
                 (RuntimeActivityKind::Progress, "Prepared in isolation")
             }
-            MutationLifecycle::SpeculativePrepared => {
-                (RuntimeActivityKind::Progress, "Speculative mutation prepared")
+            MutationLifecycle::SpeculativePrepared => (
+                RuntimeActivityKind::Progress,
+                "Speculative mutation prepared",
+            ),
+            MutationLifecycle::ReviewPending => {
+                (RuntimeActivityKind::Progress, "Parent review pending")
             }
-            MutationLifecycle::ReviewPending => (RuntimeActivityKind::Progress, "Parent review pending"),
             MutationLifecycle::RevisionRequested => {
                 (RuntimeActivityKind::Progress, "Revision requested")
             }
             MutationLifecycle::ReviewAccepted => (RuntimeActivityKind::Progress, "Review accepted"),
-            MutationLifecycle::VerificationPending => {
-                (RuntimeActivityKind::Progress, "Independent verification pending")
+            MutationLifecycle::VerificationPending => (
+                RuntimeActivityKind::Progress,
+                "Independent verification pending",
+            ),
+            MutationLifecycle::Verified => {
+                (RuntimeActivityKind::Progress, "Prepared commit verified")
             }
-            MutationLifecycle::Verified => (RuntimeActivityKind::Progress, "Prepared commit verified"),
             MutationLifecycle::IntegrationAuthorized => {
                 (RuntimeActivityKind::Progress, "Integration authorized")
             }
-            MutationLifecycle::Integrated => (RuntimeActivityKind::Progress, "Prepared commit integrated"),
+            MutationLifecycle::Integrated => {
+                (RuntimeActivityKind::Progress, "Prepared commit integrated")
+            }
             MutationLifecycle::Reconciled => (RuntimeActivityKind::Done, "Mutation reconciled"),
             MutationLifecycle::Cancelled => (RuntimeActivityKind::Done, "Mutation cancelled"),
             MutationLifecycle::Failed => (RuntimeActivityKind::Done, "Mutation failed"),
@@ -663,7 +685,9 @@ impl MutationTransaction {
             .commit
             .clone()
             .ok_or_else(|| "prepared worker has no commit".to_owned())?;
-        let tree = manager.commit_tree(&commit).map_err(|error| error.to_string())?;
+        let tree = manager
+            .commit_tree(&commit)
+            .map_err(|error| error.to_string())?;
         let changed_components = manager
             .commit_changed_components(&commit)
             .map_err(|error| error.to_string())?;
@@ -754,7 +778,9 @@ impl MutationTransaction {
             || self.state.base_head != input.base_head
             || self.state.worker.id != input.worker.id
         {
-            return Err("prepared mutation does not match the durable transaction identity".to_owned());
+            return Err(
+                "prepared mutation does not match the durable transaction identity".to_owned(),
+            );
         }
         Ok(())
     }
@@ -769,7 +795,9 @@ impl MutationTransaction {
             branch: self.state.worker.branch.clone(),
             commit: self.state.prepared_commit.clone(),
             base_head: self.state.base_head.clone(),
-            integrated_head: manager.repository_head().map_err(|error| error.to_string())?,
+            integrated_head: manager
+                .repository_head()
+                .map_err(|error| error.to_string())?,
             changed_paths: self.state.changed_paths.clone(),
             changed_components: self.state.changed_components.clone(),
         })
@@ -815,9 +843,15 @@ impl MutationTransaction {
                 || self.state.changed_components.is_empty()
                 || self.state.patch_fingerprint.trim().is_empty()
                 || self.state.scope_fingerprint.trim().is_empty()
-                || self.state.implementation_evidence_fingerprint.trim().is_empty())
+                || self
+                    .state
+                    .implementation_evidence_fingerprint
+                    .trim()
+                    .is_empty())
         {
-            return Err("prepared mutation transaction is missing immutable review inputs".to_owned());
+            return Err(
+                "prepared mutation transaction is missing immutable review inputs".to_owned(),
+            );
         }
         if let Some(review) = self.state.review.as_ref()
             && review.fingerprint != receipt_fingerprint(review)?
@@ -917,7 +951,12 @@ mod tests {
         );
     }
 
-    fn fixture() -> (tempfile::TempDir, PathBuf, WorkerManager, PreparedMutationInput) {
+    fn fixture() -> (
+        tempfile::TempDir,
+        PathBuf,
+        WorkerManager,
+        PreparedMutationInput,
+    ) {
         let directory = tempfile::tempdir().expect("tempdir");
         let repo = directory.path().join("repo");
         fs::create_dir(&repo).expect("repo");
@@ -963,7 +1002,10 @@ mod tests {
             &worker.worktree,
             &root.join("evidence/test-worktree"),
             "repo",
-            &format!("worktree:{}", changed_scope_fingerprint(&changed_components)),
+            &format!(
+                "worktree:{}",
+                changed_scope_fingerprint(&changed_components)
+            ),
             &changed_components,
         )
         .expect("worktree verification");
@@ -988,9 +1030,8 @@ mod tests {
         let (_directory, repo, _manager, mut input) = fixture();
         input.implementation_summary =
             "reviewer lacks write tools and the primary tree is unchanged".to_owned();
-        input.worktree_verification_evidence = vec![
-            "test result: ok. 1 passed; 0 failed".to_owned(),
-        ];
+        input.worktree_verification_evidence =
+            vec!["test result: ok. 1 passed; 0 failed".to_owned()];
         let root = repo.join(".medusa/executions/test");
         let transaction =
             MutationTransaction::open_or_prepare(&root, &repo, input).expect("transaction");
@@ -999,7 +1040,9 @@ mod tests {
         assert!(context.contains("primary repository intentionally remains at base HEAD"));
         assert!(context.contains("repository retrieval from the primary tree is stale"));
         assert!(context.contains("test result: ok. 1 passed; 0 failed"));
-        assert!(context.contains("Implementer narratives and earlier planning or risk summaries are advisory only"));
+        assert!(context.contains(
+            "Implementer narratives and earlier planning or risk summaries are advisory only"
+        ));
         assert!(context.contains("Do not request revision merely because"));
         assert!(context.contains("\"schema_version\":1"));
         assert!(context.contains("Free-form markers"));
@@ -1018,7 +1061,10 @@ mod tests {
                 "parent-session",
             )
             .expect("review");
-        assert_eq!(transaction.state.lifecycle, MutationLifecycle::RevisionRequested);
+        assert_eq!(
+            transaction.state.lifecycle,
+            MutationLifecycle::RevisionRequested
+        );
         assert_eq!(
             fs::read_to_string(repo.join("src/lib.rs")).expect("primary"),
             "pub fn value() -> u32 { 1 }\n"
@@ -1039,10 +1085,14 @@ mod tests {
                 "parent-session",
             )
             .expect("review");
-        transaction.begin_verification().expect("begin verification");
-        assert!(transaction
-            .record_verification(false, vec!["regression".to_owned()])
-            .is_err());
+        transaction
+            .begin_verification()
+            .expect("begin verification");
+        assert!(
+            transaction
+                .record_verification(false, vec!["regression".to_owned()])
+                .is_err()
+        );
         assert_eq!(
             fs::read_to_string(repo.join("src/lib.rs")).expect("primary"),
             "pub fn value() -> u32 { 1 }\n"
@@ -1062,7 +1112,9 @@ mod tests {
                 "parent-session",
             )
             .expect("review");
-        transaction.verify_independently(&repo).expect("verification");
+        transaction
+            .verify_independently(&repo)
+            .expect("verification");
         transaction.authorize(&repo).expect("authorize");
         let first = transaction.integrate(&repo).expect("integrate");
         let second = transaction.integrate(&repo).expect("duplicate integrate");
@@ -1091,12 +1143,17 @@ mod tests {
                 "parent-session",
             )
             .expect("review");
-        transaction.verify_independently(&repo).expect("verification");
+        transaction
+            .verify_independently(&repo)
+            .expect("verification");
         fs::write(repo.join("drift.txt"), "drift\n").expect("drift");
         git(&repo, &["add", "drift.txt"]);
         git(&repo, &["commit", "-m", "drift"]);
         assert!(transaction.authorize(&repo).is_err());
-        assert_eq!(transaction.state.lifecycle, MutationLifecycle::ReviewPending);
+        assert_eq!(
+            transaction.state.lifecycle,
+            MutationLifecycle::ReviewPending
+        );
         assert!(transaction.state.review.is_none());
         assert!(transaction.state.verification.is_none());
     }
@@ -1115,11 +1172,7 @@ mod tests {
             MutationLifecycle::ReviewPending
         );
         transaction
-            .record_review_decision(
-                ParentReviewDecision::Accepted,
-                "reviewed",
-                "parent-session",
-            )
+            .record_review_decision(ParentReviewDecision::Accepted, "reviewed", "parent-session")
             .expect("review");
         assert_eq!(
             MutationTransaction::open(transaction.path())
@@ -1153,10 +1206,11 @@ mod tests {
         assert!(transaction.review_context().is_err());
 
         input.speculative = false;
-        let promoted =
-            MutationTransaction::open_or_prepare(&root, &repo, input).expect("promoted");
-        assert_eq!(promoted.snapshot().lifecycle, MutationLifecycle::ReviewPending);
+        let promoted = MutationTransaction::open_or_prepare(&root, &repo, input).expect("promoted");
+        assert_eq!(
+            promoted.snapshot().lifecycle,
+            MutationLifecycle::ReviewPending
+        );
         assert!(promoted.review_context().is_ok());
     }
-
 }

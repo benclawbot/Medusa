@@ -1,3 +1,18 @@
+extern crate medusa_git_workers as git_workers;
+extern crate self as medusa_workers;
+
+mod openai_oauth;
+mod workspace_worker_manager;
+
+pub use crate::git_workers::{IntegrationReceipt, Worker, WorkerState};
+pub use crate::openai_oauth::{
+    OpenAiOAuthLogin, discover_openai_oauth_models, ensure_openai_oauth_connected,
+    start_openai_oauth_login,
+};
+pub use crate::workspace_worker_manager::{
+    WorkspaceMutationBackend, WorkspaceWorkerManager as WorkerManager,
+};
+
 use std::{
     collections::{BTreeMap, VecDeque},
     env,
@@ -21,45 +36,54 @@ use medusa_provider::{
     ImageSource, LazyConfiguredProviderManager, Message, MessageBlock, ModelProvider,
     ProviderExecutionPhase, Role,
 };
+use tracing::{error, info};
 
 use crate::{
     commands::{
         Effort, LearningCommand, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand,
     },
-    invariants::{RuntimeInvariantContext, RuntimeInvariantRegistry, RuntimeInvariantRegistryError},
+    invariants::{
+        RuntimeInvariantContext, RuntimeInvariantRegistry, RuntimeInvariantRegistryError,
+    },
     prompt::PromptDraft,
 };
 
-pub mod attachment;
-pub mod analysis_workspace;
 pub mod analysis_contained;
-pub mod component_runtime;
+pub mod analysis_workspace;
+pub mod attachment;
+pub mod behavioral_outcome;
+pub mod behavioral_health {
+    //! Runtime-facing re-export of the canonical cross-surface behavioral health contract.
+    pub use medusa_improvement::behavioral_health::*;
+}
 mod analysis_tool;
 pub mod checkpoint_payload;
 pub mod checkpoint_store;
-mod command_router;
 mod coding_trajectory;
-mod delegation_contract;
+mod command_router;
 pub mod commands;
+pub mod component_runtime;
 mod config_command;
+mod delegation_contract;
 mod error;
 pub mod execution_history;
 pub mod frontend;
 pub mod invariants;
-pub mod learning_retrieval;
-mod memory_retrieval;
 mod learning_authority;
+pub mod learning_retrieval;
 pub mod learning_review;
+mod memory_retrieval;
 mod multi_agent_coordinator;
 mod mutating_worker_coordinator;
-mod repository_context;
 mod mutation_transaction;
-pub mod openai_realtime;
 pub mod observer;
+pub mod openai_realtime;
 pub mod prompt;
+mod repository_context;
 pub mod review;
-pub mod wakeup_action_bridge;
+pub mod runtime_config;
 pub mod scheduled_actions;
+pub mod service_provider;
 pub mod skill_dependencies;
 pub mod skill_dependency_locks;
 mod support;
@@ -68,6 +92,17 @@ mod team_control;
 mod tests;
 pub mod voice;
 pub mod voice_agent_bridge;
+pub mod wakeup_action_bridge;
+
+#[rustfmt::skip]
+mod parent_reviewer;
+// Conflict-aware mutation scheduling and deterministic aggregate staging.
+mod parallel_mutation;
+mod parallel_mutation_batch;
+
+pub mod openai_realtime_session;
+pub mod openai_realtime_websocket;
+pub mod workspace;
 
 pub use checkpoint_payload::{CheckpointFilePayload, RuntimeCheckpointPayload};
 pub use checkpoint_store::RuntimeCheckpointRecord;
@@ -75,26 +110,26 @@ pub use error::RuntimeError;
 pub use execution_history::{
     RuntimeContinuityHealth, RuntimeExecutionHealth, RuntimeHistoricalState,
 };
+pub use medusa_agent::{
+    AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
+    UsageProvenance,
+};
 pub use observer::{
     ObservationMessage, ObservationStage, ObservationVerification, ObservedPlanStep,
     SessionObservationSnapshot, SideQuestionCancelToken, SideQuestionRequest, SideQuestionResponse,
     answer_side_question, observe_session,
 };
-pub use medusa_agent::{
-    AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
-    UsageProvenance,
-};
 pub use team_control::{
     TeamControlPlane, TeamSnapshot, TeamWorkerLifecycle, TeamWorkerRegistration, TeamWorkerSnapshot,
 };
 
+use command_router::execute_slash_command_with_submission;
 use support::{
     SUPPORTED_PROVIDERS, SelectedSkill, UpdateState, configure_model, credential_environment,
     discover_skills, effort_for_turns, forward_update, is_supported_provider, load_selected_skill,
     message_blocks, model_configuration_details, objective_for, protocol_for_provider,
     should_auto_compact, turns_for_effort,
 };
-use command_router::execute_slash_command_with_submission;
 
 #[cfg(test)]
 use command_router::execute_slash_command;
@@ -1031,10 +1066,7 @@ impl RuntimeState {
         Self::from_config_with_runtime(repo, config)
     }
 
-    fn from_config_with_runtime(
-        repo: PathBuf,
-        mut config: Config,
-    ) -> Result<Self, RuntimeError> {
+    fn from_config_with_runtime(repo: PathBuf, mut config: Config) -> Result<Self, RuntimeError> {
         let effective = runtime_config_effective_for_repo(&repo, &config)?;
         apply_runtime_route(&mut config, &effective)?;
         let mut state = Self::from_config(repo, config);
@@ -1216,14 +1248,17 @@ fn apply_runtime_route(
 fn session_runtime_config_binding(
     session: &AgentSession,
 ) -> Option<(u16, String, serde_json::Value)> {
-    session.events.iter().find_map(|event| match &event.payload {
-        EventPayload::RuntimeConfigurationBound {
-            schema_version,
-            fingerprint,
-            snapshot,
-        } => Some((*schema_version, fingerprint.clone(), snapshot.clone())),
-        _ => None,
-    })
+    session
+        .events
+        .iter()
+        .find_map(|event| match &event.payload {
+            EventPayload::RuntimeConfigurationBound {
+                schema_version,
+                fingerprint,
+                snapshot,
+            } => Some((*schema_version, fingerprint.clone(), snapshot.clone())),
+            _ => None,
+        })
 }
 
 fn validate_session_runtime_config_binding(
@@ -1265,9 +1300,27 @@ fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
         return false;
     }
     [
-        "implement", "fix", "modify", "refactor", "edit", "write code", "codebase",
-        "repository", "repo", "file", "src/", "test", "bug", "crash", "compile",
-        "build a website", "webpage", "component", "function", "pull request", "commit",
+        "implement",
+        "fix",
+        "modify",
+        "refactor",
+        "edit",
+        "write code",
+        "codebase",
+        "repository",
+        "repo",
+        "file",
+        "src/",
+        "test",
+        "bug",
+        "crash",
+        "compile",
+        "build a website",
+        "webpage",
+        "component",
+        "function",
+        "pull request",
+        "commit",
         "push changes",
     ]
     .iter()
@@ -1295,7 +1348,9 @@ fn execution_plan_for_prompt(
     plan.map_err(RuntimeError::agent)
 }
 
-fn oauth_input_from_content(content: &[MessageBlock]) -> Result<Vec<serde_json::Value>, RuntimeError> {
+fn oauth_input_from_content(
+    content: &[MessageBlock],
+) -> Result<Vec<serde_json::Value>, RuntimeError> {
     let mut input = Vec::new();
     for block in content {
         match block {
@@ -1383,10 +1438,14 @@ fn append_oauth_answer(
 }
 
 fn latest_oauth_request_id(session: &AgentSession) -> Option<String> {
-    session.events.iter().rev().find_map(|event| match &event.payload {
-        EventPayload::ModelRequestStarted { request_id, .. } => request_id.clone(),
-        _ => None,
-    })
+    session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::ModelRequestStarted { request_id, .. } => request_id.clone(),
+            _ => None,
+        })
 }
 
 fn oauth_question(
@@ -1416,7 +1475,10 @@ fn oauth_question(
                 ),
                 options: vec![
                     option("Approve", "Run this exact command."),
-                    option("Approve for session", "Allow matching commands for this session."),
+                    option(
+                        "Approve for session",
+                        "Allow matching commands for this session.",
+                    ),
                     option("Decline", "Do not run the command."),
                 ],
                 multi_select: false,
@@ -1432,7 +1494,10 @@ fn oauth_question(
                 question: format!("Allow Codex to change `{root}`?"),
                 options: vec![
                     option("Approve", "Apply this exact file change."),
-                    option("Approve for session", "Allow matching changes for this session."),
+                    option(
+                        "Approve for session",
+                        "Allow matching changes for this session.",
+                    ),
                     option("Decline", "Do not apply the change."),
                 ],
                 multi_select: false,
@@ -1448,7 +1513,10 @@ fn oauth_question(
                 question: reason.to_owned(),
                 options: vec![
                     option("Approve", "Grant the requested permissions for this turn."),
-                    option("Approve for session", "Grant the requested permissions for this session."),
+                    option(
+                        "Approve for session",
+                        "Grant the requested permissions for this session.",
+                    ),
                     option("Decline", "Do not grant additional permissions."),
                 ],
                 multi_select: false,
@@ -1563,7 +1631,8 @@ fn oauth_usage(value: Option<&serde_json::Value>, turn: u32, duration_ms: u64) -
     let input_tokens = number("input_tokens", "inputTokens");
     let output_tokens = number("output_tokens", "outputTokens");
     let cache_read_input_tokens = number("cache_read_input_tokens", "cachedInputTokens");
-    let cache_creation_input_tokens = number("cache_creation_input_tokens", "cacheWriteInputTokens");
+    let cache_creation_input_tokens =
+        number("cache_creation_input_tokens", "cacheWriteInputTokens");
     let total_tokens = number("total_tokens", "totalTokens").max(
         input_tokens
             .saturating_add(output_tokens)
@@ -1618,16 +1687,20 @@ fn run_openai_oauth_prompt(
             "a Codex approval is pending, but the app-server process is no longer available; restart the session and review the request again",
         ));
     }
-    let provider = LazyConfiguredProviderManager::from_config(&config, state.session_api_key.clone())
-        .map_err(RuntimeError::agent)?;
-    let mut engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
+    let provider =
+        LazyConfiguredProviderManager::from_config(&config, state.session_api_key.clone())
+            .map_err(RuntimeError::agent)?;
+    let mut engine =
+        AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
     if let Some((_, fingerprint, _)) = state
         .session
         .as_ref()
         .and_then(session_runtime_config_binding)
     {
         engine = engine.with_runtime_config_fingerprint(fingerprint);
-    } else if let Some((schema_version, fingerprint, snapshot)) = state.runtime_config_binding.clone() {
+    } else if let Some((schema_version, fingerprint, snapshot)) =
+        state.runtime_config_binding.clone()
+    {
         engine = engine.with_runtime_config_binding(schema_version, fingerprint, snapshot);
     } else {
         engine = engine.with_runtime_config_fingerprint(
@@ -1756,7 +1829,9 @@ fn run_openai_oauth_prompt(
     let mut interrupt_sent = false;
     loop {
         if cancel.load(Ordering::SeqCst) && !interrupt_sent {
-            server.interrupt(&thread_id, &turn_id).map_err(RuntimeError::agent)?;
+            server
+                .interrupt(&thread_id, &turn_id)
+                .map_err(RuntimeError::agent)?;
             interrupt_sent = true;
         }
         let turn_event = match server
@@ -1796,7 +1871,8 @@ fn run_openai_oauth_prompt(
                         &mut session,
                         Actor::Coordinator,
                         EventPayload::QuestionRequested {
-                            question: serde_json::to_value(&question).map_err(RuntimeError::agent)?,
+                            question: serde_json::to_value(&question)
+                                .map_err(RuntimeError::agent)?,
                         },
                     )
                     .map_err(RuntimeError::agent)?;
@@ -1894,7 +1970,9 @@ fn run_openai_oauth_prompt(
                         estimated_cost_microusd: usage.estimated_cost_microusd,
                         provenance: usage.provenance,
                     });
-                    if let Err(error) = medusa_agent::persist_session(&session).map_err(RuntimeError::agent) {
+                    if let Err(error) =
+                        medusa_agent::persist_session(&session).map_err(RuntimeError::agent)
+                    {
                         state.session = Some(session);
                         state.codex_app_server = Some(server);
                         return Err(error);
@@ -1919,13 +1997,7 @@ fn run_openai_oauth_prompt(
                         state.session = Some(session);
                         state.codex_app_server = Some(server);
                         return run_openai_oauth_prompt(
-                            state,
-                            config,
-                            next.draft,
-                            events,
-                            cancel,
-                            submission,
-                            None,
+                            state, config, next.draft, events, cancel, submission, None,
                         );
                     }
                     state.session = Some(session);
@@ -1948,6 +2020,7 @@ fn run_openai_oauth_prompt(
     }
 }
 
+#[tracing::instrument(skip_all)]
 fn run_prompt(
     state: &mut RuntimeState,
     draft: PromptDraft,
@@ -1956,6 +2029,7 @@ fn run_prompt(
     submission: &Arc<Mutex<SubmissionState>>,
     accepted: Option<&Sender<Result<(), String>>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
+    info!(repository = %state.repo.display(), "runtime prompt started");
     let config = state.config.clone();
     let session_binding = state
         .session
@@ -1974,19 +2048,12 @@ fn run_prompt(
         ));
     }
     if config.model.provider == medusa_config::openai_oauth::PROVIDER {
-        return run_openai_oauth_prompt(
-            state,
-            config,
-            draft,
-            events,
-            cancel,
-            submission,
-            accepted,
-        );
+        return run_openai_oauth_prompt(state, config, draft, events, cancel, submission, accepted);
     }
     let max_turns = config.agent.max_turns;
-    let provider = LazyConfiguredProviderManager::from_config(&config, state.session_api_key.clone())
-        .map_err(RuntimeError::agent)?;
+    let provider =
+        LazyConfiguredProviderManager::from_config(&config, state.session_api_key.clone())
+            .map_err(RuntimeError::agent)?;
     let resuming_pending_question = state
         .session
         .as_ref()
@@ -2015,11 +2082,14 @@ fn run_prompt(
         events.clone(),
         Arc::clone(cancel),
     ));
-    let mut engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel))
-        .with_general_chat(general_chat);
+    let mut engine =
+        AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel))
+            .with_general_chat(general_chat);
     if let Some((_, fingerprint, _)) = session_binding {
         engine = engine.with_runtime_config_fingerprint(fingerprint);
-    } else if let Some((schema_version, fingerprint, snapshot)) = state.runtime_config_binding.clone() {
+    } else if let Some((schema_version, fingerprint, snapshot)) =
+        state.runtime_config_binding.clone()
+    {
         engine = engine.with_runtime_config_binding(schema_version, fingerprint, snapshot);
     } else {
         engine = engine.with_runtime_config_fingerprint(
@@ -2116,34 +2186,97 @@ fn run_prompt(
                 crate::production_orchestrator::projection(ledger),
             ));
         }
-        let speculation_policy = medusa_multi_agent_scheduler::speculation::policy_for(
-            &execution_plan.planning,
-        )
-        .map_err(RuntimeError::agent)?;
-        let preflight = if crate::production_orchestrator::uses_deterministic_preflight(
-            &execution_plan,
-        ) {
-            crate::multi_agent_coordinator::run_deterministic_fast_preflight(
-                &state.repo,
-                &config,
-                &execution_plan,
-                &state.team_control,
-                events,
-            )
-        } else if speculation_policy.eligible {
-            let speculative_control = TeamControlPlane::default();
-            let (preflight, speculative) = std::thread::scope(|scope| {
-                let speculative = scope.spawn(|| {
-                    crate::mutating_worker_coordinator::run_speculative_implementation(
+        let speculation_policy =
+            medusa_multi_agent_scheduler::speculation::policy_for(&execution_plan.planning)
+                .map_err(RuntimeError::agent)?;
+        let preflight =
+            if crate::production_orchestrator::uses_deterministic_preflight(&execution_plan) {
+                crate::multi_agent_coordinator::run_deterministic_fast_preflight(
+                    &state.repo,
+                    &config,
+                    &execution_plan,
+                    &state.team_control,
+                    events,
+                )
+            } else if speculation_policy.eligible {
+                let speculative_control = TeamControlPlane::default();
+                let (preflight, speculative) = std::thread::scope(|scope| {
+                    let speculative = scope.spawn(|| {
+                        crate::mutating_worker_coordinator::run_speculative_implementation(
+                            &state.repo,
+                            &config,
+                            state.session_api_key.clone(),
+                            &execution_plan,
+                            cancel,
+                            (&speculative_control, events),
+                        )
+                    });
+                    let preflight = crate::multi_agent_coordinator::run_preflight(
                         &state.repo,
                         &config,
                         state.session_api_key.clone(),
                         &execution_plan,
                         cancel,
-                        (&speculative_control, events),
-                    )
+                        &state.team_control,
+                        events,
+                    );
+                    let speculative = speculative
+                        .join()
+                        .map_err(|_| {
+                            "speculative implementer thread terminated unexpectedly".to_owned()
+                        })
+                        .and_then(|result| result);
+                    (preflight, speculative)
                 });
-                let preflight = crate::multi_agent_coordinator::run_preflight(
+                match speculative {
+                    Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Prepared {
+                        candidate,
+                        turns,
+                        elapsed_ms,
+                    }) => {
+                        let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                            id: Some(execution_plan.fingerprint.clone()),
+                            kind: RuntimeActivityKind::Progress,
+                            title: "Speculative candidate awaiting promotion".to_owned(),
+                            details: vec![
+                                format!("candidate={candidate}"),
+                                format!("turns={turns}"),
+                                format!("overlapped_preflight_ms={elapsed_ms}"),
+                            ],
+                        }));
+                    }
+                    Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Skipped {
+                        reason,
+                    }) => {
+                        let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                            id: Some(execution_plan.fingerprint.clone()),
+                            kind: RuntimeActivityKind::Progress,
+                            title: "Speculation skipped".to_owned(),
+                            details: vec![reason],
+                        }));
+                    }
+                    Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Discarded {
+                        reason,
+                    }) => {
+                        let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                            id: Some(execution_plan.fingerprint.clone()),
+                            kind: RuntimeActivityKind::Progress,
+                            title: "Speculation discarded; cold path retained".to_owned(),
+                            details: vec![reason],
+                        }));
+                    }
+                    Err(error) => {
+                        let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                            id: Some(execution_plan.fingerprint.clone()),
+                            kind: RuntimeActivityKind::Progress,
+                            title: "Speculation unavailable; cold path retained".to_owned(),
+                            details: vec![error],
+                        }));
+                    }
+                }
+                preflight
+            } else {
+                crate::multi_agent_coordinator::run_preflight(
                     &state.repo,
                     &config,
                     state.session_api_key.clone(),
@@ -2151,71 +2284,8 @@ fn run_prompt(
                     cancel,
                     &state.team_control,
                     events,
-                );
-                let speculative = speculative
-                    .join()
-                    .map_err(|_| "speculative implementer thread terminated unexpectedly".to_owned())
-                    .and_then(|result| result);
-                (preflight, speculative)
-            });
-            match speculative {
-                Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Prepared {
-                    candidate,
-                    turns,
-                    elapsed_ms,
-                }) => {
-                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                        id: Some(execution_plan.fingerprint.clone()),
-                        kind: RuntimeActivityKind::Progress,
-                        title: "Speculative candidate awaiting promotion".to_owned(),
-                        details: vec![
-                            format!("candidate={candidate}"),
-                            format!("turns={turns}"),
-                            format!("overlapped_preflight_ms={elapsed_ms}"),
-                        ],
-                    }));
-                }
-                Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Skipped {
-                    reason,
-                }) => {
-                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                        id: Some(execution_plan.fingerprint.clone()),
-                        kind: RuntimeActivityKind::Progress,
-                        title: "Speculation skipped".to_owned(),
-                        details: vec![reason],
-                    }));
-                }
-                Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Discarded {
-                    reason,
-                }) => {
-                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                        id: Some(execution_plan.fingerprint.clone()),
-                        kind: RuntimeActivityKind::Progress,
-                        title: "Speculation discarded; cold path retained".to_owned(),
-                        details: vec![reason],
-                    }));
-                }
-                Err(error) => {
-                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                        id: Some(execution_plan.fingerprint.clone()),
-                        kind: RuntimeActivityKind::Progress,
-                        title: "Speculation unavailable; cold path retained".to_owned(),
-                        details: vec![error],
-                    }));
-                }
-            }
-            preflight
-        } else {
-            crate::multi_agent_coordinator::run_preflight(
-                &state.repo,
-                &config,
-                state.session_api_key.clone(),
-                &execution_plan,
-                cancel,
-                &state.team_control,
-                events,
-            )
-        };
+                )
+            };
         match preflight {
             Ok(evidence) => {
                 if let Some(ledger) = execution_ledger.as_mut() {
@@ -2446,197 +2516,200 @@ fn run_prompt(
     } else {
         (|| {
             loop {
-            if cancel_requested(cancel, submission) {
-                if let Some(ledger) = execution_ledger.as_mut() {
-                    let _ = ledger.cancel_remaining("runtime cancellation requested");
-                    let projected = crate::production_orchestrator::projection(ledger);
-                    session.plan = projected.clone();
-                    let _ = events.send(RuntimeEvent::Plan(projected));
+                if cancel_requested(cancel, submission) {
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        let _ = ledger.cancel_remaining("runtime cancellation requested");
+                        let projected = crate::production_orchestrator::projection(ledger);
+                        session.plan = projected.clone();
+                        let _ = events.send(RuntimeEvent::Plan(projected));
+                    }
+                    return Ok(RuntimeEvent::Cancelled);
                 }
-                return Ok(RuntimeEvent::Cancelled);
-            }
-            append_followups(&engine, &mut session, take_followups(submission))?;
-            if session.turn >= max_turns {
-                return Err(RuntimeError::TurnLimit(max_turns));
-            }
-            let provider_activity_id =
-                format!("provider-request-{}", session.turn.saturating_add(1));
-            let provider_signature = format!(
-                "{}:{}:{}",
-                state.config.model.provider, state.config.model.name, provider_activity_id
-            );
-            let mut retry_guard = medusa_tool_control::RetryGuard::new(2);
-            let mut next_attempt = 1_u8;
-            let mut provider_phase = match state.config.agent.mode {
-                Mode::ReadOnly => ProviderExecutionPhase::Planning,
-                Mode::Review => ProviderExecutionPhase::HighRiskReview,
-                Mode::Yolo => ProviderExecutionPhase::Implementation,
-            };
-            let outcome = loop {
-                let attempt_signature = format!("{provider_signature}:attempt:{next_attempt}");
-                let attempt = retry_guard
-                    .begin_attempt(&attempt_signature)
-                    .map_err(RuntimeError::agent)?;
-                next_attempt = next_attempt.saturating_add(1);
-                let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                    id: Some(provider_activity_id.clone()),
-                    kind: RuntimeActivityKind::Progress,
-                    title: format!(
-                        "Waiting for {} / {} response",
-                        state.config.model.provider, state.config.model.name
-                    ),
-                    details: vec![
-                        format!("bounded attempt {attempt}/2"),
-                        format!(
-                            "verification requirements: {:?}",
-                            verification_plan.requirements
-                        ),
-                    ],
-                }));
-                let provider_started_at = std::time::Instant::now();
-                let trajectory_context = if general_chat {
-                    String::new()
-                } else {
-                    crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?
-                };
-                let repository_context = if general_chat {
-                    String::new()
-                } else {
-                    crate::repository_context::assemble_and_render(
-                        &state.repo,
-                        &session,
-                        &draft.text,
-                    )?
-                };
-                let turn_context = format!(
-                    "{skill_context}\n\n{trajectory_context}\n\n{repository_context}"
+                append_followups(&engine, &mut session, take_followups(submission))?;
+                if session.turn >= max_turns {
+                    return Err(RuntimeError::TurnLimit(max_turns));
+                }
+                let provider_activity_id =
+                    format!("provider-request-{}", session.turn.saturating_add(1));
+                let provider_signature = format!(
+                    "{}:{}:{}",
+                    state.config.model.provider, state.config.model.name, provider_activity_id
                 );
-                match engine.step_with_observer_and_context_and_turn_instruction_for_phase(
-                    &mut session,
-                    Some(turn_context.as_str()),
-                    turn_instruction,
-                    provider_phase,
-                    |update| {
-                        forward_update(update, events, &mut updates);
-                    },
-                ) {
-                    Ok(outcome) => {
-                        let provider_duration_ms =
-                            u64::try_from(provider_started_at.elapsed().as_millis())
-                                .unwrap_or(u64::MAX);
-                        let trace = medusa_tool_control::trace(
-                            &attempt_signature,
-                            attempt,
-                            None,
-                            &verification_plan,
-                        );
-                        let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                            id: Some(provider_activity_id.clone()),
-                            kind: RuntimeActivityKind::Done,
-                            title: "Model response received".to_owned(),
-                            details: vec![
-                                format!("completed in {provider_duration_ms} ms"),
-                                format!("execution trace {}", trace.fingerprint),
-                            ],
-                        }));
-                        break outcome;
-                    }
-                    Err(_) if cancel_requested(cancel, submission) => {
-                        return Ok(RuntimeEvent::Cancelled);
-                    }
-                    Err(error) => {
-                        let error_text = error.to_string();
-                        let decision = retry_guard.decide(&error_text);
-                        let trace = medusa_tool_control::trace(
-                            &attempt_signature,
-                            attempt,
-                            Some(&decision),
-                            &verification_plan,
-                        );
-                        let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                            id: Some(provider_activity_id.clone()),
-                            kind: RuntimeActivityKind::Progress,
-                            title: "Provider attempt classified".to_owned(),
-                            details: vec![
-                                format!("class={:?}; action={:?}", decision.class, decision.action),
-                                decision.rationale.clone(),
-                                format!("execution trace {}", trace.fingerprint),
-                            ],
-                        }));
-                        if decision.action == medusa_tool_control::RetryAction::Retry {
-                            provider_phase = ProviderExecutionPhase::Repair;
-                            continue;
+                let mut retry_guard = medusa_tool_control::RetryGuard::new(2);
+                let mut next_attempt = 1_u8;
+                let mut provider_phase = match state.config.agent.mode {
+                    Mode::ReadOnly => ProviderExecutionPhase::Planning,
+                    Mode::Review => ProviderExecutionPhase::HighRiskReview,
+                    Mode::Yolo => ProviderExecutionPhase::Implementation,
+                };
+                let outcome = loop {
+                    let attempt_signature = format!("{provider_signature}:attempt:{next_attempt}");
+                    let attempt = retry_guard
+                        .begin_attempt(&attempt_signature)
+                        .map_err(RuntimeError::agent)?;
+                    next_attempt = next_attempt.saturating_add(1);
+                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                        id: Some(provider_activity_id.clone()),
+                        kind: RuntimeActivityKind::Progress,
+                        title: format!(
+                            "Waiting for {} / {} response",
+                            state.config.model.provider, state.config.model.name
+                        ),
+                        details: vec![
+                            format!("bounded attempt {attempt}/2"),
+                            format!(
+                                "verification requirements: {:?}",
+                                verification_plan.requirements
+                            ),
+                        ],
+                    }));
+                    let provider_started_at = std::time::Instant::now();
+                    let trajectory_context = if general_chat {
+                        String::new()
+                    } else {
+                        crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?
+                    };
+                    let repository_context = if general_chat {
+                        String::new()
+                    } else {
+                        crate::repository_context::assemble_and_render(
+                            &state.repo,
+                            &session,
+                            &draft.text,
+                        )?
+                    };
+                    let turn_context =
+                        format!("{skill_context}\n\n{trajectory_context}\n\n{repository_context}");
+                    match engine.step_with_observer_and_context_and_turn_instruction_for_phase(
+                        &mut session,
+                        Some(turn_context.as_str()),
+                        turn_instruction,
+                        provider_phase,
+                        |update| {
+                            forward_update(update, events, &mut updates);
+                        },
+                    ) {
+                        Ok(outcome) => {
+                            let provider_duration_ms =
+                                u64::try_from(provider_started_at.elapsed().as_millis())
+                                    .unwrap_or(u64::MAX);
+                            let trace = medusa_tool_control::trace(
+                                &attempt_signature,
+                                attempt,
+                                None,
+                                &verification_plan,
+                            );
+                            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                                id: Some(provider_activity_id.clone()),
+                                kind: RuntimeActivityKind::Done,
+                                title: "Model response received".to_owned(),
+                                details: vec![
+                                    format!("completed in {provider_duration_ms} ms"),
+                                    format!("execution trace {}", trace.fingerprint),
+                                ],
+                            }));
+                            break outcome;
                         }
-                        return Err(RuntimeError::agent(error));
+                        Err(_) if cancel_requested(cancel, submission) => {
+                            return Ok(RuntimeEvent::Cancelled);
+                        }
+                        Err(error) => {
+                            let error_text = error.to_string();
+                            let decision = retry_guard.decide(&error_text);
+                            let trace = medusa_tool_control::trace(
+                                &attempt_signature,
+                                attempt,
+                                Some(&decision),
+                                &verification_plan,
+                            );
+                            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                                id: Some(provider_activity_id.clone()),
+                                kind: RuntimeActivityKind::Progress,
+                                title: "Provider attempt classified".to_owned(),
+                                details: vec![
+                                    format!(
+                                        "class={:?}; action={:?}",
+                                        decision.class, decision.action
+                                    ),
+                                    decision.rationale.clone(),
+                                    format!("execution trace {}", trace.fingerprint),
+                                ],
+                            }));
+                            if decision.action == medusa_tool_control::RetryAction::Retry {
+                                provider_phase = ProviderExecutionPhase::Repair;
+                                continue;
+                            }
+                            return Err(RuntimeError::agent(error));
+                        }
                     }
+                };
+                let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+                if !general_chat {
+                    let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;
                 }
-            };
-            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
-            if !general_chat {
-                let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;
-            }
 
-            if matches!(outcome, StepOutcome::Continue | StepOutcome::TurnComplete)
-                && should_auto_compact(
-                    updates.current_context_tokens,
-                    state.config.model.context_window_tokens,
-                    state.config.model.auto_compact_percent,
-                )
-            {
-                compact_session(&mut session, None).map_err(RuntimeError::agent)?;
-                updates.current_context_tokens = 0;
-                let _ = events.send(RuntimeEvent::Compacted {
-                    message: format!(
-                        "Auto-compacted at {}% of the {}-token context window.",
+                if matches!(outcome, StepOutcome::Continue | StepOutcome::TurnComplete)
+                    && should_auto_compact(
+                        updates.current_context_tokens,
+                        state.config.model.context_window_tokens,
                         state.config.model.auto_compact_percent,
-                        state.config.model.context_window_tokens
-                    ),
-                });
-            }
-
-            if cancel_requested(cancel, submission) {
-                if let Some(ledger) = execution_ledger.as_mut() {
-                    let _ = ledger.cancel_remaining("runtime cancellation requested");
-                    let projected = crate::production_orchestrator::projection(ledger);
-                    session.plan = projected.clone();
-                    let _ = events.send(RuntimeEvent::Plan(projected));
-                }
-                return Ok(RuntimeEvent::Cancelled);
-            }
-
-            if matches!(outcome, StepOutcome::WaitingForUser) {
-                mark_idle(submission, false);
-                let question = session.pending_question.as_ref().ok_or_else(|| {
-                    RuntimeError::agent("agent paused without a pending question")
-                })?;
-                return Ok(RuntimeEvent::Question(question.clone()));
-            }
-
-            let queued = if matches!(outcome, StepOutcome::Completed | StepOutcome::TurnComplete) {
-                finish_or_take_followups(submission)
-            } else {
-                take_followups(submission)
-            };
-            if !queued.is_empty() {
-                append_followups(&engine, &mut session, queued)?;
-                continue;
-            }
-
-            match outcome {
-                StepOutcome::Completed => {
-                    return Ok(RuntimeEvent::Completed {
-                        session_id: session.id.to_string(),
+                    )
+                {
+                    compact_session(&mut session, None).map_err(RuntimeError::agent)?;
+                    updates.current_context_tokens = 0;
+                    let _ = events.send(RuntimeEvent::Compacted {
+                        message: format!(
+                            "Auto-compacted at {}% of the {}-token context window.",
+                            state.config.model.auto_compact_percent,
+                            state.config.model.context_window_tokens
+                        ),
                     });
                 }
-                StepOutcome::TurnComplete => return Ok(RuntimeEvent::TurnFinished),
-                StepOutcome::Continue => {}
-                StepOutcome::WaitingForUser => {
-                    return Err(RuntimeError::agent(
-                        "agent remained paused after its pending question was handled",
-                    ));
+
+                if cancel_requested(cancel, submission) {
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        let _ = ledger.cancel_remaining("runtime cancellation requested");
+                        let projected = crate::production_orchestrator::projection(ledger);
+                        session.plan = projected.clone();
+                        let _ = events.send(RuntimeEvent::Plan(projected));
+                    }
+                    return Ok(RuntimeEvent::Cancelled);
+                }
+
+                if matches!(outcome, StepOutcome::WaitingForUser) {
+                    mark_idle(submission, false);
+                    let question = session.pending_question.as_ref().ok_or_else(|| {
+                        RuntimeError::agent("agent paused without a pending question")
+                    })?;
+                    return Ok(RuntimeEvent::Question(question.clone()));
+                }
+
+                let queued =
+                    if matches!(outcome, StepOutcome::Completed | StepOutcome::TurnComplete) {
+                        finish_or_take_followups(submission)
+                    } else {
+                        take_followups(submission)
+                    };
+                if !queued.is_empty() {
+                    append_followups(&engine, &mut session, queued)?;
+                    continue;
+                }
+
+                match outcome {
+                    StepOutcome::Completed => {
+                        return Ok(RuntimeEvent::Completed {
+                            session_id: session.id.to_string(),
+                        });
+                    }
+                    StepOutcome::TurnComplete => return Ok(RuntimeEvent::TurnFinished),
+                    StepOutcome::Continue => {}
+                    StepOutcome::WaitingForUser => {
+                        return Err(RuntimeError::agent(
+                            "agent remained paused after its pending question was handled",
+                        ));
+                    }
                 }
             }
-        }
         })()
     };
     let waiting_for_user = matches!(&result, Ok(RuntimeEvent::Question(_)));
@@ -2648,7 +2721,8 @@ fn run_prompt(
         &result,
         Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished)
     );
-    let mut verified = terminal_turn && !crate::production_orchestrator::requires_mutation(&execution_plan);
+    let mut verified =
+        terminal_turn && !crate::production_orchestrator::requires_mutation(&execution_plan);
     if coordinated {
         if let Some(evidence) = implementation_evidence.as_ref() {
             match &result {
@@ -2678,7 +2752,9 @@ fn run_prompt(
                         cancel.as_ref(),
                         events,
                     ) {
-                        Ok(crate::mutation_transaction::TransactionCompletion::Reconciled(receipt)) => {
+                        Ok(crate::mutation_transaction::TransactionCompletion::Reconciled(
+                            receipt,
+                        )) => {
                             verified = true;
                             if let Some(ledger) = execution_ledger.as_mut() {
                                 crate::production_orchestrator::succeed_kinds(
@@ -2747,7 +2823,11 @@ fn run_prompt(
                                 session_id: session.id.to_string(),
                             });
                         }
-                        Ok(crate::mutation_transaction::TransactionCompletion::RevisionRequested(reason)) => {
+                        Ok(
+                            crate::mutation_transaction::TransactionCompletion::RevisionRequested(
+                                reason,
+                            ),
+                        ) => {
                             if let Some(ledger) = execution_ledger.as_mut() {
                                 let _ = crate::production_orchestrator::fail_kinds(
                                     ledger,
@@ -2858,8 +2938,45 @@ fn run_prompt(
     if coordinated {
         let _ = events.send(RuntimeEvent::Team(state.team_control.finish()));
     }
+    match &result {
+        Ok(event) => info!(
+            session_id = %session.id,
+            event = runtime_event_kind(event),
+            verified,
+            "runtime prompt completed"
+        ),
+        Err(_) => error!(
+            session_id = %session.id,
+            verified,
+            "runtime prompt failed"
+        ),
+    }
     state.session = Some(session);
     result
+}
+
+fn runtime_event_kind(event: &RuntimeEvent) -> &'static str {
+    match event {
+        RuntimeEvent::RecoveryAvailable(_) => "recovery_available",
+        RuntimeEvent::RecoveryCompleted(_) => "recovery_completed",
+        RuntimeEvent::Started => "started",
+        RuntimeEvent::AssistantText(_) => "assistant_text",
+        RuntimeEvent::Activity(_) => "activity",
+        RuntimeEvent::Team(_) => "team",
+        RuntimeEvent::Plan(_) => "plan",
+        RuntimeEvent::Question(_) => "question",
+        RuntimeEvent::Usage { .. } => "usage",
+        RuntimeEvent::Progress { .. } => "progress",
+        RuntimeEvent::Settings { .. } => "settings",
+        RuntimeEvent::ConfigurationChanged(_) => "configuration_changed",
+        RuntimeEvent::Notice { .. } => "notice",
+        RuntimeEvent::NewSession => "new_session",
+        RuntimeEvent::Compacted { .. } => "compacted",
+        RuntimeEvent::Completed { .. } => "completed",
+        RuntimeEvent::TurnFinished => "turn_finished",
+        RuntimeEvent::Cancelled => "cancelled",
+        RuntimeEvent::Failed(_) => "failed",
+    }
 }
 
 fn mutation_completion_text(summary: &str, commit: &str, changed_paths: &[String]) -> String {
@@ -2946,11 +3063,9 @@ mod mutation_completion_tests {
         )
         .expect("persist completion");
 
-        let persisted = medusa_agent::session_browser::load_session(
-            directory.path(),
-            session.id.as_str(),
-        )
-        .expect("reload completed session");
+        let persisted =
+            medusa_agent::session_browser::load_session(directory.path(), session.id.as_str())
+                .expect("reload completed session");
         assert!(persisted.completed);
         assert!(matches!(
             persisted.events.last().map(|event| &event.payload),
@@ -2987,8 +3102,8 @@ fn append_followups<P: ModelProvider>(
     Ok(())
 }
 
-mod recovery_projection;
 mod recovery_model;
+mod recovery_projection;
 mod recovery_tui;
 mod tool_policy;
 

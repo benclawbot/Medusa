@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tracing::{info, warn};
 use ulid::Ulid;
 
 use crate::{
@@ -30,6 +31,7 @@ impl MemoryEngine {
         }
         let serialized = serde_json::to_string(proposal)?;
         if contains_secret(&serialized) {
+            warn!(reason = "secret_detected", "memory proposal rejected");
             return Err(MedusaError::new(
                 ErrorCode::PolicyDenied,
                 ErrorCategory::Policy,
@@ -45,6 +47,7 @@ impl MemoryEngine {
     }
 
     /// Stores a proposal for review without modifying canonical memory.
+    #[tracing::instrument(skip(self, proposal), fields(scope = ?proposal.scope))]
     pub fn propose(&self, proposal: &MemoryProposal) -> MedusaResult<PathBuf> {
         self.validate_proposal(proposal)?;
         let path = self
@@ -52,10 +55,12 @@ impl MemoryEngine {
             .join("proposals")
             .join(format!("proposal-{}.json", Ulid::new()));
         atomic_write(&path, &serde_json::to_vec_pretty(proposal)?)?;
+        info!("memory proposal persisted");
         Ok(path)
     }
 
     /// Commits a validated proposal to canonical Markdown and refreshes the index.
+    #[tracing::instrument(skip(self, proposal), fields(scope = ?proposal.scope))]
     pub fn commit_proposal(&self, proposal: &MemoryProposal) -> MedusaResult<MemoryDocument> {
         self.validate_proposal(proposal)?;
         let duplicate = self.documents()?.into_iter().find(|(_, document)| {
@@ -64,6 +69,7 @@ impl MemoryEngine {
                 && normalize(&document.body).contains(&normalize(&proposal.claim))
         });
         if duplicate.is_some() {
+            warn!(reason = "duplicate_active_claim", "memory commit rejected");
             return Err(invalid("duplicate active memory claim"));
         }
         let now = OffsetDateTime::now_utc()
@@ -98,6 +104,7 @@ impl MemoryEngine {
         let path = self.path_for(&document);
         atomic_write(&path, document.to_markdown().as_bytes())?;
         self.rebuild_index()?;
+        info!(memory_id = %document.id, "memory commit completed");
         Ok(document)
     }
 }

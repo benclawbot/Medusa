@@ -235,7 +235,10 @@ impl RuntimeController {
         session_id: &str,
         name: &str,
     ) -> Result<Option<AnalysisValue>, RuntimeError> {
-        Ok(load_state(&self.repo, session_id)?.variables.get(name).cloned())
+        Ok(load_state(&self.repo, session_id)?
+            .variables
+            .get(name)
+            .cloned())
     }
 
     /// Execute a bounded deterministic reduction over an immutable artifact. This first backend
@@ -276,13 +279,17 @@ impl RuntimeController {
             ),
             AnalysisOperation::Utf8Contains { needle } => {
                 let text = std::str::from_utf8(&bytes).map_err(|_| {
-                    RuntimeError::InvalidCommand("analysis text operation requires UTF-8".to_owned())
+                    RuntimeError::InvalidCommand(
+                        "analysis text operation requires UTF-8".to_owned(),
+                    )
                 })?;
                 AnalysisValue::Bool(text.contains(needle))
             }
             AnalysisOperation::MatchingLines { needle, limit } => {
                 let text = std::str::from_utf8(&bytes).map_err(|_| {
-                    RuntimeError::InvalidCommand("analysis text operation requires UTF-8".to_owned())
+                    RuntimeError::InvalidCommand(
+                        "analysis text operation requires UTF-8".to_owned(),
+                    )
                 })?;
                 let bounded = (*limit).min(MAX_SAMPLE_LINES);
                 let mut matches = Vec::new();
@@ -300,7 +307,9 @@ impl RuntimeController {
             }
             AnalysisOperation::HeadLines { limit } => {
                 let text = std::str::from_utf8(&bytes).map_err(|_| {
-                    RuntimeError::InvalidCommand("analysis text operation requires UTF-8".to_owned())
+                    RuntimeError::InvalidCommand(
+                        "analysis text operation requires UTF-8".to_owned(),
+                    )
                 })?;
                 let bounded = (*limit).min(MAX_SAMPLE_LINES);
                 let mut lines = Vec::new();
@@ -339,7 +348,9 @@ impl RuntimeController {
         }
         let mut state = load_state(&self.repo, session_id)?;
         state.variables.remove(name);
-        state.non_restorable.insert(name.to_owned(), reason.to_owned());
+        state
+            .non_restorable
+            .insert(name.to_owned(), reason.to_owned());
         state.generation = state.generation.saturating_add(1);
         persist_state(&self.repo, session_id, &state)
     }
@@ -536,7 +547,11 @@ fn load_state(repo: &Path, session_id: &str) -> Result<WorkspaceState, RuntimeEr
     serde_json::from_slice(&bytes).map_err(RuntimeError::agent)
 }
 
-fn persist_state(repo: &Path, session_id: &str, state: &WorkspaceState) -> Result<(), RuntimeError> {
+fn persist_state(
+    repo: &Path,
+    session_id: &str,
+    state: &WorkspaceState,
+) -> Result<(), RuntimeError> {
     atomic_write(
         &state_path(repo, session_id),
         &serde_json::to_vec_pretty(state).map_err(RuntimeError::agent)?,
@@ -632,10 +647,8 @@ mod tests {
 
     fn controller() -> (TempDir, RuntimeController) {
         let temp = TempDir::new().expect("tempdir");
-        let controller = RuntimeController::start_with_config(
-            temp.path().to_path_buf(),
-            Config::default(),
-        );
+        let controller =
+            RuntimeController::start_with_config(temp.path().to_path_buf(), Config::default());
         (temp, controller)
     }
 
@@ -646,11 +659,15 @@ mod tests {
             .analysis_set_value("session-a", "count", AnalysisValue::Integer(7))
             .expect("set");
         assert_eq!(
-            controller.analysis_value("session-a", "count").expect("get"),
+            controller
+                .analysis_value("session-a", "count")
+                .expect("get"),
             Some(AnalysisValue::Integer(7))
         );
         assert_eq!(
-            controller.analysis_value("session-b", "count").expect("get"),
+            controller
+                .analysis_value("session-b", "count")
+                .expect("get"),
             None
         );
     }
@@ -676,25 +693,36 @@ mod tests {
             result.value,
             AnalysisValue::StringList(vec!["alpha".to_owned(), "alpha two".to_owned()])
         );
-        assert_eq!(result.provenance[0].source_sha256, artifact.source.source_sha256);
+        assert_eq!(
+            result.provenance[0].source_sha256,
+            artifact.source.source_sha256
+        );
         assert_eq!(result.provenance[0].artifact_sha256, artifact.sha256);
     }
 
     #[test]
     fn repository_escape_and_cross_session_artifacts_are_denied() {
         let (temp, controller) = controller();
-        let outside = temp.path().parent().expect("parent").join("outside-analysis.txt");
+        let outside = temp
+            .path()
+            .parent()
+            .expect("parent")
+            .join("outside-analysis.txt");
         fs::write(&outside, "secret").expect("outside fixture");
-        assert!(controller
-            .analysis_import_file("session-a", "../outside-analysis.txt", None)
-            .is_err());
+        assert!(
+            controller
+                .analysis_import_file("session-a", "../outside-analysis.txt", None)
+                .is_err()
+        );
         fs::write(temp.path().join("inside.txt"), "ok").expect("fixture");
         let artifact = controller
             .analysis_import_file("session-a", "inside.txt", None)
             .expect("import");
-        assert!(controller
-            .analysis_reduce("session-b", &artifact, AnalysisOperation::ByteCount)
-            .is_err());
+        assert!(
+            controller
+                .analysis_reduce("session-b", &artifact, AnalysisOperation::ByteCount)
+                .is_err()
+        );
         let _ = fs::remove_file(outside);
     }
 
@@ -713,9 +741,14 @@ mod tests {
             .expect("modify");
         let report = controller.analysis_restore("session-a").expect("restore");
         assert!(report.restored.contains(&"count".to_owned()));
-        assert_eq!(report.lost.get("socket"), Some(&"open native handle".to_owned()));
         assert_eq!(
-            controller.analysis_value("session-a", "count").expect("get"),
+            report.lost.get("socket"),
+            Some(&"open native handle".to_owned())
+        );
+        assert_eq!(
+            controller
+                .analysis_value("session-a", "count")
+                .expect("get"),
             Some(AnalysisValue::Integer(3))
         );
     }
@@ -726,9 +759,11 @@ mod tests {
         controller.analysis_snapshot("session-a").expect("snapshot");
         fs::write(snapshot_path(&controller.repo, "session-a"), b"not json").expect("corrupt");
         assert!(controller.analysis_restore("session-a").is_err());
-        assert!(snapshot_path(&controller.repo, "session-a")
-            .with_extension("corrupt")
-            .exists());
+        assert!(
+            snapshot_path(&controller.repo, "session-a")
+                .with_extension("corrupt")
+                .exists()
+        );
     }
 
     #[test]
@@ -739,12 +774,14 @@ mod tests {
             .expect("list");
         assert_eq!(receipt.authority, "medusa-runtime/team-control");
         assert!(receipt.team.workers.is_empty());
-        assert!(controller
-            .analysis_delegate(AnalysisDelegationKind::FollowUp {
-                worker_id: "missing".to_owned(),
-                message: "do work".to_owned(),
-            })
-            .is_err());
+        assert!(
+            controller
+                .analysis_delegate(AnalysisDelegationKind::FollowUp {
+                    worker_id: "missing".to_owned(),
+                    message: "do work".to_owned(),
+                })
+                .is_err()
+        );
     }
 
     #[test]

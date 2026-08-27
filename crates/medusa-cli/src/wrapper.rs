@@ -42,6 +42,9 @@ mod legacy {
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let repo = repository_argument(&args).unwrap_or_else(|| PathBuf::from("."));
+    if let Err(error) = medusa_daemon::initialize_observability(&repo) {
+        eprintln!("failed to initialize observability: {error}");
+    }
 
     if let Some(quickstart_args) = subcommand_arguments(&args, "quickstart") {
         finish(

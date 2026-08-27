@@ -141,9 +141,8 @@ pub(super) fn record_attempt_failure(
             "team lifecycle failure recording failed: {team_error}"
         ));
     }
-    let preserve_corrective_worktree = retryable
-        && !cancelled
-        && error.starts_with("isolated worktree verification failed:");
+    let preserve_corrective_worktree =
+        retryable && !cancelled && error.starts_with("isolated worktree verification failed:");
     if !preserve_corrective_worktree
         && let Err(cleanup_error) = manager.cleanup(std::slice::from_ref(worker))
     {
@@ -267,6 +266,9 @@ mod tests {
         capsule.verify().expect("verified capsule");
         assert!(capsule.fresh_context);
         assert!(capsule.retry_hypothesis.is_some());
-        assert_eq!(capsule.failure_fingerprint, Some(digest("verification failed")));
+        assert_eq!(
+            capsule.failure_fingerprint,
+            Some(digest("verification failed"))
+        );
     }
 }

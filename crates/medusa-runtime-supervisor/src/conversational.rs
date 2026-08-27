@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -192,6 +193,12 @@ impl ConversationalSupervisor {
         {
             let files = existing.resources.conflicting_files(&task.resources);
             if !files.is_empty() {
+                warn!(
+                    first_task_id = %existing.id,
+                    second_task_id = %task.id,
+                    conflicting_files = files.len(),
+                    "supervisor task resource conflict detected"
+                );
                 events.push(SupervisorEvent::ConflictDetected {
                     first_task_id: existing.id.clone(),
                     second_task_id: task.id.clone(),
@@ -200,9 +207,11 @@ impl ConversationalSupervisor {
             }
         }
         self.touch(&task.id);
+        let task_id = task.id.clone();
         self.tasks.insert(task.id.clone(), task.clone());
         self.bump()?;
         events.insert(0, SupervisorEvent::TaskCreated { task });
+        info!(task_id = %task_id, events = events.len(), "supervisor task created");
         Ok(events)
     }
 
@@ -212,7 +221,10 @@ impl ConversationalSupervisor {
         next: TaskStatus,
     ) -> Result<SupervisorEvent, &'static str> {
         let task = self.tasks.get_mut(task_id).ok_or("task does not exist")?;
+        let previous = task.status.clone();
+        let next_status = next.clone();
         if !valid_transition(&task.status, &next) {
+            error!(task_id = %task_id, from = ?previous, to = ?next_status, "supervisor task transition rejected");
             return Err("invalid task status transition");
         }
         task.status = next;
@@ -223,6 +235,7 @@ impl ConversationalSupervisor {
         let task = task.clone();
         self.touch(task_id);
         self.bump()?;
+        info!(task_id = %task_id, from = ?previous, to = ?next_status, revision = task.revision, "supervisor task transition applied");
         Ok(SupervisorEvent::TaskUpdated { task })
     }
 

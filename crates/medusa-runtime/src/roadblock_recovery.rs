@@ -27,7 +27,11 @@ pub(crate) fn project(trajectory: &CodingTrajectoryCheckpoint) -> Projection {
         .map(|item| (item.fingerprint.clone(), item.clone()))
         .collect::<BTreeMap<_, _>>();
     let mut roadblocks = Vec::new();
-    for failure in trajectory.repair_ledger.iter().filter(|item| item.unresolved()) {
+    for failure in trajectory
+        .repair_ledger
+        .iter()
+        .filter(|item| item.unresolved())
+    {
         let attempted = failure
             .repairs
             .iter()
@@ -51,14 +55,20 @@ pub(crate) fn project(trajectory: &CodingTrajectoryCheckpoint) -> Projection {
 
         let can_transition = trajectory.strategy_transition_count < MAX_TRANSITIONS;
         let selected_index = can_transition
-            .then(|| alternatives.iter().position(|item| item.rejected_reason.is_none()))
+            .then(|| {
+                alternatives
+                    .iter()
+                    .position(|item| item.rejected_reason.is_none())
+            })
             .flatten();
         let selected_alternative = selected_index.map(|index| alternatives[index].strategy.clone());
         for (index, item) in alternatives.iter_mut().enumerate() {
             item.selected = Some(index) == selected_index;
             if !item.selected && item.rejected_reason.is_none() {
                 item.rejected_reason = Some(match selected_alternative.as_deref() {
-                    Some(selected) => format!("lower ranked than selected alternative `{selected}`"),
+                    Some(selected) => {
+                        format!("lower ranked than selected alternative `{selected}`")
+                    }
                     None => "strategy transition budget exhausted".to_owned(),
                 });
             }
@@ -117,31 +127,110 @@ pub(crate) fn project(trajectory: &CodingTrajectoryCheckpoint) -> Projection {
 
 fn classify(failure: &RepairLedgerEntry) -> Option<RoadblockClass> {
     let text = format!("{} {}", failure.diagnostic_class, failure.summary).to_ascii_lowercase();
-    if contains_any(&text, &["command not found", "not installed", "unsupported platform", "unavailable tool", "missing capability"]) {
+    if contains_any(
+        &text,
+        &[
+            "command not found",
+            "not installed",
+            "unsupported platform",
+            "unavailable tool",
+            "missing capability",
+        ],
+    ) {
         return Some(RoadblockClass::MissingCapability);
     }
-    if contains_any(&text, &["connection refused", "service unavailable", "dependency unavailable", "offline", "dns"]) {
+    if contains_any(
+        &text,
+        &[
+            "connection refused",
+            "service unavailable",
+            "dependency unavailable",
+            "offline",
+            "dns",
+        ],
+    ) {
         return Some(RoadblockClass::DependencyUnavailable);
     }
-    if contains_any(&text, &["breaking change", "public api", "architecture", "compatibility", "forbidden dependency"]) {
+    if contains_any(
+        &text,
+        &[
+            "breaking change",
+            "public api",
+            "architecture",
+            "compatibility",
+            "forbidden dependency",
+        ],
+    ) {
         return Some(RoadblockClass::ArchitectureCompatibility);
     }
-    if contains_any(&text, &["permission denied", "not permitted", "forbidden", "policy", "approval required"]) {
+    if contains_any(
+        &text,
+        &[
+            "permission denied",
+            "not permitted",
+            "forbidden",
+            "policy",
+            "approval required",
+        ],
+    ) {
         return Some(RoadblockClass::PermissionPolicy);
     }
-    if contains_any(&text, &["stale", "conflict", "non-fast-forward", "repository drift", "lock file changed"]) {
+    if contains_any(
+        &text,
+        &[
+            "stale",
+            "conflict",
+            "non-fast-forward",
+            "repository drift",
+            "lock file changed",
+        ],
+    ) {
         return Some(RoadblockClass::RepositoryConflict);
     }
-    if contains_any(&text, &["out of memory", "budget exceeded", "resource exhausted", "quota exceeded"] ) {
+    if contains_any(
+        &text,
+        &[
+            "out of memory",
+            "budget exceeded",
+            "resource exhausted",
+            "quota exceeded",
+        ],
+    ) {
         return Some(RoadblockClass::ResourceExhaustion);
     }
-    if contains_any(&text, &["assumption", "hypothesis", "does not exist", "no method named", "unresolved import"]) {
+    if contains_any(
+        &text,
+        &[
+            "assumption",
+            "hypothesis",
+            "does not exist",
+            "no method named",
+            "unresolved import",
+        ],
+    ) {
         return Some(RoadblockClass::DisprovedHypothesis);
     }
-    if contains_any(&text, &["structurally wrong", "invariant violation", "design cannot satisfy", "structural verification"]) {
+    if contains_any(
+        &text,
+        &[
+            "structurally wrong",
+            "invariant violation",
+            "design cannot satisfy",
+            "structural verification",
+        ],
+    ) {
         return Some(RoadblockClass::StructuralVerification);
     }
-    if failure.occurrence_count >= 2 || failure.repairs.iter().filter(|attempt| attempt.outcome == medusa_session_continuity::VerificationOutcome::Failed).count() >= 1 {
+    if failure.occurrence_count >= 2
+        || failure
+            .repairs
+            .iter()
+            .filter(|attempt| {
+                attempt.outcome == medusa_session_continuity::VerificationOutcome::Failed
+            })
+            .count()
+            >= 1
+    {
         return Some(RoadblockClass::DeterministicFailure);
     }
     None
@@ -155,52 +244,191 @@ fn alternatives_for(
 ) -> Vec<AlternativePathCheckpoint> {
     let mut candidates = match class {
         RoadblockClass::MissingCapability => vec![
-            candidate("use-repository-supported-alternative", "Discover and use the repository's supported equivalent tool or command.", 92, 10, 94),
-            candidate("defer-platform-proof-to-ci", "Continue independent work and bind the unavailable platform proof to authoritative CI.", 82, 8, 96),
-            candidate("deterministic-local-fixture", "Replace unavailable live/tool dependency with a deterministic local fixture when authoritative.", 78, 14, 90),
+            candidate(
+                "use-repository-supported-alternative",
+                "Discover and use the repository's supported equivalent tool or command.",
+                92,
+                10,
+                94,
+            ),
+            candidate(
+                "defer-platform-proof-to-ci",
+                "Continue independent work and bind the unavailable platform proof to authoritative CI.",
+                82,
+                8,
+                96,
+            ),
+            candidate(
+                "deterministic-local-fixture",
+                "Replace unavailable live/tool dependency with a deterministic local fixture when authoritative.",
+                78,
+                14,
+                90,
+            ),
         ],
         RoadblockClass::DependencyUnavailable => vec![
-            candidate("deterministic-local-fixture", "Use a local deterministic fixture or cached evidence instead of the unavailable service.", 88, 10, 92),
-            candidate("continue-independent-work", "Complete independent changes and preserve the external dependency as an explicit blocker.", 76, 5, 98),
-            candidate("allowed-provider-or-service-fallback", "Use an already-authorized fallback route without expanding capability scope.", 80, 12, 88),
+            candidate(
+                "deterministic-local-fixture",
+                "Use a local deterministic fixture or cached evidence instead of the unavailable service.",
+                88,
+                10,
+                92,
+            ),
+            candidate(
+                "continue-independent-work",
+                "Complete independent changes and preserve the external dependency as an explicit blocker.",
+                76,
+                5,
+                98,
+            ),
+            candidate(
+                "allowed-provider-or-service-fallback",
+                "Use an already-authorized fallback route without expanding capability scope.",
+                80,
+                12,
+                88,
+            ),
         ],
         RoadblockClass::PermissionPolicy => vec![
-            candidate("narrow-scope-implementation", "Choose an implementation that remains inside current approval, write, network, and capability boundaries.", 90, 8, 96),
-            candidate("complete-independent-work-and-escalate", "Finish independent work and preserve the exact permission boundary as a resumable blocker.", 70, 2, 100),
+            candidate(
+                "narrow-scope-implementation",
+                "Choose an implementation that remains inside current approval, write, network, and capability boundaries.",
+                90,
+                8,
+                96,
+            ),
+            candidate(
+                "complete-independent-work-and-escalate",
+                "Finish independent work and preserve the exact permission boundary as a resumable blocker.",
+                70,
+                2,
+                100,
+            ),
         ],
         RoadblockClass::ArchitectureCompatibility => vec![
-            candidate("compatibility-shim", "Preserve the public/architecture contract with an adapter or compatibility shim.", 98, 6, 99),
-            candidate("move-change-behind-existing-seam", "Implement behind the repository's existing authority or extension seam instead of changing the public boundary.", 92, 10, 95),
-            candidate("decompose-compatible-increments", "Split the change into smaller independently verifiable compatibility-preserving steps.", 84, 6, 97),
+            candidate(
+                "compatibility-shim",
+                "Preserve the public/architecture contract with an adapter or compatibility shim.",
+                98,
+                6,
+                99,
+            ),
+            candidate(
+                "move-change-behind-existing-seam",
+                "Implement behind the repository's existing authority or extension seam instead of changing the public boundary.",
+                92,
+                10,
+                95,
+            ),
+            candidate(
+                "decompose-compatible-increments",
+                "Split the change into smaller independently verifiable compatibility-preserving steps.",
+                84,
+                6,
+                97,
+            ),
         ],
         RoadblockClass::RepositoryConflict => vec![
-            candidate("refresh-and-replan", "Refresh repository state, invalidate stale evidence, and regenerate the mutation plan.", 96, 4, 99),
-            candidate("isolate-smaller-mutation", "Use a smaller isolated edit/integration strategy against freshly read source.", 86, 8, 96),
+            candidate(
+                "refresh-and-replan",
+                "Refresh repository state, invalidate stale evidence, and regenerate the mutation plan.",
+                96,
+                4,
+                99,
+            ),
+            candidate(
+                "isolate-smaller-mutation",
+                "Use a smaller isolated edit/integration strategy against freshly read source.",
+                86,
+                8,
+                96,
+            ),
         ],
         RoadblockClass::DisprovedHypothesis => vec![
-            candidate("evidence-backed-alternative-api", "Re-read exact source/API evidence and choose an implementation supported by the observed contract.", 95, 9, 95),
-            candidate("different-layer-implementation", "Satisfy the objective through a different module or layer with less unsupported assumption.", 84, 13, 90),
-            candidate("decompose-and-probe", "Run a narrow deterministic probe, then implement only the proven branch.", 87, 7, 96),
+            candidate(
+                "evidence-backed-alternative-api",
+                "Re-read exact source/API evidence and choose an implementation supported by the observed contract.",
+                95,
+                9,
+                95,
+            ),
+            candidate(
+                "different-layer-implementation",
+                "Satisfy the objective through a different module or layer with less unsupported assumption.",
+                84,
+                13,
+                90,
+            ),
+            candidate(
+                "decompose-and-probe",
+                "Run a narrow deterministic probe, then implement only the proven branch.",
+                87,
+                7,
+                96,
+            ),
         ],
         RoadblockClass::StructuralVerification => vec![
-            candidate("redesign-behind-authoritative-seam", "Replace the structurally invalid design while preserving the authoritative verification contract.", 92, 18, 88),
-            candidate("decompose-compatible-increments", "Reduce blast radius and verify each architectural increment independently.", 83, 8, 95),
+            candidate(
+                "redesign-behind-authoritative-seam",
+                "Replace the structurally invalid design while preserving the authoritative verification contract.",
+                92,
+                18,
+                88,
+            ),
+            candidate(
+                "decompose-compatible-increments",
+                "Reduce blast radius and verify each architectural increment independently.",
+                83,
+                8,
+                95,
+            ),
         ],
         RoadblockClass::ResourceExhaustion => vec![
-            candidate("narrow-work-and-verification", "Reduce context, mutation, and verification scope while preserving required final gates.", 88, 5, 96),
-            candidate("defer-heavy-proof-to-authoritative-ci", "Continue bounded local work and move only the heavy proof to authoritative CI.", 80, 4, 94),
+            candidate(
+                "narrow-work-and-verification",
+                "Reduce context, mutation, and verification scope while preserving required final gates.",
+                88,
+                5,
+                96,
+            ),
+            candidate(
+                "defer-heavy-proof-to-authoritative-ci",
+                "Continue bounded local work and move only the heavy proof to authoritative CI.",
+                80,
+                4,
+                94,
+            ),
         ],
         RoadblockClass::DeterministicFailure => vec![
-            candidate("refresh-evidence-and-change-strategy", "Re-read exact failure/source evidence and choose a materially different repair strategy.", 94, 7, 97),
-            candidate("decompose-independent-failures", "Separate independent failures and repair the smallest authoritative root first without repeating the failed edit.", 87, 6, 96),
-            candidate("alternate-verification-route", "Use the narrowest equivalent authoritative check to test a different hypothesis before broad rerun.", 80, 4, 94),
+            candidate(
+                "refresh-evidence-and-change-strategy",
+                "Re-read exact failure/source evidence and choose a materially different repair strategy.",
+                94,
+                7,
+                97,
+            ),
+            candidate(
+                "decompose-independent-failures",
+                "Separate independent failures and repair the smallest authoritative root first without repeating the failed edit.",
+                87,
+                6,
+                96,
+            ),
+            candidate(
+                "alternate-verification-route",
+                "Use the narrowest equivalent authoritative check to test a different hypothesis before broad rerun.",
+                80,
+                4,
+                94,
+            ),
         ],
     };
 
     for item in &mut candidates {
         let signature = strategy_signature(&item.strategy);
         if attempted.contains(&signature) {
-            item.rejected_reason = Some("equivalent strategy was already attempted for a prior roadblock".to_owned());
+            item.rejected_reason =
+                Some("equivalent strategy was already attempted for a prior roadblock".to_owned());
         }
         if widens_authority(&item.strategy) {
             item.rejected_reason = Some("strategy would widen current authority".to_owned());
@@ -289,7 +517,15 @@ fn strategy_signature(strategy: &str) -> String {
 
 fn widens_authority(strategy: &str) -> bool {
     let value = strategy.to_ascii_lowercase();
-    contains_any(&value, &["disable policy", "bypass approval", "expand write", "unrestricted network"])
+    contains_any(
+        &value,
+        &[
+            "disable policy",
+            "bypass approval",
+            "expand write",
+            "unrestricted network",
+        ],
+    )
 }
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
@@ -360,7 +596,10 @@ mod tests {
             "public API compatibility policy rejects breaking change",
             1,
         )));
-        assert_eq!(projected.roadblocks[0].class, RoadblockClass::ArchitectureCompatibility);
+        assert_eq!(
+            projected.roadblocks[0].class,
+            RoadblockClass::ArchitectureCompatibility
+        );
         assert_eq!(
             projected.roadblocks[0].selected_alternative.as_deref(),
             Some("compatibility-shim")
@@ -373,17 +612,19 @@ mod tests {
         let first = project(&state);
         state.roadblocks = first.roadblocks;
         state.strategy_transition_count = 1;
-        state.repair_ledger[0].repairs.push(RepairAttemptCheckpoint {
-            id: "repair-2".to_owned(),
-            failure_fingerprint: "failure-a".to_owned(),
-            changed_files: vec!["crates/a/src/lib.rs".to_owned()],
-            outcome: VerificationOutcome::Failed,
-            hypothesis: state.roadblocks[0]
-                .selected_alternative
-                .clone()
-                .expect("strategy"),
-            repository_fingerprint: "repo-a".to_owned(),
-        });
+        state.repair_ledger[0]
+            .repairs
+            .push(RepairAttemptCheckpoint {
+                id: "repair-2".to_owned(),
+                failure_fingerprint: "failure-a".to_owned(),
+                changed_files: vec!["crates/a/src/lib.rs".to_owned()],
+                outcome: VerificationOutcome::Failed,
+                hypothesis: state.roadblocks[0]
+                    .selected_alternative
+                    .clone()
+                    .expect("strategy"),
+                repository_fingerprint: "repo-a".to_owned(),
+            });
         let second = project(&state);
         assert_ne!(
             second.roadblocks[0].selected_alternative,
@@ -401,7 +642,10 @@ mod tests {
     #[test]
     fn missing_capability_selects_repository_supported_alternative() {
         let projected = project(&trajectory(failure("required command not found", 1)));
-        assert_eq!(projected.roadblocks[0].class, RoadblockClass::MissingCapability);
+        assert_eq!(
+            projected.roadblocks[0].class,
+            RoadblockClass::MissingCapability
+        );
         assert_eq!(
             projected.roadblocks[0].selected_alternative.as_deref(),
             Some("use-repository-supported-alternative")
@@ -438,8 +682,14 @@ mod tests {
 
     #[test]
     fn repository_conflict_selects_refresh_and_replan() {
-        let projected = project(&trajectory(failure("stale repository conflict after head drift", 1)));
-        assert_eq!(projected.roadblocks[0].class, RoadblockClass::RepositoryConflict);
+        let projected = project(&trajectory(failure(
+            "stale repository conflict after head drift",
+            1,
+        )));
+        assert_eq!(
+            projected.roadblocks[0].class,
+            RoadblockClass::RepositoryConflict
+        );
         assert_eq!(
             projected.roadblocks[0].selected_alternative.as_deref(),
             Some("refresh-and-replan")
@@ -448,22 +698,38 @@ mod tests {
 
     #[test]
     fn unavailable_dependency_preserves_independent_work_path() {
-        let projected = project(&trajectory(failure("service unavailable: dependency offline", 1)));
-        assert_eq!(projected.roadblocks[0].class, RoadblockClass::DependencyUnavailable);
-        assert!(projected.roadblocks[0]
-            .alternatives
-            .iter()
-            .any(|item| item.strategy == "continue-independent-work"));
+        let projected = project(&trajectory(failure(
+            "service unavailable: dependency offline",
+            1,
+        )));
+        assert_eq!(
+            projected.roadblocks[0].class,
+            RoadblockClass::DependencyUnavailable
+        );
+        assert!(
+            projected.roadblocks[0]
+                .alternatives
+                .iter()
+                .any(|item| item.strategy == "continue-independent-work")
+        );
     }
 
     #[test]
     fn platform_capability_can_defer_proof_to_authoritative_ci() {
-        let projected = project(&trajectory(failure("unsupported platform tool not installed", 1)));
-        assert_eq!(projected.roadblocks[0].class, RoadblockClass::MissingCapability);
-        assert!(projected.roadblocks[0]
-            .alternatives
-            .iter()
-            .any(|item| item.strategy == "defer-platform-proof-to-ci"));
+        let projected = project(&trajectory(failure(
+            "unsupported platform tool not installed",
+            1,
+        )));
+        assert_eq!(
+            projected.roadblocks[0].class,
+            RoadblockClass::MissingCapability
+        );
+        assert!(
+            projected.roadblocks[0]
+                .alternatives
+                .iter()
+                .any(|item| item.strategy == "defer-platform-proof-to-ci")
+        );
     }
 
     #[test]

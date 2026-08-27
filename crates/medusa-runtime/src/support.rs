@@ -15,9 +15,7 @@ use serde_json::Value;
 
 use crate::{
     commands::{Effort, ModelConfiguration},
-    prompt::{
-        ImageAttachment, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, PromptAttachment, PromptDraft,
-    },
+    prompt::{ImageAttachment, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, PromptAttachment, PromptDraft},
 };
 
 use super::{
@@ -125,7 +123,8 @@ pub(super) fn model_context_window_tokens(
     model: &str,
     configured_default: u64,
 ) -> u64 {
-    medusa_config::model_registry::model_context_limit(provider, model).unwrap_or(configured_default)
+    medusa_config::model_registry::model_context_limit(provider, model)
+        .unwrap_or(configured_default)
 }
 
 pub(super) fn should_auto_compact(
@@ -663,10 +662,7 @@ struct EncodedImageInfo {
     media_type: &'static str,
 }
 
-fn encoded_image_info(
-    bytes: &[u8],
-    path: &Path,
-) -> Result<Option<EncodedImageInfo>, RuntimeError> {
+fn encoded_image_info(bytes: &[u8], path: &Path) -> Result<Option<EncodedImageInfo>, RuntimeError> {
     let info = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some(parse_png_dimensions(bytes))
     } else if bytes.starts_with(&[0xff, 0xd8]) {
@@ -733,8 +729,18 @@ fn parse_jpeg_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
         }
         if matches!(
             marker,
-            0xc0 | 0xc1 | 0xc2 | 0xc3 | 0xc5 | 0xc6 | 0xc7 | 0xc9 | 0xca | 0xcb | 0xcd
-                | 0xce | 0xcf
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
         ) {
             let height = u32::from(u16::from_be_bytes([
                 *bytes.get(cursor.saturating_add(3))?,
@@ -756,10 +762,12 @@ fn parse_webp_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
     let payload = bytes.get(20..)?;
     match chunk {
         b"VP8X" if payload.len() >= 10 => {
-            let width = 1 + u32::from(payload[4])
+            let width = 1
+                + u32::from(payload[4])
                 + (u32::from(payload[5]) << 8)
                 + (u32::from(payload[6]) << 16);
-            let height = 1 + u32::from(payload[7])
+            let height = 1
+                + u32::from(payload[7])
                 + (u32::from(payload[8]) << 8)
                 + (u32::from(payload[9]) << 16);
             Some(("image/webp", width, height))
@@ -929,13 +937,10 @@ mod tests {
     #[test]
     fn encoded_jpeg_dimensions_are_detected() {
         let bytes = vec![
-            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01,
-            0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01, 0x11,
+            0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
         ];
-        assert_eq!(
-            parse_jpeg_dimensions(&bytes),
-            Some(("image/jpeg", 3, 2))
-        );
+        assert_eq!(parse_jpeg_dimensions(&bytes), Some(("image/jpeg", 3, 2)));
     }
 
     #[test]
@@ -943,8 +948,8 @@ mod tests {
         let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
         bytes.extend_from_slice(&100_000_u32.to_be_bytes());
         bytes.extend_from_slice(&100_000_u32.to_be_bytes());
-        let error = encoded_image_info(&bytes, Path::new("large.png"))
-            .expect_err("reject large image");
+        let error =
+            encoded_image_info(&bytes, Path::new("large.png")).expect_err("reject large image");
         assert!(matches!(error, RuntimeError::ImagePixelLimit { .. }));
     }
 }

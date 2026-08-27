@@ -96,7 +96,12 @@ fn assemble(
             ));
             continue;
         }
-        remember_range(&mut ranges, &result.path, result.start_line, result.end_line);
+        remember_range(
+            &mut ranges,
+            &result.path,
+            result.start_line,
+            result.end_line,
+        );
         selected.push(RankedEvidence {
             path: result.path.clone(),
             symbol: result.symbol.clone(),
@@ -205,7 +210,10 @@ impl RepositoryContextAssembly {
         );
 
         if !self.policies.is_empty() {
-            push_bounded(&mut output, "\nProtected repository policy (non-prunable):\n");
+            push_bounded(
+                &mut output,
+                "\nProtected repository policy (non-prunable):\n",
+            );
             for policy in &self.policies {
                 push_bounded(
                     &mut output,
@@ -251,7 +259,10 @@ impl RepositoryContextAssembly {
         }
 
         if !self.omitted.is_empty() {
-            push_bounded(&mut output, "\nContext selection audit (omitted/compressed):\n");
+            push_bounded(
+                &mut output,
+                "\nContext selection audit (omitted/compressed):\n",
+            );
             for reason in self.omitted.iter().take(24) {
                 push_bounded(&mut output, &format!("- {reason}\n"));
             }
@@ -261,7 +272,10 @@ impl RepositoryContextAssembly {
 }
 
 fn effective_query(session: &AgentSession, turn_query: &str) -> String {
-    let mut parts = vec![turn_query.trim().to_owned(), session.objective.trim().to_owned()];
+    let mut parts = vec![
+        turn_query.trim().to_owned(),
+        session.objective.trim().to_owned(),
+    ];
     for step in &session.plan {
         parts.push(step.title.trim().to_owned());
     }
@@ -465,7 +479,12 @@ mod tests {
         .expect("test");
         let session = session(directory.path(), "fix target_value behavior");
         let assembly = assemble(directory.path(), &session, "target_value").expect("assembly");
-        assert!(assembly.selected.iter().any(|item| item.symbol == "target_value"));
+        assert!(
+            assembly
+                .selected
+                .iter()
+                .any(|item| item.symbol == "target_value")
+        );
         assert!(assembly.selected.iter().any(|item| item.symbol == "caller"));
         assert!(
             assembly
@@ -478,8 +497,11 @@ mod tests {
     #[test]
     fn repository_policy_is_protected_and_rendering_is_bounded() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("AGENTS.md"), "Never change public API without tests.\n")
-            .expect("policy");
+        fs::write(
+            directory.path().join("AGENTS.md"),
+            "Never change public API without tests.\n",
+        )
+        .expect("policy");
         fs::write(directory.path().join("lib.rs"), "pub fn api_guard() {}\n").expect("source");
         let session = session(directory.path(), "change api_guard");
         let assembly = assemble(directory.path(), &session, "api_guard").expect("assembly");
@@ -499,7 +521,12 @@ mod tests {
         fs::write(&source, "pub fn drift_target() -> usize { 2 }\n").expect("mutate");
         let second = assemble(directory.path(), &session, "drift_target").expect("second");
         assert_ne!(first.repository_fingerprint, second.repository_fingerprint);
-        assert!(second.selected.iter().any(|item| item.content.contains("{ 2 }")));
+        assert!(
+            second
+                .selected
+                .iter()
+                .any(|item| item.content.contains("{ 2 }"))
+        );
     }
 
     #[test]

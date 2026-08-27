@@ -184,8 +184,8 @@ impl RuntimeController {
                 "contained analysis artifact failed content verification".to_owned(),
             ));
         }
-        let operation_json = serde_json::to_string(&operation_wire(&operation)?)
-            .map_err(RuntimeError::agent)?;
+        let operation_json =
+            serde_json::to_string(&operation_wire(&operation)?).map_err(RuntimeError::agent)?;
         let program = python_program();
         let args = vec![
             "-I".to_owned(),
@@ -196,13 +196,9 @@ impl RuntimeController {
             operation_json,
         ];
         let started = Instant::now();
-        let output = medusa_agent::run_contained_analysis_command(
-            &root,
-            program,
-            &args,
-            &self.cancel,
-        )
-        .map_err(RuntimeError::agent)?;
+        let output =
+            medusa_agent::run_contained_analysis_command(&root, program, &args, &self.cancel)
+                .map_err(RuntimeError::agent)?;
         let elapsed_millis = started.elapsed().as_millis();
         if !output.status.success() {
             return Err(RuntimeError::InvalidCommand(format!(
@@ -215,7 +211,8 @@ impl RuntimeController {
                 "contained analysis output exceeded the configured byte limit".to_owned(),
             ));
         }
-        let wire: WireResult = serde_json::from_slice(&output.stdout).map_err(RuntimeError::agent)?;
+        let wire: WireResult =
+            serde_json::from_slice(&output.stdout).map_err(RuntimeError::agent)?;
         let reducer_millis = u128::from(wire.reducer_elapsed_nanos) / 1_000_000;
         let result = AnalysisResult {
             operation,
@@ -382,10 +379,8 @@ mod tests {
     #[test]
     fn capabilities_fail_closed_by_default() {
         let temp = TempDir::new().expect("tempdir");
-        let controller = RuntimeController::start_with_config(
-            temp.path().to_path_buf(),
-            Config::default(),
-        );
+        let controller =
+            RuntimeController::start_with_config(temp.path().to_path_buf(), Config::default());
         let capabilities = controller.analysis_workspace_capabilities();
         assert!(!capabilities.arbitrary_user_code);
         assert!(!capabilities.ambient_network);

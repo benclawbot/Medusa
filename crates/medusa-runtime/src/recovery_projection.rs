@@ -12,13 +12,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_agent::session_browser::replay_events;
-use medusa_recovery_coordinator::{
-    CheckpointPresentation, RecoveryPreview, RecoveryView, VerificationState,
-};
 use crate::{
     RuntimeController, RuntimeError, checkpoint_payload, checkpoint_store, execution_history,
     recovery_model::PersistedRecoveryRecord,
+};
+use medusa_agent::session_browser::replay_events;
+use medusa_recovery_coordinator::{
+    CheckpointPresentation, RecoveryPreview, RecoveryView, VerificationState,
 };
 
 const RECOVERY_DIRECTORY: &str = ".medusa/recovery";

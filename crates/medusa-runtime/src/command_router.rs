@@ -31,17 +31,14 @@ pub(super) fn execute_slash_command_with_submission(
             ));
         }
         SlashCommand::Learning { action } => {
-            let mut authority = crate::learning_authority::open(&state.repo)
-                .map_err(RuntimeError::agent)?;
+            let mut authority =
+                crate::learning_authority::open(&state.repo).map_err(RuntimeError::agent)?;
             let snapshot = authority
                 .snapshot()
                 .map_err(|error| RuntimeError::agent(error.to_string()))?;
             match action {
                 LearningCommand::Show { filter } => {
-                    let details = crate::learning_authority::details(
-                        &snapshot,
-                        filter.as_deref(),
-                    );
+                    let details = crate::learning_authority::details(&snapshot, filter.as_deref());
                     let _ = events.send(RuntimeEvent::Notice {
                         title: "Canonical learning authority".to_owned(),
                         details,
@@ -56,18 +53,17 @@ pub(super) fn execute_slash_command_with_submission(
                     });
                 }
                 LearningCommand::Propose { scope, key, value } => {
-                    let updated = crate::learning_authority::propose(
-                        &mut authority,
-                        &scope,
-                        &key,
-                        &value,
-                    )
-                    .map_err(RuntimeError::agent)?;
+                    let updated =
+                        crate::learning_authority::propose(&mut authority, &scope, &key, &value)
+                            .map_err(RuntimeError::agent)?;
                     let _ = events.send(RuntimeEvent::Notice {
                         title: "Canonical refinement proposed".to_owned(),
                         details: vec![format!(
                             "{} v{} is proposed at authority revision {}",
-                            updated.records.last().map_or("unknown", |record| record.proposal_id.as_str()),
+                            updated
+                                .records
+                                .last()
+                                .map_or("unknown", |record| record.proposal_id.as_str()),
                             updated.revision,
                             updated.revision
                         )],
@@ -166,25 +162,30 @@ pub(super) fn execute_slash_command_with_submission(
                         LearningCommand::Defer { id } => {
                             (id, crate::learning_authority::RuntimeLearningAction::Defer)
                         }
-                        LearningCommand::Validate { id } => {
-                            (id, crate::learning_authority::RuntimeLearningAction::Validate)
-                        }
-                        LearningCommand::Activate { id } => {
-                            (id, crate::learning_authority::RuntimeLearningAction::Activate)
-                        }
-                        LearningCommand::Suspend { id } => {
-                            (id, crate::learning_authority::RuntimeLearningAction::Suspend)
-                        }
-                        LearningCommand::Rollback { id } => {
-                            (id, crate::learning_authority::RuntimeLearningAction::Rollback)
-                        }
+                        LearningCommand::Validate { id } => (
+                            id,
+                            crate::learning_authority::RuntimeLearningAction::Validate,
+                        ),
+                        LearningCommand::Activate { id } => (
+                            id,
+                            crate::learning_authority::RuntimeLearningAction::Activate,
+                        ),
+                        LearningCommand::Suspend { id } => (
+                            id,
+                            crate::learning_authority::RuntimeLearningAction::Suspend,
+                        ),
+                        LearningCommand::Rollback { id } => (
+                            id,
+                            crate::learning_authority::RuntimeLearningAction::Rollback,
+                        ),
                         LearningCommand::Delete { id } => {
                             (id, crate::learning_authority::RuntimeLearningAction::Delete)
                         }
                         _ => unreachable!(),
                     };
-                    let updated = crate::learning_authority::transition(&mut authority, &id, action)
-                        .map_err(RuntimeError::agent)?;
+                    let updated =
+                        crate::learning_authority::transition(&mut authority, &id, action)
+                            .map_err(RuntimeError::agent)?;
                     let _ = events.send(RuntimeEvent::Notice {
                         title: "Canonical refinement lifecycle updated".to_owned(),
                         details: vec![format!(

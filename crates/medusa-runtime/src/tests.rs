@@ -40,7 +40,9 @@ fn general_chat_preparation_does_not_scan_or_capture_repository_state() {
 
 #[test]
 fn project_conversation_does_not_capture_a_review_baseline() {
-    assert!(!should_capture_review_baseline_for_plan(false, false, false));
+    assert!(!should_capture_review_baseline_for_plan(
+        false, false, false
+    ));
     assert!(should_capture_review_baseline_for_plan(false, false, true));
     assert!(!should_capture_review_baseline_for_plan(true, false, true));
     assert!(!should_capture_review_baseline_for_plan(false, true, true));
@@ -118,7 +120,11 @@ fn resumed_session_rejects_a_changed_effective_runtime_configuration() {
 
     let error = validate_session_runtime_config_binding(Some(&current), Some(&persisted))
         .expect_err("a resumed session must not adopt changed runtime defaults");
-    assert!(error.to_string().contains("different runtime configuration"));
+    assert!(
+        error
+            .to_string()
+            .contains("different runtime configuration")
+    );
 }
 
 #[test]
@@ -136,7 +142,11 @@ fn invalid_repository_runtime_configuration_fails_before_runtime_startup() {
         Ok(_) => panic!("invalid runtime config must fail closed"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("failed to parse runtime configuration"));
+    assert!(
+        error
+            .to_string()
+            .contains("failed to parse runtime configuration")
+    );
 }
 
 #[test]
@@ -154,7 +164,11 @@ fn unadmitted_repository_runtime_route_fails_before_provider_startup() {
         Ok(_) => panic!("an unadmitted runtime route must fail closed"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("not an admitted provider/model route"));
+    assert!(
+        error
+            .to_string()
+            .contains("not an admitted provider/model route")
+    );
 }
 
 #[test]
@@ -190,7 +204,10 @@ fn admitted_repository_runtime_route_applies_the_selected_fallback() {
     apply_runtime_route(&mut config, &effective).expect("admitted route applies");
     assert_eq!(config.model.provider, "fallback");
     assert_eq!(config.model.name, "fallback-model");
-    assert_eq!(config.model.base_url.as_deref(), Some("https://fallback.invalid"));
+    assert_eq!(
+        config.model.base_url.as_deref(),
+        Some("https://fallback.invalid")
+    );
     assert_eq!(config.model.auth, "none");
     assert!(config.model.streaming);
     assert_eq!(config.model.max_retries, 2);
@@ -206,7 +223,8 @@ fn explicit_config_startup_rejects_invalid_runtime_policy() {
     )
     .expect("write runtime policy");
 
-    let controller = RuntimeController::start_with_config(directory.path().to_path_buf(), Config::default());
+    let controller =
+        RuntimeController::start_with_config(directory.path().to_path_buf(), Config::default());
     let event = controller
         .events
         .recv_timeout(std::time::Duration::from_secs(1))
@@ -446,9 +464,7 @@ fn initial_submit_reports_pre_session_failure_instead_of_channel_loss() {
         event_sender,
         team_control: TeamControlPlane::default(),
         repo: directory.path().to_path_buf(),
-        invariants: std::sync::Arc::new(std::sync::Mutex::new(
-            RuntimeInvariantRegistry::default(),
-        )),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(RuntimeInvariantRegistry::default())),
     };
     let worker = thread::spawn(move || {
         let RuntimeCommand::Submit { accepted, .. } =
@@ -457,7 +473,9 @@ fn initial_submit_reports_pre_session_failure_instead_of_channel_loss() {
             panic!("expected submission command");
         };
         accepted
-            .send(Err("capability discovery failed: persistence failed".to_owned()))
+            .send(Err(
+                "capability discovery failed: persistence failed".to_owned()
+            ))
             .expect("reject submission");
     });
 
@@ -492,9 +510,7 @@ fn runtime_invariant_failure_blocks_submission_before_queueing() {
         event_sender,
         team_control: TeamControlPlane::default(),
         repo: directory.path().to_path_buf(),
-        invariants: std::sync::Arc::new(std::sync::Mutex::new(
-            RuntimeInvariantRegistry::default(),
-        )),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(RuntimeInvariantRegistry::default())),
     };
     runtime
         .register_runtime_invariant("durability", |_context| {
@@ -508,9 +524,11 @@ fn runtime_invariant_failure_blocks_submission_before_queueing() {
             ..PromptDraft::default()
         })
         .expect_err("invariant should block submission");
-    assert!(error
-        .to_string()
-        .contains("durability preflight is unavailable"));
+    assert!(
+        error
+            .to_string()
+            .contains("durability preflight is unavailable")
+    );
     assert!(command_rx.try_recv().is_err());
 }
 
@@ -1014,9 +1032,7 @@ fn initial_submit_waits_for_session_acceptance_before_returning() {
         event_sender,
         team_control: TeamControlPlane::default(),
         repo: directory.path().to_path_buf(),
-        invariants: std::sync::Arc::new(std::sync::Mutex::new(
-            RuntimeInvariantRegistry::default(),
-        )),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(RuntimeInvariantRegistry::default())),
     };
     let worker_submission = std::sync::Arc::clone(&submission);
     let worker = thread::spawn(move || {
@@ -1030,9 +1046,7 @@ fn initial_submit_waits_for_session_acceptance_before_returning() {
         assert!(state.busy);
         state.active_session_id = Some("session-accepted".to_owned());
         drop(state);
-        accepted
-            .send(Ok(()))
-            .expect("accept submission");
+        accepted.send(Ok(())).expect("accept submission");
     });
 
     assert_eq!(
@@ -1074,9 +1088,7 @@ fn followup_fails_closed_until_a_durable_session_identity_exists() {
         event_sender,
         team_control: TeamControlPlane::default(),
         repo: directory.path().to_path_buf(),
-        invariants: std::sync::Arc::new(std::sync::Mutex::new(
-            RuntimeInvariantRegistry::default(),
-        )),
+        invariants: std::sync::Arc::new(std::sync::Mutex::new(RuntimeInvariantRegistry::default())),
     };
 
     assert!(matches!(

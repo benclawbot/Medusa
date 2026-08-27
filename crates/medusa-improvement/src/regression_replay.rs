@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::{info, warn};
 
 use crate::lesson_inference::LessonCandidate;
 use crate::solution_selection::{SolutionProposal, SolutionType};
@@ -199,6 +200,7 @@ pub struct ReplayValidator;
 
 impl ReplayValidator {
     #[must_use]
+    #[tracing::instrument(skip(self, bundle, proposal, runner), fields(bundle_id = %bundle.id, lesson_id = %bundle.lesson_id))]
     pub fn validate<R: ReplayRunner>(
         &self,
         bundle: &ReplayBundle,
@@ -210,6 +212,10 @@ impl ReplayValidator {
             && !bundle.environment.network_enabled
             && bundle.environment.clock_epoch_ms == 0;
         if !deterministic {
+            warn!(
+                reason = "nondeterministic_environment",
+                "regression replay requires waiver"
+            );
             return ReplayReport {
                 bundle_id: bundle.id.clone(),
                 lesson_id: bundle.lesson_id.clone(),
@@ -295,14 +301,24 @@ impl ReplayValidator {
                     .map(move |message| format!("{}: {message}", comparison.scenario_id))
             })
             .collect::<Vec<_>>();
+        let decision = if passed {
+            ReplayDecision::Validated
+        } else {
+            ReplayDecision::Failed
+        };
+        if passed {
+            info!(scenarios = comparisons.len(), "regression replay validated");
+        } else {
+            warn!(
+                scenarios = comparisons.len(),
+                diagnostics = diagnostics.len(),
+                "regression replay failed"
+            );
+        }
         ReplayReport {
             bundle_id: bundle.id.clone(),
             lesson_id: bundle.lesson_id.clone(),
-            decision: if passed {
-                ReplayDecision::Validated
-            } else {
-                ReplayDecision::Failed
-            },
+            decision,
             comparisons,
             reviewer_decision: None,
             promotion_blocked: !passed,

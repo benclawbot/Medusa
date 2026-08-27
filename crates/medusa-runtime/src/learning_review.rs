@@ -14,8 +14,8 @@ pub fn read(repo: &Path) -> Result<LearningReviewSnapshot, LearningReviewError> 
     let snapshot = store
         .snapshot()
         .map_err(|error| LearningReviewError::Canonical(error.to_string()))?;
-    let privacy = crate::learning_authority::privacy(&store)
-        .map_err(LearningReviewError::Canonical)?;
+    let privacy =
+        crate::learning_authority::privacy(&store).map_err(LearningReviewError::Canonical)?;
     Ok(project_snapshot(&snapshot, privacy))
 }
 
@@ -26,15 +26,20 @@ pub fn transition(
     expected_revision: u64,
     actor: &str,
 ) -> Result<LearningReviewSnapshot, LearningReviewError> {
-    let mut store = crate::learning_authority::open(repo).map_err(LearningReviewError::Canonical)?;
+    let mut store =
+        crate::learning_authority::open(repo).map_err(LearningReviewError::Canonical)?;
     let action = match target {
         LearningReviewState::Approved => crate::learning_authority::RuntimeLearningAction::Approve,
         LearningReviewState::Rejected => crate::learning_authority::RuntimeLearningAction::Reject,
         LearningReviewState::Deferred => crate::learning_authority::RuntimeLearningAction::Defer,
-        LearningReviewState::Validated => crate::learning_authority::RuntimeLearningAction::Validate,
+        LearningReviewState::Validated => {
+            crate::learning_authority::RuntimeLearningAction::Validate
+        }
         LearningReviewState::Active => crate::learning_authority::RuntimeLearningAction::Activate,
         LearningReviewState::Suspended => crate::learning_authority::RuntimeLearningAction::Suspend,
-        LearningReviewState::RolledBack => crate::learning_authority::RuntimeLearningAction::Rollback,
+        LearningReviewState::RolledBack => {
+            crate::learning_authority::RuntimeLearningAction::Rollback
+        }
         LearningReviewState::Deleted => crate::learning_authority::RuntimeLearningAction::Delete,
         LearningReviewState::Proposed | LearningReviewState::Conflict => {
             return Err(LearningReviewError::Canonical(
@@ -64,7 +69,8 @@ pub fn propose(
     key: &str,
     value: &str,
 ) -> Result<LearningReviewSnapshot, LearningReviewError> {
-    let mut store = crate::learning_authority::open(repo).map_err(LearningReviewError::Canonical)?;
+    let mut store =
+        crate::learning_authority::open(repo).map_err(LearningReviewError::Canonical)?;
     crate::learning_authority::propose(&mut store, scope, key, value)
         .map_err(LearningReviewError::Canonical)?;
     read(repo)
@@ -77,7 +83,8 @@ pub fn evaluate(
     regression_passed: bool,
     effectiveness_passed: bool,
 ) -> Result<LearningReviewSnapshot, LearningReviewError> {
-    let mut store = crate::learning_authority::open(repo).map_err(LearningReviewError::Canonical)?;
+    let mut store =
+        crate::learning_authority::open(repo).map_err(LearningReviewError::Canonical)?;
     crate::learning_authority::evaluate(
         &mut store,
         id,
@@ -247,15 +254,23 @@ fn project_state(
     match lifecycle {
         medusa_context::refinement::RefinementLifecycle::Proposed => LearningReviewState::Proposed,
         medusa_context::refinement::RefinementLifecycle::Deferred => LearningReviewState::Deferred,
-        medusa_context::refinement::RefinementLifecycle::Validated => LearningReviewState::Validated,
+        medusa_context::refinement::RefinementLifecycle::Validated => {
+            LearningReviewState::Validated
+        }
         medusa_context::refinement::RefinementLifecycle::Evaluated
-        | medusa_context::refinement::RefinementLifecycle::Approved => LearningReviewState::Approved,
+        | medusa_context::refinement::RefinementLifecycle::Approved => {
+            LearningReviewState::Approved
+        }
         medusa_context::refinement::RefinementLifecycle::Active => LearningReviewState::Active,
         medusa_context::refinement::RefinementLifecycle::Superseded => {
             LearningReviewState::RolledBack
         }
-        medusa_context::refinement::RefinementLifecycle::Suspended => LearningReviewState::Suspended,
-        medusa_context::refinement::RefinementLifecycle::RolledBack => LearningReviewState::RolledBack,
+        medusa_context::refinement::RefinementLifecycle::Suspended => {
+            LearningReviewState::Suspended
+        }
+        medusa_context::refinement::RefinementLifecycle::RolledBack => {
+            LearningReviewState::RolledBack
+        }
         medusa_context::refinement::RefinementLifecycle::Rejected => LearningReviewState::Rejected,
         medusa_context::refinement::RefinementLifecycle::Tombstoned => LearningReviewState::Deleted,
         medusa_context::refinement::RefinementLifecycle::Conflict => LearningReviewState::Conflict,
@@ -270,7 +285,9 @@ fn project_kind(
         medusa_context::refinement::RefinementArtifactKind::RepositoryConvention => {
             LearningKind::RepositoryLearning
         }
-        medusa_context::refinement::RefinementArtifactKind::WorkflowMetadata => LearningKind::Policy,
+        medusa_context::refinement::RefinementArtifactKind::WorkflowMetadata => {
+            LearningKind::Policy
+        }
         medusa_context::refinement::RefinementArtifactKind::TeamRoleMetadata => {
             LearningKind::UserPreference
         }

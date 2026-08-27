@@ -788,6 +788,6 @@ fn normalized_outcome_id(outcome: &BehavioralOutcomeV1) -> Result<String, String
     .map_err(|error| error.to_string())?;
     Ok(format!(
         "behavioral-outcome-{}",
-        crate::encode(Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     ))
 }

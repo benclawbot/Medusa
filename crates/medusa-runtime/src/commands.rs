@@ -107,23 +107,47 @@ pub enum TeamCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LearningCommand {
-    Show { filter: Option<String> },
-    Inspect { id: String },
-    Propose { scope: String, key: String, value: String },
+    Show {
+        filter: Option<String>,
+    },
+    Inspect {
+        id: String,
+    },
+    Propose {
+        scope: String,
+        key: String,
+        value: String,
+    },
     Evaluate {
         id: String,
         validation_passed: bool,
         regression_passed: bool,
         effectiveness_passed: bool,
     },
-    Approve { id: String },
-    Reject { id: String },
-    Defer { id: String },
-    Validate { id: String },
-    Activate { id: String },
-    Suspend { id: String },
-    Rollback { id: String },
-    Delete { id: String },
+    Approve {
+        id: String,
+    },
+    Reject {
+        id: String,
+    },
+    Defer {
+        id: String,
+    },
+    Validate {
+        id: String,
+    },
+    Activate {
+        id: String,
+    },
+    Suspend {
+        id: String,
+    },
+    Rollback {
+        id: String,
+    },
+    Delete {
+        id: String,
+    },
     Privacy,
     Export,
 }
@@ -1167,11 +1191,8 @@ mod tests {
         let skill = directory.path().join(".medusa/skills/release/SKILL.md");
         std::fs::create_dir_all(skill.parent().expect("skill directory"))
             .expect("create skill directory");
-        std::fs::write(
-            &skill,
-            "description: Prepare a release\nUse the checklist.",
-        )
-        .expect("write skill");
+        std::fs::write(&skill, "description: Prepare a release\nUse the checklist.")
+            .expect("write skill");
 
         let suggestions = command_suggestions("/rel", directory.path());
         assert_eq!(suggestions[0].name, "release");

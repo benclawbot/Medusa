@@ -5,16 +5,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use medusa_recovery_coordinator::{
-    AuthorizedRecoveryAction, RecoveryActionExecutor,
-    RecoveryActionRequest, RecoveryActionService, RecoveryExecutionOutcome,
-    RecoveryExecutionReceipt, RecoveryOperation, RecoveryPreflightEvidence,
-    RecoveryView, RecoveryViewInput, VerificationState,
-};
 use crate::{
-    RuntimeError,
-    checkpoint_payload,
+    RuntimeError, checkpoint_payload,
     recovery_model::{PersistedRecoveryRecord, common_outcome},
+};
+use medusa_recovery_coordinator::{
+    AuthorizedRecoveryAction, RecoveryActionExecutor, RecoveryActionRequest, RecoveryActionService,
+    RecoveryExecutionOutcome, RecoveryExecutionReceipt, RecoveryOperation,
+    RecoveryPreflightEvidence, RecoveryView, RecoveryViewInput, VerificationState,
 };
 
 const RECOVERY_DIRECTORY: &str = ".medusa/recovery";
@@ -36,9 +34,10 @@ impl RecoveryActionExecutor for RuntimeRecoveryExecutor {
         {
             outcome
         } else {
-            let checkpoint_id = action.checkpoint_id.as_deref().ok_or_else(|| {
-                RuntimeError::InvalidCommand("missing checkpoint id".to_owned())
-            })?;
+            let checkpoint_id = action
+                .checkpoint_id
+                .as_deref()
+                .ok_or_else(|| RuntimeError::InvalidCommand("missing checkpoint id".to_owned()))?;
             let payload = checkpoint_payload::load(repository, &action.session_id, checkpoint_id)?;
             checkpoint_payload::restore(repository, &payload)?;
             let fingerprint = self

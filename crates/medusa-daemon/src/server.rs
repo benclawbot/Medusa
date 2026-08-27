@@ -15,7 +15,6 @@ mod included_server_tests_reference;
 include!("server_base.rs");
 
 #[cfg(not(test))]
-#[allow(dead_code)]
 mod base {
     include!("server_base.rs");
 }

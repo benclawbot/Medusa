@@ -963,11 +963,11 @@ fn artifact_kind_key(kind: RefinementArtifactKind) -> &'static str {
 }
 
 fn proposal_digest(proposal: &RefinementProposal) -> Result<String, serde_json::Error> {
-    Ok(crate::encode(Sha256::digest(serde_json::to_vec(proposal)?)))
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(proposal)?)))
 }
 
 fn receipt_digest(receipt: &ApprovalReceipt) -> Result<String, serde_json::Error> {
-    Ok(crate::encode(Sha256::digest(serde_json::to_vec(receipt)?)))
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(receipt)?)))
 }
 
 fn quarantine_corrupt(

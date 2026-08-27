@@ -9,13 +9,13 @@ use std::{
     sync::mpsc::Sender,
 };
 
+use medusa_core::hidden_command;
 use medusa_improvement::{
     learning_admission::LearningAdmissionPolicy,
     learning_monitor::LearningMonitorStore,
     refinement_authority::{SelectionContext, SelectionResult},
     scoped_memory::RepositoryIdentity,
 };
-use medusa_core::hidden_command;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -238,9 +238,7 @@ fn read_origin(repo: &Path) -> Option<String> {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             in_origin = trimmed.eq_ignore_ascii_case("[remote \"origin\"]");
-        } else if in_origin
-            && let Some(value) = trimmed.strip_prefix("url")
-        {
+        } else if in_origin && let Some(value) = trimmed.strip_prefix("url") {
             return value
                 .split_once('=')
                 .map(|(_, origin)| origin.trim().to_owned());
@@ -404,9 +402,8 @@ mod tests {
     #[test]
     fn capture_disabled_short_circuits_before_selection_audit() {
         let repo = tempfile::tempdir().expect("repo");
-        let store = medusa_improvement::learning_review::LearningReviewStore::for_repository(
-            repo.path(),
-        );
+        let store =
+            medusa_improvement::learning_review::LearningReviewStore::for_repository(repo.path());
         store
             .update_privacy(
                 medusa_improvement::learning_review::LearningPrivacy {
@@ -423,6 +420,11 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let context = select(repo.path(), &PromptDraft::default(), None, &tx);
         assert!(context.prompt_context.is_none());
-        assert!(!repo.path().join(".medusa/learning-selection-audit.jsonl").exists());
+        assert!(
+            !repo
+                .path()
+                .join(".medusa/learning-selection-audit.jsonl")
+                .exists()
+        );
     }
 }

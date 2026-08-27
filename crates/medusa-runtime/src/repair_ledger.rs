@@ -127,7 +127,11 @@ fn reconcile_generation(
         if !changed_files.is_empty() {
             let files = changed_files.iter().cloned().collect::<Vec<_>>();
             let attempt_id = format!("repair:{}:{}", generation, existing.fingerprint);
-            if !existing.repairs.iter().any(|attempt| attempt.id == attempt_id) {
+            if !existing
+                .repairs
+                .iter()
+                .any(|attempt| attempt.id == attempt_id)
+            {
                 existing.repairs.push(RepairAttemptCheckpoint {
                     id: attempt_id,
                     failure_fingerprint: existing.fingerprint.clone(),
@@ -171,7 +175,8 @@ fn reconcile_generation(
                 existing.occurrence_count = existing.occurrence_count.saturating_add(1);
                 existing.source_refs.append(&mut item.source_refs);
             }
-            if !existing.changed_details.contains(&item.summary) && existing.summary != item.summary {
+            if !existing.changed_details.contains(&item.summary) && existing.summary != item.summary
+            {
                 existing.changed_details.push(item.summary.clone());
                 existing.changed_details.truncate(16);
             }
@@ -475,7 +480,10 @@ fn add_non_verification_failure(
 ) {
     let summary = compact_summary(message);
     let fingerprint = digest(format!("{class}|{}", normalize_for_fingerprint(&summary)).as_bytes());
-    if let Some(existing) = entries.iter_mut().find(|entry| entry.fingerprint == fingerprint) {
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|entry| entry.fingerprint == fingerprint)
+    {
         if !existing.source_refs.contains(&source_ref) {
             existing.occurrence_count = existing.occurrence_count.saturating_add(1);
             existing.source_refs.push(source_ref);
@@ -540,19 +548,30 @@ mod tests {
 
     #[test]
     fn parses_multiple_diagnostics_and_keeps_expansion_handle() {
-        let evidence = vec![r#"error[E0308]: mismatched types
+        let evidence = vec![
+            r#"error[E0308]: mismatched types
   --> crates/a/src/lib.rs:12:3
 error[E0425]: cannot find value `x`
-  --> crates/b/src/lib.rs:8:9"#.to_owned()];
+  --> crates/b/src/lib.rs:8:9"#
+                .to_owned(),
+        ];
         let entries = parse_diagnostics(evidence.as_slice(), "cargo check", "journal#9", 3);
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().all(|entry| entry.source_refs == ["journal#9"]));
-        assert!(entries
-            .iter()
-            .any(|entry| entry.file.as_deref() == Some("crates/a/src/lib.rs")));
-        assert!(entries
-            .iter()
-            .any(|entry| entry.file.as_deref() == Some("crates/b/src/lib.rs")));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.source_refs == ["journal#9"])
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.file.as_deref() == Some("crates/a/src/lib.rs"))
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.file.as_deref() == Some("crates/b/src/lib.rs"))
+        );
     }
 
     fn entry(command: &str, file: &str, fingerprint: &str) -> RepairLedgerEntry {
@@ -599,16 +618,22 @@ error[E0425]: cannot find value `x`
 
     #[test]
     fn clusters_cascades_and_retains_new_generation_failures() {
-        let evidence = vec![r#"error[E0308]: root mismatch
+        let evidence = vec![
+            r#"error[E0308]: root mismatch
   --> crates/a/src/lib.rs:12:3
 error[E0425]: cascading lookup failure
-  --> crates/a/src/lib.rs:18:9"#.to_owned()];
+  --> crates/a/src/lib.rs:18:9"#
+                .to_owned(),
+        ];
         let mut first = parse_diagnostics(&evidence, "cargo check", "journal#1", 1);
         cluster_common_roots(&mut first);
         assert_eq!(first.len(), 2);
         assert!(!first[0].cascade);
         assert!(first[1].cascade);
-        assert_eq!(first[1].root_fingerprint.as_ref(), Some(&first[0].fingerprint));
+        assert_eq!(
+            first[1].root_fingerprint.as_ref(),
+            Some(&first[0].fingerprint)
+        );
 
         let root = first[0].clone();
         let mut entries = first;
@@ -624,8 +649,16 @@ error[E0425]: cascading lookup failure
             "cargo check",
             false,
         );
-        assert!(entries.iter().any(|entry| entry.fingerprint == "introduced" && entry.first_generation == 2));
-        assert!(entries.iter().any(|entry| entry.transition == RepairLedgerTransition::Persisted));
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.fingerprint == "introduced" && entry.first_generation == 2)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.transition == RepairLedgerTransition::Persisted)
+        );
     }
 
     #[test]

@@ -286,8 +286,10 @@ fn build_observation(
             }
             EventPayload::ToolExecutionStarted { tool } => {
                 *active_tools.entry(tool.clone()).or_default() += 1;
-                if !matches!(stage, ObservationStage::WaitingForUser | ObservationStage::Verifying)
-                {
+                if !matches!(
+                    stage,
+                    ObservationStage::WaitingForUser | ObservationStage::Verifying
+                ) {
                     stage = ObservationStage::Running;
                 }
             }
@@ -470,7 +472,10 @@ fn event_summary(payload: &EventPayload) -> Option<String> {
         }
         EventPayload::VerificationStarted { .. } => "verification started".to_owned(),
         EventPayload::VerificationCompleted { passed, .. } => {
-            format!("verification completed: {}", if *passed { "passed" } else { "failed" })
+            format!(
+                "verification completed: {}",
+                if *passed { "passed" } else { "failed" }
+            )
         }
         EventPayload::ApprovalRequested { .. } => "approval requested".to_owned(),
         EventPayload::ApprovalDecisionRecorded { .. } => "approval decision recorded".to_owned(),
@@ -485,7 +490,9 @@ fn event_summary(payload: &EventPayload) -> Option<String> {
         }
         EventPayload::RuntimeTurnFinished => "runtime turn finished".to_owned(),
         EventPayload::SessionCompleted { .. } => "session completed".to_owned(),
-        EventPayload::CheckpointRestoreRequested { .. } => "checkpoint restore requested".to_owned(),
+        EventPayload::CheckpointRestoreRequested { .. } => {
+            "checkpoint restore requested".to_owned()
+        }
         EventPayload::CheckpointCreated { .. } => "checkpoint created".to_owned(),
         _ => return None,
     };
@@ -779,10 +786,17 @@ mod tests {
         assert_eq!(snapshot.files_read, vec!["lib.rs"]);
         assert_eq!(snapshot.files_changed, vec!["src/lib.rs"]);
         assert_eq!(
-            snapshot.active_plan_step.as_ref().map(|step| step.title.as_str()),
+            snapshot
+                .active_plan_step
+                .as_ref()
+                .map(|step| step.title.as_str()),
             Some("Inspect files")
         );
-        assert!(!serde_json::to_string(&snapshot).unwrap().contains("sk-never-expose"));
+        assert!(
+            !serde_json::to_string(&snapshot)
+                .unwrap()
+                .contains("sk-never-expose")
+        );
     }
 
     #[test]
@@ -830,12 +844,14 @@ mod tests {
             expected_revision: Some(snapshot.revision + 1),
             ..request
         };
-        assert!(answer_side_question(
-            repository.path(),
-            &stale,
-            &SideQuestionCancelToken::default()
-        )
-        .is_err());
+        assert!(
+            answer_side_question(
+                repository.path(),
+                &stale,
+                &SideQuestionCancelToken::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]

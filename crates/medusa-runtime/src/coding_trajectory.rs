@@ -5,10 +5,10 @@ use medusa_core::hidden_command;
 use medusa_protocol::EventPayload;
 use medusa_provider::{MessageBlock, Role};
 use medusa_session_continuity::{
-    CodingTrajectoryCheckpoint, DisprovedHypothesisCheckpoint,
+    CodingTrajectoryCheckpoint, ContinuityStore, DisprovedHypothesisCheckpoint,
     ExternalEvidenceRef, FailureCheckpoint, PlanStepCheckpoint, PlanStepStatus,
-    RelevantPathCheckpoint, RepositoryCheckpoint, SessionEventKind, ContinuityStore,
-    VerificationOutcome, VerificationReceipt,
+    RelevantPathCheckpoint, RepositoryCheckpoint, SessionEventKind, VerificationOutcome,
+    VerificationReceipt,
 };
 use sha2::{Digest, Sha256};
 
@@ -32,7 +32,9 @@ pub(crate) fn sync_and_render(
         Err(medusa_session_continuity::ContinuityError::Io(error))
             if error.kind() == std::io::ErrorKind::NotFound =>
         {
-            store.create(session.id.as_str()).map_err(RuntimeError::agent)?
+            store
+                .create(session.id.as_str())
+                .map_err(RuntimeError::agent)?
         }
         Err(error) => return Err(RuntimeError::agent(error)),
     };
@@ -49,8 +51,8 @@ pub(crate) fn sync_and_render(
         .iter()
         .find(|step| step.status == AgentPlanStepStatus::InProgress)
         .map(|step| step.title.clone());
-    task.attention_required = session.pending_question.is_some()
-        || !trajectory.remaining_blockers.is_empty();
+    task.attention_required =
+        session.pending_question.is_some() || !trajectory.remaining_blockers.is_empty();
     task.verification_evidence = trajectory
         .verification_receipts
         .iter()
@@ -92,7 +94,10 @@ pub(crate) fn restore_for_resume(
     let continuity = match store.load() {
         Ok(value) => value,
         Err(medusa_session_continuity::ContinuityError::Io(error))
-            if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            if error.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(None);
+        }
         Err(error) => return Err(RuntimeError::agent(error)),
     };
     let Some(existing) = continuity.task.coding_trajectory.as_ref() else {
@@ -103,7 +108,9 @@ pub(crate) fn restore_for_resume(
             .restored_for_provider_fallback()
             .map_err(RuntimeError::agent)?
     } else {
-        existing.restored_for_resume().map_err(RuntimeError::agent)?
+        existing
+            .restored_for_resume()
+            .map_err(RuntimeError::agent)?
     };
     restored.invalidate_for_repository_drift(repository_checkpoint(repo));
     restored.validate().map_err(RuntimeError::agent)?;
@@ -204,8 +211,7 @@ fn reduce(
             EventPayload::ToolExecutionCompleted { .. }
             | EventPayload::WorkerEvidenceRecorded { .. }
             | EventPayload::IntegrationReceiptRecorded { .. } => {
-                let serialized = serde_json::to_vec(&event.payload)
-                    .map_err(RuntimeError::agent)?;
+                let serialized = serde_json::to_vec(&event.payload).map_err(RuntimeError::agent)?;
                 let digest = hex_digest(&serialized);
                 evidence.push(ExternalEvidenceRef {
                     id: format!("event-{}", event.sequence),
@@ -216,7 +222,10 @@ fn reduce(
                     digest,
                 });
             }
-            EventPayload::VerificationCompleted { passed, evidence: lines } => {
+            EventPayload::VerificationCompleted {
+                passed,
+                evidence: lines,
+            } => {
                 verification.push(VerificationReceipt {
                     command: format!("journal-verification-{}", event.sequence),
                     outcome: if *passed {
@@ -283,9 +292,9 @@ fn reduce(
         .iter()
         .map(|receipt| receipt.command.clone())
         .collect();
-    trajectory.remaining_blockers.retain(|item| {
-        item != "repository drift requires trajectory revalidation"
-    });
+    trajectory
+        .remaining_blockers
+        .retain(|item| item != "repository drift requires trajectory revalidation");
     if trajectory
         .verification_receipts
         .last()
@@ -318,13 +327,18 @@ fn reduce(
         .as_ref()
         .is_some_and(|strategy| !previously_selected.contains(strategy))
     {
-        trajectory.strategy_transition_count = trajectory.strategy_transition_count.saturating_add(1);
+        trajectory.strategy_transition_count =
+            trajectory.strategy_transition_count.saturating_add(1);
     }
     trajectory.roadblocks = roadblock_projection.roadblocks;
     trajectory
         .remaining_blockers
         .retain(|item| !item.starts_with("roadblock:"));
-    for roadblock in trajectory.roadblocks.iter().filter(|item| item.unresolved()) {
+    for roadblock in trajectory
+        .roadblocks
+        .iter()
+        .filter(|item| item.unresolved())
+    {
         trajectory.remaining_blockers.push(format!(
             "roadblock:{:?}:{}",
             roadblock.class, roadblock.summary
@@ -337,9 +351,10 @@ fn reduce(
         .iter()
         .flat_map(|roadblock| roadblock.alternatives.iter())
         .filter_map(|alternative| {
-            alternative.rejected_reason.as_ref().map(|reason| {
-                format!("{}: {}", alternative.strategy, reason)
-            })
+            alternative
+                .rejected_reason
+                .as_ref()
+                .map(|reason| format!("{}: {}", alternative.strategy, reason))
         })
         .take(128)
         .collect();
@@ -362,9 +377,7 @@ fn initial_user_constraints(session: &AgentSession) -> Vec<String> {
         .filter(|message| message.role == Role::User)
         .flat_map(|message| message.content.iter())
         .filter_map(|block| match block {
-            MessageBlock::Text { text } if !text.trim().is_empty() => {
-                Some(bounded(text, 1500))
-            }
+            MessageBlock::Text { text } if !text.trim().is_empty() => Some(bounded(text, 1500)),
             _ => None,
         })
         .take(32)
@@ -377,9 +390,7 @@ fn collect_paths(
     relevant: &mut BTreeSet<String>,
 ) {
     match value {
-        serde_json::Value::String(value)
-            if value.contains('/') || value.contains('\\') =>
-        {
+        serde_json::Value::String(value) if value.contains('/') || value.contains('\\') => {
             let normalized = value.replace('\\', "/");
             modified.insert(normalized.clone());
             relevant.insert(normalized);
@@ -391,7 +402,10 @@ fn collect_paths(
         }
         serde_json::Value::Object(values) => {
             for (key, value) in values {
-                if matches!(key.as_str(), "path" | "file" | "files" | "changed_paths" | "modified_files") {
+                if matches!(
+                    key.as_str(),
+                    "path" | "file" | "files" | "changed_paths" | "modified_files"
+                ) {
                     collect_paths(value, modified, relevant);
                 }
             }
@@ -411,15 +425,12 @@ fn dedupe_failures(values: Vec<FailureCheckpoint>) -> Vec<FailureCheckpoint> {
 
 fn repository_checkpoint(repo: &Path) -> RepositoryCheckpoint {
     let head = git(repo, &["rev-parse", "HEAD"]);
-    let workspace = git(
-        repo,
-        &["status", "--porcelain=v1", "--untracked-files=all"],
-    )
-    .unwrap_or_else(|| {
-        fs::metadata(repo)
-            .map(|meta| format!("{}:{}", repo.display(), meta.len()))
-            .unwrap_or_else(|_| repo.display().to_string())
-    });
+    let workspace = git(repo, &["status", "--porcelain=v1", "--untracked-files=all"])
+        .unwrap_or_else(|| {
+            fs::metadata(repo)
+                .map(|meta| format!("{}:{}", repo.display(), meta.len()))
+                .unwrap_or_else(|_| repo.display().to_string())
+        });
     RepositoryCheckpoint {
         head,
         workspace_fingerprint: hex_digest(workspace.as_bytes()),
@@ -494,16 +505,23 @@ mod tests {
     #[test]
     fn repair_ledger_collects_full_generation_deduplicates_and_resolves() {
         let repo = tempfile::tempdir().expect("repo");
-        Command::new("git").arg("init").arg(repo.path()).status().expect("git init");
+        Command::new("git")
+            .arg("init")
+            .arg(repo.path())
+            .status()
+            .expect("git init");
         let engine = AgentEngine::new(UnusedProvider, Config::default());
         let mut session = engine
             .create_session(repo.path(), "repair simultaneous diagnostics".to_owned())
             .expect("session");
-        let diagnostics = vec![r#"$ cargo check
+        let diagnostics = vec![
+            r#"$ cargo check
 error[E0308]: mismatched types
   --> crates/a/src/lib.rs:12:3
 error[E0425]: cannot find value `x`
-  --> crates/b/src/lib.rs:8:9"#.to_owned()];
+  --> crates/b/src/lib.rs:8:9"#
+                .to_owned(),
+        ];
         medusa_agent::record_session_event(
             &mut session,
             Actor::System("verifier".to_owned()),
@@ -514,12 +532,24 @@ error[E0425]: cannot find value `x`
         )
         .expect("first verification");
         sync_and_render(repo.path(), &session, None).expect("first sync");
-        let first = store(repo.path(), session.id.as_str()).load().expect("stored");
+        let first = store(repo.path(), session.id.as_str())
+            .load()
+            .expect("stored");
         let first_trajectory = first.task.coding_trajectory.as_ref().expect("trajectory");
         assert_eq!(first_trajectory.verification_generation, 1);
         assert_eq!(first_trajectory.repair_ledger.len(), 2);
-        assert!(first_trajectory.repair_ledger.iter().all(|entry| entry.occurrence_count == 1));
-        assert!(first_trajectory.repair_ledger.iter().all(|entry| !entry.source_refs.is_empty()));
+        assert!(
+            first_trajectory
+                .repair_ledger
+                .iter()
+                .all(|entry| entry.occurrence_count == 1)
+        );
+        assert!(
+            first_trajectory
+                .repair_ledger
+                .iter()
+                .all(|entry| !entry.source_refs.is_empty())
+        );
 
         medusa_agent::record_session_event(
             &mut session,
@@ -531,11 +561,22 @@ error[E0425]: cannot find value `x`
         )
         .expect("repeat verification");
         sync_and_render(repo.path(), &session, None).expect("repeat sync");
-        let repeated = store(repo.path(), session.id.as_str()).load().expect("stored repeat");
-        let repeated_trajectory = repeated.task.coding_trajectory.as_ref().expect("trajectory");
+        let repeated = store(repo.path(), session.id.as_str())
+            .load()
+            .expect("stored repeat");
+        let repeated_trajectory = repeated
+            .task
+            .coding_trajectory
+            .as_ref()
+            .expect("trajectory");
         assert_eq!(repeated_trajectory.verification_generation, 2);
         assert_eq!(repeated_trajectory.repair_ledger.len(), 2);
-        assert!(repeated_trajectory.repair_ledger.iter().all(|entry| entry.occurrence_count == 2));
+        assert!(
+            repeated_trajectory
+                .repair_ledger
+                .iter()
+                .all(|entry| entry.occurrence_count == 2)
+        );
 
         medusa_agent::record_session_event(
             &mut session,
@@ -547,10 +588,17 @@ error[E0425]: cannot find value `x`
         )
         .expect("passing verification");
         sync_and_render(repo.path(), &session, None).expect("passing sync");
-        let passed = store(repo.path(), session.id.as_str()).load().expect("stored pass");
+        let passed = store(repo.path(), session.id.as_str())
+            .load()
+            .expect("stored pass");
         let passed_trajectory = passed.task.coding_trajectory.as_ref().expect("trajectory");
         assert_eq!(passed_trajectory.verification_generation, 3);
-        assert!(passed_trajectory.repair_ledger.iter().all(|entry| !entry.unresolved()));
+        assert!(
+            passed_trajectory
+                .repair_ledger
+                .iter()
+                .all(|entry| !entry.unresolved())
+        );
 
         medusa_agent::compact_session(&mut session, Some("repair simultaneous diagnostics"))
             .expect("compaction");
@@ -558,7 +606,9 @@ error[E0425]: cannot find value `x`
             .expect("restore")
             .expect("context");
         assert!(restored.contains("repair_ledger"));
-        let restored_state = store(repo.path(), session.id.as_str()).load().expect("restored state");
+        let restored_state = store(repo.path(), session.id.as_str())
+            .load()
+            .expect("restored state");
         assert_eq!(
             restored_state
                 .task
@@ -573,33 +623,100 @@ error[E0425]: cannot find value `x`
     #[test]
     fn journal_projection_survives_restart_and_repository_drift() {
         let repo = tempfile::tempdir().expect("repo");
-        Command::new("git").arg("init").arg(repo.path()).status().expect("git init");
-        Command::new("git").arg("-C").arg(repo.path()).args(["config", "user.email", "test@example.invalid"]).status().expect("email");
-        Command::new("git").arg("-C").arg(repo.path()).args(["config", "user.name", "Medusa Test"]).status().expect("name");
+        Command::new("git")
+            .arg("init")
+            .arg(repo.path())
+            .status()
+            .expect("git init");
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "user.email", "test@example.invalid"])
+            .status()
+            .expect("email");
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "user.name", "Medusa Test"])
+            .status()
+            .expect("name");
         fs::write(repo.path().join("tracked.txt"), "one").expect("write");
-        Command::new("git").arg("-C").arg(repo.path()).args(["add", "."]).status().expect("add");
-        Command::new("git").arg("-C").arg(repo.path()).args(["commit", "-m", "initial"]).status().expect("commit");
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["add", "."])
+            .status()
+            .expect("add");
+        Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["commit", "-m", "initial"])
+            .status()
+            .expect("commit");
         let engine = AgentEngine::new(UnusedProvider, Config::default());
-        let mut session = engine.create_session(repo.path(), "repair regression".to_owned()).expect("session");
-        engine.append_user_message(&mut session, vec![MessageBlock::Text { text: "keep public API stable".to_owned() }]).expect("constraint");
-        medusa_agent::record_session_event(&mut session, Actor::System("verifier".to_owned()), EventPayload::VerificationCompleted { passed: false, evidence: vec!["regression failed".to_owned()] }).expect("verification");
-        let first = sync_and_render(repo.path(), &session, Some("provider-native-1".to_owned())).expect("sync");
+        let mut session = engine
+            .create_session(repo.path(), "repair regression".to_owned())
+            .expect("session");
+        engine
+            .append_user_message(
+                &mut session,
+                vec![MessageBlock::Text {
+                    text: "keep public API stable".to_owned(),
+                }],
+            )
+            .expect("constraint");
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::System("verifier".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: false,
+                evidence: vec!["regression failed".to_owned()],
+            },
+        )
+        .expect("verification");
+        let first = sync_and_render(repo.path(), &session, Some("provider-native-1".to_owned()))
+            .expect("sync");
         assert!(first.contains("keep public API stable"));
         assert!(first.contains("verification"));
         medusa_agent::compact_session(&mut session, Some("repair regression"))
             .expect("forced compaction");
-        let restored = restore_for_resume(repo.path(), &session, true).expect("restore").expect("context");
+        let restored = restore_for_resume(repo.path(), &session, true)
+            .expect("restore")
+            .expect("context");
         assert!(restored.contains("repair regression"));
         assert!(restored.contains("keep public API stable"));
         assert!(!restored.contains("provider-native-1"));
-        let stored = store(repo.path(), session.id.as_str()).load().expect("stored resume");
-        assert_eq!(stored.task.coding_trajectory.as_ref().expect("trajectory").resume_hops, 1);
+        let stored = store(repo.path(), session.id.as_str())
+            .load()
+            .expect("stored resume");
+        assert_eq!(
+            stored
+                .task
+                .coding_trajectory
+                .as_ref()
+                .expect("trajectory")
+                .resume_hops,
+            1
+        );
         fs::write(repo.path().join("tracked.txt"), "drift").expect("drift");
-        let drifted = restore_for_resume(repo.path(), &session, false).expect("drift restore").expect("context");
+        let drifted = restore_for_resume(repo.path(), &session, false)
+            .expect("drift restore")
+            .expect("context");
         assert!(drifted.contains("repository drift requires trajectory revalidation"));
-        let drifted_stored = store(repo.path(), session.id.as_str()).load().expect("stored drift");
-        let drifted_trajectory = drifted_stored.task.coding_trajectory.as_ref().expect("trajectory");
+        let drifted_stored = store(repo.path(), session.id.as_str())
+            .load()
+            .expect("stored drift");
+        let drifted_trajectory = drifted_stored
+            .task
+            .coding_trajectory
+            .as_ref()
+            .expect("trajectory");
         assert_eq!(drifted_trajectory.resume_hops, 2);
-        assert!(drifted_trajectory.relevant_paths.iter().all(|path| path.stale));
+        assert!(
+            drifted_trajectory
+                .relevant_paths
+                .iter()
+                .all(|path| path.stale)
+        );
     }
 }

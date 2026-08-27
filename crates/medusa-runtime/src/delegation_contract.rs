@@ -3,11 +3,11 @@
 use std::path::Path;
 
 use medusa_agent::{
-    AgentExecutionPolicy, DelegatedApprovalPolicy, DelegatedMutationAuthority,
-    DelegationAttemptBinding, DelegationContract, DelegationContractMaterial,
-    DelegationContractStore, DelegationLeaseBinding, TeamRole, WorkerExecutionController,
-    delegation_execution_policy, fingerprint_json, snapshot_delegated_capabilities,
-    DELEGATION_ROLE_POLICY_VERSION, DELEGATION_SYSTEM_POLICY_VERSION,
+    AgentExecutionPolicy, DELEGATION_ROLE_POLICY_VERSION, DELEGATION_SYSTEM_POLICY_VERSION,
+    DelegatedApprovalPolicy, DelegatedMutationAuthority, DelegationAttemptBinding,
+    DelegationContract, DelegationContractMaterial, DelegationContractStore,
+    DelegationLeaseBinding, TeamRole, WorkerExecutionController, delegation_execution_policy,
+    fingerprint_json, snapshot_delegated_capabilities,
 };
 use medusa_config::{Config, Mode};
 use medusa_core::SessionId;
@@ -129,7 +129,12 @@ pub(crate) fn resolve_delegation(
         .authority
         .allowed_tools
         .iter()
-        .filter(|tool| current_capabilities.allowed_tools.binary_search(tool).is_ok())
+        .filter(|tool| {
+            current_capabilities
+                .allowed_tools
+                .binary_search(tool)
+                .is_ok()
+        })
         .cloned()
         .collect::<Vec<_>>();
     let previous = store.latest_attempt(&contract.contract_id)?;
@@ -227,7 +232,6 @@ fn validate_existing(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,7 +251,10 @@ mod tests {
                 "focused tests".to_owned(),
                 "focused tests".to_owned(),
             ]),
-            vec!["focused tests".to_owned(), "patch or commit evidence".to_owned()]
+            vec![
+                "focused tests".to_owned(),
+                "patch or commit evidence".to_owned()
+            ]
         );
     }
 }

@@ -5,6 +5,7 @@ pub mod conversational_runtime;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::{error, info};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Phase {
@@ -74,85 +75,116 @@ impl SupervisorState {
     }
 
     pub fn apply(&mut self, signal: Signal) -> Result<(), &'static str> {
-        self.validate()?;
-        match (&self.phase, signal) {
-            (Phase::Created, Signal::ScheduleReady { fingerprint }) => {
-                require_digest(&fingerprint)?;
-                self.schedule_fingerprint = Some(fingerprint);
-                self.phase = Phase::Scheduled;
-            }
-            (Phase::Scheduled, Signal::LeasesReady { fingerprint }) => {
-                require_digest(&fingerprint)?;
-                self.lease_fingerprint = Some(fingerprint);
-                self.phase = Phase::Leased;
-            }
-            (Phase::Leased, Signal::WorkersStarted) => self.phase = Phase::Executing,
-            (Phase::Executing, Signal::BarrierPrepared { fingerprint }) => {
-                require_digest(&fingerprint)?;
-                self.barrier_fingerprint = Some(fingerprint);
-                self.phase = Phase::Prepared;
-            }
-            (
-                Phase::Prepared,
-                Signal::CommitStarted {
-                    journal_fingerprint,
-                },
-            ) => {
-                require_digest(&journal_fingerprint)?;
-                self.journal_fingerprint = Some(journal_fingerprint);
-                self.phase = Phase::Committing;
-            }
-            (Phase::Committing, Signal::CommitApplied { final_snapshot }) => {
-                require_digest(&final_snapshot)?;
-                self.final_snapshot = Some(final_snapshot);
-                self.phase = Phase::Verifying;
-            }
-            (Phase::Verifying, Signal::ReplayVerified { report_fingerprint }) => {
-                require_digest(&report_fingerprint)?;
-                self.replay_report_fingerprint = Some(report_fingerprint);
-                self.phase = Phase::Completed;
-            }
-            (
-                Phase::Created
-                | Phase::Scheduled
-                | Phase::Leased
-                | Phase::Executing
-                | Phase::Prepared
-                | Phase::Committing
-                | Phase::Verifying,
-                Signal::RecoveryRequired { reason },
-            ) => {
-                require_reason(&reason)?;
-                self.failure_reason = Some(reason);
-                self.phase = Phase::Recovering;
-            }
-            (Phase::Recovering, Signal::RollbackComplete { snapshot }) => {
-                require_digest(&snapshot)?;
-                self.final_snapshot = Some(snapshot);
-                self.phase = Phase::RolledBack;
-            }
-            (
-                Phase::Created
-                | Phase::Scheduled
-                | Phase::Leased
-                | Phase::Executing
-                | Phase::Prepared
-                | Phase::Committing
-                | Phase::Verifying
-                | Phase::Recovering,
-                Signal::TerminalFailure { reason },
-            ) => {
-                require_reason(&reason)?;
-                self.failure_reason = Some(reason);
-                self.phase = Phase::Failed;
-            }
-            _ => return Err("signal is invalid for the current supervisor phase"),
+        if let Err(error) = self.validate() {
+            error!(
+                execution_id = %self.execution_id,
+                phase = ?self.phase,
+                reason = %error,
+                "supervisor state validation failed"
+            );
+            return Err(error);
         }
-        self.sequence = self
-            .sequence
-            .checked_add(1)
-            .ok_or("supervisor sequence overflow")?;
-        self.seal()?;
+        let previous_phase = self.phase.clone();
+        let signal_kind = signal_kind(&signal);
+        let result = (|| {
+            match (&self.phase, signal) {
+                (Phase::Created, Signal::ScheduleReady { fingerprint }) => {
+                    require_digest(&fingerprint)?;
+                    self.schedule_fingerprint = Some(fingerprint);
+                    self.phase = Phase::Scheduled;
+                }
+                (Phase::Scheduled, Signal::LeasesReady { fingerprint }) => {
+                    require_digest(&fingerprint)?;
+                    self.lease_fingerprint = Some(fingerprint);
+                    self.phase = Phase::Leased;
+                }
+                (Phase::Leased, Signal::WorkersStarted) => self.phase = Phase::Executing,
+                (Phase::Executing, Signal::BarrierPrepared { fingerprint }) => {
+                    require_digest(&fingerprint)?;
+                    self.barrier_fingerprint = Some(fingerprint);
+                    self.phase = Phase::Prepared;
+                }
+                (
+                    Phase::Prepared,
+                    Signal::CommitStarted {
+                        journal_fingerprint,
+                    },
+                ) => {
+                    require_digest(&journal_fingerprint)?;
+                    self.journal_fingerprint = Some(journal_fingerprint);
+                    self.phase = Phase::Committing;
+                }
+                (Phase::Committing, Signal::CommitApplied { final_snapshot }) => {
+                    require_digest(&final_snapshot)?;
+                    self.final_snapshot = Some(final_snapshot);
+                    self.phase = Phase::Verifying;
+                }
+                (Phase::Verifying, Signal::ReplayVerified { report_fingerprint }) => {
+                    require_digest(&report_fingerprint)?;
+                    self.replay_report_fingerprint = Some(report_fingerprint);
+                    self.phase = Phase::Completed;
+                }
+                (
+                    Phase::Created
+                    | Phase::Scheduled
+                    | Phase::Leased
+                    | Phase::Executing
+                    | Phase::Prepared
+                    | Phase::Committing
+                    | Phase::Verifying,
+                    Signal::RecoveryRequired { reason },
+                ) => {
+                    require_reason(&reason)?;
+                    self.failure_reason = Some(reason);
+                    self.phase = Phase::Recovering;
+                }
+                (Phase::Recovering, Signal::RollbackComplete { snapshot }) => {
+                    require_digest(&snapshot)?;
+                    self.final_snapshot = Some(snapshot);
+                    self.phase = Phase::RolledBack;
+                }
+                (
+                    Phase::Created
+                    | Phase::Scheduled
+                    | Phase::Leased
+                    | Phase::Executing
+                    | Phase::Prepared
+                    | Phase::Committing
+                    | Phase::Verifying
+                    | Phase::Recovering,
+                    Signal::TerminalFailure { reason },
+                ) => {
+                    require_reason(&reason)?;
+                    self.failure_reason = Some(reason);
+                    self.phase = Phase::Failed;
+                }
+                _ => return Err("signal is invalid for the current supervisor phase"),
+            }
+            self.sequence = self
+                .sequence
+                .checked_add(1)
+                .ok_or("supervisor sequence overflow")?;
+            self.seal()?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            error!(
+                execution_id = %self.execution_id,
+                phase = ?previous_phase,
+                signal = signal_kind,
+                reason = %error,
+                "supervisor transition rejected"
+            );
+            return Err(error);
+        }
+        info!(
+            execution_id = %self.execution_id,
+            from = ?previous_phase,
+            to = ?self.phase,
+            signal = signal_kind,
+            sequence = self.sequence,
+            "supervisor transition applied"
+        );
         Ok(())
     }
 
@@ -204,6 +236,21 @@ impl SupervisorState {
     fn seal(&mut self) -> Result<(), &'static str> {
         self.fingerprint = self.calculate_fingerprint()?;
         Ok(())
+    }
+}
+
+fn signal_kind(signal: &Signal) -> &'static str {
+    match signal {
+        Signal::ScheduleReady { .. } => "schedule_ready",
+        Signal::LeasesReady { .. } => "leases_ready",
+        Signal::WorkersStarted => "workers_started",
+        Signal::BarrierPrepared { .. } => "barrier_prepared",
+        Signal::CommitStarted { .. } => "commit_started",
+        Signal::CommitApplied { .. } => "commit_applied",
+        Signal::ReplayVerified { .. } => "replay_verified",
+        Signal::RecoveryRequired { .. } => "recovery_required",
+        Signal::RollbackComplete { .. } => "rollback_complete",
+        Signal::TerminalFailure { .. } => "terminal_failure",
     }
 }
 

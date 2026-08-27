@@ -246,8 +246,9 @@ pub(crate) fn restore(repo: &Path, payload: &RuntimeCheckpointPayload) -> Result
         .join(RESTORE_TRANSACTION_DIRECTORY)
         .join(&payload.payload_fingerprint);
     if transaction.exists() {
-        fs::remove_dir_all(&transaction)
-            .map_err(|error| checkpoint_io("remove stale restore transaction", &transaction, error))?;
+        fs::remove_dir_all(&transaction).map_err(|error| {
+            checkpoint_io("remove stale restore transaction", &transaction, error)
+        })?;
     }
     let staged = transaction.join("staged");
     let backups = transaction.join("backups");
@@ -346,8 +347,9 @@ pub(crate) fn restore(repo: &Path, payload: &RuntimeCheckpointPayload) -> Result
         return Err(error);
     }
 
-    fs::remove_dir_all(&transaction)
-        .map_err(|error| checkpoint_io("remove completed restore transaction", &transaction, error))?;
+    fs::remove_dir_all(&transaction).map_err(|error| {
+        checkpoint_io("remove completed restore transaction", &transaction, error)
+    })?;
     if let Some(parent) = transaction.parent() {
         sync_parent(parent).map_err(RuntimeError::agent)?;
     }

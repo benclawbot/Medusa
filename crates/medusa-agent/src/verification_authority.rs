@@ -31,10 +31,10 @@ use verification_cancellation::{
 };
 use verification_checkpoint::VerificationCheckpointStore;
 
-#[path = "verification_authority_legacy.rs"]
-mod legacy;
+#[path = "verification_authority_backend.rs"]
+mod backend;
 
-pub use legacy::{AuthoritativeVerificationResult, prepare_components_for_verification};
+pub use backend::{AuthoritativeVerificationResult, prepare_components_for_verification};
 
 const MAX_STABLE_VERIFICATION_ATTEMPTS: usize = 3;
 const STATE_FINGERPRINT_FILE: &str = "verification-state-fingerprint";
@@ -42,7 +42,7 @@ const STATE_WATCH_INTERVAL: Duration = Duration::from_millis(100);
 const WARM_RESOURCE_TRUST_DOMAIN: &str = "local-authoritative-verification";
 
 pub(crate) fn prepare_paths_for_verification(repo: &Path, paths: &[String]) -> MedusaResult<()> {
-    legacy::prepare_paths_for_verification(repo, paths)
+    backend::prepare_paths_for_verification(repo, paths)
 }
 
 pub fn authoritative_verification_for_components(
@@ -152,7 +152,7 @@ fn authoritative_verification_for_components_at_inner(
 
         let guarded =
             run_with_repository_state_guard(repo, evidence_root, components, &before, || {
-                legacy::authoritative_verification_for_components_at(
+                backend::authoritative_verification_for_components_at(
                     repo,
                     evidence_root,
                     repository_fingerprint,

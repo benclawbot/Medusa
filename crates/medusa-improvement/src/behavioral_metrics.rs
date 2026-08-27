@@ -8,12 +8,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{
-    behavioral_outcome::{
-        BehavioralComplexityBand, BehavioralOutcomeV1, BehavioralRiskClass, BehavioralTaskIntent,
-        BehavioralTerminalStatus, BehavioralWorkspaceMode,
-    },
-    encode,
+use crate::behavioral_outcome::{
+    BehavioralComplexityBand, BehavioralOutcomeV1, BehavioralRiskClass, BehavioralTaskIntent,
+    BehavioralTerminalStatus, BehavioralWorkspaceMode,
 };
 
 pub const BEHAVIORAL_METRICS_SCHEMA_VERSION: u16 = 1;
@@ -880,7 +877,7 @@ fn revision_family(revision: Option<&str>) -> String {
 }
 
 fn digest(value: &[u8]) -> String {
-    encode(Sha256::digest(value))
+    hex::encode(Sha256::digest(value))
 }
 
 #[cfg(test)]

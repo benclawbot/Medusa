@@ -1,12 +1,9 @@
-extern crate self as hex;
-
 mod implementation;
 
 pub mod behavioral_health;
 pub mod behavioral_metrics;
 pub mod behavioral_outcome;
 pub mod correction_loop;
-#[allow(clippy::obfuscated_if_else)]
 pub mod correction_signals;
 pub mod improvement_controller;
 pub mod learning;
@@ -22,19 +19,6 @@ mod refinement_persistence;
 pub mod regression_replay;
 pub mod retrieval;
 pub mod scoped_memory;
-#[allow(clippy::collapsible_if)]
 pub mod solution_selection;
 pub mod tool_learning;
 pub use implementation::*;
-
-#[must_use]
-pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let bytes = bytes.as_ref();
-    let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        encoded.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        encoded.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    encoded
-}

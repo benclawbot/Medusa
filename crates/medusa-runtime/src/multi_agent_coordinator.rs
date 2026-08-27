@@ -19,8 +19,8 @@ use std::{
 
 use medusa_agent::{
     AgentEngine, AgentUpdate, DelegatedMutationAuthority, DelegationAttemptBinding,
-    DelegationContract, StepOutcome, TeamMemberContext, TeamRole, TeamRuntime,
-    DelegationContractStore, WorkerExecutionController, bind_session_to_delegation,
+    DelegationContract, DelegationContractStore, StepOutcome, TeamMemberContext, TeamRole,
+    TeamRuntime, WorkerExecutionController, bind_session_to_delegation,
 };
 use medusa_config::{Config, Mode};
 use medusa_core::{SessionId, hidden_command, storage};
@@ -140,12 +140,7 @@ pub fn run_deterministic_fast_preflight(
         return Err("deterministic preflight requires the fast mutation lane".to_owned());
     }
     let repository_fingerprint = repository_fingerprint(repo)?;
-    let root = execution_root_for_config(
-        repo,
-        &plan.fingerprint,
-        &repository_fingerprint,
-        config,
-    )?;
+    let root = execution_root_for_config(repo, &plan.fingerprint, &repository_fingerprint, config)?;
     let evidence_path = root.join("preflight-evidence.json");
     if evidence_path.is_file() {
         let restored: CoordinatorEvidence =
@@ -215,7 +210,9 @@ pub fn run_deterministic_fast_preflight(
         };
         let contracts_by_task = BTreeMap::from([(contract.task_id.clone(), contract.clone())]);
         validate_worker_evidence(plan, &contracts_by_task, &worker)?;
-        if let Ok(snapshot) = control.complete(&worker.worker_id, "deterministic fast-lane evidence") {
+        if let Ok(snapshot) =
+            control.complete(&worker.worker_id, "deterministic fast-lane evidence")
+        {
             let _ = events.send(RuntimeEvent::Team(snapshot));
         }
         workers.push(worker);
@@ -282,12 +279,7 @@ where
     F: Fn(WorkerRequest) -> Result<WorkerEvidence, String> + Sync,
 {
     let repository_fingerprint = repository_fingerprint(repo)?;
-    let root = execution_root_for_config(
-        repo,
-        &plan.fingerprint,
-        &repository_fingerprint,
-        config,
-    )?;
+    let root = execution_root_for_config(repo, &plan.fingerprint, &repository_fingerprint, config)?;
     let evidence_path = root.join("preflight-evidence.json");
     let execution_key = execution_id(&plan.fingerprint, &repository_fingerprint);
     if evidence_path.is_file() {
@@ -705,101 +697,101 @@ fn execute_production_worker(
     bind_session_to_delegation(&mut session, &request.delegation, &request.attempt)
         .map_err(|error| error.to_string())?;
     let result = (|| -> Result<WorkerEvidence, String> {
-    request
-        .team_context
-        .clone()
-        .execute(
-            "team_send_message",
-            &json!({"recipient":"lead","body":format!("{} started", request.contract.task_id)}),
-        )
-        .map_err(|error| error.to_string())?;
-    let system_context = format!(
-        "Delegation contract id: {}\nDelegation contract fingerprint: {}\nDelegation context fingerprint: {}\nContract: {}",
-        request.delegation.contract_id,
-        request.delegation.fingerprint,
-        request.packet.fingerprint,
-        serde_json::to_string_pretty(&request.packet).map_err(|error| error.to_string())?
-    );
-    let mut summaries = Vec::new();
-    let mut completed = false;
-    if let Ok(snapshot) = request.control.start(
-        &request.worker_id,
-        Some(session.id.as_str()),
-        "model session started",
-    ) {
-        let _ = request.events.send(RuntimeEvent::Team(snapshot));
-    }
-    for _ in 0..worker_config.agent.max_turns {
-        if cancel.load(Ordering::SeqCst) || request.control.is_cancelled(&request.worker_id) {
-            return Err(format!("worker {} was cancelled", request.worker_id));
-        }
-        let mut turn_context = system_context.clone();
-        if let Some(instruction) = request.control.take_instruction(&request.worker_id)? {
-            turn_context.push_str("\n\nLive steering instruction from the lead: ");
-            turn_context.push_str(&instruction);
-        }
-        if let Ok(snapshot) = request.control.progress(
-            &request.worker_id,
-            Some(session.id.as_str()),
-            session.turn,
-            "running model turn",
-        ) {
-            let _ = request.events.send(RuntimeEvent::Team(snapshot));
-        }
-        let outcome = engine
-            .step_with_observer_and_context(&mut session, Some(&turn_context), |update| {
-                if let AgentUpdate::AssistantText(text) = update
-                    && !text.trim().is_empty()
-                {
-                    summaries.push(text.clone());
-                }
-            })
+        request
+            .team_context
+            .clone()
+            .execute(
+                "team_send_message",
+                &json!({"recipient":"lead","body":format!("{} started", request.contract.task_id)}),
+            )
             .map_err(|error| error.to_string())?;
-        if let Ok(snapshot) = request.control.progress(
+        let system_context = format!(
+            "Delegation contract id: {}\nDelegation contract fingerprint: {}\nDelegation context fingerprint: {}\nContract: {}",
+            request.delegation.contract_id,
+            request.delegation.fingerprint,
+            request.packet.fingerprint,
+            serde_json::to_string_pretty(&request.packet).map_err(|error| error.to_string())?
+        );
+        let mut summaries = Vec::new();
+        let mut completed = false;
+        if let Ok(snapshot) = request.control.start(
             &request.worker_id,
             Some(session.id.as_str()),
-            session.turn,
-            "model turn completed",
+            "model session started",
         ) {
             let _ = request.events.send(RuntimeEvent::Team(snapshot));
         }
-        match outcome {
-            StepOutcome::Continue => {}
-            StepOutcome::TurnComplete | StepOutcome::Completed => {
-                completed = true;
-                break;
+        for _ in 0..worker_config.agent.max_turns {
+            if cancel.load(Ordering::SeqCst) || request.control.is_cancelled(&request.worker_id) {
+                return Err(format!("worker {} was cancelled", request.worker_id));
             }
-            StepOutcome::WaitingForUser => {
-                return Err(format!(
-                    "worker {} attempted to request user input",
-                    request.worker_id
-                ));
+            let mut turn_context = system_context.clone();
+            if let Some(instruction) = request.control.take_instruction(&request.worker_id)? {
+                turn_context.push_str("\n\nLive steering instruction from the lead: ");
+                turn_context.push_str(&instruction);
+            }
+            if let Ok(snapshot) = request.control.progress(
+                &request.worker_id,
+                Some(session.id.as_str()),
+                session.turn,
+                "running model turn",
+            ) {
+                let _ = request.events.send(RuntimeEvent::Team(snapshot));
+            }
+            let outcome = engine
+                .step_with_observer_and_context(&mut session, Some(&turn_context), |update| {
+                    if let AgentUpdate::AssistantText(text) = update
+                        && !text.trim().is_empty()
+                    {
+                        summaries.push(text.clone());
+                    }
+                })
+                .map_err(|error| error.to_string())?;
+            if let Ok(snapshot) = request.control.progress(
+                &request.worker_id,
+                Some(session.id.as_str()),
+                session.turn,
+                "model turn completed",
+            ) {
+                let _ = request.events.send(RuntimeEvent::Team(snapshot));
+            }
+            match outcome {
+                StepOutcome::Continue => {}
+                StepOutcome::TurnComplete | StepOutcome::Completed => {
+                    completed = true;
+                    break;
+                }
+                StepOutcome::WaitingForUser => {
+                    return Err(format!(
+                        "worker {} attempted to request user input",
+                        request.worker_id
+                    ));
+                }
             }
         }
-    }
-    if !completed {
-        return Err(format!(
-            "worker {} exceeded its bounded turn budget",
-            request.worker_id
-        ));
-    }
-    let summary = summaries.join("\n").trim().to_owned();
-    if summary.is_empty() {
-        return Err(format!("worker {} returned no evidence", request.worker_id));
-    }
-    Ok(WorkerEvidence {
-        task_id: request.contract.task_id,
-        worker_id: request.worker_id,
-        role: request.contract.role,
-        context_fingerprint: request.packet.fingerprint,
-        lease_epoch: 0,
-        delegation_contract_id: request.delegation.contract_id,
-        delegation_contract_fingerprint: request.delegation.fingerprint,
-        delegation_attempt_fingerprint: request.attempt.fingerprint,
-        session_id: session.id.to_string(),
-        turns: session.turn,
-        summary,
-    })
+        if !completed {
+            return Err(format!(
+                "worker {} exceeded its bounded turn budget",
+                request.worker_id
+            ));
+        }
+        let summary = summaries.join("\n").trim().to_owned();
+        if summary.is_empty() {
+            return Err(format!("worker {} returned no evidence", request.worker_id));
+        }
+        Ok(WorkerEvidence {
+            task_id: request.contract.task_id,
+            worker_id: request.worker_id,
+            role: request.contract.role,
+            context_fingerprint: request.packet.fingerprint,
+            lease_epoch: 0,
+            delegation_contract_id: request.delegation.contract_id,
+            delegation_contract_fingerprint: request.delegation.fingerprint,
+            delegation_attempt_fingerprint: request.attempt.fingerprint,
+            session_id: session.id.to_string(),
+            turns: session.turn,
+            summary,
+        })
     })();
     let stop_cause = if result.is_ok() {
         "read-only worker completed"
@@ -1290,8 +1282,11 @@ mod tests {
     fn deterministic_fast_preflight_uses_zero_model_turns_and_restores() {
         let repo = tempfile::tempdir().expect("repository");
         fs::create_dir_all(repo.path().join("src")).expect("src");
-        fs::write(repo.path().join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n")
-            .expect("source");
+        fs::write(
+            repo.path().join("src/lib.rs"),
+            "pub fn value() -> u8 { 1 }\n",
+        )
+        .expect("source");
         let plan = production_orchestrator::plan_for_repository(
             repo.path(),
             &PromptDraft {
@@ -1310,7 +1305,7 @@ mod tests {
             &control,
             &events,
         )
-            .expect("deterministic preflight");
+        .expect("deterministic preflight");
         assert_eq!(first.workers.len(), 2);
         assert!(first.workers.iter().all(|worker| worker.turns == 0));
         let restored = run_deterministic_fast_preflight(
@@ -1320,7 +1315,7 @@ mod tests {
             &control,
             &events,
         )
-            .expect("restored deterministic preflight");
+        .expect("restored deterministic preflight");
         assert_eq!(restored, first);
     }
 

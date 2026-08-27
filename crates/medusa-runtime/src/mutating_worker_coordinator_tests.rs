@@ -98,11 +98,8 @@ fn repository(
 #[test]
 fn turn_budget_fallback_requires_an_in_scope_repository_change() {
     let (_directory, repo, _plan, _preflight) = repository("src/");
-    let manager = WorkerManager::new(
-        &repo,
-        repo.join(".medusa/executions/turn-budget/worktrees"),
-    )
-    .expect("manager");
+    let manager = WorkerManager::new(&repo, repo.join(".medusa/executions/turn-budget/worktrees"))
+        .expect("manager");
     let worker = manager
         .open_or_create_worker("turn-budget", "worker-turn-budget")
         .expect("worker");
@@ -195,7 +192,10 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
     )
     .expect("verify");
     git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-m", "three independent failing assertions"]);
+    git(
+        &repo,
+        &["commit", "-m", "three independent failing assertions"],
+    );
 
     let cancel = Arc::new(AtomicBool::new(false));
     let (events, _) = mpsc::channel();
@@ -203,13 +203,8 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
     let first_budget = Cell::new(0u32);
     let second_budget = Cell::new(0u32);
     let second_received_failure_feedback = Cell::new(false);
-    let evidence = coordinate_with_executor(
-        &repo,
-        &plan,
-        &preflight,
-        &cancel,
-        &events,
-        |request| {
+    let evidence =
+        coordinate_with_executor(&repo, &plan, &preflight, &cancel, &events, |request| {
             let attempt = attempts.get() + 1;
             attempts.set(attempt);
             match attempt {
@@ -225,7 +220,9 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
                         fs::read_to_string(request.worker.worktree.join("src/first.txt"))
                             .map_err(|error| error.to_string())?;
                     if retained != "two\n" {
-                        return Err("corrective attempt lost the verified partial repair".to_owned());
+                        return Err(
+                            "corrective attempt lost the verified partial repair".to_owned()
+                        );
                     }
                     fs::write(request.worker.worktree.join("src/value.txt"), "three\n")
                         .map_err(|error| error.to_string())?;
@@ -239,9 +236,8 @@ fn corrective_attempt_preserves_verified_partial_repairs() {
                 turns: 1,
                 summary: format!("implementation attempt {attempt}"),
             })
-        },
-    )
-    .expect("corrective implementation");
+        })
+        .expect("corrective implementation");
 
     assert_eq!(attempts.get(), 2);
     assert!(second_budget.get() > first_budget.get());
@@ -265,7 +261,11 @@ fn interrupted_terminal_scheduler_is_reopened_for_bounded_recovery() {
     .expect_err("first attempt should fail");
     assert!(first_error.contains("simulated provider interruption"));
 
-    let state_path = preflight.state_path.parent().unwrap().join("implementation-state.json");
+    let state_path = preflight
+        .state_path
+        .parent()
+        .unwrap()
+        .join("implementation-state.json");
     let mut state = load_state(&state_path).expect("durable failure state");
     assert_eq!(state.status, ImplementationStatus::Failed);
     // Model a process interruption between durable child failure and the
@@ -274,16 +274,20 @@ fn interrupted_terminal_scheduler_is_reopened_for_bounded_recovery() {
     state.status = ImplementationStatus::Running;
     write_atomic(&state_path, &state).expect("simulate interrupted state");
 
-    let evidence = coordinate_with_executor(&repo, &plan, &preflight, &cancel, &events, |request| {
-        fs::write(request.worker.worktree.join("src/lib.rs"), "pub fn value() -> u32 { 2 }\n")
+    let evidence =
+        coordinate_with_executor(&repo, &plan, &preflight, &cancel, &events, |request| {
+            fs::write(
+                request.worker.worktree.join("src/lib.rs"),
+                "pub fn value() -> u32 { 2 }\n",
+            )
             .map_err(|error| error.to_string())?;
-        Ok(WorkerRun {
-            session_id: "recovery-session".to_owned(),
-            turns: 1,
-            summary: "recovered after reopening the bounded scheduler".to_owned(),
+            Ok(WorkerRun {
+                session_id: "recovery-session".to_owned(),
+                turns: 1,
+                summary: "recovered after reopening the bounded scheduler".to_owned(),
+            })
         })
-    })
-    .expect("terminal scheduler should be reopened");
+        .expect("terminal scheduler should be reopened");
 
     assert_eq!(evidence.changed_paths, vec!["src/lib.rs"]);
 }

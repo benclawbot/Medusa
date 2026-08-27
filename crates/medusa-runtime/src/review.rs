@@ -6,12 +6,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use medusa_core::hidden_command;
 use medusa_review_model::{
     ChangeKind, ChangeOrigin, ReviewActionRequest, ReviewAuditExport, ReviewFile, ReviewFilter,
     ReviewHistoryError, ReviewHunk, ReviewProvenance, ReviewSessionHistory, ReviewSnapshot,
     ReviewState, VerificationState, record_authorized_action,
 };
-use medusa_core::hidden_command;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -530,7 +530,8 @@ fn is_git_work_tree(repo: &Path) -> bool {
     let Ok(output) = hidden_command("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(&repo)
-        .output() else {
+        .output()
+    else {
         return false;
     };
     if !output.status.success() {

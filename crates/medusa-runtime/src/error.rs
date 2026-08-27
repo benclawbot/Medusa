@@ -9,14 +9,14 @@ use std::{
     thread,
 };
 
-use medusa_agent::{
-    AgentPlanStepStatus, AgentSession, persist_session,
-    session_browser::{list_sessions, load_session},
-};
 use super::{
     RuntimeCommand, RuntimeController, RuntimeEvent, RuntimeState, SubmissionState,
     configure_model, dispatch_runtime_events, execute_slash_command_with_submission, mark_idle,
     restore_queued_followups, run_prompt,
+};
+use medusa_agent::{
+    AgentPlanStepStatus, AgentSession, persist_session,
+    session_browser::{list_sessions, load_session},
 };
 
 #[derive(Debug)]
@@ -29,10 +29,21 @@ pub enum RuntimeError {
     EmptyPrompt,
     TurnLimit(u32),
     InvalidCommand(String),
-    BinaryFile { path: PathBuf },
-    InvalidImage { path: PathBuf },
-    ImagePixelLimit { path: PathBuf, pixels: u64, limit: u64 },
-    FileTooLarge { path: PathBuf, bytes: usize },
+    BinaryFile {
+        path: PathBuf,
+    },
+    InvalidImage {
+        path: PathBuf,
+    },
+    ImagePixelLimit {
+        path: PathBuf,
+        pixels: u64,
+        limit: u64,
+    },
+    FileTooLarge {
+        path: PathBuf,
+        bytes: usize,
+    },
 }
 
 impl RuntimeError {
@@ -66,7 +77,11 @@ impl std::fmt::Display for RuntimeError {
                 "attached image has an invalid encoded structure: {}",
                 path.display()
             ),
-            Self::ImagePixelLimit { path, pixels, limit } => write!(
+            Self::ImagePixelLimit {
+                path,
+                pixels,
+                limit,
+            } => write!(
                 formatter,
                 "attached image has {pixels} pixels; limit is {limit}: {}",
                 path.display()
@@ -173,7 +188,9 @@ impl RuntimeController {
             event_sender: runtime_event_tx,
             team_control,
             repo,
-            invariants: Arc::new(Mutex::new(crate::invariants::RuntimeInvariantRegistry::default())),
+            invariants: Arc::new(Mutex::new(
+                crate::invariants::RuntimeInvariantRegistry::default(),
+            )),
         })
     }
 }

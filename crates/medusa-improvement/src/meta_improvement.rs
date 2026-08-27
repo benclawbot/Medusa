@@ -1034,7 +1034,7 @@ fn stable_id(kind: &str, values: &[&str]) -> String {
         bytes.extend_from_slice(value.as_bytes());
     }
     let digest = sha2::Sha256::digest(&bytes);
-    format!("{kind}-{}", crate::encode(digest))
+    format!("{kind}-{}", hex::encode(digest))
 }
 
 #[cfg(test)]

@@ -34,14 +34,20 @@ pub(crate) fn select(
     let engine = match MemoryEngine::new(repo) {
         Ok(engine) => engine,
         Err(error) => {
-            unavailable(events, format!("canonical memory retrieval failed closed: {error}"));
+            unavailable(
+                events,
+                format!("canonical memory retrieval failed closed: {error}"),
+            );
             return RuntimeMemoryContext::default();
         }
     };
     let hits = match engine.search(query, Scope::Project, MAX_MEMORY_HITS) {
         Ok(hits) => hits,
         Err(error) => {
-            unavailable(events, format!("canonical memory retrieval failed closed: {error}"));
+            unavailable(
+                events,
+                format!("canonical memory retrieval failed closed: {error}"),
+            );
             return RuntimeMemoryContext::default();
         }
     };
@@ -93,14 +99,20 @@ pub(crate) fn record_reuse(
     let engine = match MemoryEngine::new(repo) {
         Ok(engine) => engine,
         Err(error) => {
-            unavailable(events, format!("canonical memory reuse was not recorded: {error}"));
+            unavailable(
+                events,
+                format!("canonical memory reuse was not recorded: {error}"),
+            );
             return;
         }
     };
     let evidence = format!("artifact://sessions/{session_id}/memory-reuse");
     for id in document_ids {
         if let Err(error) = engine.record_reuse(id, &evidence) {
-            unavailable(events, format!("canonical memory reuse for {id} was not recorded: {error}"));
+            unavailable(
+                events,
+                format!("canonical memory reuse for {id} was not recorded: {error}"),
+            );
         }
     }
 }
@@ -199,8 +211,11 @@ mod tests {
             .expect("reused document")
             .document;
         assert_eq!(updated.successful_reuse_count, 1);
-        assert!(updated.sources.iter().any(|source| {
-            source == "artifact://sessions/session-verified/memory-reuse"
-        }));
+        assert!(
+            updated
+                .sources
+                .iter()
+                .any(|source| { source == "artifact://sessions/session-verified/memory-reuse" })
+        );
     }
 }

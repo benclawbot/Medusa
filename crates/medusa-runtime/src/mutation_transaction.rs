@@ -13,8 +13,8 @@ use crate::RuntimeEvent;
 #[path = "mutation_transaction_state.rs"]
 mod state;
 
-pub use state::*;
 pub(crate) use crate::parent_reviewer::ParentReviewAuthorization;
+pub use state::*;
 
 pub fn authorize_after_parent_review<P: ModelProvider>(
     path: &Path,

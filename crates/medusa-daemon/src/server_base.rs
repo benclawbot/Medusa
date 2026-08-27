@@ -21,6 +21,7 @@ use std::process::Stdio;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+#[cfg(test)]
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use medusa_tool_policy::validate_shell_command;
 use time::OffsetDateTime;
@@ -29,17 +30,22 @@ use ulid::Ulid;
 use crate::{
     cancellation::{append_detail, cancel_all_jobs, cancel_job, mark_job_interrupted},
     frontend_control::{
-        FrontendCommandAcknowledgement, FrontendControlPlane, FrontendShutdownHandle,
+        FrontendControlPlane, FrontendShutdownHandle,
     },
     paths::DaemonPaths,
     process::ProcessRegistry,
     protocol::{
-        DAEMON_PROTOCOL_VERSION, FrontendArtifactUpload, FrontendCredentialUpdate, JobRecord,
-        JobState, Request, RequestEnvelope, Response, ResponseEnvelope,
+        DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
+        ResponseEnvelope,
     },
     scheduler::{DaemonLimits, JobRunner, JobScheduler, SubmitError},
     transport::{LocalListener, LocalStream, connect, wake},
 };
+
+#[cfg(test)]
+use crate::frontend_control::FrontendCommandAcknowledgement;
+#[cfg(test)]
+use crate::protocol::{FrontendArtifactUpload, FrontendCredentialUpdate};
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
@@ -178,6 +184,7 @@ impl DaemonClient {
     }
 
     /// Sends one versioned frontend command through the repository-scoped daemon authority.
+    #[cfg(test)]
     pub fn frontend(
         &self,
         envelope: FrontendCommandEnvelope,
@@ -194,6 +201,7 @@ impl DaemonClient {
     }
 
     /// Stages one bounded attachment in the daemon-owned content-addressed artifact store.
+    #[cfg(test)]
     pub fn frontend_artifact(&self, upload: FrontendArtifactUpload) -> MedusaResult<String> {
         match self.request(Request::FrontendArtifact { upload })? {
             Response::FrontendArtifact { artifact_id } => Ok(artifact_id),
@@ -207,6 +215,7 @@ impl DaemonClient {
     }
 
     /// Exports one verified bounded artifact for a remote frontend delivery adapter.
+    #[cfg(test)]
     pub fn frontend_artifact_export(
         &self,
         artifact_id: &str,
@@ -225,6 +234,7 @@ impl DaemonClient {
     }
 
     /// Updates one process-local daemon credential without persisting it in protocol evidence.
+    #[cfg(test)]
     pub fn frontend_credential(&self, update: FrontendCredentialUpdate) -> MedusaResult<()> {
         match self.request(Request::FrontendCredential { update })? {
             Response::Ack => Ok(()),
@@ -238,6 +248,7 @@ impl DaemonClient {
     }
 }
 
+#[cfg(test)]
 fn frontend_request_error(code: String, message: String) -> MedusaError {
     MedusaError::new(
         ErrorCode::DependencyUnavailable,

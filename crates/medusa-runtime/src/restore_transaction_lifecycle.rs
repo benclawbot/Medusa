@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{RuntimeError, checkpoint_payload::RuntimeCheckpointPayload};
 
@@ -90,7 +93,11 @@ mod tests {
     use super::*;
     use crate::checkpoint_payload::CheckpointFilePayload;
 
-    fn payload(session_id: &str, checkpoint_id: &str, payload_fingerprint: &str) -> RuntimeCheckpointPayload {
+    fn payload(
+        session_id: &str,
+        checkpoint_id: &str,
+        payload_fingerprint: &str,
+    ) -> RuntimeCheckpointPayload {
         RuntimeCheckpointPayload {
             schema_version: 1,
             session_id: session_id.to_owned(),

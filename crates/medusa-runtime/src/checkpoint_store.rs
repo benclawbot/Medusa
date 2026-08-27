@@ -17,6 +17,7 @@ use medusa_execution_checkpoint::ExecutionCheckpoint;
 use medusa_protocol::EventPayload;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::{error, info};
 
 use crate::{RuntimeController, RuntimeError, execution_history};
 
@@ -138,8 +139,7 @@ impl RuntimeController {
 /// idempotent so an interrupted operation can be retried without resurrecting canonical state.
 pub fn dispose_completed_session(repo: &Path, session_id: &str) -> Result<(), RuntimeError> {
     validate_session_id(session_id)?;
-    let restore_transactions =
-        restore_transaction_lifecycle::owned_transactions(repo, session_id)?;
+    let restore_transactions = restore_transaction_lifecycle::owned_transactions(repo, session_id)?;
     medusa_agent::session_browser::dispose_completed_session(repo, session_id)
         .map_err(RuntimeError::agent)?;
     restore_transaction_lifecycle::remove_transactions(&restore_transactions)?;
@@ -177,16 +177,35 @@ pub(crate) fn materialize(
     repo: &Path,
     session_id: &str,
 ) -> Result<RuntimeCheckpointRecord, RuntimeError> {
+    info!(session_id, "runtime checkpoint materialization started");
     validate_session_id(session_id)?;
-    let health = execution_history::inspect(repo, session_id)?;
+    let health = match execution_history::inspect(repo, session_id) {
+        Ok(health) => health,
+        Err(error) => {
+            error!(session_id, reason = %error, "runtime checkpoint materialization failed");
+            return Err(error);
+        }
+    };
     let record = RuntimeCheckpointRecord::new(
         health.session_id,
         health.journal_cursor,
         health.journal_fingerprint,
         health.checkpoint,
     )?;
-    persist(repo, &record)?;
-    crate::checkpoint_payload::materialize(repo, &record)?;
+    if let Err(error) = persist(repo, &record) {
+        error!(session_id, reason = %error, "runtime checkpoint persistence failed");
+        return Err(error);
+    }
+    if let Err(error) = crate::checkpoint_payload::materialize(repo, &record) {
+        error!(session_id, reason = %error, "runtime checkpoint payload persistence failed");
+        return Err(error);
+    }
+    info!(
+        session_id,
+        checkpoint_id = %record.checkpoint.fingerprint,
+        journal_cursor = record.journal_cursor,
+        "runtime checkpoint materialization completed"
+    );
     Ok(record)
 }
 
@@ -247,7 +266,14 @@ pub fn list(repo: &Path, session_id: &str) -> Result<Vec<RuntimeCheckpointRecord
 }
 
 fn persist(repo: &Path, record: &RuntimeCheckpointRecord) -> Result<(), RuntimeError> {
-    record.verify()?;
+    if let Err(error) = record.verify() {
+        error!(
+            session_id = %record.session_id,
+            reason = %error,
+            "runtime checkpoint verification failed before persistence"
+        );
+        return Err(error);
+    }
     let directory = checkpoint_directory(repo, &record.session_id);
     fs::create_dir_all(&directory).map_err(RuntimeError::agent)?;
     let destination = directory.join(format!("{}.json", record.checkpoint.fingerprint));
@@ -256,6 +282,11 @@ fn persist(repo: &Path, record: &RuntimeCheckpointRecord) -> Result<(), RuntimeE
         if existing == *record {
             return Ok(());
         }
+        error!(
+            session_id = %record.session_id,
+            checkpoint_id = %record.checkpoint.fingerprint,
+            "runtime checkpoint fingerprint is bound to conflicting content"
+        );
         return Err(RuntimeError::agent(format!(
             "checkpoint fingerprint {} is already bound to conflicting content",
             record.checkpoint.fingerprint
@@ -288,7 +319,10 @@ fn load_record(path: &Path) -> Result<RuntimeCheckpointRecord, RuntimeError> {
     let bytes = fs::read(path).map_err(RuntimeError::agent)?;
     let record: RuntimeCheckpointRecord =
         serde_json::from_slice(&bytes).map_err(RuntimeError::agent)?;
-    record.verify()?;
+    if let Err(error) = record.verify() {
+        error!(path = %path.display(), reason = %error, "persisted runtime checkpoint failed verification");
+        return Err(error);
+    }
     Ok(record)
 }
 
@@ -489,7 +523,8 @@ mod tests {
             .join(session.id.as_str())
             .join(format!("{}.json", record.checkpoint.fingerprint));
         let payload: crate::checkpoint_payload::RuntimeCheckpointPayload =
-            serde_json::from_slice(&fs::read(&payload_path).expect("payload")).expect("payload json");
+            serde_json::from_slice(&fs::read(&payload_path).expect("payload"))
+                .expect("payload json");
         let restore_transaction = repository
             .path()
             .join(".medusa/restore-transactions")
@@ -523,7 +558,11 @@ mod tests {
         assert!(!restore_transaction.exists());
         assert!(!continuity_path.exists());
         assert!(load_session(repository.path(), session.id.as_str()).is_err());
-        assert!(list(repository.path(), session.id.as_str()).unwrap().is_empty());
+        assert!(
+            list(repository.path(), session.id.as_str())
+                .unwrap()
+                .is_empty()
+        );
 
         dispose_completed_session(repository.path(), session.id.as_str()).expect("retry");
     }

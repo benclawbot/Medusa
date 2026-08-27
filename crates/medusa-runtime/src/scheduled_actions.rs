@@ -286,7 +286,10 @@ fn validate_request(request: &TriggerDispatchRequest) -> Result<(), RuntimeError
             "trigger dispatch identity, target, and prompt must be non-empty".to_owned(),
         ));
     }
-    if request.recurrence_seconds.is_some_and(|seconds| seconds < MIN_RECURRENCE_SECONDS) {
+    if request
+        .recurrence_seconds
+        .is_some_and(|seconds| seconds < MIN_RECURRENCE_SECONDS)
+    {
         return Err(RuntimeError::InvalidCommand(format!(
             "trigger recurrence must be at least {MIN_RECURRENCE_SECONDS} seconds"
         )));
@@ -337,7 +340,9 @@ fn claimed_record(request: &TriggerDispatchRequest) -> Result<TriggerDispatchRec
     Ok(record)
 }
 
-fn request_from_record(record: &TriggerDispatchRecord) -> Result<TriggerDispatchRequest, RuntimeError> {
+fn request_from_record(
+    record: &TriggerDispatchRecord,
+) -> Result<TriggerDispatchRequest, RuntimeError> {
     Ok(TriggerDispatchRequest {
         schedule_id: record.schedule_id.clone(),
         source_kind: record.source_kind,
@@ -483,19 +488,28 @@ mod tests {
         let second = claimed_record(&request).expect("record");
         assert_eq!(first.idempotency_key, second.idempotency_key);
         assert_eq!(first.action_id, second.action_id);
-        assert_eq!(first.delivery_policy, SessionActionDeliveryPolicy::NextSafeTurnBoundary);
+        assert_eq!(
+            first.delivery_policy,
+            SessionActionDeliveryPolicy::NextSafeTurnBoundary
+        );
 
         let mut follow_up = request;
         follow_up.delivery_mode = TriggerDeliveryMode::FollowUp;
         let record = claimed_record(&follow_up).expect("follow-up record");
-        assert_eq!(record.delivery_policy, SessionActionDeliveryPolicy::WhenIdle);
+        assert_eq!(
+            record.delivery_policy,
+            SessionActionDeliveryPolicy::WhenIdle
+        );
     }
 
     #[test]
     fn missed_run_policy_is_bounded_and_deterministic() {
         let missed: Vec<u8> = (0..20).collect();
         assert!(select_missed_occurrences(MissedRunPolicy::Skip, &missed).is_empty());
-        assert_eq!(select_missed_occurrences(MissedRunPolicy::Coalesce, &missed), vec![19]);
+        assert_eq!(
+            select_missed_occurrences(MissedRunPolicy::Coalesce, &missed),
+            vec![19]
+        );
         assert_eq!(
             select_missed_occurrences(MissedRunPolicy::CatchUp, &missed),
             (12..20).collect::<Vec<_>>()

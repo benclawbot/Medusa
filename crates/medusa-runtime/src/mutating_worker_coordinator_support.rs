@@ -7,8 +7,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use medusa_multi_agent_scheduler::Task;
 use medusa_core::storage;
+use medusa_multi_agent_scheduler::Task;
 use serde::Serialize;
 
 use crate::{
@@ -215,10 +215,9 @@ pub(super) fn evidence_from_state(
         changed_paths: state.changed_paths.clone(),
         changed_components: state.changed_components.clone(),
         verification_evidence: state.verification_evidence.clone(),
-        verification_receipt: state
-            .verification_receipt
-            .clone()
-            .ok_or_else(|| "prepared implementation has no typed verification receipt".to_owned())?,
+        verification_receipt: state.verification_receipt.clone().ok_or_else(|| {
+            "prepared implementation has no typed verification receipt".to_owned()
+        })?,
         base_head: snapshot.base_head.clone(),
         prepared_commit: snapshot.prepared_commit.clone(),
         prepared_tree: snapshot.prepared_tree.clone(),

@@ -531,7 +531,7 @@ fn quarantined_receipt(
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {
-    crate::encode(Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn digest_text(value: &str) -> String {

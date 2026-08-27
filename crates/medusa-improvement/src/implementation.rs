@@ -10,6 +10,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tracing::{info, warn};
 use ulid::Ulid;
 
 /// One normalized trajectory event.
@@ -391,8 +392,19 @@ impl ImprovementStore {
         let active = self.active_skill(&record.skill_name)?;
         let result = benchmark(&active, corpus);
         if result.frozen.score_milli() >= regression_floor_milli {
+            info!(
+                proposal_id = %record.proposal_id,
+                score_milli = result.frozen.score_milli(),
+                "improvement monitoring passed"
+            );
             return Ok(false);
         }
+        warn!(
+            proposal_id = %record.proposal_id,
+            score_milli = result.frozen.score_milli(),
+            regression_floor_milli,
+            "improvement regression detected; rolling back"
+        );
         let previous: SkillVersion = serde_json::from_slice(&fs::read(&record.rollback_bundle)?)?;
         atomic_json(&self.skill_path(&record.skill_name), &previous)?;
         record.reverted_at = Some(now()?);
@@ -401,6 +413,7 @@ impl ImprovementStore {
             result.frozen.score_milli()
         ));
         atomic_json(&self.history_path(&record.proposal_id), record)?;
+        info!(proposal_id = %record.proposal_id, "improvement rollback completed");
         Ok(true)
     }
 

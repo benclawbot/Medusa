@@ -17,7 +17,8 @@ use sha2::{Digest, Sha256};
 
 pub(crate) fn open(repo: &Path) -> Result<RefinementAuthorityStore, String> {
     let mut store = RefinementAuthorityStore::open(repo).map_err(|error| error.to_string())?;
-    let policy = LearningAdmissionPolicy::for_repository(repo).map_err(|error| error.to_string())?;
+    let policy =
+        LearningAdmissionPolicy::for_repository(repo).map_err(|error| error.to_string())?;
     if policy.capture_enabled() {
         RefinementMigrator::run(repo, &mut store).map_err(|error| error.to_string())?;
     }
@@ -59,7 +60,8 @@ pub(crate) fn resolve(
     let path = store.root().join("migrations.jsonl");
     if let Ok(text) = std::fs::read_to_string(path) {
         for line in text.lines().filter(|line| !line.trim().is_empty()) {
-            let value: serde_json::Value = serde_json::from_str(line).map_err(|error| error.to_string())?;
+            let value: serde_json::Value =
+                serde_json::from_str(line).map_err(|error| error.to_string())?;
             if value["source_record_id"].as_str() == Some(requested_id) {
                 if let (Some(id), Some(version)) = (
                     value["canonical_proposal_id"].as_str(),
@@ -83,7 +85,9 @@ pub(crate) fn propose(
     if key.trim().is_empty() || value.trim().is_empty() {
         return Err("/learning propose requires a non-empty key and value".into());
     }
-    let digest = hex::encode(Sha256::digest(format!("{scope:?}\n{key}\n{value}").as_bytes()));
+    let digest = hex::encode(Sha256::digest(
+        format!("{scope:?}\n{key}\n{value}").as_bytes(),
+    ));
     let proposal = RefinementProposal {
         id: format!("runtime-{digest}"),
         version: 1,
@@ -110,7 +114,10 @@ pub(crate) fn propose(
         },
         risk: RefinementRisk::Low,
     };
-    let revision = store.snapshot().map_err(|error| error.to_string())?.revision;
+    let revision = store
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .revision;
     store
         .propose(proposal, revision)
         .map_err(|error| error.to_string())
@@ -124,7 +131,10 @@ pub(crate) fn evaluate(
     effectiveness_passed: bool,
 ) -> Result<RefinementAuthoritySnapshot, String> {
     let (id, version) = resolve(store, requested_id)?;
-    let revision = store.snapshot().map_err(|error| error.to_string())?.revision;
+    let revision = store
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .revision;
     store
         .record_evaluation(
             &id,
@@ -152,7 +162,10 @@ pub(crate) fn transition(
     action: RuntimeLearningAction,
 ) -> Result<RefinementAuthoritySnapshot, String> {
     let (id, version) = resolve(store, requested_id)?;
-    let revision = store.snapshot().map_err(|error| error.to_string())?.revision;
+    let revision = store
+        .snapshot()
+        .map_err(|error| error.to_string())?
+        .revision;
     let result = match action {
         RuntimeLearningAction::Approve => store.approve(
             &id,
@@ -162,11 +175,17 @@ pub(crate) fn transition(
             now_unix_ms(),
             revision,
         ),
-        RuntimeLearningAction::Reject => store.reject(&id, version, "rejected by runtime user", revision),
-        RuntimeLearningAction::Defer => store.defer(&id, version, "deferred by runtime user", revision),
+        RuntimeLearningAction::Reject => {
+            store.reject(&id, version, "rejected by runtime user", revision)
+        }
+        RuntimeLearningAction::Defer => {
+            store.defer(&id, version, "deferred by runtime user", revision)
+        }
         RuntimeLearningAction::Validate => store.validate(&id, version, revision),
         RuntimeLearningAction::Activate => store.activate(&id, version, revision),
-        RuntimeLearningAction::Suspend => store.suspend(&id, version, "suspended by runtime user", revision),
+        RuntimeLearningAction::Suspend => {
+            store.suspend(&id, version, "suspended by runtime user", revision)
+        }
         RuntimeLearningAction::Rollback => store.rollback(
             &id,
             version,
@@ -175,7 +194,9 @@ pub(crate) fn transition(
             "rolled back by runtime user",
             revision,
         ),
-        RuntimeLearningAction::Delete => store.tombstone(&id, version, "deleted by runtime user", revision),
+        RuntimeLearningAction::Delete => {
+            store.tombstone(&id, version, "deleted by runtime user", revision)
+        }
     };
     result.map_err(|error| error.to_string())
 }
@@ -192,10 +213,19 @@ pub(crate) fn inspect(
         .find(|record| record.proposal_id == id && record.version == version)
         .ok_or_else(|| format!("canonical refinement {requested_id} was not found"))?;
     Ok(vec![
-        format!("id={} version={} lifecycle={:?}", id, version, record.lifecycle),
-        format!("scope={:?} artifact={:?}", record.scope, record.artifact_kind),
+        format!(
+            "id={} version={} lifecycle={:?}",
+            id, version, record.lifecycle
+        ),
+        format!(
+            "scope={:?} artifact={:?}",
+            record.scope, record.artifact_kind
+        ),
         format!("evidence_digest={}", record.evidence_digest),
-        format!("approval_receipt={}", record.approval_receipt_id.as_deref().unwrap_or("none")),
+        format!(
+            "approval_receipt={}",
+            record.approval_receipt_id.as_deref().unwrap_or("none")
+        ),
         format!("journal_head={}", snapshot.journal_head_hash),
     ])
 }
@@ -206,9 +236,10 @@ pub(crate) fn details(snapshot: &RefinementAuthoritySnapshot, filter: Option<&st
         snapshot.revision, snapshot.journal_head_hash
     )];
     for record in &snapshot.records {
-        let proposal_text = record.proposal.as_ref().map_or_else(String::new, |proposal| {
-            format!(" {:?}", proposal.after)
-        });
+        let proposal_text = record
+            .proposal
+            .as_ref()
+            .map_or_else(String::new, |proposal| format!(" {:?}", proposal.after));
         let searchable = format!(
             "{} {:?} {:?} {:?}{proposal_text}",
             record.proposal_id, record.lifecycle, record.scope, record.artifact_kind

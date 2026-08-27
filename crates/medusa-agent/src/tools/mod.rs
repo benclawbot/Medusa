@@ -70,7 +70,6 @@ static BROWSER_NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 pub(crate) struct CertifiedToolExecution {
     pub receipt: Value,
     pub result: MedusaResult<String>,
-    #[allow(dead_code)]
     pub canonical: CanonicalToolResultV1,
 }
 

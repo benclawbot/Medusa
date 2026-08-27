@@ -15,7 +15,9 @@ use medusa_intelligence::{RepositoryGraph, RepositoryGraphFreshness, ReviewImpac
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::verification_checkpoint::{VerificationCheckpoint, VerificationCheckpointStore};
+use crate::verification_authority::verification_checkpoint::{
+    VerificationCheckpoint, VerificationCheckpointStore,
+};
 
 const COMMAND_PREVIEW_MAX_BYTES: usize = 4 * 1024;
 const COMMAND_PREVIEW_MAX_LINES: usize = 32;
