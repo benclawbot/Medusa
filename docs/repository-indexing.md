@@ -12,17 +12,17 @@ Medusa maintains a deterministic, syntax-aware repository index for Rust and Pyt
 
 ## Prompt allocation and retrieval
 
-Before each model request, Medusa accounts for system instructions, durable conversation, tool schemas, approval and memory context, and reserved response capacity. Repository retrieval may use only the remaining capacity below the proactive-compaction threshold.
+Before each model request, Medusa accounts for system instructions, durable conversation, tool schemas, approval and memory context, and reserved response capacity. The runtime's request-specific repository projection is assembled once and passed to the agent as additional system context; the agent then budgets the final request and compacts if required.
 
-The retrieval allocation is capped at 8,000 estimated tokens and keeps a fixed 256-token wrapper reserve. Ranked fragments are selected with the deterministic `RetrievalBudget` contract. The request is then budgeted again after repository context is appended, so retrieval cannot silently starve protected prompt sections or response capacity.
+The runtime projection is capped at 6,000 source tokens, 16 exact ranges, 1,200 tokens per range, and a 36 KiB rendered context. Ranked fragments are selected with the deterministic `RetrievalBudget` contract. The final request is budgeted after repository context is appended, so retrieval cannot silently starve protected prompt sections or response capacity.
 
-The retrieval query uses the current durable session objective. Included fragments carry their path, symbol, line range, score, and source content. Candidates that do not fit retain explicit exclusion reasons such as total-budget exhaustion, per-result limits, stale ranges, unavailable source, or result-count limits.
+The retrieval query combines the current prompt, durable session objective, and active plan. Included fragments carry their path, symbol, line range, score, and source content, with caller/reference ranges added when they fit. Candidates that do not fit retain explicit exclusion reasons such as total-budget exhaustion, per-result limits, stale ranges, unavailable source, or result-count limits.
 
 ## Frontend visibility
 
 When a refresh changes indexed state, the agent emits a normal `code_index` tool activity before the model request. The activity lists reindexed paths, removed paths, and files that still contain parse errors.
 
-When repository context is selected, the agent emits a `repository_context` activity with included and excluded fragment counts, used and allocated retrieval tokens, protected capacity, and grouped exclusion reasons. TUI and Desktop receive both activities through the same shared agent observer pipeline.
+The agent emits a normal `code_index` activity when its process-wide index changes. The selected runtime projection is included in the request manifest's additional-context fingerprint, so replay/audit can identify the exact context without maintaining a second injected repository projection.
 
 ## Current language support
 
@@ -37,5 +37,5 @@ Both languages use deterministic path/source ordering, the same incremental inva
 - `crates/medusa-intelligence/src/index.rs`: language dispatch, full builds, and incremental refreshes.
 - `crates/medusa-intelligence/src/retrieval.rs`: ranking, hard budgets, and exclusion reasons.
 - `crates/medusa-agent/src/session_browser.rs`: repository-owned cache primitive.
-- `crates/medusa-agent/src/repository_index.rs`: process-wide refresh, Git identity coordination, retrieval formatting, and status reporting.
-- `crates/medusa-agent/build.rs`: injects refresh, retrieval allocation, and request re-budgeting before each generated engine model request.
+- `crates/medusa-agent/src/repository_index.rs`: process-wide refresh and Git identity coordination.
+- `crates/medusa-runtime/src/repository_context.rs`: request-specific ranking, caller expansion, policy protection, rendering, and verification-scope selection.

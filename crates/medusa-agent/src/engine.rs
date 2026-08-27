@@ -359,6 +359,41 @@ fn active_plan_step_id(session: &AgentSession) -> Option<&str> {
         .map(|step| step.title.as_str())
 }
 
+fn observe_tool_start<F>(
+    session: &mut AgentSession,
+    name: &str,
+    input: &serde_json::Value,
+    observer: &mut F,
+) -> MedusaResult<()>
+where
+    F: FnMut(&AgentUpdate),
+{
+    append_observed(
+        session,
+        EventPayload::ToolExecutionStarted {
+            tool: audited_tool_name(name, input),
+        },
+        observer,
+    )
+}
+
+fn execute_observed_engine_tool<F, O>(
+    session: &mut AgentSession,
+    name: &str,
+    input: &serde_json::Value,
+    cancellation: &AtomicBool,
+    execution_policy: &AgentExecutionPolicy,
+    observer: &mut O,
+    handler: F,
+) -> MedusaResult<CertifiedToolExecution>
+where
+    F: FnOnce(&serde_json::Value) -> MedusaResult<String>,
+    O: FnMut(&AgentUpdate),
+{
+    observe_tool_start(session, name, input, observer)?;
+    execute_engine_tool_with_policy(name, input, cancellation, execution_policy, handler)
+}
+
 fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
     if name == "desktop_commander" {
         if let Some(tool) = input.get("tool").and_then(serde_json::Value::as_str) {
@@ -1354,6 +1389,11 @@ impl<P: ModelProvider> AgentEngine<P> {
         crate::engine_support::compact_session_with_semantic(session, focus, semantic)
     }
 
+    /// Compatibility driver for embedders that own an `AgentEngine` directly.
+    ///
+    /// The shared runtime has a richer loop for cancellation, follow-ups, and coordinated
+    /// execution, so this intentionally stays a small single-agent boundary around the common
+    /// phase-aware step implementation rather than becoming a second production runtime.
     pub fn run_to_completion(&self, session: &mut AgentSession) -> MedusaResult<()> {
         let default_phase = provider_execution_phase(self.config.agent.mode);
         let mut phase = default_phase;
@@ -1399,6 +1439,8 @@ impl<P: ModelProvider> AgentEngine<P> {
         }
     }
 
+    // These public façades preserve the stable embedding API; every variant delegates to the
+    // one phase-aware implementation below, so they carry no independent turn logic.
     pub fn step(&self, session: &mut AgentSession) -> MedusaResult<StepOutcome> {
         self.step_with_observer(session, |_| {})
     }
@@ -1579,35 +1621,6 @@ impl<P: ModelProvider> AgentEngine<P> {
             requested_output_tokens,
             context_window_tokens,
         );
-        let repository_capacity = budget
-            .compaction_threshold_tokens
-            .saturating_sub(budget.estimated_total_tokens);
-        if !self.general_chat
-            && let Some(retrieval) = repository_index::retrieve_context(
-                &session.repo,
-                &session.objective,
-                repository_capacity,
-            )?
-        {
-            assembly_provenance.insert(
-                "repository_context".to_owned(),
-                effective_request::fragment_fingerprint(&retrieval.system_fragment),
-            );
-            system.push_str("\n\n");
-            system.push_str(&retrieval.system_fragment);
-            observer(&AgentUpdate::ToolOutput {
-                tool: "repository_context".to_owned(),
-                output: retrieval.status,
-                is_error: false,
-            });
-            budget = context_budget::PromptBudget::for_request(
-                &system,
-                &request_messages,
-                &tools,
-                requested_output_tokens,
-                context_window_tokens,
-            );
-        }
         let mut compacted = false;
         if matches!(
             budget.decision(),
@@ -2093,18 +2106,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                 let mut post_action = None;
                 let execution = if scoped_tool_names.binary_search(&name).is_err() {
                     measured = true;
-                    append_observed(
+                    execute_observed_engine_tool(
                         session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
-                    execute_engine_tool_with_policy(
                         &name,
                         &input,
                         self.cancellation.as_ref(),
                         &self.execution_policy,
+                        &mut observer,
                         |_| {
                             Err(MedusaError::new(
                                 ErrorCode::PolicyDenied,
@@ -2119,30 +2127,19 @@ impl<P: ModelProvider> AgentEngine<P> {
                     }
                     measured = true;
                     timing_override = Some(early.timing);
-                    append_observed(
-                        session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
+                    observe_tool_start(session, &name, &input, &mut observer)?;
                     early.execution
                 } else if name == ANALYSIS_WORKSPACE_TOOL {
                     measured = true;
-                    append_observed(
-                        session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
                     let host = self.analysis_host.as_ref();
                     let session_id = session.id.to_string();
-                    execute_engine_tool_with_policy(
+                    execute_observed_engine_tool(
+                        session,
                         &name,
                         &input,
                         self.cancellation.as_ref(),
                         &self.execution_policy,
+                        &mut observer,
                         |canonical_input| {
                             let host = host.ok_or_else(|| {
                                 MedusaError::new(
@@ -2156,13 +2153,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     )?
                 } else if name == "update_plan" {
                     measured = true;
-                    append_observed(
-                        session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
+                    observe_tool_start(session, &name, &input, &mut observer)?;
                     execute_engine_tool_with_policy(
                         &name,
                         &input,
@@ -2193,18 +2184,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                     )?
                 } else if name == "ask_user_question" {
                     measured = true;
-                    append_observed(
+                    execute_observed_engine_tool(
                         session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
-                    execute_engine_tool_with_policy(
                         &name,
                         &input,
                         self.cancellation.as_ref(),
                         &self.execution_policy,
+                        &mut observer,
                         |canonical_input| {
                             let question = question_from_input(id.clone(), canonical_input)?;
                             post_action = Some(PostToolAction::AskQuestion(Box::new(question)));
@@ -2217,18 +2203,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                     .is_some_and(|team| team.handles(&name))
                 {
                     measured = true;
-                    append_observed(
+                    execute_observed_engine_tool(
                         session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
-                    execute_engine_tool_with_policy(
                         &name,
                         &input,
                         self.cancellation.as_ref(),
                         &self.execution_policy,
+                        &mut observer,
                         |canonical_input| {
                             self.team_context
                                 .as_ref()
@@ -2245,22 +2226,19 @@ impl<P: ModelProvider> AgentEngine<P> {
                 } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name)
                 {
                     measured = true;
-                    append_observed(
+                    let repository = session.repo.clone();
+                    let session_id = session.id.to_string();
+                    execute_observed_engine_tool(
                         session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
-                    execute_engine_tool_with_policy(
                         &name,
                         &input,
                         self.cancellation.as_ref(),
                         &self.execution_policy,
+                        &mut observer,
                         |canonical_input| {
                             self.execute_desktop_commander(
-                                &session.repo,
-                                session.id.as_str(),
+                                &repository,
+                                &session_id,
                                 canonical_input,
                             )
                         },
@@ -2280,13 +2258,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                             output,
                         )?
                     } else {
-                        append_observed(
-                            session,
-                            EventPayload::ToolExecutionStarted {
-                                tool: audited_tool_name(&name, &input),
-                            },
-                            &mut observer,
-                        )?;
+                        observe_tool_start(session, &name, &input, &mut observer)?;
                         execute_session_tool(
                             &session.repo,
                             &name,

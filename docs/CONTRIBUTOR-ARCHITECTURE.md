@@ -27,7 +27,7 @@ The workspace metadata in root `Cargo.toml` is the machine-readable production e
 | Responsibility | Current ownership |
 |---|---|
 | Objective and goal state | `crates/medusa-goal`, `crates/medusa-world-model` |
-| Context retrieval and turn assembly | `crates/medusa-context`, `crates/medusa-context-retrieval`, `crates/medusa-turn-assembly` |
+| Context retrieval and turn assembly | `crates/medusa-runtime/src/memory_retrieval.rs`, `crates/medusa-runtime/src/repository_context.rs`, `crates/medusa-agent/src/engine.rs`, and `crates/medusa-prompt-cache` |
 | Persisted session and plan state | `crates/medusa-agent`, `crates/medusa-memory`, `crates/medusa-session-continuity` |
 | Production task contracts and mutation classification | `crates/medusa-runtime/src/production_orchestrator.rs` |
 | Conflict-aware mutation resources and DAGs | `crates/medusa-multi-agent-scheduler`, `crates/medusa-runtime/src/parallel_mutation.rs` |

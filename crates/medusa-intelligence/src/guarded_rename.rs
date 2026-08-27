@@ -61,7 +61,7 @@ pub fn validate_guarded_rename(
         by_path
             .entry(text.path.clone())
             .or_default()
-            .push(text.range.clone());
+            .push(text.range);
     }
 
     for (path, ranges) in &mut by_path {

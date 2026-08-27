@@ -47,6 +47,7 @@ pub mod execution_history;
 pub mod frontend;
 pub mod invariants;
 pub mod learning_retrieval;
+mod memory_retrieval;
 mod learning_authority;
 pub mod learning_review;
 mod multi_agent_coordinator;
@@ -2381,6 +2382,11 @@ fn run_prompt(
     let session_id = state.session.as_ref().map(|session| session.id.as_str());
     let learning_context =
         crate::learning_retrieval::select(&state.repo, &draft, session_id, events);
+    let memory_context = if general_chat {
+        crate::memory_retrieval::RuntimeMemoryContext::default()
+    } else {
+        crate::memory_retrieval::select(&state.repo, &draft.text, events)
+    };
     // Worker-only completion skips the model loop, so it still needs this projection here.
     // Direct turns assemble the live trajectory immediately before each provider attempt below.
     if implementation_evidence.is_some() && !general_chat {
@@ -2401,6 +2407,9 @@ fn run_prompt(
     }
     if let Some(learning) = learning_context.prompt_context {
         task_context.push(learning);
+    }
+    if let Some(memory) = &memory_context.prompt_context {
+        task_context.push(memory.clone());
     }
     if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) {
         task_context.push(skill);
@@ -2837,6 +2846,14 @@ fn run_prompt(
             title: "Runtime learning record unavailable".to_owned(),
             details: vec![error.to_string()],
         });
+    }
+    if verified {
+        crate::memory_retrieval::record_reuse(
+            &state.repo,
+            session.id.as_str(),
+            &memory_context.document_ids,
+            events,
+        );
     }
     if coordinated {
         let _ = events.send(RuntimeEvent::Team(state.team_control.finish()));

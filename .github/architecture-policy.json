@@ -19,32 +19,32 @@
   "crate_exemptions": {
     "medusa-context-retrieval": {
       "owner": "intelligence",
-      "reason": "Preserved deterministic context-retrieval component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "reason": "Preserved deterministic context-retrieval component has no shipped caller; the shipped runtime has no authoritative ContextLedger projection, so define that boundary before integration or retirement.",
       "expires": "2026-11-30"
     },
     "medusa-markdown-memory": {
       "owner": "state-and-recovery",
-      "reason": "Preserved Markdown memory index/retrieval component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "reason": "Preserved Markdown chunk index is superseded for canonical project memory by medusa-memory, which the shipped runtime now retrieves with lifecycle and validation filtering; retain pending unique-behavior migration or retirement review.",
       "expires": "2026-11-30"
     },
     "medusa-mcp-cache": {
       "owner": "intelligence",
-      "reason": "Preserved MCP schema-cache and lazy-connection component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "reason": "Preserved MCP schema-cache and lazy-connection component has no shipped caller; the shipped transport is DesktopCommanderClient and needs an explicit schema, scope, and cacheability bridge before integration or retirement.",
       "expires": "2026-11-30"
     },
     "medusa-memory-consolidation": {
       "owner": "state-and-recovery",
-      "reason": "Preserved deterministic memory-consolidation component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "reason": "Preserved deterministic consolidation policy has no shipped caller; verified learning is currently governed by refinement authority and approval state, so migrate conflict semantics before integration or retirement.",
       "expires": "2026-11-30"
     },
     "medusa-memory-writeback": {
       "owner": "state-and-recovery",
-      "reason": "Preserved conflict-safe Markdown memory writeback component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "reason": "Preserved generated-marker writeback is not the canonical medusa-memory Markdown/lifecycle format and has no shipped caller; retain pending a lossless migration or retirement review.",
       "expires": "2026-11-30"
     },
     "medusa-turn-assembly": {
       "owner": "intelligence",
-      "reason": "Preserved deterministic model-turn assembly component has no shipped caller after dependency hygiene reconciliation; retain as non-shipped pending production integration or retirement review.",
+      "reason": "Preserved deterministic turn assembly is partially superseded by medusa-agent request assembly, context_budget, and medusa-prompt-cache; retain unique budget/provenance behavior pending migration or retirement review.",
       "expires": "2026-11-30"
     }
   }

@@ -294,8 +294,8 @@ fn typescript_symbol_rename(
         )
         .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
 
-    let position = location.range.start.clone();
-    match prepare_rename(&mut client, &target_path, position.clone())
+    let position = location.range.start;
+    match prepare_rename(&mut client, &target_path, position)
         .map_err(|error| crate::tools::invalid_tool(error.to_string()))?
     {
         LspCapabilityResult::Supported(_) => {}
@@ -311,7 +311,7 @@ fn typescript_symbol_rename(
         }
     }
 
-    let edit = match lsp_rename(&mut client, repo, &target_path, position.clone(), new_name)
+    let edit = match lsp_rename(&mut client, repo, &target_path, position, new_name)
         .map_err(|error| crate::tools::invalid_tool(error.to_string()))?
     {
         LspCapabilityResult::Supported(edit) => edit,
