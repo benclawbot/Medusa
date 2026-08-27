@@ -33,7 +33,6 @@ mod runtime {
 mod sessions;
 #[cfg(test)]
 mod test_tempfile;
-mod voice;
 mod worktree;
 #[cfg(test)]
 extern crate self as tempfile;
@@ -77,7 +76,6 @@ use runtime::{
 };
 use sessions::{runtime_list_sessions, runtime_read_session};
 use tauri::Manager;
-use voice::{desktop_establish_realtime_session, desktop_realtime_capability};
 use worktree::runtime_read_worktree;
 
 pub fn daemon_config() -> Result<medusa_config::Config, String> {
@@ -98,8 +96,6 @@ pub fn run() -> tauri::Result<()> {
             desktop_model_registry,
             desktop_browser_oauth,
             desktop_ensure_browser_oauth,
-            desktop_realtime_capability,
-            desktop_establish_realtime_session,
             runtime_start,
             runtime_resume,
             runtime_close,
