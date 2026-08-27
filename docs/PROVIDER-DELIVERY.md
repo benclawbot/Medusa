@@ -8,7 +8,7 @@ Medusa keeps first-run provider setup intentionally small and separates determin
 
 The stable setup surface is:
 
-- ChatGPT/OpenAI through API key or the local OAuth gateway;
+- ChatGPT/OpenAI through API key or the Codex app-server OAuth route;
 - Anthropic through API key;
 - a local OpenAI-compatible runtime;
 - an explicit advanced/custom endpoint.
@@ -57,7 +57,7 @@ Image input is reported as unsupported by the stable setup contract. Tool use is
 
 ## External dependencies
 
-ChatGPT OAuth uses the loopback `openai-oauth` gateway. Local routes require the configured local OpenAI-compatible runtime. These dependencies are reported explicitly rather than started silently by the diagnostic.
+ChatGPT OAuth uses the installed Codex CLI app-server. Local routes require the configured local OpenAI-compatible runtime. These dependencies are reported explicitly rather than started silently by the diagnostic.
 
 ## Distribution trust boundary
 

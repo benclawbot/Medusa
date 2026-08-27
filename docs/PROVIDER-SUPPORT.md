@@ -21,6 +21,6 @@ The scheduled cross-platform live dogfood gate resolves its provider, model, pro
 
 - `telegram-live-evidence`: Repository tests are complete; real bot, chat, Mini App, and sanitized live evidence are still required.
 
-The desktop application does not expose Realtime voice. ChatGPT OAuth remains a text-provider route because the local gateway does not provide the Realtime session credential required by a desktop microphone/WebRTC client.
+The desktop application does not expose Realtime voice. ChatGPT OAuth remains a text-provider route because the Codex app-server does not provide the Realtime session credential required by a desktop microphone/WebRTC client.
 
 See `docs/LIVE-PROVIDER-DOGFOOD.md` for the bounded evidence contract and `docs/PROVIDER-DELIVERY.md` for first-run diagnostics.

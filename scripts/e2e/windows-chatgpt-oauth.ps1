@@ -2,7 +2,6 @@
 param(
     [string]$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")),
     [string]$Prompt = "Reply with the exact text MEDUSA_OAUTH_E2E_OK and do not modify files.",
-    [int]$GatewayStartupTimeoutSeconds = 45,
     [int]$ModelTurnTimeoutSeconds = 300,
     [int]$TuiTimeoutSeconds = 120,
     [int]$DesktopSmokeSeconds = 20,
@@ -59,15 +58,6 @@ function Invoke-External {
     [pscustomobject]@{ ExitCode = $process.ExitCode; TimedOut = $false; Stdout = $stdout; Stderr = $stderr }
 }
 
-function Test-Gateway {
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:10531/v1/models" -TimeoutSec 5
-        return $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
-    } catch {
-        return $false
-    }
-}
-
 function Sanitize-Text([string]$Text) {
     if ($null -eq $Text) { return "" }
     $sanitized = $Text
@@ -95,8 +85,7 @@ function Export-SanitizedLogs {
 $summary = [ordered]@{
     started_at_utc = [DateTime]::UtcNow.ToString("o")
     os = [Environment]::OSVersion.VersionString
-    gateway_reused = $false
-    gateway_started = $false
+    codex_app_server = "not-validated"
     deterministic_tests = "not-run"
     live_model_turn = "not-run"
     tui = "not-run"
@@ -106,7 +95,7 @@ $summary = [ordered]@{
 
 try {
     Write-Step "Validate prerequisites"
-    foreach ($command in @("git", "cargo", "node", "npm", "npx")) {
+    foreach ($command in @("git", "cargo", "node", "npm", "codex")) {
         if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
             throw "Required command '$command' is not available on PATH."
         }
@@ -121,18 +110,9 @@ try {
     Invoke-External -FilePath "git" -ArgumentList @("-c", "user.name=Medusa E2E", "-c", "user.email=medusa-e2e@invalid.local", "commit", "-m", "fixture") -LogName "fixture-git-commit" -WorkingDirectory $fixtureDir | Out-Null
     Complete-Step
 
-    Write-Step "Reuse or start ChatGPT OAuth gateway"
-    if (Test-Gateway) {
-        $summary.gateway_reused = $true
-    } else {
-        Invoke-External -FilePath "npx" -ArgumentList @("--yes", "openai-oauth@2.0.0", "--no-open", "--detach") -LogName "oauth-gateway-start" -TimeoutSeconds 120 | Out-Null
-        $deadline = [DateTime]::UtcNow.AddSeconds($GatewayStartupTimeoutSeconds)
-        while ([DateTime]::UtcNow -lt $deadline -and -not (Test-Gateway)) {
-            Start-Sleep -Seconds 2
-        }
-        if (-not (Test-Gateway)) { throw "openai-oauth did not become reachable at 127.0.0.1:10531." }
-        $summary.gateway_started = $true
-    }
+    Write-Step "Validate Codex app-server OAuth route"
+    Invoke-External -FilePath "codex" -ArgumentList @("--version") -LogName "codex-version" -TimeoutSeconds 30 | Out-Null
+    $summary.codex_app_server = "validated (codex app-server --stdio)"
     Complete-Step
 
     Write-Step "Run existing deterministic tests and builds"

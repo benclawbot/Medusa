@@ -1240,10 +1240,10 @@ mod tests {
         let control = TeamControlPlane::default();
         let mut selected_config = Config::default();
         selected_config.model.provider = "openai-oauth".to_owned();
-        selected_config.model.name = "gpt-5".to_owned();
+        selected_config.model.name = "gpt-5.6-luna".to_owned();
         selected_config.model.protocol = "openai".to_owned();
         selected_config.model.auth = "none".to_owned();
-        selected_config.model.base_url = Some("http://127.0.0.1:10531/v1".to_owned());
+        selected_config.model.base_url = None;
 
         let calls = Arc::new(AtomicUsize::new(0));
         let first_calls = Arc::clone(&calls);

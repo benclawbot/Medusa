@@ -513,7 +513,7 @@ impl ProviderProfile {
                     "chatgpt-oauth" => {
                         self.provider = "openai-oauth".to_owned();
                         self.auth = "none".to_owned();
-                        self.base_url = Some("http://127.0.0.1:10531/v1".to_owned());
+                        self.base_url = None;
                     }
                     "openai-api" => {
                         self.provider = "openai".to_owned();
@@ -699,10 +699,7 @@ mod tests {
             .expect("oauth route");
         assert_eq!(profile.provider, "openai-oauth");
         assert_eq!(profile.auth, "none");
-        assert_eq!(
-            profile.base_url.as_deref(),
-            Some("http://127.0.0.1:10531/v1")
-        );
+        assert!(profile.base_url.is_none());
         assert!(profile.set_value("configured", "maybe").is_err());
         profile.unset_value("configured").expect("unset");
         assert!(!profile.configured);

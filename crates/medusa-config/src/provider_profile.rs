@@ -91,12 +91,10 @@ impl ProviderProfile {
         }
 
         if self.connection == "chatgpt-oauth"
-            && (self.provider != "openai-oauth"
-                || self.auth != "none"
-                || self.base_url.as_deref() != Some("http://127.0.0.1:10531/v1"))
+            && (self.provider != "openai-oauth" || self.auth != "none")
         {
             return Err(config_error(
-                "ChatGPT OAuth must use the local openai-oauth route",
+                "ChatGPT OAuth must use the Codex app-server route",
             ));
         }
 
@@ -153,15 +151,14 @@ impl ProviderProfile {
     }
 
     fn normalize_legacy_route(mut self) -> Self {
-        if self.connection == "chatgpt-oauth"
-            && self.provider == "openai-oauth"
-            && self.model == "MiniMax-M3"
-        {
-            self.connection = "direct".into();
-            self.provider = "minimax".into();
-            self.auth = "api-key".into();
+        if self.connection == "chatgpt-oauth" && self.provider == "openai-oauth" {
             self.base_url = None;
-            self.configured = true;
+            if self.model == "MiniMax-M3" {
+                self.connection = "direct".into();
+                self.provider = "minimax".into();
+                self.auth = "api-key".into();
+                self.configured = true;
+            }
         }
         self
     }
@@ -336,9 +333,9 @@ mod tests {
         let profile = ProviderProfile {
             connection: "chatgpt-oauth".into(),
             provider: "openai-oauth".into(),
-            model: "gpt-5".into(),
+            model: "gpt-5.6-luna".into(),
             auth: "none".into(),
-            base_url: Some("http://127.0.0.1:10531/v1".into()),
+            base_url: None,
             configured: true,
             ..ProviderProfile::default()
         };

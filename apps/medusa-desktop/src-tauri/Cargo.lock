@@ -2345,7 +2345,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-agent"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "medusa-browser-client",
@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-browser-client"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "serde",
@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-capabilities"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "medusa-config",
@@ -2411,14 +2411,14 @@ dependencies = [
 
 [[package]]
 name = "medusa-clearops"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "medusa-confidence"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
  "time",
@@ -2426,7 +2426,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-config"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "reqwest 0.12.28",
@@ -2436,7 +2436,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-context"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2447,7 +2447,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-continuation"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-confidence",
  "medusa-failure",
@@ -2457,7 +2457,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-core"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-daemon"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.3",
@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-desktop"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -2523,7 +2523,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-escalation"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "serde",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-evidence"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "serde",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-execution-checkpoint"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2556,7 +2556,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-execution-replay"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-extensions"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "serde",
@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-external-contracts"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2591,7 +2591,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-external-provider"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-config",
  "medusa-core",
@@ -2602,7 +2602,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-failure"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
  "time",
@@ -2610,7 +2610,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-github"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "serde",
@@ -2621,14 +2621,14 @@ dependencies = [
 
 [[package]]
 name = "medusa-goal"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "medusa-improvement"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-context",
  "medusa-core",
@@ -2643,7 +2643,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-intelligence"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "medusa-core",
@@ -2657,7 +2657,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-memory"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "rusqlite",
@@ -2670,7 +2670,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-multi-agent-scheduler"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "medusa-evidence",
@@ -2681,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-openai-realtime"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -2690,7 +2690,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-process-containment"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "libc",
  "windows",
@@ -2699,7 +2699,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-process-registry"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -2709,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-progress"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "medusa-core",
@@ -2721,7 +2721,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-prompt-cache"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2731,7 +2731,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-protocol"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "medusa-core",
@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-provider"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-config",
  "medusa-core",
@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-recovery-coordinator"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2768,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-review-model"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-runtime"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2818,7 +2818,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-runtime-supervisor"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2828,7 +2828,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-session-continuity"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -2837,7 +2837,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-skill"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "serde",
@@ -2848,7 +2848,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-time-travel"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2859,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-tool-control"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
  "sha2",
@@ -2867,14 +2867,14 @@ dependencies = [
 
 [[package]]
 name = "medusa-tool-policy"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "medusa-transaction-coordinator"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2885,7 +2885,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-update"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "flate2",
  "hex",
@@ -2905,7 +2905,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-wakeup"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "serde",
  "time",
@@ -2913,7 +2913,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-worker-leases"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "hex",
  "serde",
@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-workers"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "medusa-evidence",
@@ -2933,7 +2933,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-world-model"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "medusa-core",
  "serde",
@@ -4283,9 +4283,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
  "itoa",
  "memchr",

@@ -62,7 +62,7 @@ Windows, macOS, and Ubuntu run the shared Rust contracts. Browser media tests us
 A live smoke test is limited to a separately supported TUI or Telegram Realtime route. It is permitted only when an authenticated OAuth Realtime route is already configured and the operator explicitly enables it. It must:
 
 1. probe capability before requesting microphone access;
-2. use the existing supported OAuth gateway rather than requesting an API key;
+2. use a separately supported authenticated Realtime route; the Codex app-server ChatGPT OAuth route is text-only and must not be treated as a voice credential source;
 3. avoid logging credentials, raw audio, and sensitive transcripts;
 4. exercise connect, one spoken turn, one assistant audio turn, barge-in, reconnect, and close;
 5. release all device and transport handles even after failure.

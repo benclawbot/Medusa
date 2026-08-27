@@ -62,10 +62,9 @@ pub(super) fn configure_model(
     let provider_changed = state.config.model.provider != configuration.provider;
     if provider_changed {
         if let Some(entry) = provider_catalog_entry(&configuration.provider) {
-            // Provider routes own their authentication mode. In particular, the local
-            // ChatGPT OAuth gateway must stay credentialless at the OpenAI transport layer;
-            // retaining the previous API-key mode makes the gateway look like an unconfigured
-            // repository endpoint and fails before the request is sent.
+            // Provider routes own their authentication mode. In particular, ChatGPT OAuth is
+            // credentialless at the Medusa transport layer because Codex owns the app-server
+            // account; retaining the previous API-key mode would make the route look unconfigured.
             state.config.model.auth = entry.default_auth.to_owned();
         }
     }

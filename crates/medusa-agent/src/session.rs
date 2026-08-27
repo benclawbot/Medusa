@@ -191,6 +191,9 @@ pub struct AgentSession {
     pub approval_receipts: Vec<ApprovalReceipt>,
     #[serde(default)]
     pub rollback_receipts: Vec<RollbackReceipt>,
+    /// Codex app-server thread bound to this Medusa session, when using ChatGPT OAuth.
+    #[serde(default)]
+    pub codex_thread_id: Option<String>,
 }
 
 /// Creates the on-disk Medusa runtime layout.
@@ -481,6 +484,7 @@ mod tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+            codex_thread_id: None,
         }
     }
 

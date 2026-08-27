@@ -28,6 +28,7 @@ fn session(repo: &std::path::Path) -> AgentSession {
         approval_grants: Vec::new(),
         approval_receipts: Vec::new(),
         rollback_receipts: Vec::new(),
+        codex_thread_id: None,
     }
 }
 

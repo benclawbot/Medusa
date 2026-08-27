@@ -1,12 +1,11 @@
 use std::{
     collections::BTreeMap,
     io::{self, IsTerminal},
-    process::Child,
 };
 
 use medusa_config::{
     Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, PROVIDER_PROFILE_KEYS,
-    ProviderProfile, ProviderProfileCatalog, openai_oauth,
+    ProviderProfile, ProviderProfileCatalog,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_tui::setup::{
@@ -111,50 +110,26 @@ impl FirstRunSetupHost for CliSetupHost {
                 "provider `{provider_id}` does not expose a Medusa browser sign-in helper"
             ));
         }
-        if openai_oauth::auth_file_present() {
-            return Err(
-                "ChatGPT OAuth credentials already exist; Medusa will not launch a hidden overwrite prompt. Run `npx openai-oauth@2.0.0 login --no-open` in an interactive terminal, confirm the overwrite, and copy the printed URL into your browser to re-authenticate, then retry setup".to_owned(),
-            );
-        }
-        let child = medusa_runtime::start_openai_oauth_login().map_err(|error| {
+        let login = medusa_runtime::start_openai_oauth_login().map_err(|error| {
             format!(
-                "could not launch browser sign-in with openai-oauth: {error}. Install Node.js and retry from Medusa"
+                "could not launch browser sign-in through Codex app-server: {error}. Install the Codex CLI and retry from Medusa"
             )
         })?;
-        Ok(Box::new(OpenAiOAuthLogin { child }))
+        Ok(Box::new(OpenAiOAuthLogin { login }))
     }
 }
 
 struct OpenAiOAuthLogin {
-    child: Child,
+    login: medusa_runtime::OpenAiOAuthLogin,
 }
 
 impl BrowserOAuthSession for OpenAiOAuthLogin {
     fn poll(&mut self) -> io::Result<Option<Result<Vec<String>, String>>> {
-        let Some(status) = self.child.try_wait()? else {
-            return Ok(None);
-        };
-        if !status.success() {
-            return Ok(Some(Err(format!(
-                "openai-oauth browser sign-in exited with {status}"
-            ))));
-        }
-        let result = oauth_preflight::discover_models()
-            .map_err(|error| format!("authenticated model discovery failed: {}", error.message));
-        Ok(Some(result))
+        Ok(self.login.poll())
     }
 
     fn cancel(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-impl Drop for OpenAiOAuthLogin {
-    fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
-            self.cancel();
-        }
+        self.login.cancel();
     }
 }
 

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DESKTOP_TOOL_EVENT, type DesktopTool } from "./desktop-tools";
-import { ensureBrowserOauthGateway, loadProviderCatalog, startBrowserOauth } from "./providerCatalog";
+import { ensureBrowserOauth, loadProviderCatalog, startBrowserOauth } from "./providerCatalog";
 import {
   closeRuntime,
   cancelRuntime,
@@ -70,14 +70,13 @@ const providerCatalog = [
   {
     id: "openai-oauth",
     displayName: "ChatGPT OAuth",
-    description: "ChatGPT/Codex OAuth through the local gateway",
+    description: "ChatGPT OAuth through the Codex app-server",
     connection: "chatgpt-oauth",
     profileProvider: "openai-oauth",
     authMethods: ["none"],
     defaultAuth: "none",
-    defaultModel: "gpt-5",
+    defaultModel: "gpt-5.6-luna",
     modelOptions: [],
-    baseUrl: "http://127.0.0.1:10531/v1",
     browserOauth: true,
     discoverModels: true,
     customValues: false,
@@ -92,7 +91,7 @@ vi.mock("./providerCatalog", async () => {
   return {
     ...actual,
     loadProviderCatalog: vi.fn(),
-    ensureBrowserOauthGateway: vi.fn(),
+    ensureBrowserOauth: vi.fn(),
     startBrowserOauth: vi.fn(),
   };
 });
@@ -127,7 +126,7 @@ vi.mock("./runtime", async () => {
 beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(loadProviderCatalog).mockReset().mockResolvedValue(providerCatalog);
-  vi.mocked(ensureBrowserOauthGateway).mockReset().mockResolvedValue(undefined);
+  vi.mocked(ensureBrowserOauth).mockReset().mockResolvedValue(undefined);
   vi.mocked(startBrowserOauth).mockReset();
   vi.mocked(loadSharedConfiguration).mockReset().mockResolvedValue({
     revision: 0,
@@ -258,7 +257,7 @@ it("signs in through ChatGPT OAuth and replaces the placeholder with discovered 
 
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "openai-oauth" } });
-  await waitFor(() => expect(ensureBrowserOauthGateway).toHaveBeenCalledWith("openai-oauth"));
+  await waitFor(() => expect(ensureBrowserOauth).toHaveBeenCalledWith("openai-oauth"));
   await waitFor(() => expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument());
   expect(screen.queryByRole("option", { name: "gpt-5" })).not.toBeInTheDocument();
   expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-terra");
@@ -520,7 +519,7 @@ it("keeps diagnostics behind an explicit Session details control", async () => {
   expect(screen.getByRole("complementary", { name: "Session details" })).toBeInTheDocument();
 });
 
-it("shows a gateway-authenticated OAuth credential as ready in Session details", async () => {
+it("shows a Codex-authenticated OAuth account as ready in Session details", async () => {
   vi.mocked(loadSharedConfiguration).mockResolvedValue({
     revision: 13,
     activeProfile: "default",
@@ -529,7 +528,7 @@ it("shows a gateway-authenticated OAuth credential as ready in Session details",
     model: "gpt-5.6-luna",
     effort: "medium",
     auth: "none",
-    baseUrl: "http://127.0.0.1:10531/v1",
+    baseUrl: undefined,
     configured: true,
     credentialConfigured: true,
   });

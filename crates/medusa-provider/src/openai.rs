@@ -401,14 +401,11 @@ fn validate_provider_endpoint(provider: &str, base_url: &str) -> MedusaResult<()
 }
 
 fn validate_provider_endpoint_for_provider(
-    provider: &str,
+    _provider: &str,
     base_url: &str,
     allow_insecure_loopback: bool,
 ) -> MedusaResult<()> {
     let url = parse_provider_endpoint(base_url)?;
-    if url.scheme() == "http" && is_openai_oauth_gateway(provider, &url) {
-        return Ok(());
-    }
     validate_parsed_provider_endpoint(url, allow_insecure_loopback)
 }
 
@@ -451,15 +448,6 @@ fn validate_parsed_provider_endpoint(url: Url, allow_insecure_loopback: bool) ->
         ErrorCategory::Validation,
         "provider base_url must use HTTPS; loopback HTTP requires MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP=1",
     ))
-}
-
-fn is_openai_oauth_gateway(provider: &str, url: &Url) -> bool {
-    provider == "OPENAI_OAUTH"
-        && url.host_str() == Some("127.0.0.1")
-        && url.port() == Some(10531)
-        && url.path() == "/v1"
-        && url.query().is_none()
-        && url.fragment().is_none()
 }
 
 fn is_loopback_url(url: &Url) -> bool {
@@ -811,33 +799,29 @@ mod tests {
     }
 
     #[test]
-    fn chatgpt_oauth_allows_only_its_exact_loopback_gateway_without_global_opt_in() {
+    fn chatgpt_oauth_does_not_use_a_loopback_gateway() {
         let mut config = Config::default();
         config.model.provider = "openai-oauth".to_owned();
         config.model.protocol = "openai".to_owned();
         config.model.auth = "none".to_owned();
-        config.model.base_url = Some("http://127.0.0.1:10531/v1".to_owned());
+        config.model.base_url = None;
         let provider = OpenAiProvider::from_config_with_api_key(
             &config,
             Some("api-key-must-not-enter-oauth-route".to_owned()),
         )
-        .expect("the fixed OAuth gateway is a trusted local transport");
+        .expect("the direct app-server route does not construct an HTTP gateway");
         assert!(
             provider.api_key.is_none(),
-            "ChatGPT OAuth must rely on gateway authentication, not an API key"
+            "ChatGPT OAuth must rely on app-server authentication, not an API key"
         );
-
-        for (provider, endpoint) in [
-            ("OPENAI", "http://127.0.0.1:10531/v1"),
-            ("OPENAI_OAUTH", "http://localhost:10531/v1"),
-            ("OPENAI_OAUTH", "http://127.0.0.1:10532/v1"),
-            ("OPENAI_OAUTH", "http://127.0.0.1:10531/other"),
-        ] {
-            assert!(
-                validate_provider_endpoint_for_provider(provider, endpoint, false).is_err(),
-                "{provider} must not trust {endpoint}"
-            );
-        }
+        assert!(
+            validate_provider_endpoint_for_provider(
+                "OPENAI_OAUTH",
+                "http://127.0.0.1:10531/v1",
+                false,
+            )
+            .is_err()
+        );
     }
 
     #[test]

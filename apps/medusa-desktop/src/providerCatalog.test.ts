@@ -97,8 +97,8 @@ it("never exposes the OAuth placeholder when discovery is unavailable", async ()
       profileProvider: "openai-oauth",
       authMethods: ["none"],
       defaultAuth: "none",
-      defaultModel: "gpt-5",
-      modelOptions: ["gpt-5"],
+      defaultModel: "gpt-5.6-luna",
+      modelOptions: ["gpt-5.6-luna"],
       browserOauth: true,
       discoverModels: true,
       customValues: false,
@@ -109,8 +109,8 @@ it("never exposes the OAuth placeholder when discovery is unavailable", async ()
       discovery_available: true,
       used_cached_discovery: false,
       models: [{
-        id: "gpt-5",
-        display_name: "gpt-5",
+        id: "gpt-5.6-luna",
+        display_name: "gpt-5.6-luna",
         provider_id: "openai-oauth",
         profile_provider: "openai-oauth",
         availability: "not-authorized",
@@ -145,8 +145,8 @@ it("uses only account-discovered OAuth models after sign-in", async () => {
       profileProvider: "openai-oauth",
       authMethods: ["none"],
       defaultAuth: "none",
-      defaultModel: "gpt-5",
-      modelOptions: ["gpt-5"],
+      defaultModel: "gpt-5.6-luna",
+      modelOptions: ["gpt-5.6-luna"],
       browserOauth: true,
       discoverModels: true,
       customValues: false,
@@ -191,13 +191,13 @@ it("resolves OpenAI OAuth image input by profile provider and connection metadat
     description: "Browser OAuth route",
     connection: "chatgpt-oauth",
     profileProvider: "openai-oauth",
-    authMethods: ["oauth"],
-    defaultAuth: "oauth",
-    defaultModel: "gpt-5.1-codex",
-    modelOptions: ["gpt-5.1-codex"],
+    authMethods: ["none"],
+    defaultAuth: "none",
+    defaultModel: "gpt-5.6-luna",
+    modelOptions: ["gpt-5.6-luna"],
     models: [{
-      id: "gpt-5.1-codex",
-      display_name: "GPT-5.1 Codex",
+      id: "gpt-5.6-luna",
+      display_name: "GPT-5.6 Luna",
       provider_id: "openai-oauth",
       profile_provider: "openai-oauth",
       availability: "available",
@@ -222,8 +222,8 @@ it("resolves OpenAI OAuth image input by profile provider and connection metadat
     currentCustom: false,
   }];
 
-  expect(profileModelCapabilityState(providers, "openai-oauth", "chatgpt-oauth", "gpt-5.1-codex", "image_input")).toBe("supported");
-  expect(profileModelCapabilityState(providers, "chatgpt-oauth", "chatgpt-oauth", "gpt-5.1-codex", "image_input")).toBe("unknown");
+  expect(profileModelCapabilityState(providers, "openai-oauth", "chatgpt-oauth", "gpt-5.6-luna", "image_input")).toBe("supported");
+  expect(profileModelCapabilityState(providers, "chatgpt-oauth", "chatgpt-oauth", "gpt-5.6-luna", "image_input")).toBe("unknown");
 });
 
 it("keeps missing model capability metadata unknown instead of treating it as unsupported", () => {

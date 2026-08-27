@@ -148,6 +148,7 @@ fn session(repo: &Path, objective: &str, messages: Vec<Message>) -> AgentSession
         approval_grants: Vec::new(),
         approval_receipts: Vec::new(),
         rollback_receipts: Vec::new(),
+        codex_thread_id: None,
     }
 }
 

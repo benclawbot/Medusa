@@ -381,6 +381,7 @@ mod interruption_tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+            codex_thread_id: None,
         };
         let interrupted = recover_interrupted_session(repo, &mut session).expect("recover");
         assert_eq!(interrupted, ["provider request"]);

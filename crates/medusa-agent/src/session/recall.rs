@@ -198,6 +198,7 @@ mod tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+            codex_thread_id: None,
             world_model: None,
         };
         append_event(

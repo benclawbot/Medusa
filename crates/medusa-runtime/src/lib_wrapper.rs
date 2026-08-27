@@ -10,7 +10,8 @@ mod workspace_worker_manager;
 // embedders can use the same workspace-aware mutation authority as the built-in user surfaces.
 pub use crate::git_workers::{IntegrationReceipt, Worker, WorkerState};
 pub use crate::openai_oauth::{
-    discover_openai_oauth_models, ensure_openai_oauth_connected, start_openai_oauth_login,
+    OpenAiOAuthLogin, discover_openai_oauth_models, ensure_openai_oauth_connected,
+    start_openai_oauth_login,
 };
 pub use crate::workspace_worker_manager::{
     WorkspaceMutationBackend, WorkspaceWorkerManager as WorkerManager,

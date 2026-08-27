@@ -1455,7 +1455,7 @@ mod settings_tests {
 
     #[test]
     fn oauth_never_requires_or_emits_an_api_key() {
-        let mut modal = ModelModal::new(Some("openai-oauth / gpt-5"), Some("effort:high"), true);
+        let mut modal = ModelModal::new(Some("openai-oauth / gpt-5.6-luna"), Some("effort:high"), true);
         assert!(!modal.requires_api_key());
         modal.api_key = "should-never-leak".to_owned();
         assert!(modal.configuration().api_key.is_none());
@@ -1464,7 +1464,7 @@ mod settings_tests {
 
     #[test]
     fn reasoning_effort_options_are_derived_from_model_capabilities() {
-        let modal = ModelModal::new(Some("openai-oauth / gpt-5"), Some("effort:high"), false);
+        let modal = ModelModal::new(Some("openai-oauth / gpt-5.6-luna"), Some("effort:high"), false);
         assert_eq!(
             modal.effort_options(),
             vec![Effort::Low, Effort::Medium, Effort::High]

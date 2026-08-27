@@ -18,7 +18,8 @@ use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, ConfigurationChanged, Mode, ProviderProfileStore};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
-    ConfiguredProvider, Message, MessageBlock, ModelProvider, ProviderExecutionPhase, Role,
+    ConfiguredProvider, ImageSource, Message, MessageBlock, ModelProvider, ProviderExecutionPhase,
+    Role,
 };
 
 use crate::{
@@ -1016,6 +1017,7 @@ struct RuntimeState {
     effort: Effort,
     plan_mode: bool,
     team_control: TeamControlPlane,
+    codex_app_server: Option<openai_oauth::CodexAppServer>,
 }
 
 impl RuntimeState {
@@ -1059,13 +1061,14 @@ impl RuntimeState {
             runtime_config_fingerprint,
             runtime_config_binding,
             team_control: TeamControlPlane::default(),
+            codex_app_server: None,
         }
     }
 
     fn settings_event(&self) -> RuntimeEvent {
         // A route configured with auth=none is ready without a Medusa-managed
-        // API key. This includes the local ChatGPT OAuth gateway, whose
-        // credential store is owned by openai-oauth rather than this runtime.
+        // API key. This includes ChatGPT OAuth, whose credential store is owned
+        // by the Codex app-server rather than this runtime.
         let credential_configured = self.config.model.auth == "none"
             || self.session_api_key.is_some()
             || credential_environment(&self.config.model.provider)
@@ -1291,6 +1294,659 @@ fn execution_plan_for_prompt(
     plan.map_err(RuntimeError::agent)
 }
 
+fn oauth_input_from_content(content: &[MessageBlock]) -> Result<Vec<serde_json::Value>, RuntimeError> {
+    let mut input = Vec::new();
+    for block in content {
+        match block {
+            MessageBlock::Text { text } => {
+                if !text.is_empty() {
+                    input.push(serde_json::json!({"type": "text", "text": text}));
+                }
+            }
+            MessageBlock::Image {
+                source: ImageSource::Base64 { media_type, data },
+                ..
+            } => input.push(serde_json::json!({
+                "type": "image",
+                "url": format!("data:{media_type};base64,{data}")
+            })),
+            MessageBlock::Image {
+                source: ImageSource::AttachmentRef { .. },
+                ..
+            } => {
+                return Err(RuntimeError::agent(
+                    "ChatGPT OAuth app-server turns require encoded image attachments",
+                ));
+            }
+            MessageBlock::ToolUse { .. } | MessageBlock::ToolResult { .. } => {
+                return Err(RuntimeError::agent(
+                    "ChatGPT OAuth app-server input cannot contain tool transcript blocks",
+                ));
+            }
+        }
+    }
+    if input.is_empty() {
+        return Err(RuntimeError::EmptyPrompt);
+    }
+    Ok(input)
+}
+
+fn oauth_content_text(content: &[MessageBlock]) -> String {
+    let text = content
+        .iter()
+        .filter_map(|block| match block {
+            MessageBlock::Text { text } => Some(text.as_str()),
+            MessageBlock::Image { .. } => Some("[image attachment]"),
+            MessageBlock::ToolUse { .. } | MessageBlock::ToolResult { .. } => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.trim().to_owned()
+}
+
+fn append_oauth_answer(
+    session: &mut AgentSession,
+    content: Vec<MessageBlock>,
+) -> Result<(), RuntimeError> {
+    let question = session.pending_question.take().ok_or_else(|| {
+        RuntimeError::agent("there is no pending OAuth app-server question to answer")
+    })?;
+    let answer = oauth_content_text(&content);
+    if answer.is_empty() {
+        session.pending_question = Some(question);
+        return Err(RuntimeError::EmptyPrompt);
+    }
+    session.completed = false;
+    session.turn = 0;
+    session.messages.push(Message {
+        role: Role::User,
+        content,
+    });
+    medusa_agent::record_session_event(
+        session,
+        Actor::User,
+        EventPayload::ApprovalDecisionRecorded {
+            decision: serde_json::json!({"answer": answer}),
+        },
+    )
+    .map_err(RuntimeError::agent)?;
+    medusa_agent::record_session_event(
+        session,
+        Actor::User,
+        EventPayload::UserPromptReceived { text: answer },
+    )
+    .map_err(RuntimeError::agent)?;
+    medusa_agent::record_session_event(session, Actor::Coordinator, EventPayload::SessionResumed)
+        .map_err(RuntimeError::agent)?;
+    Ok(())
+}
+
+fn latest_oauth_request_id(session: &AgentSession) -> Option<String> {
+    session.events.iter().rev().find_map(|event| match &event.payload {
+        EventPayload::ModelRequestStarted { request_id, .. } => request_id.clone(),
+        _ => None,
+    })
+}
+
+fn oauth_question(
+    pending: &openai_oauth::PendingServerRequest,
+) -> Result<AgentQuestion, RuntimeError> {
+    let params = &pending.params;
+    let item_id = params
+        .get("itemId")
+        .or_else(|| params.get("item_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    let option = |label: &str, description: &str| AgentQuestionOption {
+        label: label.to_owned(),
+        description: description.to_owned(),
+    };
+    let questions = match pending.method.as_str() {
+        "item/commandExecution/requestApproval" => {
+            let command = params
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the requested Codex command");
+            vec![AgentQuestionItem {
+                header: "Codex command".to_owned(),
+                question: format!(
+                    "Allow Codex to run `{}`?",
+                    command.chars().take(300).collect::<String>()
+                ),
+                options: vec![
+                    option("Approve", "Run this exact command."),
+                    option("Approve for session", "Allow matching commands for this session."),
+                    option("Decline", "Do not run the command."),
+                ],
+                multi_select: false,
+            }]
+        }
+        "item/fileChange/requestApproval" => {
+            let root = params
+                .get("grantRoot")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the requested files");
+            vec![AgentQuestionItem {
+                header: "Codex file change".to_owned(),
+                question: format!("Allow Codex to change `{root}`?"),
+                options: vec![
+                    option("Approve", "Apply this exact file change."),
+                    option("Approve for session", "Allow matching changes for this session."),
+                    option("Decline", "Do not apply the change."),
+                ],
+                multi_select: false,
+            }]
+        }
+        "item/permissions/requestApproval" => {
+            let reason = params
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Codex requested additional permissions");
+            vec![AgentQuestionItem {
+                header: "Codex permissions".to_owned(),
+                question: reason.to_owned(),
+                options: vec![
+                    option("Approve", "Grant the requested permissions for this turn."),
+                    option("Approve for session", "Grant the requested permissions for this session."),
+                    option("Decline", "Do not grant additional permissions."),
+                ],
+                multi_select: false,
+            }]
+        }
+        "item/tool/requestUserInput" => params
+            .get("questions")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|question| {
+                let options = question
+                    .get("options")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|option| AgentQuestionOption {
+                        label: option
+                            .get("label")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Option")
+                            .to_owned(),
+                        description: option
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    })
+                    .collect();
+                AgentQuestionItem {
+                    header: question
+                        .get("header")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Codex question")
+                        .to_owned(),
+                    question: question
+                        .get("question")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Codex requested input")
+                        .to_owned(),
+                    options,
+                    multi_select: false,
+                }
+            })
+            .collect(),
+        "mcpServer/elicitation/request" => vec![AgentQuestionItem {
+            header: "Codex integration".to_owned(),
+            question: params
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Codex requested confirmation")
+                .to_owned(),
+            options: vec![
+                option("Approve", "Accept the requested integration action."),
+                option("Decline", "Decline the requested integration action."),
+            ],
+            multi_select: false,
+        }],
+        _ => Vec::new(),
+    };
+    serde_json::from_value(serde_json::json!({
+        "tool_use_id": item_id,
+        "questions": questions
+    }))
+    .map_err(RuntimeError::agent)
+}
+
+fn oauth_activity(event: &openai_oauth::CodexTurnEvent) -> Option<RuntimeActivity> {
+    let openai_oauth::CodexTurnEvent::Activity { method, params } = event else {
+        return None;
+    };
+    let item = params.get("item").unwrap_or(params);
+    let item_type = item
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Codex activity");
+    if item_type == "agentMessage" || item_type == "userMessage" {
+        return None;
+    }
+    let title = match item_type {
+        "commandExecution" => "Codex command".to_owned(),
+        "fileChange" => "Codex file change".to_owned(),
+        "mcpToolCall" => "Codex integration".to_owned(),
+        other => other.to_owned(),
+    };
+    Some(RuntimeActivity {
+        id: item
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        kind: if method.ends_with("completed") {
+            RuntimeActivityKind::Done
+        } else {
+            RuntimeActivityKind::Tool
+        },
+        title,
+        details: Vec::new(),
+    })
+}
+
+fn oauth_usage(value: Option<&serde_json::Value>, turn: u32, duration_ms: u64) -> TurnUsage {
+    let source = value
+        .and_then(|value| value.get("last").or(Some(value)))
+        .unwrap_or(&serde_json::Value::Null);
+    let number = |snake: &str, camel: &str| {
+        source
+            .get(snake)
+            .or_else(|| source.get(camel))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default()
+    };
+    let input_tokens = number("input_tokens", "inputTokens");
+    let output_tokens = number("output_tokens", "outputTokens");
+    let cache_read_input_tokens = number("cache_read_input_tokens", "cachedInputTokens");
+    let cache_creation_input_tokens = number("cache_creation_input_tokens", "cacheWriteInputTokens");
+    let total_tokens = number("total_tokens", "totalTokens").max(
+        input_tokens
+            .saturating_add(output_tokens)
+            .saturating_add(cache_read_input_tokens)
+            .saturating_add(cache_creation_input_tokens),
+    );
+    TurnUsage {
+        turn,
+        input_tokens,
+        output_tokens,
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+        total_tokens,
+        duration_ms,
+        tokens_per_second_milli: if duration_ms == 0 {
+            0
+        } else {
+            total_tokens.saturating_mul(1_000_000) / duration_ms
+        },
+        estimated_cost_microusd: 0,
+        provenance: if value.is_some() {
+            medusa_agent::UsageProvenance::ProviderReported
+        } else {
+            medusa_agent::UsageProvenance::Estimated
+        },
+    }
+}
+
+fn oauth_sandbox_policy(mode: Mode) -> (&'static str, &'static str) {
+    match mode {
+        Mode::ReadOnly => ("never", "readOnly"),
+        Mode::Review | Mode::Yolo => ("on-request", "workspaceWrite"),
+    }
+}
+
+fn run_openai_oauth_prompt(
+    state: &mut RuntimeState,
+    config: Config,
+    draft: PromptDraft,
+    events: &Sender<RuntimeEvent>,
+    cancel: &Arc<AtomicBool>,
+    submission: &Arc<Mutex<SubmissionState>>,
+    accepted: Option<&Sender<Result<(), String>>>,
+) -> Result<RuntimeEvent, RuntimeError> {
+    let content = message_blocks(&draft)?;
+    let pending_answer = state
+        .session
+        .as_ref()
+        .is_some_and(|session| session.pending_question.is_some());
+    if pending_answer && state.codex_app_server.is_none() {
+        return Err(RuntimeError::agent(
+            "a Codex approval is pending, but the app-server process is no longer available; restart the session and review the request again",
+        ));
+    }
+    let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
+        .map_err(RuntimeError::agent)?;
+    let mut engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
+    if let Some((_, fingerprint, _)) = state
+        .session
+        .as_ref()
+        .and_then(session_runtime_config_binding)
+    {
+        engine = engine.with_runtime_config_fingerprint(fingerprint);
+    } else if let Some((schema_version, fingerprint, snapshot)) = state.runtime_config_binding.clone() {
+        engine = engine.with_runtime_config_binding(schema_version, fingerprint, snapshot);
+    } else {
+        engine = engine.with_runtime_config_fingerprint(
+            state
+                .runtime_config_fingerprint
+                .clone()
+                .unwrap_or_else(|| "runtime-config-unavailable".to_owned()),
+        );
+    }
+    let mut session = match state.session.take() {
+        Some(mut session) => {
+            if !pending_answer {
+                if let Err(error) = engine
+                    .append_user_message(&mut session, content.clone())
+                    .map_err(RuntimeError::agent)
+                {
+                    state.session = Some(session);
+                    return Err(error);
+                }
+            }
+            session
+        }
+        None => {
+            let objective = state
+                .pending_goal
+                .take()
+                .unwrap_or_else(|| objective_for(&draft));
+            engine
+                .create_session_with_content(&state.repo, objective, content.clone())
+                .map_err(RuntimeError::agent)?
+        }
+    };
+    let mut server = if let Some(server) = state.codex_app_server.take() {
+        server
+    } else {
+        match openai_oauth::CodexAppServer::connect() {
+            Ok(server) => server,
+            Err(error) => {
+                state.session = Some(session);
+                return Err(RuntimeError::agent(error));
+            }
+        }
+    };
+    let turn_setup = (|| -> Result<(String, String, String), RuntimeError> {
+        if pending_answer {
+            let answer = oauth_content_text(&content);
+            let mut answered_session = session.clone();
+            append_oauth_answer(&mut answered_session, content.clone())?;
+            server
+                .respond_pending_with_answer(&answer)
+                .map_err(RuntimeError::agent)?;
+            medusa_agent::persist_session(&answered_session).map_err(RuntimeError::agent)?;
+            session = answered_session;
+            let Some((thread_id, turn_id)) = server.active_turn() else {
+                return Err(RuntimeError::agent(
+                    "Codex app-server did not retain the active turn while resuming an approval",
+                ));
+            };
+            let request_id = latest_oauth_request_id(&session)
+                .unwrap_or_else(|| format!("codex-turn-{}", session.turn.saturating_add(1)));
+            Ok((thread_id.to_owned(), turn_id.to_owned(), request_id))
+        } else {
+            server.ensure_authenticated().map_err(RuntimeError::agent)?;
+            let (approval_policy, sandbox) = oauth_sandbox_policy(config.agent.mode);
+            let thread_id = server
+                .start_or_resume_thread(
+                    &state.repo,
+                    &config.model.name,
+                    approval_policy,
+                    if config.agent.mode == Mode::ReadOnly {
+                        "read-only"
+                    } else {
+                        "workspace-write"
+                    },
+                    session.codex_thread_id.as_deref(),
+                )
+                .map_err(RuntimeError::agent)?;
+            if session.codex_thread_id.as_deref() != Some(thread_id.as_str()) {
+                session.codex_thread_id = Some(thread_id.clone());
+                medusa_agent::persist_session(&session).map_err(RuntimeError::agent)?;
+            }
+            let input = oauth_input_from_content(&content)?;
+            let request_id = format!("codex-turn-{}", session.turn.saturating_add(1));
+            medusa_agent::record_session_event(
+                &mut session,
+                Actor::Coordinator,
+                EventPayload::ModelRequestStarted {
+                    provider: config.model.provider.clone(),
+                    model: config.model.name.clone(),
+                    request_id: Some(request_id.clone()),
+                    request_fingerprint: None,
+                    manifest_ref: None,
+                    attempt_ordinal: 0,
+                    parent_request_id: None,
+                },
+            )
+            .map_err(RuntimeError::agent)?;
+            let turn_id = server
+                .start_turn(
+                    &thread_id,
+                    input,
+                    &config.model.name,
+                    state.effort.label(),
+                    &state.repo,
+                    sandbox,
+                )
+                .map_err(RuntimeError::agent)?;
+            Ok((thread_id, turn_id, request_id))
+        }
+    })();
+    let (thread_id, turn_id, request_id) = match turn_setup {
+        Ok(setup) => setup,
+        Err(error) => {
+            state.session = Some(session);
+            state.codex_app_server = Some(server);
+            return Err(error);
+        }
+    };
+    lock_submission(submission).active_session_id = Some(session.id.to_string());
+    if let Some(accepted) = accepted {
+        let _ = accepted.send(Ok(()));
+    }
+    let started_at = std::time::Instant::now();
+    let mut assistant_text = String::new();
+    let mut reported_usage = None;
+    let mut interrupt_sent = false;
+    loop {
+        if cancel.load(Ordering::SeqCst) && !interrupt_sent {
+            server.interrupt(&thread_id, &turn_id).map_err(RuntimeError::agent)?;
+            interrupt_sent = true;
+        }
+        let turn_event = match server
+            .next_turn_event_with_cancel((!interrupt_sent).then_some(cancel.as_ref()))
+            .map_err(RuntimeError::agent)
+        {
+            Ok(event) => event,
+            Err(error) => {
+                state.session = Some(session);
+                state.codex_app_server = Some(server);
+                mark_idle(submission, true);
+                return Err(error);
+            }
+        };
+        match turn_event {
+            openai_oauth::CodexTurnEvent::AssistantDelta(delta) => {
+                assistant_text.push_str(&delta);
+                let _ = events.send(RuntimeEvent::AssistantText(delta));
+            }
+            event @ openai_oauth::CodexTurnEvent::Activity { .. } => {
+                if let Some(activity) = oauth_activity(&event) {
+                    let _ = events.send(RuntimeEvent::Activity(activity));
+                }
+            }
+            openai_oauth::CodexTurnEvent::Plan(value) => {
+                if let Ok(plan) = serde_json::from_value::<Vec<AgentPlanStep>>(value) {
+                    session.plan = plan.clone();
+                    let _ = events.send(RuntimeEvent::Plan(plan));
+                }
+            }
+            openai_oauth::CodexTurnEvent::Usage(value) => reported_usage = Some(value),
+            openai_oauth::CodexTurnEvent::Approval(pending) => {
+                let question_result = (|| -> Result<AgentQuestion, RuntimeError> {
+                    let question = oauth_question(&pending)?;
+                    session.pending_question = Some(question.clone());
+                    medusa_agent::record_session_event(
+                        &mut session,
+                        Actor::Coordinator,
+                        EventPayload::QuestionRequested {
+                            question: serde_json::to_value(&question).map_err(RuntimeError::agent)?,
+                        },
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    medusa_agent::record_session_event(
+                        &mut session,
+                        Actor::Coordinator,
+                        EventPayload::ApprovalRequested {
+                            request: serde_json::json!({
+                                "method": pending.method,
+                                "params": pending.params
+                            }),
+                        },
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    Ok(question)
+                })();
+                let question = match question_result {
+                    Ok(question) => question,
+                    Err(error) => {
+                        state.session = Some(session);
+                        state.codex_app_server = Some(server);
+                        mark_idle(submission, true);
+                        return Err(error);
+                    }
+                };
+                state.session = Some(session);
+                state.codex_app_server = Some(server);
+                mark_idle(submission, false);
+                return Ok(RuntimeEvent::Question(question));
+            }
+            openai_oauth::CodexTurnEvent::Completed(completion) => {
+                let elapsed_ms = u64::try_from(started_at.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .max(1);
+                let text = if completion.text.is_empty() {
+                    assistant_text.clone()
+                } else {
+                    completion.text
+                };
+                let usage = oauth_usage(
+                    completion.usage.as_ref().or(reported_usage.as_ref()),
+                    session.turn.saturating_add(1),
+                    elapsed_ms,
+                );
+                if !text.trim().is_empty() {
+                    let message = Message {
+                        role: Role::Assistant,
+                        content: vec![MessageBlock::Text { text: text.clone() }],
+                    };
+                    session.messages.push(message.clone());
+                    medusa_agent::record_session_event(
+                        &mut session,
+                        Actor::Coordinator,
+                        EventPayload::AssistantMessageRecorded {
+                            message: serde_json::to_value(&message).map_err(RuntimeError::agent)?,
+                        },
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    if assistant_text.is_empty() {
+                        let _ = events.send(RuntimeEvent::AssistantText(text));
+                    }
+                }
+                if completion.status == "completed" {
+                    session.turn = session.turn.saturating_add(1);
+                    medusa_agent::record_session_event(
+                        &mut session,
+                        Actor::Coordinator,
+                        EventPayload::ModelResponseReceived {
+                            response_id: Some(turn_id.clone()),
+                            usage: serde_json::to_value(&usage).map_err(RuntimeError::agent)?,
+                            request_id: Some(request_id.clone()),
+                            request_fingerprint: None,
+                        },
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    medusa_agent::record_session_event(
+                        &mut session,
+                        Actor::Coordinator,
+                        EventPayload::ProviderExecutionRecorded {
+                            status: serde_json::json!({
+                                "backend": "codex-app-server",
+                                "status": completion.status
+                            }),
+                        },
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    let _ = events.send(RuntimeEvent::Usage {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        cache_read_input_tokens: usage.cache_read_input_tokens,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                        total_tokens: usage.total_tokens,
+                        duration_ms: usage.duration_ms,
+                        tokens_per_second_milli: usage.tokens_per_second_milli,
+                        estimated_cost_microusd: usage.estimated_cost_microusd,
+                        provenance: usage.provenance,
+                    });
+                    if let Err(error) = medusa_agent::persist_session(&session).map_err(RuntimeError::agent) {
+                        state.session = Some(session);
+                        state.codex_app_server = Some(server);
+                        return Err(error);
+                    }
+                    let queued = finish_or_take_followups(submission);
+                    let mut queued = queued.into_iter();
+                    if let Some(next) = queued.next() {
+                        let remaining = queued.collect::<Vec<_>>();
+                        if !remaining.is_empty() {
+                            lock_submission(submission).followups.extend(remaining);
+                        }
+                        medusa_agent::record_session_event(
+                            &mut session,
+                            Actor::User,
+                            EventPayload::UserFollowupDequeued {
+                                command_id: next.command_id.clone(),
+                                text: next.draft.text.clone(),
+                            },
+                        )
+                        .map_err(RuntimeError::agent)?;
+                        medusa_agent::persist_session(&session).map_err(RuntimeError::agent)?;
+                        state.session = Some(session);
+                        state.codex_app_server = Some(server);
+                        return run_openai_oauth_prompt(
+                            state,
+                            config,
+                            next.draft,
+                            events,
+                            cancel,
+                            submission,
+                            None,
+                        );
+                    }
+                    state.session = Some(session);
+                    state.codex_app_server = Some(server);
+                    return Ok(RuntimeEvent::TurnFinished);
+                }
+                state.session = Some(session);
+                state.codex_app_server = Some(server);
+                if interrupt_sent || completion.status == "interrupted" {
+                    mark_idle(submission, true);
+                    return Ok(RuntimeEvent::Cancelled);
+                }
+                let message = completion
+                    .error
+                    .unwrap_or_else(|| "Codex app-server reported a failed turn".to_owned());
+                mark_idle(submission, true);
+                return Err(RuntimeError::agent(message));
+            }
+        }
+    }
+}
+
 fn run_prompt(
     state: &mut RuntimeState,
     draft: PromptDraft,
@@ -1315,6 +1971,17 @@ fn run_prompt(
         return Err(RuntimeError::agent(
             "active session is bound to a different provider/model configuration; start a new session",
         ));
+    }
+    if config.model.provider == medusa_config::openai_oauth::PROVIDER {
+        return run_openai_oauth_prompt(
+            state,
+            config,
+            draft,
+            events,
+            cancel,
+            submission,
+            accepted,
+        );
     }
     let max_turns = config.agent.max_turns;
     let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
@@ -2251,6 +2918,7 @@ mod mutation_completion_tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+            codex_thread_id: None,
         };
         session.completed = true;
         medusa_agent::record_session_event(

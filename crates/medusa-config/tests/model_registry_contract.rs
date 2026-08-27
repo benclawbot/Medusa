@@ -27,7 +27,7 @@ fn realtime_preflight_metadata_requires_both_audio_and_realtime() {
     assert!(realtime.audio_input);
     assert!(realtime.realtime);
 
-    let text = model_capabilities("openai-oauth", "gpt-5");
+    let text = model_capabilities("openai-oauth", "gpt-5.6-luna");
     assert!(text.audio_input);
     assert!(!text.realtime);
 }

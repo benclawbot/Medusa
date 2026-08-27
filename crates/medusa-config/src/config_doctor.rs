@@ -16,7 +16,6 @@ use super::{
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog, ProviderProfileStore,
     credential_environment,
 };
-use crate::openai_oauth;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -256,6 +255,17 @@ fn diagnose_store(
 }
 
 fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorCheck>) {
+    if profile.connection == "chatgpt-oauth" {
+        add_check(
+            checks,
+            "endpoint",
+            ConfigDoctorStatus::Pass,
+            "ChatGPT OAuth endpoint is owned by the Codex app-server",
+            None::<String>,
+            None,
+        );
+        return;
+    }
     let Some(base_url) = profile.base_url.as_deref() else {
         add_check(
             checks,
@@ -291,7 +301,6 @@ fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorChe
     };
     let reachable = TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok();
     let remediation = match profile.connection.as_str() {
-        "chatgpt-oauth" => oauth_gateway_remediation(openai_oauth::auth_file_present()),
         "omniroute" => {
             "Start OmniRoute on the configured loopback endpoint, then refresh diagnostics."
         }
@@ -307,21 +316,13 @@ fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorChe
             ConfigDoctorStatus::ActionRequired
         },
         if reachable {
-            "selected loopback gateway is reachable"
+            "selected loopback service is reachable"
         } else {
-            "selected loopback gateway is not reachable"
+            "selected loopback service is not reachable"
         },
         (!reachable).then_some(remediation),
         None,
     );
-}
-
-fn oauth_gateway_remediation(auth_file_present: bool) -> &'static str {
-    if auth_file_present {
-        "Start the local OAuth gateway with `npx openai-oauth@2.0.0 --no-open --detach`, then refresh diagnostics. If it remains unavailable, run `npx openai-oauth@2.0.0 login --no-open` in an interactive terminal, confirm the overwrite, and copy the printed URL into your browser to re-authenticate."
-    } else {
-        "Run `npx openai-oauth@2.0.0 login --no-open` in an interactive terminal, then copy the printed URL into your browser to sign in, then refresh diagnostics."
-    }
 }
 
 fn diagnose_credential(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorCheck>) {
@@ -488,15 +489,18 @@ mod tests {
     }
 
     #[test]
-    fn oauth_gateway_remediation_does_not_hide_existing_credential_state() {
-        let existing = oauth_gateway_remediation(true);
-        assert!(existing.contains("--detach"));
-        assert!(existing.contains("--no-open"));
-        assert!(existing.contains("interactive terminal"));
-
-        let missing = oauth_gateway_remediation(false);
-        assert!(missing.contains("sign in"));
-        assert!(!missing.contains("--detach"));
-        assert!(missing.contains("--no-open"));
+    fn oauth_endpoint_is_owned_by_codex_app_server() {
+        let profile = ProviderProfile {
+            connection: "chatgpt-oauth".to_owned(),
+            provider: "openai-oauth".to_owned(),
+            auth: "none".to_owned(),
+            base_url: None,
+            configured: true,
+            ..ProviderProfile::default()
+        };
+        let mut checks = Vec::new();
+        diagnose_endpoint(&profile, &mut checks);
+        assert_eq!(checks.len(), 1);
+        assert!(checks[0].detail.contains("Codex app-server"));
     }
 }

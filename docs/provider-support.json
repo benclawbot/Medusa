@@ -75,7 +75,7 @@
       "support_tier": "production-supported",
       "runtime_protocol": "openai",
       "credential_environment": null,
-      "default_model": "gpt-5",
+      "default_model": "gpt-5.6-luna",
       "dogfood": { "status": "not-enabled" },
       "realtime_voice": "unavailable"
     },

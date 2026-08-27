@@ -1175,12 +1175,12 @@ mod tests {
     }
 
     #[test]
-    fn switching_from_oauth_to_minimax_clears_the_oauth_gateway_route() {
+    fn switching_from_oauth_to_minimax_clears_the_previous_route() {
         let next = next_model_base_url(
             "minimax",
             None,
             "openai-oauth",
-            Some("http://127.0.0.1:10531/v1"),
+            Some("https://api.openai.com/v1"),
         );
         assert_eq!(next, None);
     }
@@ -1191,7 +1191,7 @@ mod tests {
             "anthropic-compatible",
             Some("https://gateway.example/v1".to_owned()),
             "openai-oauth",
-            Some("http://127.0.0.1:10531/v1"),
+            Some("https://api.openai.com/v1"),
         );
         assert_eq!(next.as_deref(), Some("https://gateway.example/v1"));
     }

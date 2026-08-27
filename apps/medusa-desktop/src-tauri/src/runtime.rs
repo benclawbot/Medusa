@@ -12,7 +12,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::ImageReader;
-use medusa_config::{Config, provider_catalog_entry};
+use medusa_config::{Config, DiscoveredModel, provider_catalog_entry};
 use medusa_daemon::{
     DaemonClient, DaemonLaunch, DaemonLifecycleState, DaemonSupervisor, FrontendArtifactKind,
     FrontendArtifactUpload, FrontendCommandAcknowledgement, FrontendControlResult,
@@ -42,7 +42,7 @@ use crate::{
         DesktopAttachment, DesktopCommandSuggestion, DesktopModelConfiguration, DesktopPromptDraft,
         DesktopRuntimeEvent, DesktopSubmitDisposition, DesktopWebArtifact, RuntimeStartResponse,
     },
-    provider_auth::browser_oauth_credentials_present,
+    provider_auth::browser_oauth_authenticated,
 };
 
 const DESKTOP_CLIENT_ID: &str = "desktop-primary";
@@ -799,7 +799,7 @@ fn verify_provider_route(
 ) -> Result<(), String> {
     let entry = provider_catalog_entry(provider)
         .ok_or_else(|| format!("unknown provider `{provider}`"))?;
-    if entry.browser_oauth && !browser_oauth_credentials_present(provider) {
+    if entry.browser_oauth && !browser_oauth_authenticated(provider) {
         return Err(format!(
             "{} is not authenticated. Sign in with ChatGPT before applying this provider.",
             entry.display_name
@@ -820,18 +820,30 @@ fn verify_provider_route(
         &BTreeMap::new(),
     )
     .map_err(|error| error.to_string())?;
-    let discovered = match discover_models(&config, api_key) {
-        Ok(models) => models,
-        // MiniMax's Anthropic-compatible endpoint intentionally does not expose the OpenAI
-        // `/models` discovery resource. Its curated catalog is the authoritative model list,
-        // so a configured catalog model can pass startup verification without a billable probe.
-        Err(ModelDiscoveryError::Unsupported)
-            if entry.id == "minimax" && entry.known_models.contains(&model) =>
-        {
-            return Ok(());
-        }
-        Err(error) => {
-            return Err(format!(
+    let discovered: Result<Vec<DiscoveredModel>, String> = if entry.id == "openai-oauth" {
+        medusa_runtime::discover_openai_oauth_models()
+            .map(|models| {
+                models
+                    .into_iter()
+                    .map(|id| DiscoveredModel {
+                        id,
+                        display_name: None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_owned())
+    } else {
+        match discover_models(&config, api_key) {
+            Ok(models) => Ok(models),
+            // MiniMax's Anthropic-compatible endpoint intentionally does not expose the OpenAI
+            // `/models` discovery resource. Its curated catalog is the authoritative model list,
+            // so a configured catalog model can pass startup verification without a billable probe.
+            Err(ModelDiscoveryError::Unsupported)
+                if entry.id == "minimax" && entry.known_models.contains(&model) =>
+            {
+                return Ok(());
+            }
+            Err(error) => Err(format!(
                 "{} route verification failed at {}: {error:?}",
                 entry.display_name,
                 prepared_profile
@@ -840,9 +852,10 @@ fn verify_provider_route(
                     .as_deref()
                     .or(entry.base_url)
                     .unwrap_or("the provider endpoint")
-            ));
+            )),
         }
     };
+    let discovered = discovered?;
     if !discovered.iter().any(|candidate| candidate.id == model) {
         let available = discovered
             .iter()

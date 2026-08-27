@@ -5,9 +5,9 @@ use std::{
 };
 
 use medusa_config::{
-    Config, ModelDiscoveryCache, ModelRegistry, ProviderProfile, ProviderProfileCatalog,
-    apply_provider_defaults, model_registry_for_profile, provider_catalog_entry,
-    provider_catalog_entry_for_profile,
+    Config, DiscoveredModel, DiscoveryFailure, ModelDiscoveryCache, ModelRegistry, ProviderProfile,
+    ProviderProfileCatalog, apply_provider_defaults, model_registry_for_profile,
+    provider_catalog_entry, provider_catalog_entry_for_profile,
 };
 use medusa_provider::discover_models;
 
@@ -83,8 +83,23 @@ pub fn desktop_model_registry(
         }
     }
 
-    let credential = SystemCredentialStore.load(&profile.provider)?;
-    match discover_models(&config, credential.as_deref()) {
+    let discovery = if profile.provider == "openai-oauth" {
+        medusa_runtime::discover_openai_oauth_models()
+            .map(|models| {
+                models
+                    .into_iter()
+                    .map(|id| DiscoveredModel {
+                        id,
+                        display_name: None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| oauth_discovery_failure(&error))
+    } else {
+        let credential = SystemCredentialStore.load(&profile.provider)?;
+        discover_models(&config, credential.as_deref()).map_err(|error| error.fallback_kind())
+    };
+    match discovery {
         Ok(models) => {
             let registry = model_registry_for_profile(&profile, Ok(&models), None, now);
             let mut guard = cache
@@ -106,11 +121,29 @@ pub fn desktop_model_registry(
                 .map_err(|_| "model discovery cache is poisoned")?;
             Ok(model_registry_for_profile(
                 &profile,
-                Err(error.fallback_kind()),
+                Err(error),
                 guard.get(&provider_id),
                 now,
             ))
         }
+    }
+}
+
+fn oauth_discovery_failure(error: &str) -> DiscoveryFailure {
+    let normalized = error.to_ascii_lowercase();
+    if normalized.contains("not signed in")
+        || normalized.contains("not authenticated")
+        || normalized.contains("authenticated account")
+    {
+        DiscoveryFailure::NotAuthorized
+    } else if normalized.contains("timed out")
+        || normalized.contains("closed")
+        || normalized.contains("launch")
+        || normalized.contains("protocol")
+    {
+        DiscoveryFailure::Offline
+    } else {
+        DiscoveryFailure::TemporarilyUnavailable
     }
 }
 

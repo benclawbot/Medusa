@@ -12,7 +12,7 @@ The product model is **Plan, Execute Safely, Recover**:
 - **Execute Safely.** Read-only teammates scout the work. Git mutation can use a conflict-aware bounded implementation DAG with isolated worktrees; ordinary directories use one isolated content-addressed snapshot implementer. Review, independent verification, authorization, and integration remain separate runtime authorities.
 - **Recover.** Sessions, plans, events, approvals, worker leases, immutable candidates, delegation contracts, agent scopes, effective model-request manifests, transactions, verification, and recovery state live under `.medusa` as durable authority. Interruption, cancellation, or crash never gets rewritten as success.
 
-**Status (v1.0.2, `main`):
+**Status (v1.0.5, `main`):
 - **CLI, TUI, desktop application, daemon, telegram access, shared runtime**
 - Bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, effective model-request manifests, deterministic request reconstruction, certified tool execution, verified self-update, and repository-enforced engineering policy are shipped.
 
@@ -141,7 +141,7 @@ General-chat turns can avoid repository indexing/scanning when the task does not
 
 ### Desktop application
 
-The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, chat, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and usage telemetry. Desktop ChatGPT OAuth is text-only: the local OAuth gateway does not expose the Realtime session credential required for microphone/WebRTC voice, so the desktop voice UI and live-evidence route are intentionally not included. Guided onboarding and model discovery consume the same canonical provider/model metadata used by the runtime.
+The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, chat, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and usage telemetry. Desktop ChatGPT OAuth is text-only: the Codex app-server route does not provide the Realtime session credential required for microphone/WebRTC voice, so the desktop voice UI and live-evidence route are intentionally not included. Guided onboarding and model discovery consume the same canonical provider/model metadata used by the runtime.
 
 ### Telegram
 
@@ -161,7 +161,7 @@ Medusa has one provider-neutral realtime voice model rather than a separate voic
 - Rust 1.88 or newer for source builds; the repository pins Rust 1.88.0
 - A supported model connection for model-dependent work
 - The platform containment backend required for guarded shell execution
-- Node.js 22 for ChatGPT OAuth, required UI-change browser verification, desktop development, or desktop packaging
+- Node.js 22 for UI-change browser verification, desktop development, or desktop packaging (the Codex app-server OAuth route does not require Node.js)
 - **Git only when needed:** source installation/cloning and Git-backed mutation require Git; packaged Medusa can perform ordinary-directory and ephemeral workspace work without a Git repository
 
 ### Install the CLI
@@ -225,16 +225,12 @@ The canonical selectable-route, support-tier, credential, live-dogfood, protocol
 | Anthropic | production-supported | Anthropic Messages | `ANTHROPIC_API_KEY` |
 | Anthropic-compatible | custom endpoint | Anthropic-compatible | `MEDUSA_API_KEY`, optionally `MEDUSA_BASE_URL` |
 | OpenAI API | production-supported | OpenAI-compatible | `OPENAI_API_KEY` |
-| ChatGPT OAuth | production-supported | OpenAI-compatible local gateway | `openai-oauth` gateway / existing ChatGPT account state |
+| ChatGPT OAuth | production-supported | Codex app-server JSONL | Codex ChatGPT account state |
 | OpenAI-compatible | custom endpoint | OpenAI-compatible | `MEDUSA_API_KEY` plus configured endpoint |
 | OmniRoute | managed route | OpenAI-compatible | managed external route |
 | Local runtime | local route | OpenAI-compatible | user-operated local runtime |
 
-ChatGPT OAuth is supplied through the separately distributed `openai-oauth` loopback gateway. Medusa can reuse an existing OAuth credential, start or adopt the authenticated local gateway when the route is selected, and validate discovered models without reading the gateway credential file directly. See [ChatGPT OAuth](docs/CHATGPT-OAUTH.md):
-
-```bash
-npx --yes openai-oauth@2.0.0 --no-open --detach
-```
+ChatGPT OAuth is supplied by the installed Codex CLI app-server (`codex app-server --stdio`). Codex owns browser login, token refresh, account state, model access, and the upstream transport; Medusa passes turns over the JSONL protocol and never reads or stores OAuth credentials. See [ChatGPT OAuth](docs/CHATGPT-OAUTH.md).
 
 ## Quick start
 
@@ -642,8 +638,8 @@ Platform support does not imply identical containment, audio, browser, credentia
 - The transactional component runtime is an accepted and tested reference contract under incremental adoption; not every existing production service is component-managed or hot-replaceable.
 - The canonical tool-result migration is incomplete across all tool families; shell/output-envelope and related projections are migrated foundations, while remaining consumers continue to move toward one typed canonical result contract.
 - The full behavioral self-optimization loop is not claimed as end-to-end production-accepted until real canary/promotion/rollback evidence and cross-surface release integration are complete.
-- Telegram end-to-end voice acceptance still requires real bot/chat/Mini App access, audio hardware, and sanitized evidence under issue [#719](https://github.com/benclawbot/Medusa/issues/719). Desktop ChatGPT OAuth voice is not shipped because the OAuth gateway does not provide the Realtime session credential required by the desktop WebRTC path.
-- ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
+- Telegram end-to-end voice acceptance still requires real bot/chat/Mini App access, audio hardware, and sanitized evidence under issue [#719](https://github.com/benclawbot/Medusa/issues/719). Desktop ChatGPT OAuth voice is not shipped because the Codex app-server route does not provide the Realtime session credential required by the desktop WebRTC path.
+- ChatGPT OAuth depends on the installed Codex CLI and its authenticated ChatGPT account; Node.js is not required for this route.
 - browser actions are readiness-gated preview: they are explicit opt-in, dispatched through the certified-production browser route, and not default-enabled. Set `MEDUSA_BROWSER_ENABLED=true` only with an approved `MEDUSA_BROWSER_PATH` and verified `MEDUSA_BROWSER_VERIFY_URL`; route admission, permissions, and required verification authority remain enforced.
 - Screenshot input is accepted only when the selected provider declares compatible image support and limits.
 - Desktop release packages are unsigned at the operating-system level.

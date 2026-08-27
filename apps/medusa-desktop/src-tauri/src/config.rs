@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::{
     credentials::{CredentialStore, SystemCredentialStore},
-    provider_auth::browser_oauth_credentials_present,
+    provider_auth::browser_oauth_authenticated,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -260,7 +260,7 @@ fn shared_configuration(
         .and_then(std::env::var_os)
         .is_some_and(|value| !value.is_empty());
     let credential_configured = if profile.provider == "openai-oauth" {
-        browser_oauth_credentials_present(&profile.provider)
+        browser_oauth_authenticated(&profile.provider)
     } else {
         profile.auth == "none"
             || environment_credential
@@ -361,7 +361,7 @@ fn provider_credential_configured(
     credentials: &impl CredentialStore,
 ) -> bool {
     if entry.browser_oauth {
-        return browser_oauth_credentials_present(entry.profile_provider);
+        return browser_oauth_authenticated(entry.profile_provider);
     }
 
     let no_auth_required = entry.default_auth == "none"
@@ -566,11 +566,11 @@ mod tests {
             prepare_with_catalog(catalog, "openai-oauth", "", "medium", 0).expect("prepare");
         assert_eq!(prepared.profile.connection, "chatgpt-oauth");
         assert_eq!(prepared.profile.provider, "openai-oauth");
-        assert_eq!(prepared.profile.model, "gpt-5");
+        assert_eq!(prepared.profile.model, "gpt-5.6-luna");
         assert_eq!(prepared.profile.auth, "none");
         assert_eq!(
             prepared.profile.base_url.as_deref(),
-            Some("http://127.0.0.1:10531/v1")
+            None
         );
     }
 }

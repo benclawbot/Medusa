@@ -272,8 +272,9 @@ impl SetupState {
         if entry.browser_oauth {
             return vec![SetupChoice {
                 label: "Sign in with browser".to_owned(),
-                description: "Open provider sign-in and return here after the loopback callback"
-                    .to_owned(),
+                description:
+                    "Open ChatGPT sign-in and return here after Codex confirms the account"
+                        .to_owned(),
             }];
         }
         entry
@@ -334,7 +335,7 @@ impl SetupState {
                     .to_owned()
             }
             SetupStep::Authentication => {
-                "Credentials stay with the provider, environment, or local gateway; Medusa does not display them."
+                "Credentials stay with the provider, environment, or Codex app-server; Medusa does not display them."
                     .to_owned()
             }
             SetupStep::Model if self.searching => {
@@ -862,7 +863,7 @@ fn auth_label(method: &str) -> &'static str {
     match method {
         "oauth" => "Provider OAuth",
         "api-key" => "API key from environment",
-        "existing" => "Existing gateway credentials",
+        "existing" => "Existing provider credentials",
         "none" => "No authentication",
         _ => "Authentication",
     }
@@ -870,9 +871,9 @@ fn auth_label(method: &str) -> &'static str {
 
 fn auth_description(method: &str) -> &'static str {
     match method {
-        "oauth" => "Use the provider/gateway OAuth authority",
+        "oauth" => "Use the provider's OAuth authority",
         "api-key" => "Read the provider's registered environment variable; never store the value",
-        "existing" => "Use credentials already owned by the selected gateway",
+        "existing" => "Use credentials already owned by the selected provider",
         "none" => "The route does not require a Medusa-managed credential",
         _ => "Keep the route's typed authentication mode",
     }
@@ -964,12 +965,12 @@ mod tests {
         apply_provider_defaults(entry, &mut state.profile);
         state.oauth_succeeded(
             "openai-oauth",
-            vec!["gpt-live".to_owned(), "gpt-5".to_owned()],
+            vec!["gpt-live".to_owned(), "gpt-5.6-luna".to_owned()],
         );
         let models = state.model_options();
         assert!(models.contains(&"gpt-live".to_owned()));
-        assert!(models.contains(&"gpt-5".to_owned()));
-        assert_eq!(state.profile.model, "gpt-5");
+        assert!(models.contains(&"gpt-5.6-luna".to_owned()));
+        assert_eq!(state.profile.model, "gpt-5.6-luna");
     }
 
     #[test]

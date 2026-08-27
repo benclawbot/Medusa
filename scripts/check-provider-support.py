@@ -81,7 +81,7 @@ def render_markdown(manifest: dict[str, Any]) -> str:
         lines.append(f"- `{capability['id']}`: {capability['reason']}")
     lines.extend([
         "",
-        "The desktop application does not expose Realtime voice. ChatGPT OAuth remains a text-provider route because the local gateway does not provide the Realtime session credential required by a desktop microphone/WebRTC client.",
+        "The desktop application does not expose Realtime voice. ChatGPT OAuth remains a text-provider route because the Codex app-server does not provide the Realtime session credential required by a desktop microphone/WebRTC client.",
         "",
         "See `docs/LIVE-PROVIDER-DOGFOOD.md` for the bounded evidence contract and `docs/PROVIDER-DELIVERY.md` for first-run diagnostics.",
         "",

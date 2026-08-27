@@ -114,6 +114,7 @@ mod tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+            codex_thread_id: None,
             tool_artifacts: Vec::new(),
             world_model,
         }

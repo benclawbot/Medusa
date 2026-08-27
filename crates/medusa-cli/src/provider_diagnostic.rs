@@ -104,7 +104,7 @@ fn diagnose(config: &Config) -> DiagnosticReport {
     }
 
     if matches!(provider.as_str(), "openai-oauth") {
-        external_dependencies.push("local openai-oauth gateway at 127.0.0.1:10531".into());
+        external_dependencies.push("Codex CLI app-server (codex app-server --stdio)".into());
     }
     if provider == "local" {
         external_dependencies.push(

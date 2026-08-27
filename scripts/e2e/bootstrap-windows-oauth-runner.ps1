@@ -36,17 +36,12 @@ function Assert-Node22 {
     }
 }
 
-function Assert-OAuthGateway {
-    try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:10531/v1/models" -TimeoutSec 5
-        if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 500) {
-            throw "Unexpected gateway status $($response.StatusCode)."
-        }
-        Write-Host "openai-oauth gateway is reachable at 127.0.0.1:10531."
+function Assert-CodexCli {
+    $version = (& codex --version 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+        throw "The Codex CLI could not be started. Install it and ensure codex is on PATH."
     }
-    catch {
-        throw "The openai-oauth gateway is not reachable. Complete ChatGPT OAuth login first, then run: npx --yes openai-oauth@2.0.0 --no-open --detach"
-    }
+    Write-Host "Found $version; Medusa will use codex app-server --stdio for ChatGPT OAuth."
 }
 
 if ($env:OS -ne "Windows_NT") {
@@ -57,11 +52,12 @@ Assert-InteractiveUser
 Require-Command git
 Require-Command node
 Require-Command npm
+Require-Command codex
 Require-Command rustup
 Assert-Node22
+Assert-CodexCli
 
 rustup toolchain install 1.88.0 --profile minimal | Out-Host
-Assert-OAuthGateway
 
 New-Item -ItemType Directory -Path $RunnerDirectory -Force | Out-Null
 $archive = Join-Path $env:TEMP "actions-runner-win-x64-$RunnerVersion.zip"

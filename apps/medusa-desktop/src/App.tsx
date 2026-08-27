@@ -44,7 +44,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import "./approval-card.css";
 import {
   loadProviderCatalog,
-  ensureBrowserOauthGateway,
+  ensureBrowserOauth,
   profileModelCapabilityState,
   startBrowserOauth,
   type ProviderCatalogEntry,
@@ -383,9 +383,10 @@ export function App() {
   }, []);
 
   const refreshConfiguration = useCallback(async () => {
-    const configuration = await loadSharedConfiguration();
+    let configuration = await loadSharedConfiguration();
     if (configuration.provider === "openai-oauth") {
-      await ensureBrowserOauthGateway(configuration.provider).catch(() => undefined);
+      await ensureBrowserOauth(configuration.provider).catch(() => undefined);
+      configuration = await loadSharedConfiguration();
     }
     const catalog = await loadProviderCatalog();
     setSharedConfiguration(configuration);
@@ -967,7 +968,7 @@ export function App() {
     setLoadingModels(true);
     try {
       if (nextProvider.browserOauth) {
-        await ensureBrowserOauthGateway(value);
+        await ensureBrowserOauth(value);
       }
       const refreshed = await loadProviderCatalog(true, value);
       setProviderCatalog(refreshed);

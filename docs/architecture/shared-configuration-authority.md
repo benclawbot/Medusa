@@ -11,7 +11,7 @@ CLI / future TUI / desktop / Telegram
   -> medusa-config::Config layered runtime resolution
 ```
 
-`medusa-cli` remains responsible for interactive prompts and starting the local OpenAI OAuth gateway, but it no longer defines or persists a second provider-profile schema.
+`medusa-cli` remains responsible for interactive prompts and starting the Codex app-server OAuth flow, but it no longer defines or persists a second provider-profile schema.
 
 ## Provider profile contract
 

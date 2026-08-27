@@ -575,10 +575,10 @@ fn model_picker_switches_route_authentication_mode() {
         &mut state,
         ModelConfiguration {
             provider: "openai-oauth".to_owned(),
-            model: "gpt-5".to_owned(),
+            model: "gpt-5.6-luna".to_owned(),
             effort: Effort::Medium,
             api_key: None,
-            base_url: Some("http://127.0.0.1:10531/v1".to_owned()),
+            base_url: None,
         },
         &sender,
     )
@@ -612,10 +612,10 @@ fn oauth_route_reports_ready_without_a_medusa_api_key() {
         &mut state,
         ModelConfiguration {
             provider: "openai-oauth".to_owned(),
-            model: "gpt-5".to_owned(),
+            model: "gpt-5.6-luna".to_owned(),
             effort: Effort::High,
             api_key: None,
-            base_url: Some("http://127.0.0.1:10531/v1".to_owned()),
+            base_url: None,
         },
         &sender,
     )
@@ -627,7 +627,7 @@ fn oauth_route_reports_ready_without_a_medusa_api_key() {
             model,
             credential_configured: true,
             ..
-        } if model == "openai-oauth / gpt-5"
+        } if model == "openai-oauth / gpt-5.6-luna"
     ));
 }
 
@@ -849,6 +849,7 @@ fn durable_runtime_session(repo: &Path) -> medusa_agent::AgentSession {
         approval_grants: Vec::new(),
         approval_receipts: Vec::new(),
         rollback_receipts: Vec::new(),
+        codex_thread_id: None,
     }
 }
 

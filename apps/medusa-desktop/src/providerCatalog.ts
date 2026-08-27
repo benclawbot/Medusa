@@ -106,8 +106,8 @@ export async function startBrowserOauth(provider: string): Promise<void> {
   await invoke("desktop_browser_oauth", { provider });
 }
 
-export async function ensureBrowserOauthGateway(provider: string): Promise<void> {
-  await invoke("desktop_ensure_browser_oauth_gateway", { provider });
+export async function ensureBrowserOauth(provider: string): Promise<void> {
+  await invoke("desktop_ensure_browser_oauth", { provider });
 }
 
 export type ModelCapabilityState = "supported" | "unsupported" | "unknown";

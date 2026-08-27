@@ -11,7 +11,7 @@ use std::{
 use medusa_config::{
     Config, PROVIDER_PROFILE_KEYS, ConfigurationApplyTiming, ConfigurationChangeOrigin,
     ConfigurationChanged, ProviderProfile, ProviderProfileCatalog, ProviderProfileStore,
-    credential_environment, diagnose_config_catalog, openai_oauth,
+    credential_environment, diagnose_config_catalog,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Serialize;
@@ -47,7 +47,7 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
             ),
             (
                 "chatgpt-oauth",
-                "ChatGPT OAuth via local openai-oauth gateway",
+                "ChatGPT OAuth via Codex app-server",
             ),
             ("openai-api", "OpenAI API key"),
             ("openai-compatible", "Existing OpenAI-compatible endpoint"),
@@ -85,11 +85,10 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
 
     if matches!(
         profile.connection.as_str(),
-        "omniroute" | "chatgpt-oauth" | "openai-compatible" | "local"
+        "omniroute" | "openai-compatible" | "local"
     ) {
         let default_url = match profile.connection.as_str() {
             "omniroute" => "http://127.0.0.1:20128/v1",
-            "chatgpt-oauth" => "http://127.0.0.1:10531/v1",
             "local" => "http://127.0.0.1:11434/v1",
             _ => profile
                 .base_url
@@ -104,7 +103,7 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
     if profile.connection == "chatgpt-oauth" {
         profile.provider = "openai-oauth".into();
         profile.auth = "none".into();
-        profile.base_url = Some("http://127.0.0.1:10531/v1".into());
+        profile.base_url = None;
     } else if profile.connection == "openai-api" {
         profile.provider = "openai".into();
         profile.auth = "api-key".into();
@@ -493,7 +492,9 @@ fn provider_default<'a>(connection: &str, current: &'a str) -> &'a str {
 
 fn model_default<'a>(connection: &str, current: &'a str) -> &'a str {
     if current.is_empty() {
-        if connection == "omniroute" {
+        if connection == "chatgpt-oauth" {
+            "gpt-5.6-luna"
+        } else if connection == "omniroute" {
             "auto/coding"
         } else {
             "MiniMax-M3"
@@ -541,7 +542,7 @@ fn ensure_profile_ready(profile: &ProviderProfile) -> MedusaResult<()> {
         && TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_err()
     {
         return Err(config_error(format!(
-            "the configured local provider endpoint {base_url} is not reachable; start the gateway/runtime and run `medusa config doctor`"
+            "the configured local provider endpoint {base_url} is not reachable; start the provider runtime and run `medusa config doctor`"
         )));
     }
     Ok(())
@@ -549,44 +550,9 @@ fn ensure_profile_ready(profile: &ProviderProfile) -> MedusaResult<()> {
 
 fn ensure_runtime_for_profile(profile: &ProviderProfile) -> MedusaResult<()> {
     if profile.uses_openai_oauth() {
-        ensure_chatgpt_oauth_gateway()?;
-    }
-    Ok(())
-}
-
-fn npx_program() -> &'static str {
-    openai_oauth::npx_program()
-}
-
-fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
-    let address: SocketAddr = openai_oauth::GATEWAY_ADDR
-        .parse()
-        .map_err(|error| config_error(format!("invalid OAuth gateway address: {error}")))?;
-    if TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok() {
-        return Ok(());
-    }
-
-    println!("Starting the local ChatGPT OAuth gateway...");
-    let status = Command::new(npx_program())
-        .args(openai_oauth::GATEWAY_ARGS)
-        .status()
-        .map_err(|error| {
-            config_error(format!(
-                "could not start openai-oauth with {}: {error}. Install Node.js or start the gateway manually",
-                npx_program()
-            ))
+        medusa_runtime::ensure_openai_oauth_connected().map_err(|error| {
+            config_error(format!("Codex app-server OAuth setup failed: {error}"))
         })?;
-    if !status.success() {
-        return Err(config_error(format!(
-            "openai-oauth exited with status {status}; run `{} {} login` and retry",
-            npx_program(),
-            openai_oauth::PACKAGE,
-        )));
-    }
-    if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err() {
-        return Err(config_error(
-            "openai-oauth started but its loopback endpoint is not reachable at 127.0.0.1:10531",
-        ));
     }
     Ok(())
 }
@@ -608,7 +574,7 @@ fn loopback_socket(base_url: &str) -> Option<SocketAddr> {
 fn print_auth_guidance(profile: &ProviderProfile) {
     if profile.uses_openai_oauth() {
         println!(
-            "ChatGPT OAuth is managed by the loopback gateway at http://127.0.0.1:10531/v1; Medusa never reads the OAuth credential file."
+            "ChatGPT OAuth is managed directly by the Codex app-server; Medusa never reads the OAuth credential file."
         );
         return;
     }
@@ -722,7 +688,22 @@ mod tests {
     }
 
     #[test]
-    fn platform_npx_program_uses_windows_command_wrapper() {
-        assert_eq!(npx_program(), if cfg!(windows) { "npx.cmd" } else { "npx" });
+    fn chatgpt_oauth_profile_uses_codex_app_server_without_gateway_url() {
+        let profile = ProviderProfile {
+            configured: true,
+            connection: "chatgpt-oauth".into(),
+            provider: "openai-oauth".into(),
+            model: "gpt-5.6-luna".into(),
+            base_url: None,
+            auth: "none".into(),
+            ..ProviderProfile::default()
+        };
+
+        profile.validate().expect("direct ChatGPT OAuth profile");
+        assert!(profile.uses_openai_oauth());
+        assert_eq!(
+            model_default(&profile.connection, &profile.model),
+            "gpt-5.6-luna"
+        );
     }
 }

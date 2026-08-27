@@ -269,7 +269,8 @@ pub fn model_context_limit(provider: &str, model: &str) -> Option<u64> {
         ("minimax", "minimax-m2.7" | "minimax-m2.7-highspeed" | "minimax-m2.5") => Some(204_800),
         ("anthropic", "claude-opus-4-6" | "claude-sonnet-4-6") => Some(1_000_000),
         ("anthropic", "claude-haiku-4-5") => Some(200_000),
-        ("openai", "gpt-5.1-codex" | "gpt-5.1" | "gpt-5-mini") | ("openai-oauth", "gpt-5") => {
+        ("openai", "gpt-5.1-codex" | "gpt-5.1" | "gpt-5-mini")
+        | ("openai-oauth", "gpt-5" | "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna") => {
             Some(400_000)
         }
         _ => None,
@@ -341,7 +342,7 @@ mod tests {
             registry.find("private-model").unwrap().source,
             ModelSource::Custom
         );
-        assert!(registry.find("gpt-5").is_some());
+        assert!(registry.find("gpt-5.6-luna").is_some());
     }
 
     #[test]
@@ -356,7 +357,7 @@ mod tests {
         };
         let cached = model_registry(
             "openai-oauth",
-            "gpt-5",
+            "gpt-5.6-luna",
             Err(DiscoveryFailure::Offline),
             Some(&cache),
             200,
@@ -369,13 +370,13 @@ mod tests {
 
         let stale = model_registry(
             "openai-oauth",
-            "gpt-5",
+            "gpt-5.6-luna",
             Err(DiscoveryFailure::Offline),
             Some(&cache),
             100 + MODEL_DISCOVERY_CACHE_TTL_SECONDS + 1,
         );
         assert!(!stale.used_cached_discovery);
-        assert!(stale.find("gpt-5").is_some());
+        assert!(stale.find("gpt-5.6-luna").is_some());
     }
 
     #[test]
@@ -388,7 +389,7 @@ mod tests {
             1,
         );
         assert_eq!(
-            registry.find("gpt-5").unwrap().availability,
+            registry.find("gpt-5.6-luna").unwrap().availability,
             ModelAvailability::NotAuthorized
         );
         assert_eq!(
@@ -462,7 +463,10 @@ mod tests {
             model_context_limit("openai", "gpt-5.1-codex"),
             Some(400_000)
         );
-        assert_eq!(model_context_limit("openai-oauth", "gpt-5"), Some(400_000));
+        assert_eq!(
+            model_context_limit("openai-oauth", "gpt-5.6-luna"),
+            Some(400_000)
+        );
     }
 
     #[test]
@@ -492,7 +496,7 @@ mod tests {
         };
         let registry = model_registry(
             "openai-oauth",
-            "gpt-5",
+            "gpt-5.6-luna",
             Err(DiscoveryFailure::Offline),
             Some(&cache),
             100,

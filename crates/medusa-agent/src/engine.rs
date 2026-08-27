@@ -940,6 +940,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+            codex_thread_id: None,
         };
         if let Err(error) = append_event(
             &mut session,

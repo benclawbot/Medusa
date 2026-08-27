@@ -2,12 +2,13 @@
 
 This directory contains the opt-in test harness for exercising Medusa against a real ChatGPT OAuth session on Windows.
 
-The live suite deliberately runs only on a self-hosted Windows runner configured under the same Windows user account that owns the `openai-oauth` credential. The gateway owns and reads that credential; Medusa only talks to the local OpenAI-compatible endpoint at `127.0.0.1:10531`.
+The live suite deliberately runs only on a self-hosted Windows runner configured under the same Windows user account that owns the Codex ChatGPT OAuth session. Medusa launches `codex app-server --stdio`, and Codex owns the browser login, credential storage, and provider connection.
 
 ## Runner requirements
 
 - Windows 11
 - Git, Rust 1.88, Node.js 22 and npm
+- Codex CLI on `PATH` (the runner must be able to launch `codex app-server --stdio`)
 - GitHub Actions runner installed for the interactive user, with labels `self-hosted`, `Windows`, `X64`, and `medusa-oauth`
 - A completed `openai-oauth` browser login for that user
 - Permission to launch desktop applications from the runner session
@@ -27,7 +28,7 @@ pwsh -File scripts/e2e/bootstrap-windows-oauth-runner.ps1 `
   -Start
 ```
 
-The bootstrap verifies Windows, Git, Node.js 22, Rust 1.88, and the local OAuth gateway; downloads and configures the GitHub Actions runner; applies the `medusa-oauth` label; and starts it in the current interactive desktop session. It deliberately does not install the runner as a Windows service.
+The bootstrap verifies Windows, Git, Node.js 22, Rust 1.88, and the Codex CLI; downloads and configures the GitHub Actions runner; applies the `medusa-oauth` label; and starts it in the current interactive desktop session. It deliberately does not install the runner as a Windows service.
 
 The registration token is passed only to GitHub's `config.cmd`. Do not put it in source control, shell history, workflow secrets, screenshots, or logs.
 
@@ -37,15 +38,14 @@ Trigger **Authenticated Windows E2E** manually from GitHub Actions. The workflow
 
 The live harness:
 
-1. checks or starts the loopback OAuth gateway;
-2. confirms the gateway is reachable without reading its credential files;
-3. builds the production CLI, TUI, and Tauri desktop application;
-4. runs a real model turn in a disposable Git repository;
-5. launches the prompt-driven TUI path and verifies that durable session evidence is written;
-6. launches the Windows desktop package as a smoke test;
-7. writes only sanitized logs and a JSON result summary.
+1. validates the Codex CLI app-server entry point;
+2. builds the production CLI, TUI, and Tauri desktop application;
+3. runs a real model turn in a disposable Git repository;
+4. launches the prompt-driven TUI path and verifies that durable session evidence is written;
+5. launches the Windows desktop package as a smoke test;
+6. writes only sanitized logs and a JSON result summary.
 
-No access token, refresh token, cookie, authorization header, gateway credential file, or `%APPDATA%\medusa` provider file is uploaded as an artifact.
+No access token, refresh token, cookie, authorization header, Codex credential file, or `%APPDATA%\medusa` provider file is uploaded as an artifact.
 
 ## Local invocation
 
