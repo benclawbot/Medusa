@@ -6,29 +6,18 @@ use std::{
 };
 
 use medusa_recovery_coordinator::{
-    AuthorizedRecoveryAction, CheckpointPresentation, RecoveryActionExecutor,
+    AuthorizedRecoveryAction, RecoveryActionExecutor,
     RecoveryActionRequest, RecoveryActionService, RecoveryExecutionOutcome,
-    RecoveryExecutionReceipt, RecoveryOperation, RecoveryPreflightEvidence, RecoveryPreview,
+    RecoveryExecutionReceipt, RecoveryOperation, RecoveryPreflightEvidence,
     RecoveryView, RecoveryViewInput, VerificationState,
 };
-use serde::Deserialize;
-
-use crate::{RuntimeError, checkpoint_payload};
+use crate::{
+    RuntimeError,
+    checkpoint_payload,
+    recovery_model::{PersistedRecoveryRecord, common_outcome},
+};
 
 const RECOVERY_DIRECTORY: &str = ".medusa/recovery";
-#[derive(Debug, Deserialize)]
-struct PersistedRecoveryRecord {
-    session_id: String,
-    last_durable_step: String,
-    interrupted_operation: Option<String>,
-    current_repository_fingerprint: String,
-    verification: VerificationState,
-    approvals_must_be_reestablished: bool,
-    containment_must_be_reestablished: bool,
-    checkpoints: Vec<CheckpointPresentation>,
-    selected_preview: Option<RecoveryPreview>,
-}
-
 struct RuntimeRecoveryExecutor {
     repository_fingerprint: String,
     checkpoint_fingerprints: BTreeMap<String, String>,
@@ -42,40 +31,24 @@ impl RecoveryActionExecutor for RuntimeRecoveryExecutor {
         repository: &Path,
         action: &AuthorizedRecoveryAction,
     ) -> Result<RecoveryExecutionOutcome, Self::Error> {
-        let outcome = match action.operation {
-            RecoveryOperation::Inspect => RecoveryExecutionOutcome::succeeded(
-                self.repository_fingerprint.clone(),
-                VerificationState::Unknown,
-            ),
-            RecoveryOperation::Resume => RecoveryExecutionOutcome::succeeded(
-                self.repository_fingerprint.clone(),
-                VerificationState::Incomplete,
-            ),
-            RecoveryOperation::RetryVerification => RecoveryExecutionOutcome::succeeded(
-                self.repository_fingerprint.clone(),
-                VerificationState::Incomplete,
-            ),
-            RecoveryOperation::Abandon => {
-                RecoveryExecutionOutcome::cancelled(VerificationState::Incomplete)
-            }
-            RecoveryOperation::RestoreCheckpoint => {
-                let checkpoint_id = action.checkpoint_id.as_deref().ok_or_else(|| {
-                    RuntimeError::InvalidCommand("missing checkpoint id".to_owned())
+        let outcome = if let Some(outcome) =
+            common_outcome(action.operation, &self.repository_fingerprint)
+        {
+            outcome
+        } else {
+            let checkpoint_id = action.checkpoint_id.as_deref().ok_or_else(|| {
+                RuntimeError::InvalidCommand("missing checkpoint id".to_owned())
+            })?;
+            let payload = checkpoint_payload::load(repository, &action.session_id, checkpoint_id)?;
+            checkpoint_payload::restore(repository, &payload)?;
+            let fingerprint = self
+                .checkpoint_fingerprints
+                .get(checkpoint_id)
+                .cloned()
+                .ok_or_else(|| {
+                    RuntimeError::InvalidCommand("checkpoint metadata is unavailable".to_owned())
                 })?;
-                let payload =
-                    checkpoint_payload::load(repository, &action.session_id, checkpoint_id)?;
-                checkpoint_payload::restore(repository, &payload)?;
-                let fingerprint = self
-                    .checkpoint_fingerprints
-                    .get(checkpoint_id)
-                    .cloned()
-                    .ok_or_else(|| {
-                        RuntimeError::InvalidCommand(
-                            "checkpoint metadata is unavailable".to_owned(),
-                        )
-                    })?;
-                RecoveryExecutionOutcome::succeeded(fingerprint, VerificationState::Incomplete)
-            }
+            RecoveryExecutionOutcome::succeeded(fingerprint, VerificationState::Incomplete)
         };
         Ok(outcome)
     }

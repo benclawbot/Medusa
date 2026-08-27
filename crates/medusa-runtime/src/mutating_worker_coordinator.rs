@@ -25,7 +25,7 @@ use medusa_multi_agent_scheduler::speculation::{
     SpeculationLedger, SpeculationState, policy_for as speculation_policy_for,
 };
 use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
-use medusa_provider::ConfiguredProvider;
+use medusa_provider::LazyConfiguredProviderManager;
 use medusa_workers::{Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -1751,7 +1751,7 @@ fn execute_production_implementer(
     worker_config.agent.max_turns = bounded_implementer_turns(config.agent.max_turns)
         .min(request.delegation.authority.max_turns)
         .min(request.max_model_turns.max(1));
-    let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
+    let provider = LazyConfiguredProviderManager::from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let policy = policy_for(&request.delegation, &request.attempt, TeamRole::Implementer);
     let engine =

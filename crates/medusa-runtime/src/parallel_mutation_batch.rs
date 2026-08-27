@@ -18,7 +18,7 @@ use medusa_evidence::{ChangedComponent, changed_scope_fingerprint};
 use medusa_multi_agent_scheduler::mutation_dag::{
     AcceptedTaskEvidence, IntegrationBarrier, MutationDag,
 };
-use medusa_provider::ConfiguredProvider;
+use medusa_provider::LazyConfiguredProviderManager;
 use medusa_workers::{Worker, WorkerManager, WorkerState};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -95,7 +95,7 @@ pub fn prepare_combined(
         events,
     )?;
     validate_parallel_evidence(dag, &parallel)?;
-    let provider = ConfiguredProvider::manager_from_config(config, session_api_key)
+    let provider = LazyConfiguredProviderManager::from_config(config, session_api_key)
         .map_err(|error| error.to_string())?;
     let barrier = authorize_children(repo, config, &provider, dag, &parallel, cancel, events)?;
     persist_json(&batch_root.join("integration-barrier.json"), &barrier)?;

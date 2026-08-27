@@ -10,7 +10,7 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 use flate2::read::GzDecoder;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 
 use crate::model::invalid;
 
@@ -73,7 +73,7 @@ pub fn acknowledge_update_health() -> MedusaResult<bool> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    atomic_write(&path, b"healthy\n")?;
+    storage::atomic_write(&path, b"healthy\n")?;
     Ok(true)
 }
 
@@ -188,7 +188,7 @@ impl AtomicInstaller {
                     restart,
                 )
             };
-            atomic_write(&helper, script.as_bytes())?;
+            storage::atomic_write(&helper, script.as_bytes())?;
             #[cfg(unix)]
             set_executable(&helper)?;
             helper_command(&helper).spawn().map_err(io_error)?;
@@ -580,17 +580,6 @@ fn powershell_quote_path(path: &Path) -> String {
 
 fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let temporary = path.with_extension("tmp");
-    {
-        let mut output = fs::File::create(&temporary)?;
-        output.write_all(bytes)?;
-        output.sync_all()?;
-    }
-    fs::rename(&temporary, path)?;
-    Ok(())
 }
 
 fn sync_staged_copy(path: &Path) -> MedusaResult<()> {

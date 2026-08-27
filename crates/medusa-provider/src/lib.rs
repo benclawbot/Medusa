@@ -21,6 +21,12 @@ mod streaming_tool_calls;
 mod verification_bridge;
 mod verified_routing;
 
+#[derive(Debug, Default, serde::Deserialize)]
+struct OpenAiPromptTokenDetails {
+    #[serde(default)]
+    cached_tokens: u64,
+}
+
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
 pub(crate) use contracts::strip_hidden_reasoning;

@@ -6,29 +6,17 @@ use std::{
 };
 
 use medusa_recovery_coordinator::{
-    AuthorizedRecoveryAction, CheckpointPresentation, RecoveryActionExecutor,
+    AuthorizedRecoveryAction, RecoveryActionExecutor,
     RecoveryActionRequest, RecoveryActionService, RecoveryExecutionOutcome,
-    RecoveryExecutionReceipt, RecoveryOperation, RecoveryPreflightEvidence, RecoveryPreview,
+    RecoveryExecutionReceipt, RecoveryOperation, RecoveryPreflightEvidence,
     RecoveryView, RecoveryViewInput, VerificationState,
 };
-use serde::Deserialize;
-
-use super::RuntimeEvent;
+use super::{
+    RuntimeEvent,
+    recovery_model::{PersistedRecoveryRecord, common_outcome},
+};
 
 const RECOVERY_DIRECTORY: &str = ".medusa/recovery";
-
-#[derive(Debug, Deserialize)]
-struct PersistedRecoveryRecord {
-    session_id: String,
-    last_durable_step: String,
-    interrupted_operation: Option<String>,
-    current_repository_fingerprint: String,
-    verification: VerificationState,
-    approvals_must_be_reestablished: bool,
-    containment_must_be_reestablished: bool,
-    checkpoints: Vec<CheckpointPresentation>,
-    selected_preview: Option<RecoveryPreview>,
-}
 
 struct RuntimeRecoveryExecutor {
     repository_fingerprint: String,
@@ -42,28 +30,14 @@ impl RecoveryActionExecutor for RuntimeRecoveryExecutor {
         _repository: &Path,
         action: &AuthorizedRecoveryAction,
     ) -> Result<RecoveryExecutionOutcome, Self::Error> {
-        let outcome = match action.operation {
-            RecoveryOperation::Inspect => RecoveryExecutionOutcome::succeeded(
-                self.repository_fingerprint.clone(),
-                VerificationState::Unknown,
-            ),
-            RecoveryOperation::Resume => RecoveryExecutionOutcome::succeeded(
-                self.repository_fingerprint.clone(),
-                VerificationState::Incomplete,
-            ),
-            RecoveryOperation::RetryVerification => RecoveryExecutionOutcome::succeeded(
-                self.repository_fingerprint.clone(),
-                VerificationState::Incomplete,
-            ),
-            RecoveryOperation::Abandon => {
-                RecoveryExecutionOutcome::cancelled(VerificationState::Incomplete)
-            }
-            RecoveryOperation::RestoreCheckpoint => RecoveryExecutionOutcome::failed_closed(
-                "checkpoint payload restoration is not available in the runtime executor",
-                Some(self.repository_fingerprint.clone()),
-                VerificationState::Incomplete,
-            ),
-        };
+        let outcome = common_outcome(action.operation, &self.repository_fingerprint)
+            .unwrap_or_else(|| {
+                RecoveryExecutionOutcome::failed_closed(
+                    "checkpoint payload restoration is not available in the runtime executor",
+                    Some(self.repository_fingerprint.clone()),
+                    VerificationState::Incomplete,
+                )
+            });
         Ok(outcome)
     }
 }
@@ -237,7 +211,7 @@ fn corrupt_view(path: &Path) -> RecoveryView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use medusa_recovery_coordinator::{CheckpointPresentation, RecoveryHealth};
+    use medusa_recovery_coordinator::{CheckpointPresentation, RecoveryHealth, RecoveryPreview};
     use tempfile::tempdir;
 
     fn checkpoint() -> CheckpointPresentation {

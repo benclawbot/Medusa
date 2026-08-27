@@ -7,10 +7,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
-    ProviderStreamEvent, ResponseBlock, Role, Usage, async_response_error, blocking_response_error,
-    openai_transport, provider_error, provider_response_error, run_cancellable_request,
-    shared_async_http_client, shared_blocking_http_client,
+    ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
+    OpenAiPromptTokenDetails, ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role,
+    Usage, async_response_error, blocking_response_error, openai_transport, provider_error,
+    provider_response_error, run_cancellable_request, shared_async_http_client,
+    shared_blocking_http_client,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -505,12 +506,6 @@ struct OpenAiUsage {
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: OpenAiPromptTokenDetails,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OpenAiPromptTokenDetails {
-    #[serde(default)]
-    cached_tokens: u64,
 }
 
 impl OpenAiWireResponse {

@@ -11,11 +11,11 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use medusa_context::refinement::{RefinementArtifactKind, RefinementLifecycle};
-use medusa_core::{hidden_command, learning_policy::LearningAdmissionPolicy};
+use medusa_core::{hidden_command, learning_policy::LearningAdmissionPolicy, storage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -358,11 +358,66 @@ impl LearningMonitorStore {
             (None, Some(replayed)) => replayed,
             (None, None) => MonitorDocument::default(),
         };
-        Ok(Self {
+        let mut store = Self {
             root,
             document,
             _lock: lock,
-        })
+        };
+        store.reconcile_from_canonical_authority(repo)?;
+        Ok(store)
+    }
+
+    fn reconcile_from_canonical_authority(
+        &mut self,
+        repo: &Path,
+    ) -> Result<(), LearningMonitorError> {
+        if self.document.artifacts.is_empty() {
+            return Ok(());
+        }
+
+        let authority = RefinementAuthorityStore::open(repo)
+            .map_err(|error| LearningMonitorError::Authority(error.to_string()))?;
+        let canonical = authority
+            .snapshot()
+            .map_err(|error| LearningMonitorError::Authority(error.to_string()))?;
+
+        let mut changed = false;
+        for artifact in self.document.artifacts.values_mut() {
+            let record = canonical
+                .records
+                .iter()
+                .find(|record| {
+                    record.proposal_id == artifact.artifact_id
+                        && record.version == artifact.artifact_version
+                })
+                .ok_or_else(|| {
+                    LearningMonitorError::Authority(format!(
+                        "canonical refinement authority is missing monitor artifact {}:{}",
+                        artifact.artifact_id, artifact.artifact_version
+                    ))
+                })?;
+
+            let canonical_active = canonical.active.iter().any(|proposal| {
+                proposal.id == artifact.artifact_id && proposal.version == artifact.artifact_version
+            });
+            if artifact.active != canonical_active {
+                artifact.active = canonical_active;
+                changed = true;
+            }
+            if artifact.predecessor_id != record.predecessor_proposal_id {
+                artifact.predecessor_id = record.predecessor_proposal_id.clone();
+                changed = true;
+            }
+            if artifact.predecessor_version != record.predecessor_version {
+                artifact.predecessor_version = record.predecessor_version;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.commit_event("authority_reconciliation", unix_ms())?;
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -674,12 +729,7 @@ impl LearningMonitorStore {
         file.write_all(b"\n")?;
         file.sync_data()?;
         let state_path = self.root.join("state.json");
-        let temporary = self.root.join(format!("state.tmp-{}", std::process::id()));
-        fs::write(&temporary, serde_json::to_vec_pretty(&self.document)?)?;
-        if state_path.exists() {
-            fs::remove_file(&state_path)?;
-        }
-        fs::rename(temporary, state_path)?;
+        storage::atomic_write(&state_path, &serde_json::to_vec_pretty(&self.document)?)?;
         Ok(())
     }
 }
@@ -962,6 +1012,13 @@ fn apply_authority_action(
     }
     state.active = false;
     Ok(())
+}
+
+fn unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
 }
 
 fn validate_outcome(outcome: &OutcomeRecord) -> Result<(), LearningMonitorError> {
@@ -1602,6 +1659,48 @@ mod tests {
                 .collect::<BTreeSet<_>>()
                 .len(),
             50
+        );
+    }
+
+    #[test]
+    fn reopen_fails_closed_when_canonical_record_is_missing() {
+        let repo = tempdir().expect("repo");
+        let monitor_root = repo.path().join(MONITOR_ROOT);
+        fs::create_dir_all(&monitor_root).expect("monitor root");
+
+        let artifact = ArtifactMonitorState {
+            artifact_id: "missing".into(),
+            artifact_version: 1,
+            kind: MonitorArtifactKind::Prompt,
+            active: true,
+            predecessor_id: None,
+            predecessor_version: None,
+            belief: BeliefState::default(),
+            exposures: Vec::new(),
+            outcomes: Vec::new(),
+            reports: Vec::new(),
+            actions: Vec::new(),
+        };
+        let mut artifacts = BTreeMap::new();
+        artifacts.insert("missing:1".into(), artifact);
+        let document = MonitorDocument {
+            schema_version: SCHEMA_VERSION,
+            revision: 1,
+            artifacts,
+            unattributed_outcomes: Vec::new(),
+        };
+        fs::write(
+            monitor_root.join("state.json"),
+            serde_json::to_vec(&document).expect("document"),
+        )
+        .expect("state");
+
+        let error = LearningMonitorStore::open(repo.path()).expect_err("missing authority record");
+        assert!(matches!(error, LearningMonitorError::Authority(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("missing monitor artifact missing:1")
         );
     }
 }

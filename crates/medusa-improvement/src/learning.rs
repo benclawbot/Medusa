@@ -127,14 +127,6 @@ pub struct LearningProposal {
     pub requires_approval: bool,
 }
 
-pub trait LearningPolicy: Send + Sync {
-    fn decide(
-        &self,
-        experience: &ExperienceRecord,
-        matched_skill: Option<&str>,
-    ) -> MedusaResult<LearningAction>;
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RuleBasedLearningPolicy {
     pub minimum_complexity: usize,
@@ -150,7 +142,7 @@ impl Default for RuleBasedLearningPolicy {
     }
 }
 
-impl LearningPolicy for RuleBasedLearningPolicy {
+impl RuleBasedLearningPolicy {
     fn decide(
         &self,
         experience: &ExperienceRecord,
@@ -173,13 +165,13 @@ impl LearningPolicy for RuleBasedLearningPolicy {
     }
 }
 
-pub struct ExperienceCompiler<P> {
-    policy: P,
+pub struct ExperienceCompiler {
+    policy: RuleBasedLearningPolicy,
 }
 
-impl<P: LearningPolicy> ExperienceCompiler<P> {
+impl ExperienceCompiler {
     #[must_use]
-    pub fn new(policy: P) -> Self {
+    pub fn new(policy: RuleBasedLearningPolicy) -> Self {
         Self { policy }
     }
 
@@ -337,19 +329,6 @@ impl DelegationProfile {
         }
         Ok(())
     }
-}
-
-pub trait MemoryProvider: Send + Sync {
-    fn remember(&self, record: &ExperienceRecord) -> MedusaResult<()>;
-}
-pub trait ContextEngine: Send + Sync {
-    fn compress(&self, summary: &CodingContextSummary) -> MedusaResult<String>;
-}
-pub trait RetrievalProvider: Send + Sync {
-    fn search(&self, query: &SessionSearchQuery) -> MedusaResult<Vec<SessionSearchHit>>;
-}
-pub trait ExecutionBackend: Send + Sync {
-    fn execute(&self, profile: &DelegationProfile, task: &str) -> MedusaResult<String>;
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

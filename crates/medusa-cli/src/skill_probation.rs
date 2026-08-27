@@ -1,42 +1,8 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
-use serde::{Deserialize, Serialize};
+use medusa_skill::lifecycle::{ProbationPolicy, ProbationReport, ProbationSummary};
 
 const PROBATION_PATH: &str = ".medusa/learning/skill-probation/summary.json";
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ProbationSummary {
-    #[serde(default = "schema_one")]
-    schema_version: u8,
-    policy: ProbationPolicy,
-    #[serde(default)]
-    skills: BTreeMap<String, ProbationReport>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct ProbationPolicy {
-    required_post_restore_samples: usize,
-    healthy_rate_milli: u16,
-    failure_rate_milli: u16,
-    automatic_quarantine: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ProbationReport {
-    state: String,
-    baseline_observed_sessions: usize,
-    baseline_verification_rate_milli: u16,
-    baseline_confidence_milli: u16,
-    post_restore_sessions: usize,
-    post_restore_verified_sessions: usize,
-    post_restore_verification_rate_milli: u16,
-    post_restore_confidence_milli: u16,
-    verification_rate_change_milli: i32,
-    remaining_samples: usize,
-    restored_at_epoch_seconds: Option<u64>,
-    latest_recorded_at: String,
-    recommendation: String,
-}
 
 pub(super) fn try_run(root: &Path, args: &[String]) -> Option<Result<(), String>> {
     (args.first().map(String::as_str) == Some("probation")).then(|| run(root, &args[1..]))
@@ -132,10 +98,6 @@ fn print_report(name: &str, report: &ProbationReport) {
 
 fn usage() -> String {
     format!("Usage:\n{}", usage_line())
-}
-
-fn schema_one() -> u8 {
-    1
 }
 
 #[cfg(test)]

@@ -3,7 +3,10 @@ use std::collections::BTreeSet;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Deserialize;
 
-use crate::{ModelResponse, ProviderStreamEvent, ResponseBlock, StreamingToolCallAssembler, Usage};
+use crate::{
+    ModelResponse, OpenAiPromptTokenDetails, ProviderStreamEvent, ResponseBlock,
+    StreamingToolCallAssembler, Usage,
+};
 
 /// Stateful OpenAI chat-completions SSE parser that emits provider-neutral stream events.
 #[derive(Debug, Default)]
@@ -202,12 +205,6 @@ struct OpenAiStreamUsage {
     completion_tokens: u64,
     #[serde(default)]
     prompt_tokens_details: OpenAiPromptTokenDetails,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct OpenAiPromptTokenDetails {
-    #[serde(default)]
-    cached_tokens: u64,
 }
 
 impl OpenAiStreamUsage {

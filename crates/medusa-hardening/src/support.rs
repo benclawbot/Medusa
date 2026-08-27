@@ -8,6 +8,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+pub(crate) use storage::atomic_write;
+
 pub(crate) fn append_atomic(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
     let mut existing = if path.exists() {
         fs::read(path)?
@@ -15,7 +17,7 @@ pub(crate) fn append_atomic(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
         Vec::new()
     };
     existing.extend_from_slice(bytes);
-    atomic_write(path, &existing)
+    storage::atomic_write(path, &existing).map_err(MedusaError::from)
 }
 
 pub(crate) fn copy_tree(
@@ -119,11 +121,7 @@ fn collect_files(
 }
 
 pub(crate) fn atomic_json(path: &Path, value: &impl Serialize) -> MedusaResult<()> {
-    atomic_write(path, &serde_json::to_vec_pretty(value)?)
-}
-
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    storage::atomic_write(path, bytes)?;
+    storage::atomic_write(path, &serde_json::to_vec_pretty(value)?)?;
     Ok(())
 }
 

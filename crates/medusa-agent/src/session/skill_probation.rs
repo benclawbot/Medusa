@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 use medusa_core::MedusaResult;
+use medusa_skill::lifecycle::{ProbationPolicy, ProbationReport, ProbationSummary};
 use serde::{Deserialize, Serialize};
 
 const ACTIVE_SKILLS_ROOT: &str = ".medusa/skills";
@@ -38,39 +39,6 @@ struct BaselineRecommendation {
     observed_sessions: usize,
     verification_rate_milli: u16,
     confidence_milli: u16,
-}
-
-#[derive(Debug, Serialize)]
-struct ProbationSummary {
-    schema_version: u8,
-    policy: ProbationPolicy,
-    skills: BTreeMap<String, ProbationReport>,
-}
-
-#[derive(Debug, Serialize)]
-struct ProbationPolicy {
-    required_post_restore_samples: usize,
-    healthy_rate_milli: u16,
-    failure_rate_milli: u16,
-    automatic_quarantine: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ProbationReport {
-    state: String,
-    baseline_observed_sessions: usize,
-    baseline_verification_rate_milli: u16,
-    baseline_confidence_milli: u16,
-    post_restore_sessions: usize,
-    post_restore_verified_sessions: usize,
-    post_restore_verification_rate_milli: u16,
-    post_restore_confidence_milli: u16,
-    verification_rate_change_milli: i32,
-    remaining_samples: usize,
-    restored_at_epoch_seconds: Option<u64>,
-    dependency_graph_sha256: Option<String>,
-    latest_recorded_at: String,
-    recommendation: String,
 }
 
 pub(super) fn refresh(repo: &Path) -> MedusaResult<()> {

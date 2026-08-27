@@ -7,19 +7,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub use crate::lsp_navigation::{LspPosition, LspRange};
 use crate::{LspClient, LspError};
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct LspPosition {
-    pub line: u32,
-    pub character: u32,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct LspRange {
-    pub start: LspPosition,
-    pub end: LspPosition,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LspHover {

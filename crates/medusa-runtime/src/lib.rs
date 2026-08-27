@@ -18,8 +18,8 @@ use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, ConfigurationChanged, Mode, ProviderProfileStore};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
-    ConfiguredProvider, ImageSource, Message, MessageBlock, ModelProvider, ProviderExecutionPhase,
-    Role,
+    ImageSource, LazyConfiguredProviderManager, Message, MessageBlock, ModelProvider,
+    ProviderExecutionPhase, Role,
 };
 
 use crate::{
@@ -1617,7 +1617,7 @@ fn run_openai_oauth_prompt(
             "a Codex approval is pending, but the app-server process is no longer available; restart the session and review the request again",
         ));
     }
-    let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
+    let provider = LazyConfiguredProviderManager::from_config(&config, state.session_api_key.clone())
         .map_err(RuntimeError::agent)?;
     let mut engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
     if let Some((_, fingerprint, _)) = state
@@ -1984,7 +1984,7 @@ fn run_prompt(
         );
     }
     let max_turns = config.agent.max_turns;
-    let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
+    let provider = LazyConfiguredProviderManager::from_config(&config, state.session_api_key.clone())
         .map_err(RuntimeError::agent)?;
     let resuming_pending_question = state
         .session
@@ -2657,7 +2657,7 @@ fn run_prompt(
                             crate::production_orchestrator::projection(ledger),
                         ));
                     }
-                    let review_provider = ConfiguredProvider::manager_from_config(
+                    let review_provider = LazyConfiguredProviderManager::from_config(
                         &state.config,
                         state.session_api_key.clone(),
                     )
@@ -2972,6 +2972,7 @@ fn append_followups<P: ModelProvider>(
 }
 
 mod recovery_projection;
+mod recovery_model;
 mod recovery_tui;
 mod tool_policy;
 

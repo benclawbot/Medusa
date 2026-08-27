@@ -29,6 +29,53 @@ const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: u64 = 512 * 1024;
 const MAX_RUNTIME_SECONDS: u64 = 300;
 
+pub mod lifecycle {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Serialize};
+
+    fn schema_one() -> u8 {
+        1
+    }
+
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    pub struct ProbationPolicy {
+        pub required_post_restore_samples: usize,
+        pub healthy_rate_milli: u16,
+        pub failure_rate_milli: u16,
+        pub automatic_quarantine: bool,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct ProbationReport {
+        pub state: String,
+        pub baseline_observed_sessions: usize,
+        pub baseline_verification_rate_milli: u16,
+        pub baseline_confidence_milli: u16,
+        pub post_restore_sessions: usize,
+        pub post_restore_verified_sessions: usize,
+        pub post_restore_verification_rate_milli: u16,
+        pub post_restore_confidence_milli: u16,
+        pub verification_rate_change_milli: i32,
+        pub remaining_samples: usize,
+        pub restored_at_epoch_seconds: Option<u64>,
+        #[serde(default)]
+        pub dependency_graph_sha256: Option<String>,
+        pub latest_recorded_at: String,
+        pub recommendation: String,
+    }
+
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    pub struct ProbationSummary {
+        #[serde(default = "schema_one")]
+        pub schema_version: u8,
+        #[serde(default)]
+        pub policy: ProbationPolicy,
+        #[serde(default)]
+        pub skills: BTreeMap<String, ProbationReport>,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillRuntime {

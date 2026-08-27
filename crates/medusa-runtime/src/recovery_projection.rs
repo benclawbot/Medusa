@@ -16,26 +16,12 @@ use medusa_agent::session_browser::replay_events;
 use medusa_recovery_coordinator::{
     CheckpointPresentation, RecoveryPreview, RecoveryView, VerificationState,
 };
-use serde::Serialize;
-
 use crate::{
     RuntimeController, RuntimeError, checkpoint_payload, checkpoint_store, execution_history,
+    recovery_model::PersistedRecoveryRecord,
 };
 
 const RECOVERY_DIRECTORY: &str = ".medusa/recovery";
-
-#[derive(Debug, Serialize)]
-struct PersistedRecoveryRecord {
-    session_id: String,
-    last_durable_step: String,
-    interrupted_operation: Option<String>,
-    current_repository_fingerprint: String,
-    verification: VerificationState,
-    approvals_must_be_reestablished: bool,
-    containment_must_be_reestablished: bool,
-    checkpoints: Vec<CheckpointPresentation>,
-    selected_preview: Option<RecoveryPreview>,
-}
 
 impl RuntimeController {
     /// Returns the current recovery views derived from verified runtime state.

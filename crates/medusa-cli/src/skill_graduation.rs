@@ -1,42 +1,17 @@
 use std::{
-    collections::BTreeMap,
     fs,
     path::{Component, Path},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use medusa_core::storage;
+use medusa_skill::lifecycle::{ProbationReport, ProbationSummary};
 use serde::{Deserialize, Serialize};
 
 const ACTIVE_ROOT: &str = ".medusa/skills";
 const PROBATION_PATH: &str = ".medusa/learning/skill-probation/summary.json";
 const GRADUATION_ROOT: &str = ".medusa/learning/skill-graduations";
 const LIFECYCLE_FILE: &str = "lifecycle.json";
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ProbationSummary {
-    #[serde(default)]
-    skills: BTreeMap<String, ProbationReport>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct ProbationReport {
-    state: String,
-    baseline_observed_sessions: usize,
-    baseline_verification_rate_milli: u16,
-    baseline_confidence_milli: u16,
-    post_restore_sessions: usize,
-    post_restore_verified_sessions: usize,
-    post_restore_verification_rate_milli: u16,
-    post_restore_confidence_milli: u16,
-    verification_rate_change_milli: i32,
-    remaining_samples: usize,
-    restored_at_epoch_seconds: Option<u64>,
-    #[serde(default)]
-    dependency_graph_sha256: Option<String>,
-    latest_recorded_at: String,
-    recommendation: String,
-}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct LifecycleRecord {

@@ -1,10 +1,6 @@
 //! Bounded GitHub wire-format and persistence helpers for the verified updater.
 
-use std::{
-    fs::{self, File},
-    io::{Read, Write},
-    path::Path,
-};
+use std::{io::Read, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::blocking::Response;
@@ -50,21 +46,10 @@ pub(super) fn read_bounded(
     Ok(body)
 }
 
-pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let temporary = path.with_extension("tmp");
-    {
-        let mut file = File::create(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    fs::rename(&temporary, path)?;
-    sync_parent(path)
-}
-
 pub(super) fn sync_parent(path: &Path) -> MedusaResult<()> {
     #[cfg(unix)]
     if let Some(parent) = path.parent() {
-        File::open(parent)?.sync_all()?;
+        std::fs::File::open(parent)?.sync_all()?;
     }
     #[cfg(not(unix))]
     let _ = path;

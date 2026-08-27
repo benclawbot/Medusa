@@ -25,7 +25,7 @@ use medusa_agent::{
 use medusa_config::{Config, Mode};
 use medusa_core::{SessionId, hidden_command, storage};
 use medusa_multi_agent_scheduler::{ExecutionLane, Task, TaskState, Worker as ScheduledWorker};
-use medusa_provider::ConfiguredProvider;
+use medusa_provider::LazyConfiguredProviderManager;
 use medusa_workers::{Worker, WorkerState};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -688,7 +688,7 @@ fn execute_production_worker(
         .max_turns
         .max(1)
         .min(request.delegation.authority.max_turns);
-    let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
+    let provider = LazyConfiguredProviderManager::from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let role = team_role_for(request.contract.role);
     let engine =

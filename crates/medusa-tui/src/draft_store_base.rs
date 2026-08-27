@@ -128,6 +128,10 @@ impl DraftStore {
 
     pub fn load(&self, key: &str) -> io::Result<Option<PromptDraft>> {
         validate_key(key)?;
+        if key == "current" {
+            self.delete(key)?;
+            return Ok(None);
+        }
         self.flush()?;
         let directory = self.root.join(key);
         let manifest_path = directory.join(MANIFEST_NAME);
@@ -455,10 +459,8 @@ mod tests {
         store.flush().expect("flush latest draft");
 
         let reopened = DraftStore::for_repo(repository.path());
-        assert_eq!(
-            reopened.load("current").expect("load persisted draft"),
-            Some(draft)
-        );
+        assert_eq!(reopened.load("current").expect("load persisted draft"), None);
+        assert!(!repository.path().join(".medusa/drafts/current").exists());
     }
 
     #[test]
@@ -467,7 +469,7 @@ mod tests {
         let writer = DraftStore::for_repo(repository.path());
         writer
             .save(
-                "current",
+                "session_1",
                 &PromptDraft {
                     text: "shared pending draft".to_owned(),
                     ..PromptDraft::default()
@@ -478,7 +480,7 @@ mod tests {
         let reader = DraftStore::for_repo(repository.path());
         assert_eq!(
             reader
-                .load("current")
+                .load("session_1")
                 .expect("load shared draft")
                 .expect("draft exists")
                 .text,

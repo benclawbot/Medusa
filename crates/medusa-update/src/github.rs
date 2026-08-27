@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, storage};
 use reqwest::{
     StatusCode,
     blocking::{Client, Response},
@@ -23,7 +23,7 @@ use crate::{
 
 mod support;
 
-use support::{GithubAsset, GithubRelease, atomic_write, http_error, read_bounded, sync_parent};
+use support::{GithubAsset, GithubRelease, http_error, read_bounded, sync_parent};
 
 const GITHUB_API: &str = "https://api.github.com";
 const MAX_RELEASE_METADATA: usize = 4 * 1024 * 1024;
@@ -149,8 +149,8 @@ impl GithubReleaseClient {
             return Ok(());
         };
         fs::create_dir_all(directory)?;
-        atomic_write(&directory.join("latest.etag"), etag.as_bytes())?;
-        atomic_write(&directory.join("latest.json"), body)?;
+        storage::atomic_write(&directory.join("latest.etag"), etag.as_bytes())?;
+        storage::atomic_write(&directory.join("latest.json"), body)?;
         Ok(())
     }
 

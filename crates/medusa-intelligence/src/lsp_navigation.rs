@@ -20,13 +20,13 @@ pub enum LspNavigationKind {
     WorkspaceSymbol,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub struct LspPosition {
     pub line: u32,
     pub character: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 pub struct LspRange {
     pub start: LspPosition,
     pub end: LspPosition,
