@@ -1,0 +1,62 @@
+name: Snapshot repository staging
+
+on:
+  push:
+    branches:
+      - agent/652-desktop-daemon-authority-finalize
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+      - name: Package repository
+        run: tar --exclude=.git --exclude=repository-snapshot.tar.gz -czf repository-snapshot.tar.gz .
+      - name: Upload repository snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: repository-snapshot
+          path: repository-snapshot.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Publish snapshot run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from urllib.request import Request, urlopen
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          run_id = os.environ["GITHUB_RUN_ID"]
+          token = os.environ["GH_TOKEN"]
+          payload = json.dumps({
+              "state": "success",
+              "context": "repository-snapshot/run",
+              "description": f"snapshot run {run_id}",
+              "target_url": f"https://github.com/{repo}/actions/runs/{run_id}",
+          }).encode()
+          request = Request(
+              f"https://api.github.com/repos/{repo}/statuses/{sha}",
+              data=payload,
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "medusa-snapshot-staging",
+              },
+          )
+          with urlopen(request):
+              pass
+          PY
