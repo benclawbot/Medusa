@@ -4,6 +4,7 @@ import {
   Download,
   FileCode2,
   Filter,
+  GitCompareArrows,
   Link2,
   RefreshCw,
   RotateCcw,
