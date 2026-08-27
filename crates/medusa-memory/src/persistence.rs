@@ -56,7 +56,7 @@ impl MemoryEngine {
         Ok(documents)
     }
 
-    pub(crate) fn read_by_id(&self, id: &str) -> MedusaResult<(PathBuf, MemoryDocument)> {
+    pub fn read_by_id(&self, id: &str) -> MedusaResult<(PathBuf, MemoryDocument)> {
         self.documents()?
             .into_iter()
             .find(|(_, document)| document.id == id)
