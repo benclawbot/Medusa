@@ -487,6 +487,43 @@ Scheduled timer/heartbeat/file/process/external-signal wakeups enter the same du
   <img src="docs/assets/medusa-architecture.jpg" alt="Medusa architecture: interfaces, shared runtime, multi-agent execution, tools and policy, state and recovery, memory and learning, containment, and a shared authoritative data layer" width="100%">
 </p>
 
+### Manager boundaries
+
+| Crate | Responsibility |
+|---|---|
+| `medusa-cli` | User-facing command entry point |
+| `medusa-runtime` | Frontend-neutral interactive session control, commands, events, cancellation, follow-ups, and manager composition |
+| `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and daemon lifecycle visibility |
+| `medusa-daemon` | Cross-platform IPC, shared lifecycle supervision, bounded scheduling, overload backpressure, race-safe cancellation, descendant-safe immediate shutdown, persistence, recovery, and graceful draining |
+| `medusa-agent` | Agent Orchestrator: session lifecycle, planning, policy, completion verification, and the shared Tool Manager |
+| `medusa-capabilities` | Capability Manager: one discovered capability matrix for CLI, TUI, desktop, and model context |
+| `medusa-provider` | Provider Manager: provider-neutral contracts, bounded retry/failover, response cache, and health snapshots |
+| `medusa-github` | GitHub Manager: authenticated repository, pull request, issue, and Actions operations via GitHub CLI credential storage |
+| `medusa-update` | Update Manager: release discovery, provenance/checksum verification, platform installation, rollback, and restart |
+| `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
+| `medusa-memory` | Markdown storage, retrieval, provenance, and lifecycle |
+| `medusa-workers` | Parallel worktrees and deterministic merge coordination |
+| `medusa-extensions` | Skills, hooks, MCP isolation, and Desktop Commander integration |
+| `medusa-hardening` | Observability, migrations, archives, chaos recovery, and release evidence |
+| `medusa-browser-client` | Browser sidecar client and protocol |
+| `medusa-browserd` | Node.js and Playwright browser sidecar process |
+
+The manager boundaries are deliberately one-way: frontends depend on `medusa-runtime`; runtime composes capability, provider, and agent managers; the agent consumes the Tool Manager and capability context; service managers stay independent of presentation. This keeps future GitLab, Bitbucket, Azure DevOps, package sources, MCP servers, and model providers additive rather than changes to a monolithic runtime.
+
+## Desktop interface
+
+`apps/medusa-desktop` is the Zeus-derived alternative entry point. It preserves the three-panel desktop shell while replacing Zeus's separate agent implementation with a thin Tauri adapter over `medusa-runtime`.
+
+```bash
+cd apps/medusa-desktop
+npm ci
+npm run tauri:dev
+```
+
+Build the validated unsigned package targets for the current platform with `npm run tauri:build -- --bundles <targets>`. Linux uses `deb,appimage`, macOS uses `app,dmg`, and Windows uses `nsis`. See [Desktop distribution](docs/DESKTOP-DISTRIBUTION.md) for package validation, CI artifacts, draft-release assembly, provenance verification, and signing limitations.
+
+The desktop app uses the same session controller, provider configuration, skills, cancellation, follow-up queue, plans, questions, tools, memory, policy, and repository-scoped daemon supervisor as the TUI.
+
 The canonical coding path is:
 
 ```text
