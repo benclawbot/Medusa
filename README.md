@@ -12,7 +12,7 @@ The product model is **Plan, Execute Safely, Recover**:
 - **Execute Safely.** Read-only teammates scout the work. Git mutation can use a conflict-aware bounded implementation DAG with isolated worktrees; ordinary directories use one isolated content-addressed snapshot implementer. Review, independent verification, authorization, and integration remain separate runtime authorities.
 - **Recover.** Sessions, plans, events, approvals, worker leases, immutable candidates, delegation contracts, agent scopes, effective model-request manifests, transactions, verification, and recovery state live under `.medusa` as durable authority. Interruption, cancellation, or crash never gets rewritten as success.
 
-**Status (v1.0.5, `main`):
+**Status (v1.0.6, `main`):
 - **CLI, TUI, desktop application, daemon, telegram access, shared runtime**
 - Bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, effective model-request manifests, deterministic request reconstruction, certified tool execution, verified self-update, and repository-enforced engineering policy are shipped.
 

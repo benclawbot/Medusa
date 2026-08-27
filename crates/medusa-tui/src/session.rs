@@ -465,7 +465,17 @@ fn is_internal_notice(title: &str) -> bool {
             | "recovery completed"
             | "background daemon recovered"
             | "checkpoint created"
-    )
+            | "background daemon started"
+            | "background daemon connected"
+            | "model configuration updated"
+            | "runtime capabilities"
+            | "waiting for model or tool response"
+    ) || normalized.starts_with("configuration revision ")
+}
+
+fn is_internal_activity_title(title: &str) -> bool {
+    let normalized = title.trim().to_ascii_lowercase();
+    normalized == "waiting for model or tool response" || normalized.starts_with("requesting ")
 }
 
 fn user_visible_runtime_error(error: &str) -> String {
@@ -494,17 +504,16 @@ pub(super) fn drain_runtime_events(
         match event {
             RuntimeEvent::Started => {
                 app.begin_run();
-                app.record_activity(TranscriptActivity {
-                    id: None,
-                    kind: TranscriptActivityKind::Progress,
-                    title: "Waiting for model or tool response".to_owned(),
-                    details: Vec::new(),
-                });
             }
             RuntimeEvent::AssistantText(text) => {
                 app.record_assistant_text(text);
             }
             RuntimeEvent::Activity(activity) => {
+                if activity.id.as_deref() == Some("runtime-capabilities")
+                    || is_internal_activity_title(&activity.title)
+                {
+                    continue;
+                }
                 app.record_activity(TranscriptActivity {
                     id: activity.id,
                     kind: match activity.kind {
@@ -763,6 +772,26 @@ mod tests {
         assert!(!is_internal_notice("Recovery action failed closed"));
         assert!(!is_internal_notice("Checkpoint restore failed"));
         assert!(!is_internal_notice("Configuration updated"));
+    }
+
+    #[test]
+    fn routine_runtime_diagnostics_are_hidden_from_the_transcript() {
+        for title in [
+            "Model configuration updated",
+            "Runtime capabilities",
+            "Waiting for model or tool response",
+            "Configuration revision 4 applied",
+            "Background daemon connected",
+        ] {
+            assert!(is_internal_notice(title), "{title}");
+        }
+        for title in [
+            "Requesting openai-oauth/gpt-5.6-luna",
+            "Waiting for model or tool response",
+        ] {
+            assert!(is_internal_activity_title(title), "{title}");
+        }
+        assert!(!is_internal_activity_title("Inspect repository"));
     }
 
     #[test]

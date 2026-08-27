@@ -21,6 +21,9 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 const APP_SERVER_TIMEOUT: &str = "timed out waiting for Codex app-server";
+// OAuth credentials are owned by the first-party Codex service; do not inherit
+// a user's unrelated local router endpoint from the Codex CLI configuration.
+const DIRECT_CHATGPT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 #[derive(Clone, Debug)]
 pub struct PendingServerRequest {
@@ -109,7 +112,7 @@ impl Drop for CodexAppServer {
 impl CodexAppServer {
     pub fn connect() -> Result<Self, String> {
         let mut child = hidden_command(codex_program())
-            .args(["app-server", "--stdio"])
+            .args(codex_app_server_args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -698,6 +701,15 @@ pub fn codex_program() -> &'static str {
     if cfg!(windows) { "codex.cmd" } else { "codex" }
 }
 
+fn codex_app_server_args() -> Vec<String> {
+    vec![
+        "app-server".to_owned(),
+        "--stdio".to_owned(),
+        "-c".to_owned(),
+        format!("openai_base_url={DIRECT_CHATGPT_BASE_URL:?}"),
+    ]
+}
+
 fn read_protocol_lines(stdout: impl io::Read, sender: mpsc::Sender<Result<Value, String>>) {
     let mut reader = BufReader::new(stdout);
     loop {
@@ -908,5 +920,17 @@ mod tests {
         assert_eq!(codex_program(), "codex.cmd");
         #[cfg(not(windows))]
         assert_eq!(codex_program(), "codex");
+    }
+
+    #[test]
+    fn app_server_launch_args_force_the_direct_chatgpt_endpoint() {
+        let args = codex_app_server_args();
+        assert_eq!(args.first().map(String::as_str), Some("app-server"));
+        assert_eq!(args.get(1).map(String::as_str), Some("--stdio"));
+        assert_eq!(args.get(2).map(String::as_str), Some("-c"));
+        assert_eq!(
+            args.get(3).map(String::as_str),
+            Some("openai_base_url=\"https://chatgpt.com/backend-api/codex\"")
+        );
     }
 }

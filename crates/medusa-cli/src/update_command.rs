@@ -11,6 +11,7 @@ use medusa_update::{
     MainArtifactProgress, MainBranchUpdater, MainBuildProgress, Platform, ReleaseClient, Restart,
     UpdateCheck, UpdateDiagnostics, UpdatePhase, UpdatePolicy,
 };
+use crossterm::terminal;
 use semver::Version;
 use sha2::{Digest, Sha256};
 
@@ -22,6 +23,8 @@ const BUILD_PHASE_END: u8 = 78;
 const BUILD_ESTIMATE: Duration = Duration::from_secs(360);
 const BUILD_PIECE_ESTIMATE: usize = 272;
 const PROGRESS_WIDTH: usize = 32;
+const MIN_PROGRESS_BAR_WIDTH: usize = 12;
+const DEFAULT_TERMINAL_WIDTH: usize = 120;
 
 pub(super) fn run(
     repo: &Path,
@@ -319,6 +322,7 @@ struct UpdateProgress {
     current_version: String,
     new_version: String,
     download_started: Option<Instant>,
+    terminal_width: usize,
 }
 
 impl UpdateProgress {
@@ -335,6 +339,7 @@ impl UpdateProgress {
             current_version,
             new_version,
             download_started: None,
+            terminal_width: terminal_width(),
         }
     }
 
@@ -417,13 +422,14 @@ impl UpdateProgress {
         let _ = write!(
             stderr,
             "{}",
-            render_progress_line(
+            render_progress_line_with_width(
                 self.stage,
                 percent,
                 &self.detail,
                 &self.current_version,
                 &self.new_version,
                 self.colors,
+                self.terminal_width,
             )
         );
         let _ = stderr.flush();
@@ -492,6 +498,7 @@ fn estimate_build_percent(elapsed: Duration, compiled_packages: usize) -> u8 {
     BUILD_PHASE_START.saturating_add((ratio * span).round() as u8)
 }
 
+#[cfg(test)]
 fn render_progress_line(
     stage: UpdateStage,
     percent: u8,
@@ -500,40 +507,112 @@ fn render_progress_line(
     new_version: &str,
     colors: bool,
 ) -> String {
+    render_progress_line_with_width(
+        stage,
+        percent,
+        detail,
+        current_version,
+        new_version,
+        colors,
+        usize::MAX,
+    )
+}
+
+fn render_progress_line_with_width(
+    stage: UpdateStage,
+    percent: u8,
+    detail: &str,
+    current_version: &str,
+    new_version: &str,
+    colors: bool,
+    terminal_width: usize,
+) -> String {
     let percent = percent.min(100);
-    let filled = usize::from(percent) * PROGRESS_WIDTH / 100;
-    let bar = if colors {
-        format!(
-            "{}{}\u{1b}[0m\u{1b}[2m{}\u{1b}[0m",
-            stage.color(),
-            "█".repeat(filled),
-            "░".repeat(PROGRESS_WIDTH.saturating_sub(filled))
-        )
-    } else {
-        format!(
-            "{}{}",
-            "█".repeat(filled),
-            "░".repeat(PROGRESS_WIDTH.saturating_sub(filled))
-        )
-    };
-    let prefix = if colors { "\r\u{1b}[2K" } else { "\r" };
-    let title = version_transition(current_version, new_version);
     let percent_label = if stage == UpdateStage::Building {
         format!("{percent:3}% est.")
     } else {
         format!("{percent:3}%")
     };
+    let stage_label = stage.label();
+    let title_prefix = "Updating Medusa ";
+    let suffix = format!("] {percent_label} · {stage_label} · ");
+    let minimum_bar_width = MIN_PROGRESS_BAR_WIDTH.min(terminal_width);
+    let title_budget = terminal_width
+        .saturating_sub(title_prefix.chars().count())
+        .saturating_sub(suffix.chars().count())
+        .saturating_sub(minimum_bar_width)
+        .saturating_sub(2);
+    let title = truncate_display(&version_transition(current_version, new_version), title_budget);
+    let overhead = title_prefix.chars().count()
+        + title.chars().count()
+        + 2
+        + suffix.chars().count();
+    let bar_width = PROGRESS_WIDTH.min(
+        terminal_width
+            .saturating_sub(overhead)
+            .max(minimum_bar_width),
+    );
+    let detail_budget = terminal_width.saturating_sub(overhead + bar_width);
+    let detail = truncate_display(detail, detail_budget);
+    let filled = usize::from(percent) * bar_width / 100;
+    let plain_bar = format!(
+        "{}{}",
+        "█".repeat(filled),
+        "░".repeat(bar_width.saturating_sub(filled))
+    );
+    let bar = if colors {
+        format!(
+            "{}{}\u{1b}[0m\u{1b}[2m{}\u{1b}[0m",
+            stage.color(),
+            "█".repeat(filled),
+            "░".repeat(bar_width.saturating_sub(filled))
+        )
+    } else {
+        plain_bar.clone()
+    };
+    let prefix = if colors { "\r\u{1b}[2K" } else { "\r" };
+    let visible_line = format!(
+        "{title_prefix}{title} [{plain_bar}] {percent_label} · {stage_label} · {detail}"
+    );
+    debug_assert!(
+        terminal_width == usize::MAX || visible_line.chars().count() <= terminal_width,
+        "progress line exceeds terminal width: {} > {}",
+        visible_line.chars().count(),
+        terminal_width
+    );
     if colors {
         format!(
-            "{prefix}\u{1b}[1;36mUpdating Medusa\u{1b}[0m {title} [{bar}] {percent_label} · {} · {detail}",
-            stage.label()
+            "{prefix}\u{1b}[1;36mUpdating Medusa\u{1b}[0m {title} [{bar}] {percent_label} · {stage_label} · {detail}"
         )
     } else {
         format!(
-            "{prefix}Updating Medusa {title} [{bar}] {percent_label} · {} · {detail}",
-            stage.label()
+            "{prefix}{visible_line}"
         )
     }
+}
+
+fn terminal_width() -> usize {
+    terminal::size()
+        .ok()
+        .map(|(width, _)| usize::from(width))
+        .filter(|width| *width > 0)
+        .unwrap_or(DEFAULT_TERMINAL_WIDTH)
+}
+
+fn truncate_display(value: &str, max_width: usize) -> String {
+    let width = value.chars().count();
+    if width <= max_width {
+        return value.to_owned();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_owned();
+    }
+    let mut truncated = value.chars().take(max_width - 1).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 fn version_transition(current: &str, new: &str) -> String {
@@ -654,6 +733,21 @@ mod tests {
 
         assert!(line.contains("Installing"));
         assert!(!line.contains("\u{1b}["));
+    }
+
+    #[test]
+    fn progress_line_is_width_safe_for_narrow_windows_terminals() {
+        let line = render_progress_line_with_width(
+            UpdateStage::Downloading,
+            42,
+            "123.4 MiB / 567.8 MiB · 12.4 MiB/s · ETA 00:37",
+            "1.0.5 (5b97a73ef0d4)",
+            "1.0.5 (5c17d7f00f4f)",
+            false,
+            80,
+        );
+        let visible = line.trim_start_matches('\r');
+        assert!(visible.chars().count() <= 80, "line wrapped: {visible}");
     }
 
     #[test]
