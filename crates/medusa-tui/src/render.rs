@@ -122,10 +122,8 @@ fn active_status(app: &AppState) -> &str {
 
 pub(super) fn running_status(app: &AppState) -> String {
     format!(
-        "{} ({} · turn {})",
-        active_status(app),
-        format_elapsed(app.elapsed_seconds().unwrap_or_default()),
-        app.active_turn
+        "working... · {}",
+        format_elapsed(app.elapsed_seconds().unwrap_or_default())
     )
 }
 
@@ -447,7 +445,7 @@ pub(super) fn render_frame(
         return frame;
     }
     let mut row = usize::from(HEADER_TOP_PADDING);
-    let status = if app.is_running() {
+    let status = if app.is_waiting_for_answer() {
         running_status(app)
     } else {
         active_status(app).to_owned()
@@ -517,7 +515,7 @@ pub(super) fn render_frame(
     let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
     let content_rows = usize::from(height.saturating_sub(composer_height + header_height));
     let mut content = transcript_lines(app, width);
-    if app.is_running() {
+    if app.is_waiting_for_answer() {
         content.push(StyledLine::with_marker(
             spinner_marker(app.spinner_frame),
             Color::Magenta,

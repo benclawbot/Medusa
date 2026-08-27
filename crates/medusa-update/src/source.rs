@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     io::{self, BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -45,6 +45,7 @@ pub struct MainBranchRevision {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MainBuildProgress {
     pub compiled_packages: usize,
+    pub total_packages: Option<usize>,
     pub current_package: Option<String>,
     pub elapsed: Duration,
 }
@@ -236,8 +237,14 @@ impl MainBranchUpdater {
         let target_dir = cargo_target_directory(repo);
         fs::create_dir_all(&target_dir)?;
         let started = Instant::now();
-        let compiled_packages =
-            run_cargo_install(&revision, &install_root, &target_dir, &mut progress)?;
+        let total_packages = cargo_package_count(&revision, workspace.path());
+        let compiled_packages = run_cargo_install(
+            &revision,
+            &install_root,
+            &target_dir,
+            total_packages,
+            &mut progress,
+        )?;
 
         let candidate = install_root.join("bin").join(medusa_binary_name());
         let installer = AtomicInstaller::new(executable.to_path_buf());
@@ -254,6 +261,7 @@ impl MainBranchUpdater {
         let scheduled = installer.schedule_replace(&candidate, &restart, parent_pid)?;
         progress(MainBuildProgress {
             compiled_packages,
+            total_packages,
             current_package: None,
             elapsed: started.elapsed(),
         });
@@ -630,10 +638,109 @@ fn ensure_cargo_available() -> MedusaResult<()> {
         })
 }
 
+#[derive(Deserialize)]
+struct CargoMetadata {
+    resolve: Option<CargoResolve>,
+}
+
+#[derive(Deserialize)]
+struct CargoResolve {
+    root: Option<String>,
+    nodes: Vec<CargoNode>,
+}
+
+#[derive(Deserialize)]
+struct CargoNode {
+    id: String,
+    deps: Vec<CargoDependency>,
+}
+
+#[derive(Deserialize)]
+struct CargoDependency {
+    pkg: String,
+    dep_kinds: Vec<CargoDependencyKind>,
+}
+
+#[derive(Deserialize)]
+struct CargoDependencyKind {
+    kind: Option<String>,
+}
+
+fn cargo_package_count(revision: &str, workspace: &Path) -> Option<usize> {
+    let probe_root = workspace.join("metadata-probe");
+    fs::create_dir_all(&probe_root).ok()?;
+    let manifest = probe_root.join("Cargo.toml");
+    let manifest_text = format!(
+        "[package]\nname = \"medusa-main-build-probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\nmedusa-cli = {{ git = \"{REPOSITORY_URL}\", rev = \"{revision}\" }}\n"
+    );
+    fs::write(&manifest, manifest_text).ok()?;
+
+    let lockfile = Command::new("cargo")
+        .args(["generate-lockfile", "--manifest-path"])
+        .arg(&manifest)
+        .output()
+        .ok()?;
+    if !lockfile.status.success() {
+        return None;
+    }
+
+    let mut metadata_command = Command::new("cargo");
+    metadata_command
+        .args(["metadata", "--manifest-path"])
+        .arg(&manifest)
+        .args(["--format-version", "1", "--locked"]);
+    if let Some(target) = rustc_host_target() {
+        metadata_command.args(["--filter-platform", &target]);
+    }
+    let output = metadata_command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let metadata = serde_json::from_slice::<CargoMetadata>(&output.stdout).ok()?;
+    let resolve = metadata.resolve?;
+    let root = resolve.root?;
+    let nodes = resolve
+        .nodes
+        .into_iter()
+        .map(|node| (node.id.clone(), node))
+        .collect::<HashMap<_, _>>();
+    let mut seen = HashSet::new();
+    let mut pending = VecDeque::from([root.clone()]);
+    while let Some(id) = pending.pop_front() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let Some(node) = nodes.get(&id) else {
+            return None;
+        };
+        for dependency in &node.deps {
+            if dependency
+                .dep_kinds
+                .iter()
+                .any(|kind| kind.kind.as_deref() != Some("dev"))
+            {
+                pending.push_back(dependency.pkg.clone());
+            }
+        }
+    }
+    Some(seen.len().saturating_sub(1))
+}
+
+fn rustc_host_target() -> Option<String> {
+    let output = Command::new("rustc").arg("-vV").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
+}
+
 fn run_cargo_install(
     revision: &str,
     install_root: &Path,
     target_dir: &Path,
+    total_packages: Option<usize>,
     progress: &mut impl FnMut(MainBuildProgress),
 ) -> MedusaResult<usize> {
     let mut child = Command::new("cargo")
@@ -661,6 +768,7 @@ fn run_cargo_install(
     let mut output_tail = VecDeque::with_capacity(8);
     progress(MainBuildProgress {
         compiled_packages: 0,
+        total_packages,
         current_package: None,
         elapsed: Duration::ZERO,
     });
@@ -680,6 +788,7 @@ fn run_cargo_install(
                 }
                 progress(MainBuildProgress {
                     compiled_packages: compiled.len(),
+                    total_packages,
                     current_package: package,
                     elapsed: started.elapsed(),
                 });
@@ -692,6 +801,7 @@ fn run_cargo_install(
             }
             Err(mpsc::RecvTimeoutError::Timeout) => progress(MainBuildProgress {
                 compiled_packages: compiled.len(),
+                total_packages,
                 current_package: None,
                 elapsed: started.elapsed(),
             }),

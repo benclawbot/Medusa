@@ -845,6 +845,15 @@ impl AppState {
         self.run_started_at.is_some()
     }
 
+    #[must_use]
+    pub fn is_waiting_for_answer(&self) -> bool {
+        self.is_running()
+            && !matches!(
+                self.transcript.last(),
+                Some(TranscriptEntry::Assistant(_))
+            )
+    }
+
     pub fn record_activity(&mut self, activity: TranscriptActivity) {
         if let Some(id) = activity.id.as_deref()
             && let Some(existing) = self

@@ -24,7 +24,10 @@ pub fn project_event(
     presentation_cursor: u64,
     frontend_kind: FrontendKind,
 ) -> Option<FrontendEventEnvelope> {
-    if presentation_cursor == 0 || event.validate().is_err() {
+    if presentation_cursor == 0
+        || event.validate().is_err()
+        || is_hidden_execution_event(&event.payload)
+    {
         return None;
     }
     let frontend = match &event.payload {
@@ -407,6 +410,21 @@ fn activity(
         affected_paths: Vec::new(),
         evidence_ref,
     }
+}
+
+fn is_hidden_execution_event(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::ModelRequestStarted { .. }
+            | EventPayload::ModelRequestFailed { .. }
+            | EventPayload::ProviderExecutionRecorded { .. }
+            | EventPayload::ToolCallRequested { .. }
+            | EventPayload::ToolExecutionStarted { .. }
+            | EventPayload::ToolOutputChunk { .. }
+            | EventPayload::ToolExecutionCompleted { .. }
+            | EventPayload::ToolExecutionTimingRecorded { .. }
+            | EventPayload::CheckpointCreated { .. }
+    )
 }
 
 fn visible_assistant_text(message: &Value) -> Option<String> {
@@ -1071,19 +1089,59 @@ mod tests {
     }
 
     #[test]
-    fn secret_like_tool_arguments_are_not_projected() {
-        let projected = project_event(
-            &event(EventPayload::ToolCallRequested {
+    fn model_and_primary_tool_activity_is_not_projected() {
+        let payloads = vec![
+            EventPayload::ModelRequestStarted {
+                provider: "provider".to_owned(),
+                model: "model".to_owned(),
+                request_id: None,
+                request_fingerprint: None,
+                manifest_ref: None,
+                attempt_ordinal: 0,
+                parent_request_id: None,
+            },
+            EventPayload::ModelRequestFailed {
+                request_id: "request".to_owned(),
+                request_fingerprint: "fingerprint".to_owned(),
+                error: "failed".to_owned(),
+            },
+            EventPayload::ProviderExecutionRecorded {
+                status: json!({"status": "running"}),
+            },
+            EventPayload::ToolCallRequested {
                 tool: "shell_run".to_owned(),
                 arguments: json!({"command": "cargo test", "api_token": "do-not-render"}),
-            }),
-            1,
-            FrontendKind::Telegram,
-        )
-        .expect("projection");
-        let FrontendEvent::Activity(activity) = projected.event else {
-            panic!("expected activity")
-        };
-        assert_eq!(activity.details, vec!["command: cargo test"]);
+            },
+            EventPayload::ToolExecutionStarted {
+                tool: "shell_run".to_owned(),
+            },
+            EventPayload::ToolOutputChunk {
+                artifact_ref: "artifact".to_owned(),
+                byte_count: 12,
+            },
+            EventPayload::ToolExecutionCompleted {
+                tool: "shell_run".to_owned(),
+                exit_code: Some(0),
+            },
+            EventPayload::ToolExecutionTimingRecorded {
+                tool_use_id: "tool-use".to_owned(),
+                tool: "shell_run".to_owned(),
+                queue_duration_ns: 1,
+                execution_duration_ns: 2,
+                expected_duration_ms: 3,
+                concurrency_cost: 1,
+                cached: false,
+            },
+            EventPayload::CheckpointCreated {
+                checkpoint_id: "checkpoint".to_owned(),
+            },
+        ];
+
+        for payload in payloads {
+            assert!(
+                project_event(&event(payload), 1, FrontendKind::Telegram).is_none(),
+                "low-level execution payload was projected"
+            );
+        }
     }
 }

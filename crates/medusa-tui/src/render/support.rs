@@ -50,21 +50,16 @@ pub(super) fn center_or_crop(line: &str, block_width: usize, width: u16) -> Stri
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ActivityGroup {
-    Execution,
     Verification,
 }
 
-fn activity_group(activity: &TranscriptActivity) -> ActivityGroup {
-    if matches!(activity.kind, TranscriptActivityKind::Verification) {
-        ActivityGroup::Verification
-    } else {
-        ActivityGroup::Execution
-    }
+fn activity_group(activity: &TranscriptActivity) -> Option<ActivityGroup> {
+    matches!(activity.kind, TranscriptActivityKind::Verification)
+        .then_some(ActivityGroup::Verification)
 }
 
 fn activity_group_heading(group: ActivityGroup) -> StyledLine {
     match group {
-        ActivityGroup::Execution => StyledLine::new("Execution activity", Color::DarkYellow),
         ActivityGroup::Verification => StyledLine::new("Verification evidence", Color::Blue),
     }
 }
@@ -115,9 +110,13 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
             }
             TranscriptEntry::Activity(activity) => {
                 let group = activity_group(activity);
-                if previous_activity_group != Some(group) {
-                    lines.push(activity_group_heading(group));
+                if let Some(group) = group {
+                    if previous_activity_group != Some(group) {
+                        lines.push(activity_group_heading(group));
+                    }
                     previous_activity_group = Some(group);
+                } else {
+                    previous_activity_group = None;
                 }
                 lines.extend(activity_lines(
                     activity,

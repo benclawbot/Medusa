@@ -350,7 +350,7 @@ mod tests {
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>();
-        assert!(text.contains(&"Execution activity"));
+        assert!(!text.contains(&"Execution activity"));
         assert!(text.contains(&"[running] Inspect repository"));
         assert!(text.contains(&"[succeeded] Patch applied"));
         assert!(text.contains(&"Verification evidence"));
@@ -453,6 +453,27 @@ mod tests {
     }
 
     #[test]
+    fn working_spinner_is_replaced_by_the_assistant_answer() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "working-indicator",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
+        app.begin_run();
+        let working = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
+        assert!(working.iter().any(|line| line.text.contains("working...")));
+
+        app.record_assistant_text("answer".to_owned());
+        let answered = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
+        assert!(answered.iter().any(|line| line.text.contains("answer")));
+        assert!(!answered.iter().any(|line| line.text.contains("working...")));
+    }
+
+    #[test]
     fn running_status_and_header_metrics_use_real_accounting() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
@@ -466,7 +487,7 @@ mod tests {
         app.update_turn(3);
         app.record_usage(0, 300, 0, 0, 0);
         app.record_usage(700, 1_200, 200, 100, 2_000);
-        assert_eq!(running_status(&app), "Working (0s · turn 3)");
+        assert_eq!(running_status(&app), "working... · 0s");
         assert_eq!(
             session_metrics_line(&app, 120),
             "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 1.2k tok/s"

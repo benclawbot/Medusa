@@ -17,9 +17,8 @@ use sha2::{Digest, Sha256};
 
 const BUILD_PHASE_START: u8 = 5;
 const BUILD_PHASE_END: u8 = 78;
-// A fresh Windows build emitted 272 distinct `Compiling` packages before
-// exceeding 290 seconds in a cold environment. Keep the estimate conservative
-// so the bar remains informative instead of reaching its cap too early.
+// Fallback when the exact revision's Cargo metadata cannot be resolved before
+// the build starts. Normal builds display the resolved package count instead.
 const BUILD_ESTIMATE: Duration = Duration::from_secs(360);
 const BUILD_PIECE_ESTIMATE: usize = 272;
 const PROGRESS_WIDTH: usize = 32;
@@ -319,6 +318,7 @@ struct UpdateProgress {
     last_percent: u8,
     stage: UpdateStage,
     detail: String,
+    stage_label: String,
     current_version: String,
     new_version: String,
     download_started: Option<Instant>,
@@ -336,6 +336,7 @@ impl UpdateProgress {
             last_percent: u8::MAX,
             stage: UpdateStage::Preparing,
             detail: String::new(),
+            stage_label: UpdateStage::Preparing.label().to_owned(),
             current_version,
             new_version,
             download_started: None,
@@ -361,6 +362,15 @@ impl UpdateProgress {
     }
 
     fn build(&mut self, snapshot: MainBuildProgress) {
+        let total = snapshot
+            .total_packages
+            .filter(|total| *total > 0)
+            .unwrap_or(BUILD_PIECE_ESTIMATE);
+        let total_prefix = if snapshot.total_packages.is_some() {
+            ""
+        } else {
+            "~"
+        };
         let package = snapshot
             .current_package
             .as_deref()
@@ -371,15 +381,18 @@ impl UpdateProgress {
         } else {
             String::new()
         };
-        self.stage(
+        self.stage_with_label(
             UpdateStage::Building,
-            estimate_build_percent(snapshot.elapsed, snapshot.compiled_packages),
+            estimate_build_percent(snapshot.elapsed, snapshot.compiled_packages, total),
             format!(
-                "{}{} crates · {} elapsed{}",
+                "{}{} elapsed{}",
                 phase,
-                snapshot.compiled_packages,
                 format_elapsed(snapshot.elapsed),
                 package
+            ),
+            format!(
+                "Building {}/{}{} crates",
+                snapshot.compiled_packages, total_prefix, total
             ),
         );
     }
@@ -406,24 +419,41 @@ impl UpdateProgress {
     }
 
     fn stage(&mut self, stage: UpdateStage, percent: u8, detail: impl Into<String>) {
+        self.stage_with_label(stage, percent, detail, stage.label());
+    }
+
+    fn stage_with_label(
+        &mut self,
+        stage: UpdateStage,
+        percent: u8,
+        detail: impl Into<String>,
+        stage_label: impl Into<String>,
+    ) {
         if !self.enabled {
             return;
         }
         let percent = percent.min(100);
         let detail = detail.into();
-        if self.last_percent == percent && self.stage == stage && self.detail == detail {
+        let stage_label = stage_label.into();
+        if self.last_percent == percent
+            && self.stage == stage
+            && self.detail == detail
+            && self.stage_label == stage_label
+        {
             return;
         }
         self.started = true;
         self.last_percent = percent;
         self.stage = stage;
         self.detail = detail;
+        self.stage_label = stage_label;
         let mut stderr = io::stderr().lock();
         let _ = write!(
             stderr,
             "{}",
             render_progress_line_with_width(
                 self.stage,
+                &self.stage_label,
                 percent,
                 &self.detail,
                 &self.current_version,
@@ -490,9 +520,9 @@ fn policy_error(message: impl Into<String>) -> MedusaError {
 }
 
 // Helpers are kept above the test module so all-target Clippy can lint the test target.
-fn estimate_build_percent(elapsed: Duration, compiled_packages: usize) -> u8 {
+fn estimate_build_percent(elapsed: Duration, compiled_packages: usize, total_packages: usize) -> u8 {
     let time_ratio = elapsed.as_secs_f64() / BUILD_ESTIMATE.as_secs_f64();
-    let pieces_ratio = compiled_packages as f64 / BUILD_PIECE_ESTIMATE as f64;
+    let pieces_ratio = compiled_packages as f64 / total_packages.max(1) as f64;
     let ratio = (time_ratio * 0.65 + pieces_ratio * 0.35).clamp(0.0, 0.98);
     let span = f64::from(BUILD_PHASE_END - BUILD_PHASE_START);
     BUILD_PHASE_START.saturating_add((ratio * span).round() as u8)
@@ -509,6 +539,7 @@ fn render_progress_line(
 ) -> String {
     render_progress_line_with_width(
         stage,
+        stage.label(),
         percent,
         detail,
         current_version,
@@ -520,6 +551,7 @@ fn render_progress_line(
 
 fn render_progress_line_with_width(
     stage: UpdateStage,
+    stage_label: &str,
     percent: u8,
     detail: &str,
     current_version: &str,
@@ -533,7 +565,6 @@ fn render_progress_line_with_width(
     } else {
         format!("{percent:3}%")
     };
-    let stage_label = stage.label();
     let title_prefix = "Updating Medusa ";
     let suffix = format!("] {percent_label} · {stage_label} · ");
     let minimum_bar_width = MIN_PROGRESS_BAR_WIDTH.min(terminal_width);
@@ -693,13 +724,30 @@ mod tests {
 
     #[test]
     fn build_progress_estimate_uses_elapsed_time_and_compiled_pieces() {
-        let early = estimate_build_percent(Duration::from_secs(5), 2);
-        let more_pieces = estimate_build_percent(Duration::from_secs(5), 12);
-        let more_time = estimate_build_percent(Duration::from_secs(30), 2);
+        let early = estimate_build_percent(Duration::from_secs(5), 2, BUILD_PIECE_ESTIMATE);
+        let more_pieces = estimate_build_percent(Duration::from_secs(5), 12, BUILD_PIECE_ESTIMATE);
+        let more_time = estimate_build_percent(Duration::from_secs(30), 2, BUILD_PIECE_ESTIMATE);
 
         assert!(more_pieces > early);
         assert!(more_time > early);
         assert!(more_time < BUILD_PHASE_END);
+    }
+
+    #[test]
+    fn build_progress_line_shows_compiled_and_total_crates() {
+        let line = render_progress_line_with_width(
+            UpdateStage::Building,
+            "Building 235/305 crates",
+            77,
+            "02:10 elapsed · medusa-runtime",
+            "1.0.6 (old)",
+            "1.0.7 (new)",
+            false,
+            120,
+        );
+
+        assert!(line.contains("Building 235/305 crates"));
+        assert!(line.contains("77% est."));
     }
 
     #[test]
@@ -739,6 +787,7 @@ mod tests {
     fn progress_line_is_width_safe_for_narrow_windows_terminals() {
         let line = render_progress_line_with_width(
             UpdateStage::Downloading,
+            "Downloading",
             42,
             "123.4 MiB / 567.8 MiB · 12.4 MiB/s · ETA 00:37",
             "1.0.5 (5b97a73ef0d4)",

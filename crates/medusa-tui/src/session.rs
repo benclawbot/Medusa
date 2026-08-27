@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     daemon_status::DaemonMonitor,
     render::support::{app_error, runtime_error},
+    runtime::RuntimeActivity,
 };
 use std::time::Instant;
 
@@ -475,7 +476,20 @@ fn is_internal_notice(title: &str) -> bool {
 
 fn is_internal_activity_title(title: &str) -> bool {
     let normalized = title.trim().to_ascii_lowercase();
-    normalized == "waiting for model or tool response" || normalized.starts_with("requesting ")
+    normalized == "provider execution"
+        || normalized == "checkpoint created"
+        || normalized == "model response received"
+        || normalized == "provider attempt classified"
+        || normalized.starts_with("requesting ")
+        || normalized.starts_with("waiting for ")
+        || normalized.starts_with("codex ")
+}
+
+fn is_user_visible_activity(activity: &RuntimeActivity) -> bool {
+    !matches!(
+        activity.kind,
+        RuntimeActivityKind::Assistant | RuntimeActivityKind::Tool
+    ) && !is_internal_activity_title(&activity.title)
 }
 
 fn user_visible_runtime_error(error: &str) -> String {
@@ -510,7 +524,7 @@ pub(super) fn drain_runtime_events(
             }
             RuntimeEvent::Activity(activity) => {
                 if activity.id.as_deref() == Some("runtime-capabilities")
-                    || is_internal_activity_title(&activity.title)
+                    || !is_user_visible_activity(&activity)
                 {
                     continue;
                 }
@@ -792,6 +806,28 @@ mod tests {
             assert!(is_internal_activity_title(title), "{title}");
         }
         assert!(!is_internal_activity_title("Inspect repository"));
+    }
+
+    #[test]
+    fn model_and_primary_tool_activities_are_hidden_but_failures_remain_visible() {
+        for (kind, title) in [
+            (RuntimeActivityKind::Assistant, "Model response received"),
+            (RuntimeActivityKind::Tool, "Shell(cargo test)"),
+            (RuntimeActivityKind::Done, "Checkpoint created"),
+        ] {
+            assert!(!is_user_visible_activity(&RuntimeActivity {
+                id: None,
+                kind,
+                title: title.to_owned(),
+                details: Vec::new(),
+            }));
+        }
+        assert!(is_user_visible_activity(&RuntimeActivity {
+            id: None,
+            kind: RuntimeActivityKind::Error,
+            title: "Shell(cargo test) failed".to_owned(),
+            details: vec!["exit code: 1".to_owned()],
+        }));
     }
 
     #[test]
