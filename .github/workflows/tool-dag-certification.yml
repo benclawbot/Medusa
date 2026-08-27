@@ -1,14 +1,6 @@
 name: Tool DAG Certification
 
 on:
-  pull_request:
-    paths:
-      - 'crates/medusa-agent/**'
-      - 'crates/medusa-process-containment/**'
-      - 'crates/medusa-protocol/**'
-      - 'benchmarks/performance/baselines/tool-dag-v1.json'
-      - 'scripts/performance/certify_tool_dag.py'
-      - '.github/workflows/tool-dag-certification.yml'
   schedule:
     - cron: '41 3 * * 2'
   workflow_dispatch:

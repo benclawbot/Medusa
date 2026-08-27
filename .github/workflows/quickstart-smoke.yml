@@ -5,6 +5,7 @@ on:
     paths:
       - "crates/medusa-cli/**"
       - "docs/quickstart.md"
+  workflow_dispatch:
 
 permissions:
   contents: read

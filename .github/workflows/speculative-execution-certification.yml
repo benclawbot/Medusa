@@ -1,17 +1,13 @@
 name: Speculative Execution Certification
 
 on:
-  pull_request:
-    paths:
-      - 'crates/medusa-multi-agent-scheduler/**'
-      - 'crates/medusa-runtime/**'
-      - '.github/workflows/speculative-execution-certification.yml'
   push:
     branches: [main]
     paths:
       - 'crates/medusa-multi-agent-scheduler/**'
       - 'crates/medusa-runtime/**'
       - '.github/workflows/speculative-execution-certification.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read

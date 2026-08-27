@@ -1,13 +1,6 @@
 name: Browser Dispatch Hardening Certification
 
 on:
-  pull_request:
-    paths:
-      - "browser/**"
-      - "crates/medusa-agent/**"
-      - "crates/medusa-browser-client/**"
-      - "crates/medusa-browserd/**"
-      - ".github/workflows/browser-dispatch-hardening-certification.yml"
   push:
     branches: [main]
     paths:
@@ -16,6 +9,7 @@ on:
       - "crates/medusa-browser-client/**"
       - "crates/medusa-browserd/**"
       - ".github/workflows/browser-dispatch-hardening-certification.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
