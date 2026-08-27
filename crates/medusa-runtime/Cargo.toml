@@ -22,7 +22,12 @@ medusa-core = { path = "../medusa-core" }
 medusa-execution-checkpoint = { path = "../medusa-execution-checkpoint" }
 medusa-execution-replay = { path = "../medusa-execution-replay" }
 medusa-improvement = { path = "../medusa-improvement" }
+<<<<<<< HEAD
 medusa-intelligence = { path = "../medusa-intelligence" }
+=======
+medusa-markdown-memory = { path = "../medusa-markdown-memory" }
+medusa-mcp-cache = { path = "../medusa-mcp-cache" }
+>>>>>>> origin/agent/509-explainable-learning-retrieval
 medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-openai-realtime = { path = "../medusa-openai-realtime" }
