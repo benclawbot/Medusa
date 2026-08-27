@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
+import { DesktopVoiceDock } from "./DesktopVoiceDock";
 import { DiffDock } from "./DiffDock";
 import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { LearningDock } from "./LearningDock";
@@ -67,6 +68,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     ) : (
       <>
         <App />
+        <DesktopVoiceDock />
         <DesktopTimelineBridge />
         <SessionDock />
         <DiffDock />

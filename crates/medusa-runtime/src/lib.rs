@@ -2381,19 +2381,18 @@ fn run_prompt(
     let session_id = state.session.as_ref().map(|session| session.id.as_str());
     let learning_context =
         crate::learning_retrieval::select(&state.repo, &draft, session_id, events);
-    let trajectory_context = if general_chat {
-        String::new()
-    } else {
+    // Worker-only completion skips the model loop, so it still needs this projection here.
+    // Direct turns assemble the live trajectory immediately before each provider attempt below.
+    if implementation_evidence.is_some() && !general_chat {
         let session = state.session.as_ref().ok_or_else(|| {
             RuntimeError::agent("runtime session disappeared before trajectory projection")
         })?;
-        crate::coding_trajectory::sync_and_render(&state.repo, session, None)?
-    };
+        crate::coding_trajectory::sync_and_render(&state.repo, session, None)?;
+    }
     let mut task_context = vec![
         orchestration_context,
         tool_policy_context,
         verification_context,
-        trajectory_context,
     ];
     if implementation_evidence.is_none()
         && let Some(evidence) = coordinator_evidence.as_ref()
