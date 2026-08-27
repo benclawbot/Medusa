@@ -410,7 +410,6 @@ fn explicitly_excluded(learning: &ScopedLearning, context: &TaskContext) -> bool
         "{} {} {}",
         learning.id, learning.conflict_key, learning.generalized_rule
     ));
-<<<<<<< HEAD
     context.explicit_exclusions.iter().any(|excluded| {
         learning_terms
             .iter()
@@ -436,18 +435,6 @@ fn bounded_word_variant(left: &str, right: &str) -> bool {
     longer
         .strip_prefix(shorter)
         .is_some_and(|suffix| matches!(suffix, "s" | "es" | "ed" | "ing"))
-=======
-    let exclusion_terms = context
-        .explicit_exclusions
-        .iter()
-        .flat_map(|excluded| expanded_terms(excluded))
-        .collect::<BTreeSet<_>>();
-    !exclusion_terms.is_disjoint(&learning_terms)
-        || !learning
-            .applicability
-            .excluded_contexts
-            .is_disjoint(&context.scope.context_tags)
->>>>>>> origin/agent/509-explainable-learning-retrieval
 }
 
 fn equal_scope_conflict(resolved: &ResolvedLearning) -> bool {

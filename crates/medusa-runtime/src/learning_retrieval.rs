@@ -10,18 +10,12 @@ use std::{
 };
 
 use medusa_improvement::{
-<<<<<<< HEAD
     learning_admission::LearningAdmissionPolicy,
     learning_monitor::LearningMonitorStore,
     refinement_authority::{SelectionContext, SelectionResult},
     scoped_memory::RepositoryIdentity,
 };
 use medusa_core::hidden_command;
-=======
-    retrieval::{RetrievalConfig, RetrievalResult, SelectionDisposition, TaskContext, retrieve},
-    scoped_memory::{RepositoryIdentity, ScopeContext, ScopedMemoryStore},
-};
->>>>>>> origin/agent/509-explainable-learning-retrieval
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -29,13 +23,8 @@ use time::OffsetDateTime;
 use crate::{RuntimeEvent, prompt::PromptDraft};
 
 #[derive(Clone, Debug, Default)]
-<<<<<<< HEAD
 pub struct RuntimeLearningContext {
     pub prompt_context: Option<String>,
-=======
-pub(crate) struct RuntimeLearningContext {
-    pub(crate) prompt_context: Option<String>,
->>>>>>> origin/agent/509-explainable-learning-retrieval
 }
 
 #[derive(Serialize)]
@@ -45,23 +34,15 @@ struct SelectionAudit<'a> {
     objective_digest: String,
     task_kind: &'a str,
     artifact_kind: &'a str,
-<<<<<<< HEAD
     result: &'a SelectionResult,
 }
 
 pub fn select(
-=======
-    result: &'a RetrievalResult,
-}
-
-pub(crate) fn select(
->>>>>>> origin/agent/509-explainable-learning-retrieval
     repo: &Path,
     draft: &PromptDraft,
     session_id: Option<&str>,
     events: &Sender<RuntimeEvent>,
 ) -> RuntimeLearningContext {
-<<<<<<< HEAD
     let policy = match LearningAdmissionPolicy::for_repository(repo) {
         Ok(policy) => policy,
         Err(error) => {
@@ -75,11 +56,6 @@ pub(crate) fn select(
         }
     };
     if !policy.capture_enabled() {
-=======
-    let user_store = user_store_path();
-    let repository_store = repo.join(".medusa/learnings.json");
-    if !user_store.exists() && !repository_store.exists() {
->>>>>>> origin/agent/509-explainable-learning-retrieval
         return RuntimeLearningContext::default();
     }
 
@@ -87,7 +63,6 @@ pub(crate) fn select(
     let task_kind = infer_task_kind(objective);
     let artifact_kind = infer_artifact_kind(draft, objective);
     let now_unix_ms = now_unix_ms();
-<<<<<<< HEAD
     let authority = match crate::learning_authority::open(repo) {
         Ok(authority) => authority,
         Err(error) => {
@@ -120,38 +95,6 @@ pub(crate) fn select(
                 title: "Canonical learned behavior unavailable".to_owned(),
                 details: vec![format!(
                     "Selection failed closed; no learned behavior was applied: {error}"
-=======
-    let context = TaskContext {
-        scope: ScopeContext {
-            owner_id: owner_id(),
-            repository: repository_identity(repo),
-            workspace_id: env::var("MEDUSA_WORKSPACE_ID").ok(),
-            organization_id: env::var("MEDUSA_ORGANIZATION_ID").ok(),
-            session_id: session_id.map(str::to_owned),
-            task_id: Some(
-                session_id
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("draft-{}", draft.revision)),
-            ),
-            task_kind: Some(task_kind.to_owned()),
-            artifact_kind: Some(artifact_kind.to_owned()),
-            context_tags: context_tags(objective, task_kind, artifact_kind),
-        },
-        objective: objective.to_owned(),
-        explicit_exclusions: explicit_exclusions(objective),
-        suppressed_learning_ids: marker_values(objective, "@suppress-learning:"),
-        approved_high_impact_ids: marker_values(objective, "@approve-learning:"),
-        now_unix_ms,
-    };
-    let store = ScopedMemoryStore::new(user_store, Some(repository_store));
-    let result = match retrieve(&store, &context, &RetrievalConfig::default()) {
-        Ok(result) => result,
-        Err(error) => {
-            let _ = events.send(RuntimeEvent::Notice {
-                title: "Learned behavior unavailable".to_owned(),
-                details: vec![format!(
-                    "Retrieval failed closed; no learned behavior was applied: {error}"
->>>>>>> origin/agent/509-explainable-learning-retrieval
                 )],
             });
             return RuntimeLearningContext::default();
@@ -159,7 +102,6 @@ pub(crate) fn select(
     };
 
     emit_notices(&result, events);
-<<<<<<< HEAD
     let projection_revision = authority
         .snapshot()
         .map(|snapshot| snapshot.revision)
@@ -189,17 +131,6 @@ pub(crate) fn select(
         )
     {
         let _ = events.send(RuntimeEvent::Notice {
-=======
-    if let Err(error) = append_audit(
-        repo,
-        objective,
-        task_kind,
-        artifact_kind,
-        now_unix_ms,
-        &result,
-    ) {
-        let _ = events.send(RuntimeEvent::Notice {
->>>>>>> origin/agent/509-explainable-learning-retrieval
             title: "Learning selection audit unavailable".to_owned(),
             details: vec![error.to_string()],
         });
@@ -210,31 +141,18 @@ pub(crate) fn select(
     }
 }
 
-<<<<<<< HEAD
 fn emit_notices(result: &SelectionResult, events: &Sender<RuntimeEvent>) {
-=======
-fn emit_notices(result: &RetrievalResult, events: &Sender<RuntimeEvent>) {
->>>>>>> origin/agent/509-explainable-learning-retrieval
     if !result.selected.is_empty() {
         let details = result
             .selected
             .iter()
             .map(|selected| {
                 format!(
-<<<<<<< HEAD
                     "{} v{} (receipt {}): {}",
                     selected.proposal.id,
                     selected.proposal.version,
                     selected.approval_receipt_id,
                     selected.selection_rationale
-=======
-                    "{} v{} ({:?}, score {}): {}",
-                    selected.learning_id,
-                    selected.version,
-                    selected.phase,
-                    selected.score,
-                    selected.explanation
->>>>>>> origin/agent/509-explainable-learning-retrieval
                 )
             })
             .collect();
@@ -244,41 +162,10 @@ fn emit_notices(result: &RetrievalResult, events: &Sender<RuntimeEvent>) {
         });
     }
 
-<<<<<<< HEAD
     if !result.blocked_conflicts.is_empty() {
         let _ = events.send(RuntimeEvent::Notice {
             title: "Conflicting learned behavior blocked".to_owned(),
             details: result.blocked_conflicts.clone(),
-=======
-    let review = result
-        .considered
-        .iter()
-        .filter(|record| record.disposition == SelectionDisposition::ReviewRequired)
-        .map(|record| {
-            format!(
-                "{}: {}. Add @approve-learning:{} to this task to approve only this execution.",
-                record.learning_id, record.explanation, record.learning_id
-            )
-        })
-        .collect::<Vec<_>>();
-    if !review.is_empty() {
-        let _ = events.send(RuntimeEvent::Notice {
-            title: "Learned behavior needs approval".to_owned(),
-            details: review,
-        });
-    }
-
-    let conflicts = result
-        .considered
-        .iter()
-        .filter(|record| record.disposition == SelectionDisposition::Conflict)
-        .map(|record| format!("{}: {}", record.conflict_key, record.explanation))
-        .collect::<Vec<_>>();
-    if !conflicts.is_empty() {
-        let _ = events.send(RuntimeEvent::Notice {
-            title: "Conflicting learned behavior blocked".to_owned(),
-            details: conflicts,
->>>>>>> origin/agent/509-explainable-learning-retrieval
         });
     }
 }
@@ -289,11 +176,7 @@ fn append_audit(
     task_kind: &str,
     artifact_kind: &str,
     recorded_at_unix_ms: i64,
-<<<<<<< HEAD
     result: &SelectionResult,
-=======
-    result: &RetrievalResult,
->>>>>>> origin/agent/509-explainable-learning-retrieval
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = repo.join(".medusa/learning-selection-audit.jsonl");
     if let Some(parent) = path.parent() {
@@ -314,44 +197,20 @@ fn append_audit(
     Ok(())
 }
 
-<<<<<<< HEAD
-=======
-fn user_store_path() -> PathBuf {
-    if let Some(path) = env::var_os("MEDUSA_USER_LEARNING_STORE") {
-        return PathBuf::from(path);
-    }
-    if let Some(path) = env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(path).join("medusa/learnings.json");
-    }
-    if let Some(path) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(path).join("Medusa/learnings.json");
-    }
-    if let Some(path) = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")) {
-        return PathBuf::from(path).join(".medusa/learnings.json");
-    }
-    env::temp_dir().join("medusa-user/learnings.json")
-}
-
->>>>>>> origin/agent/509-explainable-learning-retrieval
 fn owner_id() -> String {
     env::var("MEDUSA_USER_ID").unwrap_or_else(|_| "local-user".to_owned())
 }
 
 fn repository_identity(repo: &Path) -> Option<RepositoryIdentity> {
-<<<<<<< HEAD
     let origin = read_origin(repo).or_else(|| repository_root_commit(repo))?;
     // RepositoryIdentity uses the origin fingerprint for logical identity. The second component is
     // clone/worktree-local and is deliberately based on the git common directory so worktrees of
     // one clone remain correlated without substituting an absolute worktree path for repository
     // identity.
-=======
-    let origin = read_origin(repo).unwrap_or_else(|| repo.to_string_lossy().into_owned());
->>>>>>> origin/agent/509-explainable-learning-retrieval
     let common = git_common_directory(repo).unwrap_or_else(|| repo.join(".git"));
     RepositoryIdentity::new(&origin, &common.to_string_lossy()).ok()
 }
 
-<<<<<<< HEAD
 fn repository_root_commit(repo: &Path) -> Option<String> {
     let output = hidden_command("git")
         .args(["rev-list", "--max-parents=0", "HEAD"])
@@ -371,8 +230,6 @@ fn repository_root_commit(repo: &Path) -> Option<String> {
     (!roots.is_empty()).then(|| format!("git-roots:{}", roots.join(",")))
 }
 
-=======
->>>>>>> origin/agent/509-explainable-learning-retrieval
 fn read_origin(repo: &Path) -> Option<String> {
     let common = git_common_directory(repo)?;
     let config = fs::read_to_string(common.join("config")).ok()?;
@@ -381,21 +238,12 @@ fn read_origin(repo: &Path) -> Option<String> {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             in_origin = trimmed.eq_ignore_ascii_case("[remote \"origin\"]");
-<<<<<<< HEAD
         } else if in_origin
             && let Some(value) = trimmed.strip_prefix("url")
         {
             return value
                 .split_once('=')
                 .map(|(_, origin)| origin.trim().to_owned());
-=======
-        } else if in_origin {
-            if let Some(value) = trimmed.strip_prefix("url") {
-                return value
-                    .split_once('=')
-                    .map(|(_, origin)| origin.trim().to_owned());
-            }
->>>>>>> origin/agent/509-explainable-learning-retrieval
         }
     }
     None
@@ -443,14 +291,10 @@ fn infer_artifact_kind(draft: &PromptDraft, objective: &str) -> &'static str {
     let lower = objective.to_ascii_lowercase();
     if !draft.attachments.is_empty() {
         "multimodal_prompt"
-<<<<<<< HEAD
     } else if contains_any(
         &lower,
         &["documentation", "docs", "readme", "memo", "report"],
     ) {
-=======
-    } else if contains_any(&lower, &["documentation", "docs", "readme", "memo", "report"]) {
->>>>>>> origin/agent/509-explainable-learning-retrieval
         "document"
     } else if contains_any(&lower, &["test", "fixture", "benchmark"]) {
         "test"
@@ -556,7 +400,6 @@ mod tests {
         assert!(exclusions.contains("publishing"));
         assert!(exclusions.contains("artifacts"));
     }
-<<<<<<< HEAD
 
     #[test]
     fn capture_disabled_short_circuits_before_selection_audit() {
@@ -582,6 +425,4 @@ mod tests {
         assert!(context.prompt_context.is_none());
         assert!(!repo.path().join(".medusa/learning-selection-audit.jsonl").exists());
     }
-=======
->>>>>>> origin/agent/509-explainable-learning-retrieval
 }

@@ -12,43 +12,8 @@
     "medusa-tui",
     "medusa-browserd"
   ],
-<<<<<<< HEAD
   "test_support_crates": [
     "medusa-testkit"
-=======
-  "test_support_crates": ["medusa-testkit"],
-  "ignored_unreferenced_rs": [
-    "crates/medusa-intelligence/src/rust_ast.rs",
-    "crates/medusa-intelligence/src/rust_symbols_v2.rs",
-    "crates/medusa-agent/src/engine_base.rs",
-    "crates/medusa-agent/src/world_model_observation.rs",
-    "crates/medusa-agent/src/autonomous_engine.rs",
-    "crates/medusa-agent/src/coding_policy.rs",
-    "crates/medusa-agent/src/repository_index.rs",
-    "crates/medusa-improvement/src/crate.rs",
-    "crates/medusa-improvement/src/learning.rs",
-    "crates/medusa-cli/src/skill_dependencies.rs",
-    "crates/medusa-cli/src/skills.rs",
-    "crates/medusa-cli/src/skill_graduation.rs",
-    "crates/medusa-cli/src/skill_probation.rs",
-    "crates/medusa-cli/src/skill_lifecycle.rs",
-    "crates/medusa-cli/src/oauth_preflight.rs",
-    "crates/medusa-runtime/src/attachment.rs",
-    "crates/medusa-runtime/src/commands.rs",
-    "crates/medusa-runtime/src/error.rs",
-    "crates/medusa-runtime/src/generated_lib.rs",
-    "crates/medusa-runtime/src/learning_retrieval.rs",
-    "crates/medusa-runtime/src/lib.rs",
-    "crates/medusa-runtime/src/lifecycle.rs",
-    "crates/medusa-runtime/src/production_orchestrator.rs",
-    "crates/medusa-runtime/src/openai_realtime.rs",
-    "crates/medusa-runtime/src/prompt.rs",
-    "crates/medusa-runtime/src/runtime_impl.rs",
-    "crates/medusa-runtime/src/support.rs",
-    "crates/medusa-runtime/src/tests.rs",
-    "crates/medusa-runtime/src/voice.rs",
-    "crates/medusa-runtime/src/voice_agent_bridge.rs"
->>>>>>> origin/agent/509-explainable-learning-retrieval
   ],
   "ignored_unreferenced_rs": [],
   "crate_exemptions": {
