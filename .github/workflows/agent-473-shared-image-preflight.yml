@@ -1,0 +1,256 @@
+name: Agent 473 shared image preflight
+
+on:
+  push:
+    branches:
+      - agent/473-shared-image-attachments
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/473-shared-image-attachments
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Consolidate encoded image ingestion
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('crates/medusa-runtime/src/prompt.rs')
+          s = p.read_text()
+          s = s.replace(
+              'use std::{fmt, path::PathBuf};',
+              'use std::{fmt, io::Cursor, path::PathBuf};\n\nuse base64::{Engine as _, engine::general_purpose::STANDARD};\nuse image::ImageReader;',
+          )
+          marker = '#[derive(Clone, Debug, Eq, PartialEq)]\npub enum ClipboardContent {'
+          insert = '''#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+          pub enum AttachmentSource {
+              Clipboard,
+              FilePicker,
+              DragAndDrop,
+              Screenshot,
+              RestoredDraft,
+          }
+
+          impl AttachmentSource {
+              #[must_use]
+              pub const fn as_str(self) -> &'static str {
+                  match self {
+                      Self::Clipboard => "clipboard",
+                      Self::FilePicker => "file_picker",
+                      Self::DragAndDrop => "drag_and_drop",
+                      Self::Screenshot => "screenshot",
+                      Self::RestoredDraft => "restored_draft",
+                  }
+              }
+          }
+
+          #[derive(Clone, Debug, Eq, PartialEq)]
+          pub struct EncodedImage {
+              pub display_name: String,
+              pub data_url: String,
+              pub source: AttachmentSource,
+          }
+
+          '''
+          if marker not in s:
+              raise SystemExit('clipboard marker not found')
+          s = s.replace(marker, insert + marker, 1)
+          old = '''                source_format: image.source_format,
+              }));'''
+          new = '''                source_format: image.source_format,
+                  source: AttachmentSource::Clipboard,
+              }));'''
+          if old not in s:
+              raise SystemExit('add_image constructor not found')
+          s = s.replace(old, new, 1)
+          marker = '    pub fn total_attachment_bytes(&self) -> usize {'
+          method = '''    pub fn add_encoded_image(&mut self, image: EncodedImage) -> Result<(), ClipboardError> {
+              let (header, encoded) = image
+                  .data_url
+                  .split_once(',')
+                  .ok_or(ClipboardError::InvalidImageEncoding)?;
+              if !header.starts_with("data:image/") || !header.ends_with(";base64") {
+                  return Err(ClipboardError::InvalidImageEncoding);
+              }
+              let max_encoded_bytes = MAX_IMAGE_BYTES
+                  .saturating_mul(4)
+                  .div_ceil(3)
+                  .saturating_add(4);
+              if encoded.len() > max_encoded_bytes {
+                  return Err(ClipboardError::ImageByteLimit {
+                      bytes: encoded.len(),
+                      limit: max_encoded_bytes,
+                  });
+              }
+              let bytes = STANDARD
+                  .decode(encoded)
+                  .map_err(|_| ClipboardError::InvalidImageEncoding)?;
+              if bytes.len() > MAX_IMAGE_BYTES {
+                  return Err(ClipboardError::ImageByteLimit {
+                      bytes: bytes.len(),
+                      limit: MAX_IMAGE_BYTES,
+                  });
+              }
+              let decoded = ImageReader::new(Cursor::new(bytes))
+                  .with_guessed_format()
+                  .map_err(|_| ClipboardError::InvalidImageEncoding)?
+                  .decode()
+                  .map_err(|_| ClipboardError::InvalidImageEncoding)?
+                  .to_rgba8();
+              self.add_image(ClipboardImage {
+                  width: decoded.width(),
+                  height: decoded.height(),
+                  rgba: decoded.into_raw(),
+                  source_format: Some(
+                      header
+                          .trim_start_matches("data:")
+                          .trim_end_matches(";base64")
+                          .to_owned(),
+                  ),
+              })?;
+              if let Some(PromptAttachment::Image(attached)) = self.attachments.last_mut() {
+                  attached.display_name = image.display_name;
+                  attached.source = image.source;
+              }
+              Ok(())
+          }
+
+          '''
+          if marker not in s:
+              raise SystemExit('total bytes marker not found')
+          s = s.replace(marker, method + marker, 1)
+          s = s.replace(
+              'pub struct ImageAttachment {\n    pub display_name: String,',
+              'pub struct ImageAttachment {\n    pub display_name: String,\n    pub source: AttachmentSource,',
+              1,
+          )
+          s = s.replace(
+              '    InvalidImageDimensions,',
+              '    InvalidImageDimensions,\n    InvalidImageEncoding,',
+              1,
+          )
+          s = s.replace(
+              '            Self::InvalidImageDimensions => {',
+              '            Self::InvalidImageEncoding => {\n                formatter.write_str("image attachment is not a supported base64 image data URL")\n            }\n            Self::InvalidImageDimensions => {',
+              1,
+          )
+          p.write_text(s)
+
+          p = Path('crates/medusa-runtime/Cargo.toml')
+          s = p.read_text()
+          s = s.replace(
+              'hex.workspace = true\n',
+              'hex.workspace = true\nimage = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }\n',
+              1,
+          )
+          p.write_text(s)
+
+          p = Path('apps/medusa-desktop/src-tauri/src/runtime.rs')
+          s = p.read_text()
+          s = s.replace('use base64::{Engine as _, engine::general_purpose::STANDARD};\nuse image::ImageReader;\n', '', 1)
+          s = s.replace(
+              '        ClipboardImage, FileAttachment, MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES,\n        MAX_IMAGE_PIXELS, MAX_TOTAL_ATTACHMENT_BYTES, PromptAttachment, PromptDraft,\n        TextAttachment,\n',
+              '        AttachmentSource, EncodedImage, FileAttachment, MAX_CLIPBOARD_TEXT_BYTES,\n        MAX_TOTAL_ATTACHMENT_BYTES, PromptAttachment, PromptDraft, TextAttachment,\n',
+              1,
+          )
+          start = s.index('fn attach_image(')
+          end = s.index('\nfn ensure_total', start)
+          replacement = '''fn attach_image(draft: &mut PromptDraft, name: &str, data_url: &str) -> Result<(), String> {
+              draft
+                  .add_encoded_image(EncodedImage {
+                      display_name: name.to_owned(),
+                      data_url: data_url.to_owned(),
+                      source: AttachmentSource::Clipboard,
+                  })
+                  .map_err(|error| format!("cannot attach image {name}: {error}"))
+          }
+          '''
+          p.write_text(s[:start] + replacement + s[end:])
+
+          replacements = {
+              'crates/medusa-runtime/src/tests.rs': [
+                  ('use crate::prompt::{FileAttachment, ImageAttachment, PromptAttachment};', 'use crate::prompt::{AttachmentSource, FileAttachment, ImageAttachment, PromptAttachment};'),
+                  ('            display_name: "screen.png".to_owned(),\n', '            display_name: "screen.png".to_owned(),\n            source: AttachmentSource::Clipboard,\n'),
+              ],
+              'crates/medusa-runtime/src/support.rs': [
+                  ('    prompt::{ImageAttachment, PromptAttachment, PromptDraft},', '    prompt::{AttachmentSource, ImageAttachment, PromptAttachment, PromptDraft},'),
+                  ('                display_name: "screen.png".to_owned(),\n', '                display_name: "screen.png".to_owned(),\n                source: AttachmentSource::Clipboard,\n'),
+              ],
+              'crates/medusa-tui/tests/clipboard_coverage.rs': [
+                  ('    ClipboardError, ClipboardImage, ClipboardService, FileAttachment, ImageAttachment,', '    AttachmentSource, ClipboardError, ClipboardImage, ClipboardService, FileAttachment, ImageAttachment,'),
+                  ('        display_name: "shot.png".to_owned(),\n', '        display_name: "shot.png".to_owned(),\n        source: AttachmentSource::Clipboard,\n'),
+              ],
+              'crates/medusa-tui/src/lib.rs': [
+                  ('            display_name: "shot.png".to_owned(),\n', '            display_name: "shot.png".to_owned(),\n            source: crate::clipboard::AttachmentSource::Clipboard,\n'),
+              ],
+          }
+          for file_name, pairs in replacements.items():
+              p = Path(file_name)
+              s = p.read_text()
+              for old, new in pairs:
+                  if old not in s:
+                      raise SystemExit(f'missing constructor marker in {file_name}: {old!r}')
+                  s = s.replace(old, new, 1)
+              p.write_text(s)
+
+          p = Path('crates/medusa-tui/src/draft_store.rs')
+          s = p.read_text()
+          s = s.replace(
+              '    FileAttachment, ImageAttachment, PromptAttachment, PromptDraft, TextAttachment,',
+              '    AttachmentSource, FileAttachment, ImageAttachment, PromptAttachment, PromptDraft, TextAttachment,',
+              1,
+          )
+          s = s.replace(
+              '                        display_name: image.display_name.clone(),\n                        width: image.width,',
+              '                        display_name: image.display_name.clone(),\n                        source: image.source.as_str().to_owned(),\n                        width: image.width,',
+              1,
+          )
+          s = s.replace(
+              '                    display_name,\n                    width,',
+              '                    display_name,\n                    source,\n                    width,',
+              1,
+          )
+          s = s.replace(
+              '                        display_name,\n                        width,',
+              '                        display_name,\n                        source: match source.as_str() {\n                            "file_picker" => AttachmentSource::FilePicker,\n                            "drag_and_drop" => AttachmentSource::DragAndDrop,\n                            "screenshot" => AttachmentSource::Screenshot,\n                            "clipboard" => AttachmentSource::Clipboard,\n                            _ => AttachmentSource::RestoredDraft,\n                        },\n                        width,',
+              1,
+          )
+          s = s.replace(
+              '    Image {\n        display_name: String,\n        width: u32,',
+              '    Image {\n        display_name: String,\n        source: String,\n        width: u32,',
+              1,
+          )
+          for name in ('screen.png', 'large.png'):
+              old = f'                display_name: "{name}".to_owned(),\n                width:'
+              if old in s:
+                  s = s.replace(old, f'                display_name: "{name}".to_owned(),\n                source: AttachmentSource::Clipboard,\n                width:', 1)
+          p.write_text(s)
+          PY
+      - name: Format
+        run: cargo fmt --all
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --all-features
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps
+      - name: Remove helper workflow and commit
+        run: |
+          rm .github/workflows/agent-473-shared-image-preflight.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-runtime/Cargo.toml crates/medusa-runtime/src/prompt.rs crates/medusa-runtime/src/tests.rs crates/medusa-runtime/src/support.rs crates/medusa-tui/src/draft_store.rs crates/medusa-tui/src/lib.rs crates/medusa-tui/tests/clipboard_coverage.rs apps/medusa-desktop/src-tauri/src/runtime.rs .github/workflows/agent-473-shared-image-preflight.yml
+          git commit -m "feat: share image attachment ingestion"
+          git push origin HEAD:agent/473-shared-image-attachments
