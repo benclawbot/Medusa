@@ -332,7 +332,6 @@ rollback
 
 // Atomic replacement scripts intentionally receive every persisted path explicitly.
 #[allow(clippy::too_many_arguments)]
-#[cfg(any(windows, test))]
 fn windows_replace_script(
     parent_pid: u32,
     backup: &Path,
