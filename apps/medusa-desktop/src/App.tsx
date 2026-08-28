@@ -446,13 +446,9 @@ export function App() {
     }
   }, []);
 
-  const refreshConfiguration = useCallback(async () => {
-    let configuration = await loadSharedConfiguration();
-    if (configuration.provider === "openai-oauth") {
-      await ensureBrowserOauth(configuration.provider).catch(() => undefined);
-      configuration = await loadSharedConfiguration();
-    }
-    const catalog = await loadProviderCatalog();
+  const refreshConfiguration = useCallback(async (refreshModels = false) => {
+    const configuration = await loadSharedConfiguration();
+    const catalog = await loadProviderCatalog(refreshModels, refreshModels ? configuration.provider : undefined);
     setSharedConfiguration(configuration);
     setProviderCatalog(catalog);
     setProvider(configuration.provider);
@@ -738,6 +734,15 @@ export function App() {
     const start = async () => {
       const configuration = await refreshConfiguration();
       if (!configuration.configured || !configuration.provider.trim() || !configuration.model.trim()) return undefined;
+      if (configuration.provider === "openai-oauth") {
+        // OAuth discovery talks to the Codex app-server and can take its full
+        // protocol timeout. Warm it in the background so launch stays usable.
+        void ensureBrowserOauth(configuration.provider)
+          .then(() => {
+            if (!disposed) void refreshConfiguration(true).catch(() => undefined);
+          })
+          .catch(() => undefined);
+      }
       let started;
       try {
         started = await startRuntime(previous || undefined);

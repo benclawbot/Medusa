@@ -47,11 +47,20 @@ fn profile_for_discovery(requested_provider: Option<&str>) -> Result<ProviderPro
 }
 
 #[tauri::command]
-pub fn desktop_model_registry(
+pub async fn desktop_model_registry(
     refresh: Option<bool>,
     provider: Option<String>,
 ) -> Result<ModelRegistry, String> {
-    let profile = profile_for_discovery(provider.as_deref())?;
+    tauri::async_runtime::spawn_blocking(move || desktop_model_registry_sync(refresh, provider.as_deref()))
+        .await
+        .map_err(|error| format!("model discovery task failed: {error}"))?
+}
+
+fn desktop_model_registry_sync(
+    refresh: Option<bool>,
+    provider: Option<&str>,
+) -> Result<ModelRegistry, String> {
+    let profile = profile_for_discovery(provider)?;
     let provider_id = provider_catalog_entry_for_profile(&profile)
         .map_or(profile.provider.as_str(), |entry| entry.id)
         .to_owned();
@@ -78,6 +87,14 @@ pub fn desktop_model_registry(
                 &profile,
                 Err(medusa_config::DiscoveryFailure::Offline),
                 Some(cached),
+                now,
+            ));
+        }
+        if profile.provider == "openai-oauth" {
+            return Ok(model_registry_for_profile(
+                &profile,
+                Err(DiscoveryFailure::Offline),
+                None,
                 now,
             ));
         }
@@ -178,5 +195,24 @@ mod tests {
         assert_eq!(model.availability, ModelAvailability::Available);
         assert!(model.capabilities.tool_calling);
         assert!(model.capabilities.image_input);
+    }
+
+    #[test]
+    fn initial_oauth_registry_uses_curated_fallback_without_live_discovery() {
+        let profile = ProviderProfile {
+            provider: "openai-oauth".to_owned(),
+            model: "gpt-5.6-luna".to_owned(),
+            ..ProviderProfile::default()
+        };
+        let registry = model_registry_for_profile(
+            &profile,
+            Err(DiscoveryFailure::Offline),
+            None,
+            1,
+        );
+        assert_eq!(
+            registry.find("gpt-5.6-luna").expect("curated model").availability,
+            ModelAvailability::TemporarilyUnavailable
+        );
     }
 }

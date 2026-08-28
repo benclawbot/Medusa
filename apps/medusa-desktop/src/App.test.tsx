@@ -168,6 +168,36 @@ it("starts a general chat without requiring a project", async () => {
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
 });
 
+it("starts the desktop before OAuth preflight completes", async () => {
+  vi.mocked(loadSharedConfiguration).mockResolvedValue({
+    revision: 0,
+    activeProfile: "default",
+    connection: "chatgpt-oauth",
+    provider: "openai-oauth",
+    model: "gpt-5.6-luna",
+    effort: "medium",
+    auth: "none",
+    configured: true,
+    credentialConfigured: false,
+  });
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-oauth", repo: "" });
+  let finishPreflight: () => void = () => undefined;
+  vi.mocked(ensureBrowserOauth).mockReturnValue(new Promise<void>((resolve) => {
+    finishPreflight = resolve;
+  }));
+
+  render(<App />);
+
+  await waitFor(() => expect(startRuntime).toHaveBeenCalledWith(undefined));
+  await waitFor(() => expect(configureRuntime).toHaveBeenCalledWith(
+    "runtime-oauth",
+    expect.objectContaining({ provider: "openai-oauth", model: "gpt-5.6-luna" }),
+  ));
+  expect(screen.getByRole("textbox")).toBeEnabled();
+
+  finishPreflight();
+});
+
 it("keeps the composer usable while initial runtime configuration is pending", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   let resolveConfiguration: () => void = () => undefined;
