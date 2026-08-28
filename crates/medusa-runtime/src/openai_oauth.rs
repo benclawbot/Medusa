@@ -230,23 +230,7 @@ impl CodexAppServer {
         sandbox: &str,
         thread_id: Option<&str>,
     ) -> Result<String, String> {
-        let params = if let Some(thread_id) = thread_id {
-            json!({
-                "threadId": thread_id,
-                "cwd": cwd,
-                "model": model,
-                "approvalPolicy": approval_policy,
-                "sandbox": sandbox,
-                "excludeTurns": true
-            })
-        } else {
-            json!({
-                "cwd": cwd,
-                "model": model,
-                "approvalPolicy": approval_policy,
-                "sandbox": sandbox
-            })
-        };
+        let params = thread_request_params(cwd, model, approval_policy, sandbox, thread_id);
         let method = if thread_id.is_some() {
             "thread/resume"
         } else {
@@ -787,6 +771,25 @@ fn parse_models(value: Value) -> Result<Vec<String>, String> {
     }
 }
 
+fn thread_request_params(
+    cwd: &Path,
+    model: &str,
+    approval_policy: &str,
+    sandbox: &str,
+    thread_id: Option<&str>,
+) -> Value {
+    let mut params = json!({
+        "cwd": cwd,
+        "model": model,
+        "approvalPolicy": approval_policy,
+        "sandbox": sandbox
+    });
+    if let Some(thread_id) = thread_id {
+        params["threadId"] = Value::String(thread_id.to_owned());
+    }
+    params
+}
+
 fn account_type(value: &Value) -> Option<&str> {
     value
         .get("account")
@@ -947,5 +950,21 @@ mod tests {
             args.get(3).map(String::as_str),
             Some("openai_base_url=\"https://chatgpt.com/backend-api/codex\"")
         );
+    }
+
+    #[test]
+    fn resuming_thread_uses_only_stable_app_server_parameters() {
+        let params = thread_request_params(
+            Path::new("C:\\workspace"),
+            "gpt-5.6-luna",
+            "never",
+            "read-only",
+            Some("thread-1"),
+        );
+        assert_eq!(
+            params.get("threadId").and_then(Value::as_str),
+            Some("thread-1")
+        );
+        assert!(params.get("excludeTurns").is_none());
     }
 }
