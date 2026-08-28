@@ -1668,6 +1668,18 @@ fn oauth_sandbox_policy(mode: Mode) -> (&'static str, &'static str) {
     }
 }
 
+#[cfg(test)]
+mod oauth_sandbox_contract_tests {
+    use super::{Mode, oauth_sandbox_policy};
+
+    #[test]
+    fn uses_codex_app_server_sandbox_variants_for_thread_and_turn() {
+        assert_eq!(oauth_sandbox_policy(Mode::ReadOnly), ("never", "readOnly"));
+        assert_eq!(oauth_sandbox_policy(Mode::Review), ("on-request", "workspaceWrite"));
+        assert_eq!(oauth_sandbox_policy(Mode::Yolo), ("on-request", "workspaceWrite"));
+    }
+}
+
 fn run_openai_oauth_prompt(
     state: &mut RuntimeState,
     config: Config,

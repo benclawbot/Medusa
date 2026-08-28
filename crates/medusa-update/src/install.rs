@@ -219,6 +219,10 @@ fn helper_command(script: &Path) -> Command {
     if cfg!(windows) {
         #[cfg(windows)]
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        #[cfg(windows)]
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        #[cfg(windows)]
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         let mut command = Command::new("powershell");
         command
             .args([
@@ -231,7 +235,7 @@ fn helper_command(script: &Path) -> Command {
             ])
             .arg(script);
         #[cfg(windows)]
-        command.creation_flags(CREATE_NO_WINDOW);
+        command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
         command
     } else {
         let mut command = Command::new("sh");

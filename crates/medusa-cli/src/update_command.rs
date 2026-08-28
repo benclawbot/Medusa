@@ -203,16 +203,11 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
         return Ok(());
     }
 
-    let current_version = format!(
-        "{} ({})",
-        env!("CARGO_PKG_VERSION"),
-        short_revision(current)
-    );
-    let new_version = format!(
-        "{} ({})",
-        env!("CARGO_PKG_VERSION"),
-        short_revision(&latest.sha)
-    );
+    // Rolling `main` artifacts do not carry a release semver. Showing the
+    // package version here is misleading because every main build can share
+    // that value; the immutable revision is the actual version being updated.
+    let current_version = main_revision_label(current);
+    let new_version = main_revision_label(&latest.sha);
     let mut progress = UpdateProgress::new(current_version.clone(), new_version.clone());
     progress.stage(UpdateStage::Preparing, 0, "checking prebuilt main artifact");
     let strategy = main_update_strategy(updater.main_cli_artifact_available(&latest.sha)?);
@@ -261,6 +256,10 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
 
 fn short_revision(revision: &str) -> &str {
     revision.get(..12).unwrap_or(revision)
+}
+
+fn main_revision_label(revision: &str) -> String {
+    format!("main ({})", short_revision(revision))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -808,6 +807,14 @@ mod tests {
         assert_eq!(
             version_transition("1.0.4 (old)", "1.0.4 (new)"),
             "1.0.4 (old) → 1.0.4 (new)"
+        );
+    }
+
+    #[test]
+    fn main_revision_labels_use_the_revision_instead_of_package_version() {
+        assert_eq!(
+            main_revision_label("f95e04f9bfb5deadbeef"),
+            "main (f95e04f9bfb5)"
         );
     }
 

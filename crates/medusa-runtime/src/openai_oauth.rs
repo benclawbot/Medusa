@@ -282,7 +282,7 @@ impl CodexAppServer {
                 "model": model,
                 "effort": effort,
                 "cwd": cwd,
-                "sandboxPolicy": {"type": sandbox}
+                "sandboxPolicy": {"type": codex_turn_sandbox(sandbox)}
             }),
         )?;
         let turn_id = result
@@ -653,6 +653,14 @@ impl CodexAppServer {
     }
 }
 
+fn codex_turn_sandbox(sandbox: &str) -> &str {
+    match sandbox {
+        "read-only" => "readOnly",
+        "workspace-write" => "workspaceWrite",
+        other => other,
+    }
+}
+
 pub fn discover_openai_oauth_models() -> Result<Vec<String>, String> {
     let mut server = CodexAppServer::connect()?;
     let account = server
@@ -893,6 +901,13 @@ mod tests {
             })),
             "hello world"
         );
+    }
+
+    #[test]
+    fn turn_sandbox_is_converted_to_app_server_variant() {
+        assert_eq!(codex_turn_sandbox("read-only"), "readOnly");
+        assert_eq!(codex_turn_sandbox("workspace-write"), "workspaceWrite");
+        assert_eq!(codex_turn_sandbox("dangerFullAccess"), "dangerFullAccess");
     }
 
     #[test]
