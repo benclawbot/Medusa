@@ -1,5 +1,9 @@
 # Security Policy
 
+## Security model
+
+The full security model — trust boundary, threat model, containment per platform, verification gate, and durability vs. irreversibility — lives in [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md).
+
 Do not report vulnerabilities in public issues. Use GitHub private vulnerability reporting when enabled.
 
 ## Security authority
