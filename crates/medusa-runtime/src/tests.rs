@@ -1070,7 +1070,7 @@ fn initial_submit_waits_for_session_acceptance_before_returning() {
 }
 
 #[test]
-fn followup_fails_closed_until_a_durable_session_identity_exists() {
+fn followup_queues_until_a_durable_session_identity_exists() {
     let directory = tempdir().expect("temporary directory");
     let submission = std::sync::Arc::new(std::sync::Mutex::new(SubmissionState {
         busy: true,
@@ -1091,13 +1091,15 @@ fn followup_fails_closed_until_a_durable_session_identity_exists() {
         invariants: std::sync::Arc::new(std::sync::Mutex::new(RuntimeInvariantRegistry::default())),
     };
 
-    assert!(matches!(
-        runtime.submit(PromptDraft {
-            text: "do not acknowledge this before durability".to_owned(),
-            ..PromptDraft::default()
-        }),
-        Err(RuntimeError::Busy)
-    ));
+    assert_eq!(
+        runtime
+            .submit(PromptDraft {
+                text: "queue this until durability".to_owned(),
+                ..PromptDraft::default()
+            })
+            .expect("follow-up queues"),
+        SubmitDisposition::Queued
+    );
     assert!(command_rx.try_recv().is_err());
     assert!(
         submission
@@ -1105,5 +1107,13 @@ fn followup_fails_closed_until_a_durable_session_identity_exists() {
             .expect("submission state")
             .followups
             .is_empty()
+    );
+    assert_eq!(
+        submission
+            .lock()
+            .expect("submission state")
+            .pre_session_followups
+            .len(),
+        1
     );
 }

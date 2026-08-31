@@ -351,7 +351,6 @@ fn run() -> MedusaResult<()> {
             approve_allowlist,
         } => {
             ensure_selected_runtime()?;
-            oauth_preflight::run_if_needed(&config)?;
             let approval_policy = HeadlessApprovalPolicy::load(
                 non_interactive,
                 approve_allowlist.as_deref(),
@@ -367,7 +366,6 @@ fn run() -> MedusaResult<()> {
         }
         CommandKind::Resume { session } => {
             ensure_selected_runtime()?;
-            oauth_preflight::run_if_needed(&config)?;
             let runtime = RuntimeController::start_resumed_with_config(repo.clone(), &session, config)
                 .map_err(runtime_error)?;
             runtime

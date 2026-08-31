@@ -185,7 +185,10 @@ impl CodexAppServer {
         &mut self,
         cancel: Option<&AtomicBool>,
     ) -> Result<(), String> {
-        let account = self.account_read(true)?;
+        // Avoid a token refresh on every turn. A refresh can block for tens of
+        // seconds even when the local Codex session is already authenticated.
+        // Refresh only on the unauthenticated path below.
+        let account = self.account_read(false)?;
         if account_type(&account) == Some("chatgpt") {
             return Ok(());
         }

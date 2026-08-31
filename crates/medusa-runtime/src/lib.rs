@@ -300,6 +300,7 @@ struct QueuedFollowup {
 struct SubmissionState {
     busy: bool,
     followups: VecDeque<QueuedFollowup>,
+    pre_session_followups: VecDeque<QueuedFollowup>,
     active_session_id: Option<String>,
 }
 
@@ -486,15 +487,18 @@ impl RuntimeController {
         self.check_runtime_invariants("submit")?;
         let mut submission = lock_submission(&self.submission);
         if submission.busy {
-            let session_id = submission
-                .active_session_id
-                .clone()
-                .ok_or(RuntimeError::Busy)?;
             let command_id = next_followup_command_id();
             let queued = QueuedFollowup {
                 command_id: command_id.clone(),
                 draft,
                 durably_recorded: true,
+            };
+            let Some(session_id) = submission.active_session_id.clone() else {
+                submission.pre_session_followups.push_back(QueuedFollowup {
+                    durably_recorded: false,
+                    ..queued
+                });
+                return Ok(SubmitDisposition::Queued);
             };
             record_controller_event(
                 &self.repo,
@@ -880,6 +884,23 @@ fn worker_loop_with_discovery<F>(
     F: FnOnce(PathBuf) -> RuntimeEvent + Send + 'static,
 {
     let _ = events.send(state.settings_event());
+    // Warm the OAuth app-server before the first user turn. Connecting and
+    // authenticating lazily made an otherwise trivial prompt pay the full cold
+    // startup cost (often tens of seconds).
+    if state.config.model.provider == medusa_config::openai_oauth::PROVIDER {
+        match openai_oauth::CodexAppServer::connect().and_then(|mut server| {
+            server.ensure_authenticated()?;
+            Ok(server)
+        }) {
+            Ok(server) => state.codex_app_server = Some(server),
+            Err(error) => {
+                let _ = events.send(RuntimeEvent::Notice {
+                    title: "ChatGPT app-server warmup deferred".to_owned(),
+                    details: vec![error],
+                });
+            }
+        }
+    }
     for recovery_event in recovery::startup_events(&state.repo) {
         let _ = events.send(recovery_event);
     }
@@ -1675,8 +1696,14 @@ mod oauth_sandbox_contract_tests {
     #[test]
     fn uses_codex_app_server_sandbox_variants_for_thread_and_turn() {
         assert_eq!(oauth_sandbox_policy(Mode::ReadOnly), ("never", "readOnly"));
-        assert_eq!(oauth_sandbox_policy(Mode::Review), ("on-request", "workspaceWrite"));
-        assert_eq!(oauth_sandbox_policy(Mode::Yolo), ("on-request", "workspaceWrite"));
+        assert_eq!(
+            oauth_sandbox_policy(Mode::Review),
+            ("on-request", "workspaceWrite")
+        );
+        assert_eq!(
+            oauth_sandbox_policy(Mode::Yolo),
+            ("on-request", "workspaceWrite")
+        );
     }
 }
 
@@ -1745,6 +1772,13 @@ fn run_openai_oauth_prompt(
                 .map_err(RuntimeError::agent)?
         }
     };
+    // The session is durable and has an identity. Signal acceptance before
+    // potentially slow app-server authentication and thread setup.
+    medusa_agent::persist_session(&session).map_err(RuntimeError::agent)?;
+    lock_submission(submission).active_session_id = Some(session.id.to_string());
+    if let Some(accepted) = accepted {
+        let _ = accepted.send(Ok(()));
+    }
     let mut server = if let Some(server) = state.codex_app_server.take() {
         server
     } else {
@@ -1796,6 +1830,11 @@ fn run_openai_oauth_prompt(
             }
             let input = oauth_input_from_content(&content)?;
             let request_id = format!("codex-turn-{}", session.turn.saturating_add(1));
+            let turn_effort = if is_general_chat_request(&draft.text, draft.attachments.len()) {
+                "low"
+            } else {
+                state.effort.label()
+            };
             medusa_agent::record_session_event(
                 &mut session,
                 Actor::Coordinator,
@@ -1815,7 +1854,7 @@ fn run_openai_oauth_prompt(
                     &thread_id,
                     input,
                     &config.model.name,
-                    state.effort.label(),
+                    turn_effort,
                     &state.repo,
                     sandbox,
                 )
@@ -1831,10 +1870,6 @@ fn run_openai_oauth_prompt(
             return Err(error);
         }
     };
-    lock_submission(submission).active_session_id = Some(session.id.to_string());
-    if let Some(accepted) = accepted {
-        let _ = accepted.send(Ok(()));
-    }
     let started_at = std::time::Instant::now();
     let mut assistant_text = String::new();
     let mut reported_usage = None;
@@ -2145,6 +2180,30 @@ fn run_prompt(
     };
     lock_submission(submission).active_session_id = Some(session.id.to_string());
     state.session = Some(session);
+    let pre_session_followups = {
+        let mut submission = lock_submission(submission);
+        submission
+            .pre_session_followups
+            .drain(..)
+            .collect::<Vec<_>>()
+    };
+    if !pre_session_followups.is_empty() {
+        let session = state.session.as_mut().expect("session initialized");
+        for followup in &pre_session_followups {
+            medusa_agent::record_session_event(
+                session,
+                Actor::User,
+                EventPayload::UserFollowupQueued {
+                    command_id: followup.command_id.clone(),
+                    prompt: serde_json::to_value(&followup.draft).map_err(RuntimeError::agent)?,
+                },
+            )
+            .map_err(RuntimeError::agent)?;
+        }
+        lock_submission(submission)
+            .followups
+            .extend(pre_session_followups);
+    }
     if let Some(accepted) = accepted {
         let _ = accepted.send(Ok(()));
     }
