@@ -15,6 +15,7 @@ use super::support::{
     model_configuration_details, tool_title,
 };
 use super::*;
+use crate::coordination::production_orchestrator;
 
 #[test]
 fn general_chat_requests_skip_repository_work_but_attachments_stay_explicit() {

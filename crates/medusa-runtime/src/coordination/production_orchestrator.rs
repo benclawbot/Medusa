@@ -15,7 +15,12 @@ use medusa_multi_agent_scheduler::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{RuntimeActivity, RuntimeActivityKind, RuntimeEvent, prompt::PromptDraft};
+use crate::{
+RuntimeActivity,
+RuntimeActivityKind,
+RuntimeEvent,
+prompt::PromptDraft
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionMode {

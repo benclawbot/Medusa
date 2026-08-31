@@ -602,6 +602,7 @@ The component contract is an incremental adoption seam. `RuntimeController`, cap
 |---|---|---|
 | **Interfaces** | CLI parsing, terminal interaction, desktop UI, Telegram command/rendering | `medusa-cli`, `medusa-tui`, `apps/medusa-desktop`, daemon Telegram modules |
 | **Runtime authority** | Session lifecycle, commands, events, coordination, completion, cancellation, agent scopes, component lifecycle contract | `medusa-runtime`, `medusa-agent`, `medusa-daemon` |
+| **Internal coordination submodules** | Multi-agent preflight, mutating worker execution, delegation contract, production orchestrator, and team control live under `medusa-runtime/src/coordination/` so coverage and visibility can be measured per sub-module | `medusa-runtime/src/coordination/` |
 | **Multi-agent execution** | Task contracts, immutable delegation, scheduling, leases, mutation DAGs, isolated implementation, barriers, parent review | `medusa-multi-agent-scheduler`, `medusa-workers`, `medusa-worker-leases`, runtime coordinators |
 | **Context and intelligence** | Workspace context, retrieval, turn assembly, goals, progress, confidence, failure | context and intelligence crate families |
 | **Tools and policy** | Capability discovery, authorization, certified execution, Git/browser/extensions, engineering policy | capability, policy, control, extension, GitHub, and browser crates |

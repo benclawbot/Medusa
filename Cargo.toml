@@ -73,7 +73,7 @@ codegen-units = 1
 
 [workspace.metadata.medusa]
 production_execution_model = "bounded-teammates-with-workspace-isolated-mutation"
-production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> workspace-isolated candidate verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence"
+production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> coordination::multi_agent_coordinator::run_preflight -> coordination::mutating_worker_coordinator::run_implementation when required -> workspace-isolated candidate verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence"
 orchestration_planning = "production runtime path; task contracts drive durable read-only preflight, conflict-aware bounded Git parallel mutation when safe, and isolated Git or directory implementation"
 subagent_delegation = "production; bounded read-only planner and risk-reviewer teammates plus centrally scheduled Git mutation DAG children when safe; directory mutation remains one isolated snapshot implementer; nested delegation is denied"
 verification_gate = "typed-evidence-and-changed-component-authority"

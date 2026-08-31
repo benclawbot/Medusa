@@ -11,9 +11,9 @@ use medusa_core::storage;
 use medusa_multi_agent_scheduler::Task;
 use serde::Serialize;
 
-use crate::{
+use crate::mutation_transaction::MutationTransaction;
+use crate::coordination::{
     multi_agent_coordinator::CoordinatorEvidence,
-    mutation_transaction::MutationTransaction,
     production_orchestrator::{AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan},
 };
 

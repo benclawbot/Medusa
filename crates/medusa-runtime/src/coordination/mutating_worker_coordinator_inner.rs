@@ -30,10 +30,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
-    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+    RuntimeActivity,
+    RuntimeActivityKind,
+    RuntimeEvent,
+    mutation_transaction::{MutationTransaction, PreparedMutationInput},
+};
+use crate::coordination::{
     delegation_contract::{DelegationRequest, policy_for, resolve_delegation},
     multi_agent_coordinator::{CoordinatorEvidence, WorkerEvidence},
-    mutation_transaction::{MutationTransaction, PreparedMutationInput},
     production_orchestrator::{
         AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
     },
@@ -458,8 +462,8 @@ pub fn run_speculative_implementation(
             reason: "historical speculative waste exceeds retained useful work".to_owned(),
         });
     }
-    let repository_fingerprint = crate::multi_agent_coordinator::repository_fingerprint(repo)?;
-    let root = crate::multi_agent_coordinator::execution_root_for_config(
+    let repository_fingerprint = crate::coordination::multi_agent_coordinator::repository_fingerprint(repo)?;
+    let root = crate::coordination::multi_agent_coordinator::execution_root_for_config(
         repo,
         &plan.fingerprint,
         &repository_fingerprint,
@@ -753,7 +757,7 @@ fn promote_speculative_state(
         return Err(conflict);
     }
     let current_repository_fingerprint =
-        crate::multi_agent_coordinator::repository_fingerprint(repo)?;
+        crate::coordination::multi_agent_coordinator::repository_fingerprint(repo)?;
     if current_repository_fingerprint != preflight.repository_fingerprint {
         let detail = "primary repository changed while speculative work was running".to_owned();
         let _ = ledger.invalidate(InvalidationReason::RepositoryDrift, detail.clone());
