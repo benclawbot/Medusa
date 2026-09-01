@@ -10,7 +10,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PIPELINE = ROOT / "crates/medusa-agent/src/tool_pipeline.rs"
 TOOLS = ROOT / "crates/medusa-agent/src/tools/mod.rs"
-ENGINE = ROOT / "crates/medusa-agent/src/engine.rs"
+ENGINE = ROOT / "crates/medusa-agent/src/engine_inner.rs"
 DOC = ROOT / "docs/TOOL-EXECUTION-PIPELINE.md"
 
 REQUIRED_STAGES = [
