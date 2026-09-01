@@ -552,6 +552,7 @@ fn render_progress_line(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_progress_line_with_width(
     stage: UpdateStage,
     stage_label: &str,
