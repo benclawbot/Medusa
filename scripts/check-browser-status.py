@@ -112,6 +112,7 @@ def validate(root: Path) -> None:
         raise BrowserStatusError(f"browser ADR is incomplete: {missing}")
 
     registry = read(root, "crates/medusa-capabilities/src/registry.rs")
+    registry += "\n" + read(root, "crates/medusa-capabilities/src/registry_inner.rs")
     for symbol in ("browser_capability_state", "MEDUSA_BROWSER_VERIFY_URL", "Capability::Browser"):
         if symbol not in registry:
             raise BrowserStatusError(f"runtime registry lost browser readiness authority: {symbol}")
