@@ -21,6 +21,7 @@ mod learning;
 mod memories;
 mod model_registry;
 mod mutations;
+mod permissions;
 mod provider_auth;
 mod pull_requests;
 mod review;
@@ -66,6 +67,9 @@ use model_registry::desktop_model_registry;
 use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
 };
+use permissions::{
+    desktop_permission_mode, desktop_permission_modes, desktop_set_permission_mode,
+};
 use provider_auth::{desktop_browser_oauth, desktop_ensure_browser_oauth};
 use pull_requests::runtime_create_draft_pull_request;
 use review::{runtime_apply_review_action, runtime_export_review_audit, runtime_read_review};
@@ -94,6 +98,9 @@ pub fn run() -> tauri::Result<()> {
             desktop_shared_configuration,
             desktop_provider_catalog,
             desktop_model_registry,
+            desktop_permission_modes,
+            desktop_permission_mode,
+            desktop_set_permission_mode,
             desktop_browser_oauth,
             desktop_ensure_browser_oauth,
             runtime_start,
