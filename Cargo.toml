@@ -5,6 +5,7 @@ members = [
   "crates/medusa-evidence",
   "crates/medusa-external-contracts",
   "crates/medusa-config",
+  "crates/medusa-permissions",
   "crates/medusa-protocol",
   "crates/medusa-testkit",
   "crates/medusa-provider",
@@ -83,6 +84,7 @@ medusa-core = { path = "crates/medusa-core" }
 medusa-context = { path = "crates/medusa-context" }
 medusa-evidence = { path = "crates/medusa-evidence" }
 medusa-external-contracts = { path = "crates/medusa-external-contracts" }
+medusa-permissions = { path = "crates/medusa-permissions" }
 medusa-protocol = { path = "crates/medusa-protocol" }
 medusa-process-containment = { path = "crates/medusa-process-containment" }
 medusa-testkit = { path = "crates/medusa-testkit" }
