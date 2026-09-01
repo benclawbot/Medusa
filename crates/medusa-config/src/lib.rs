@@ -33,13 +33,48 @@ pub use staged_profile::{
 /// Current configuration schema version.
 pub const CONFIG_VERSION: u16 = 1;
 
-/// Execution mode.
+/// Execution / approval mode shared by every frontend.
+///
+/// The serialized value is durable configuration. Frontends must not reset it when a new
+/// session starts; changing the value is an explicit user preference change.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
+    /// Unrestricted execution. This remains the fresh-install default for backwards compatibility.
     Yolo,
+    /// Workspace-scoped execution with explicit user approval at protected boundaries.
     Review,
+    /// Workspace-scoped execution with automatic review of routine approval requests.
+    ApproveForMe,
+    /// Read-only workspace execution.
     ReadOnly,
+}
+
+impl Mode {
+    #[must_use]
+    pub const fn permission_label(self) -> &'static str {
+        match self {
+            Self::Yolo => "Full Access",
+            Self::Review => "Ask for approval",
+            Self::ApproveForMe => "Approve for me",
+            Self::ReadOnly => "Read Only",
+        }
+    }
+
+    #[must_use]
+    pub const fn asks_user_for_protected_actions(self) -> bool {
+        matches!(self, Self::Review | Self::ReadOnly)
+    }
+
+    #[must_use]
+    pub const fn auto_reviews_protected_actions(self) -> bool {
+        matches!(self, Self::ApproveForMe)
+    }
+
+    #[must_use]
+    pub const fn is_full_access(self) -> bool {
+        matches!(self, Self::Yolo)
+    }
 }
 
 /// Root configuration.
@@ -503,6 +538,8 @@ mod tests {
         let config = Config::default();
         config.validate().expect("defaults");
         assert_eq!(config.agent.mode, Mode::Yolo);
+        assert_eq!(config.agent.mode.permission_label(), "Full Access");
+        assert!(config.agent.mode.is_full_access());
         assert_eq!(config.agent.max_turns, 500);
         assert_eq!(config.agent.parallel_workers, 4);
         assert_eq!(config.model.provider, "minimax");
@@ -516,6 +553,26 @@ mod tests {
         assert!(config.memory.enabled);
         assert_eq!(config.memory.format, "markdown");
         assert!(config.verification.required);
+    }
+
+    #[test]
+    fn permission_modes_round_trip_with_codex_style_labels() {
+        for (serialized, mode, label) in [
+            ("yolo", Mode::Yolo, "Full Access"),
+            ("review", Mode::Review, "Ask for approval"),
+            ("approve-for-me", Mode::ApproveForMe, "Approve for me"),
+            ("read-only", Mode::ReadOnly, "Read Only"),
+        ] {
+            let config = Config::from_toml(&format!(
+                "version = 1\n[agent]\nmode = '{serialized}'\n"
+            ))
+            .expect("permission mode config");
+            assert_eq!(config.agent.mode, mode);
+            assert_eq!(config.agent.mode.permission_label(), label);
+        }
+        assert!(Mode::Review.asks_user_for_protected_actions());
+        assert!(Mode::ApproveForMe.auto_reviews_protected_actions());
+        assert!(!Mode::Yolo.asks_user_for_protected_actions());
     }
 
     #[test]
