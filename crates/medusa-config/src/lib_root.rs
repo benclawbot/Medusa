@@ -1,7 +1,12 @@
 #[path = "lib.rs"]
 mod implementation;
+mod permission_mode;
 
 pub use implementation::*;
+pub use permission_mode::{
+    ApprovalPolicy, PermissionContext, PermissionMode, PermissionStore, ReviewerPolicy,
+    SandboxProfile,
+};
 
 pub mod model_registry;
 pub mod openai_oauth;

@@ -217,6 +217,7 @@ pub(super) struct UiIdentity {
     project: String,
     model: String,
     effort: String,
+    permission: String,
 }
 
 impl UiIdentity {
@@ -235,7 +236,14 @@ impl UiIdentity {
                 .to_owned(),
             model: config.model.name,
             effort: effort_label(config.agent.max_turns).to_owned(),
+            permission: PermissionStore::user()
+                .and_then(|store| store.load())
+                .map_or_else(|_| PermissionMode::FullAccess.label().to_owned(), |mode| mode.label().to_owned()),
         }
+    }
+
+    pub(super) fn set_permission(&mut self, mode: PermissionMode) {
+        self.permission = mode.label().to_owned();
     }
 }
 
@@ -613,6 +621,7 @@ pub(super) fn render_frame(
     } else {
         composer_prompt_text(&app.composer.draft.text)
     };
+    let prompt = format!("{prompt}  [{}]", identity.permission);
     set_frame_line(
         &mut frame,
         bottom_row,

@@ -704,7 +704,8 @@ fn write_cached_host_triple(target_dir: &Path) -> MedusaResult<()> {
 fn cached_host_triple_matches(target_dir: &Path) -> bool {
     let Some(stored) = fs::read_to_string(target_dir.join(HOST_TRIPLE_FILE))
         .ok()
-        .map(|s| s.trim().to_owned()) else {
+        .map(|s| s.trim().to_owned())
+    else {
         return false;
     };
     let Some(active) = rustc_host_target() else {
@@ -756,7 +757,6 @@ fn sccache_available() -> bool {
         .map(|s| s.success())
         .unwrap_or(false)
 }
-
 
 fn ensure_cargo_available() -> MedusaResult<()> {
     Command::new("cargo")
@@ -1395,7 +1395,10 @@ mod tests {
     fn cached_revision_round_trips_through_target_dir() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_cached_revision(temp.path(), REVISION).expect("write");
-        assert_eq!(read_cached_revision(temp.path()), Some(REVISION.to_ascii_lowercase()));
+        assert_eq!(
+            read_cached_revision(temp.path()),
+            Some(REVISION.to_ascii_lowercase())
+        );
     }
 
     #[test]
@@ -1430,7 +1433,9 @@ mod tests {
         .expect("write binary");
         assert!(update_cache_is_fresh(temp.path(), REVISION));
         // Different revision: not fresh.
-        assert!(!update_cache_is_fresh(temp.path(), "0000000000000000000000000000000000000001"));
+        assert!(!update_cache_is_fresh(
+            temp.path(),
+            "0000000000000000000000000000000000000001"
+        ));
     }
-
 }

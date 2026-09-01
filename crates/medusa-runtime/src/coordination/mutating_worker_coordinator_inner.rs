@@ -29,12 +29,6 @@ use medusa_workers::{Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{
-    RuntimeActivity,
-    RuntimeActivityKind,
-    RuntimeEvent,
-    mutation_transaction::{MutationTransaction, PreparedMutationInput},
-};
 use crate::coordination::{
     delegation_contract::{DelegationRequest, policy_for, resolve_delegation},
     multi_agent_coordinator::{CoordinatorEvidence, WorkerEvidence},
@@ -42,6 +36,10 @@ use crate::coordination::{
         AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
     },
     team_control::{TeamControlPlane, TeamWorkerRegistration},
+};
+use crate::{
+    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+    mutation_transaction::{MutationTransaction, PreparedMutationInput},
 };
 
 #[path = "mutating_worker_failure.rs"]
@@ -462,7 +460,8 @@ pub fn run_speculative_implementation(
             reason: "historical speculative waste exceeds retained useful work".to_owned(),
         });
     }
-    let repository_fingerprint = crate::coordination::multi_agent_coordinator::repository_fingerprint(repo)?;
+    let repository_fingerprint =
+        crate::coordination::multi_agent_coordinator::repository_fingerprint(repo)?;
     let root = crate::coordination::multi_agent_coordinator::execution_root_for_config(
         repo,
         &plan.fingerprint,

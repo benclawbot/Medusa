@@ -36,13 +36,13 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         options.initial_prompt.clone().unwrap_or_default(),
         clipboard,
     )?;
-    let identity = UiIdentity::for_repo(&options.repo);
+    let mut identity = UiIdentity::for_repo(&options.repo);
     let mut runtime = runtime_for_options(&options).map_err(runtime_error)?;
     let mut terminal = TerminalGuard::enter()?;
     run_loop(
         terminal.stdout(),
         &options,
-        &identity,
+        &mut identity,
         &mut app,
         &mut runtime,
     )
@@ -115,7 +115,7 @@ impl Drop for TerminalGuard {
 pub(super) fn run_loop(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
-    identity: &UiIdentity,
+    identity: &mut UiIdentity,
     app: &mut AppState,
     runtime: &mut RuntimeController,
 ) -> io::Result<ExitReason> {
@@ -165,6 +165,12 @@ pub(super) fn run_loop(
             if ctrl_l_redraw(&terminal_event) {
                 continue;
             }
+            if handle_permission_mode_shortcut(&terminal_event, identity, app, runtime)? {
+                continue;
+            }
+            if handle_permission_mode_shortcut(&terminal_event, identity, app, runtime)? {
+                continue;
+            }
             if handle_mouse_selection(app, identity, &terminal_event)? {
                 continue;
             }
@@ -182,7 +188,7 @@ pub(super) fn run_loop(
 pub(super) fn run_loop(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
-    identity: &UiIdentity,
+    identity: &mut UiIdentity,
     app: &mut AppState,
     runtime: &mut RuntimeController,
 ) -> io::Result<ExitReason> {
@@ -254,6 +260,36 @@ pub(super) fn run_loop(
             }
         }
     }
+}
+
+fn handle_permission_mode_shortcut(
+    terminal_event: &Event,
+    identity: &mut UiIdentity,
+    app: &mut AppState,
+    runtime: &mut RuntimeController,
+) -> io::Result<bool> {
+    let Event::Key(key) = terminal_event else {
+        return Ok(false);
+    };
+    if key.kind != KeyEventKind::Press || key.code != KeyCode::BackTab {
+        return Ok(false);
+    }
+    if app.is_running() {
+        app.status = "finish the current turn before changing permissions".to_owned();
+        return Ok(true);
+    }
+    let store = PermissionStore::user().map_err(|error| io::Error::other(error.to_string()))?;
+    let current = store.load().map_err(|error| io::Error::other(error.to_string()))?;
+    let position = PermissionMode::ALL
+        .iter()
+        .position(|mode| *mode == current)
+        .unwrap_or_default();
+    let next = PermissionMode::ALL[(position + 1) % PermissionMode::ALL.len()];
+    store.save(next).map_err(|error| io::Error::other(error.to_string()))?;
+    identity.set_permission(next);
+    *runtime = RuntimeController::start(app.repository().to_path_buf());
+    app.status = format!("permissions: {}", next.label());
+    Ok(true)
 }
 
 fn handle_mouse_selection(
