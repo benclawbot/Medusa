@@ -278,14 +278,14 @@ fn handle_permission_mode_shortcut(
         app.status = "finish the current turn before changing permissions".to_owned();
         return Ok(true);
     }
-    let store = PermissionStore::user().map_err(app_error)?;
-    let current = store.load().map_err(app_error)?;
+    let store = PermissionStore::user().map_err(|error| io::Error::other(error.to_string()))?;
+    let current = store.load().map_err(|error| io::Error::other(error.to_string()))?;
     let position = PermissionMode::ALL
         .iter()
         .position(|mode| *mode == current)
         .unwrap_or_default();
     let next = PermissionMode::ALL[(position + 1) % PermissionMode::ALL.len()];
-    store.save(next).map_err(app_error)?;
+    store.save(next).map_err(|error| io::Error::other(error.to_string()))?;
     identity.set_permission(next);
     *runtime = RuntimeController::start(app.repository().to_path_buf());
     app.status = format!("permissions: {}", next.label());
