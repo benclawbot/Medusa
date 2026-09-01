@@ -1,0 +1,50 @@
+name: Apply product architecture split fix
+
+on:
+  push:
+    branches:
+      - feat/persistent-permission-modes
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/persistent-permission-modes
+          fetch-depth: 0
+      - name: Teach architecture checker about split mutating coordinator
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/check-product-architecture.py')
+          text = path.read_text()
+          old = '    mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")\n'
+          new = ('    mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")\n'
+                 '    mutating_coordinator += "\\n" + read(\n'
+                 '        root, "crates/medusa-runtime/src/mutating_worker_coordinator_inner.rs"\n'
+                 '    )\n')
+          if old not in text:
+              if 'mutating_worker_coordinator_inner.rs' in text:
+                  raise SystemExit(0)
+              raise SystemExit('mutating coordinator architecture binding not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Validate architecture checker
+        run: python3 scripts/check-product-architecture.py
+      - name: Commit fix
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/check-product-architecture.py
+          git commit -m "fix: follow split mutating coordinator in architecture check"
+          git push origin HEAD:feat/persistent-permission-modes
