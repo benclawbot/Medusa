@@ -1213,12 +1213,12 @@ mod tests {
 
     #[test]
     fn source_build_target_directory_is_repo_scoped() {
+        let repo = Path::new(r"C:\repo");
         assert_eq!(
-            cargo_target_directory(Path::new(r"C:\repo")),
-            Path::new(r"C:\repo\.medusa\update-cache\cargo-target")
+            cargo_target_directory(repo),
+            repo.join(".medusa").join("update-cache").join("cargo-target")
         );
     }
-
     #[test]
     fn cargo_compiling_lines_report_package_names() {
         assert_eq!(
