@@ -37,7 +37,7 @@ use crossterm::{
         enable_raw_mode, size,
     },
 };
-use medusa_config::Config;
+use medusa_config::{Config, PermissionMode, PermissionStore};
 #[cfg(unix)]
 use medusa_daemon::JobRecord;
 use native_clipboard::NativeClipboard;

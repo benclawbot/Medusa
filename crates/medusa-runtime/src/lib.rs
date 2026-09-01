@@ -30,7 +30,9 @@ use medusa_agent::{
     compact_session, update_session_objective,
 };
 use medusa_capabilities::CapabilityRegistry;
-use medusa_config::{Config, ConfigurationChanged, Mode, ProviderProfileStore};
+use medusa_config::{
+    Config, ConfigurationChanged, Mode, PermissionMode, PermissionStore, ProviderProfileStore,
+};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
     ImageSource, LazyConfiguredProviderManager, Message, MessageBlock, ModelProvider,
@@ -1088,6 +1090,10 @@ impl RuntimeState {
     }
 
     fn from_config_with_runtime(repo: PathBuf, mut config: Config) -> Result<Self, RuntimeError> {
+        let permission_mode = PermissionStore::user()
+            .and_then(|store| store.load())
+            .map_err(RuntimeError::agent)?;
+        config.agent.mode = permission_mode.execution_mode();
         let effective = runtime_config_effective_for_repo(&repo, &config)?;
         apply_runtime_route(&mut config, &effective)?;
         let mut state = Self::from_config(repo, config);
@@ -1682,28 +1688,72 @@ fn oauth_usage(value: Option<&serde_json::Value>, turn: u32, duration_ms: u64) -
     }
 }
 
-fn oauth_sandbox_policy(mode: Mode) -> (&'static str, &'static str) {
+fn persisted_permission_mode(fallback: Mode) -> PermissionMode {
+    PermissionStore::user()
+        .and_then(|store| store.load())
+        .unwrap_or(match fallback {
+            Mode::Yolo => PermissionMode::FullAccess,
+            Mode::Review => PermissionMode::AskForApproval,
+            Mode::ReadOnly => PermissionMode::ReadOnly,
+        })
+}
+
+fn oauth_sandbox_policy(mode: PermissionMode) -> (&'static str, &'static str) {
     match mode {
-        Mode::ReadOnly => ("never", "readOnly"),
-        Mode::Review | Mode::Yolo => ("on-request", "workspaceWrite"),
+        PermissionMode::FullAccess => ("never", "dangerFullAccess"),
+        PermissionMode::AskForApproval | PermissionMode::ApproveForMe => {
+            ("on-request", "workspaceWrite")
+        }
+        PermissionMode::ReadOnly => ("on-request", "readOnly"),
+    }
+}
+
+fn should_auto_approve_oauth(mode: PermissionMode, method: &str) -> bool {
+    match mode {
+        PermissionMode::FullAccess => matches!(
+            method,
+            "item/commandExecution/requestApproval"
+                | "item/fileChange/requestApproval"
+                | "item/permissions/requestApproval"
+        ),
+        PermissionMode::ApproveForMe => matches!(
+            method,
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
+        ),
+        PermissionMode::AskForApproval | PermissionMode::ReadOnly => false,
     }
 }
 
 #[cfg(test)]
 mod oauth_sandbox_contract_tests {
-    use super::{Mode, oauth_sandbox_policy};
+    use super::{PermissionMode, oauth_sandbox_policy, should_auto_approve_oauth};
 
     #[test]
-    fn uses_codex_app_server_sandbox_variants_for_thread_and_turn() {
-        assert_eq!(oauth_sandbox_policy(Mode::ReadOnly), ("never", "readOnly"));
+    fn uses_codex_app_server_permission_profiles_for_thread_and_turn() {
         assert_eq!(
-            oauth_sandbox_policy(Mode::Review),
+            oauth_sandbox_policy(PermissionMode::FullAccess),
+            ("never", "dangerFullAccess")
+        );
+        assert_eq!(
+            oauth_sandbox_policy(PermissionMode::AskForApproval),
             ("on-request", "workspaceWrite")
         );
         assert_eq!(
-            oauth_sandbox_policy(Mode::Yolo),
+            oauth_sandbox_policy(PermissionMode::ApproveForMe),
             ("on-request", "workspaceWrite")
         );
+        assert_eq!(
+            oauth_sandbox_policy(PermissionMode::ReadOnly),
+            ("on-request", "readOnly")
+        );
+        assert!(should_auto_approve_oauth(
+            PermissionMode::ApproveForMe,
+            "item/fileChange/requestApproval"
+        ));
+        assert!(!should_auto_approve_oauth(
+            PermissionMode::ApproveForMe,
+            "item/permissions/requestApproval"
+        ));
     }
 }
 
@@ -1810,7 +1860,8 @@ fn run_openai_oauth_prompt(
             Ok((thread_id.to_owned(), turn_id.to_owned(), request_id))
         } else {
             server.ensure_authenticated().map_err(RuntimeError::agent)?;
-            let (approval_policy, sandbox) = oauth_sandbox_policy(config.agent.mode);
+            let permission_mode = persisted_permission_mode(config.agent.mode);
+            let (approval_policy, sandbox) = oauth_sandbox_policy(permission_mode);
             let thread_id = server
                 .start_or_resume_thread(
                     &state.repo,
@@ -1911,6 +1962,13 @@ fn run_openai_oauth_prompt(
             }
             openai_oauth::CodexTurnEvent::Usage(value) => reported_usage = Some(value),
             openai_oauth::CodexTurnEvent::Approval(pending) => {
+                let permission_mode = persisted_permission_mode(config.agent.mode);
+                if should_auto_approve_oauth(permission_mode, &pending.method) {
+                    server
+                        .respond_pending_with_answer("approve")
+                        .map_err(RuntimeError::agent)?;
+                    continue;
+                }
                 let question_result = (|| -> Result<AgentQuestion, RuntimeError> {
                     let question = oauth_question(&pending)?;
                     session.pending_question = Some(question.clone());
@@ -2188,7 +2246,11 @@ fn run_prompt(
             .collect::<Vec<_>>()
     };
     if !pre_session_followups.is_empty() {
-        let session = state.session.as_mut().expect("session initialized");
+        let session = state.session.as_mut().ok_or_else(|| {
+            RuntimeError::InvalidCommand(
+                "session state disappeared after initialization".to_owned(),
+            )
+        })?;
         for followup in &pre_session_followups {
             medusa_agent::record_session_event(
                 session,
