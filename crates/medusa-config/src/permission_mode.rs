@@ -58,16 +58,12 @@ impl PermissionMode {
     #[must_use]
     pub const fn description(self) -> &'static str {
         match self {
-            Self::FullAccess => {
-                "Unrestricted access to the internet and files on this computer."
-            }
+            Self::FullAccess => "Unrestricted access to the internet and files on this computer.",
             Self::AskForApproval => {
                 "Ask before changing files outside the workspace or using the internet."
             }
             Self::ApproveForMe => "Only ask for actions detected as potentially unsafe.",
-            Self::ReadOnly => {
-                "Read files in the workspace; ask before edits or internet access."
-            }
+            Self::ReadOnly => "Read files in the workspace; ask before edits or internet access.",
         }
     }
 
@@ -97,9 +93,7 @@ impl PermissionMode {
             "ask-for-approval" | "ask" | "review" => Ok(Self::AskForApproval),
             "approve-for-me" | "auto-review" | "auto" => Ok(Self::ApproveForMe),
             "read-only" | "readonly" | "plan" => Ok(Self::ReadOnly),
-            other => Err(config_error(format!(
-                "unknown permission mode `{other}`"
-            ))),
+            other => Err(config_error(format!("unknown permission mode `{other}`"))),
         }
     }
 }
