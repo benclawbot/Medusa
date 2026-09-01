@@ -74,6 +74,9 @@ def validate(root: Path) -> None:
     planning = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
     read_only_coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
     mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
+    mutating_coordinator += "\n" + read(
+        root, "crates/medusa-runtime/src/mutating_worker_coordinator_inner.rs"
+    )
     mutation_transaction = read(root, "crates/medusa-runtime/src/mutation_transaction_state.rs")
     parallel_mutation = read(root, "crates/medusa-runtime/src/parallel_mutation.rs")
     parallel_batch = read(root, "crates/medusa-runtime/src/parallel_mutation_batch.rs")
