@@ -1,7 +1,7 @@
 use std::{cell::Cell, sync::mpsc};
 
-use crate::prompt::PromptDraft;
 use crate::coordination::production_orchestrator::{self, AgentRole};
+use crate::prompt::PromptDraft;
 
 use super::*;
 

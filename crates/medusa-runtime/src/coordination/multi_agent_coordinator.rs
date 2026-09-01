@@ -31,7 +31,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::{RuntimeActivity, RuntimeActivityKind, RuntimeEvent};
 use super::{
     delegation_contract::{DelegationRequest, policy_for, resolve_delegation},
     production_orchestrator::{
@@ -40,6 +39,7 @@ use super::{
     },
     team_control::{TeamControlPlane, TeamWorkerRegistration},
 };
+use crate::{RuntimeActivity, RuntimeActivityKind, RuntimeEvent};
 
 const LEASE_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
 const WORKER_TURN_LIMIT: u32 = 12;

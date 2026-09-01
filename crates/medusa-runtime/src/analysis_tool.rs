@@ -116,8 +116,9 @@ impl RuntimeAnalysisHost {
             attachments: Vec::new(),
             revision: 0,
         };
-        let plan = crate::coordination::production_orchestrator::plan_for_repository(&self.repo, &draft)
-            .map_err(|error| invalid(error.to_string()))?;
+        let plan =
+            crate::coordination::production_orchestrator::plan_for_repository(&self.repo, &draft)
+                .map_err(|error| invalid(error.to_string()))?;
         if crate::coordination::production_orchestrator::requires_mutation(&plan)
             || plan.tasks.iter().any(|task| !task.write_paths.is_empty())
         {

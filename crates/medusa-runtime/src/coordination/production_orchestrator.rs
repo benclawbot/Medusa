@@ -15,12 +15,7 @@ use medusa_multi_agent_scheduler::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{
-RuntimeActivity,
-RuntimeActivityKind,
-RuntimeEvent,
-prompt::PromptDraft
-};
+use crate::{RuntimeActivity, RuntimeActivityKind, RuntimeEvent, prompt::PromptDraft};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionMode {
@@ -132,9 +127,7 @@ pub fn plan_for_repository(
 /// General chat is deliberately not repository-scoped. Keeping this path separate from
 /// `plan_for_repository` prevents a prompt such as "hey" from recursively enumerating a large
 /// working directory before the model can answer.
-pub fn plan_for_general_chat(
-    draft: &PromptDraft,
-) -> Result<ProductionExecutionPlan, &'static str> {
+pub fn plan_for_general_chat(draft: &PromptDraft) -> Result<ProductionExecutionPlan, &'static str> {
     let planning = plan_typed(PlannerInput {
         objective: draft.text.clone(),
         attachment_count: draft.attachments.len(),
@@ -188,7 +181,12 @@ fn enrich_plan_from_repository_graph(
         return apply_repository_graph_evidence(planning, Vec::new(), false, false);
     }
 
-    let changed = if planning.scope.effective.iter().any(|path| path == "repository") {
+    let changed = if planning
+        .scope
+        .effective
+        .iter()
+        .any(|path| path == "repository")
+    {
         graph.snapshot().files.keys().cloned().collect::<Vec<_>>()
     } else {
         planning
@@ -369,8 +367,7 @@ pub fn events(plan: &ProductionExecutionPlan) -> Vec<RuntimeEvent> {
             format!("scope={:?}", plan.planning.scope.resolution),
             format!("risk={:?}", plan.planning.risk),
             format!("model_turn_budget={:?}", plan.planning.model_turn_budget),
-            "All frontend task state is projected from the durable execution ledger."
-                .to_owned(),
+            "All frontend task state is projected from the durable execution ledger.".to_owned(),
         ],
     })]
 }
@@ -493,7 +490,10 @@ pub fn persist_outcome(
     let mut line = serde_json::to_vec(&outcome).map_err(std::io::Error::other)?;
     line.push(b'\n');
     use std::io::Write;
-    let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
     file.write_all(&line)?;
     Ok(path)
 }
@@ -517,23 +517,38 @@ fn contract_for(objective: &str, planned: &PlannedTask) -> AgentContract {
     let (role, required_evidence) = match planned.kind {
         TaskKind::Analysis => (
             AgentRole::Planner,
-            vec!["repository evidence".to_owned(), "dependency-aware plan".to_owned()],
+            vec![
+                "repository evidence".to_owned(),
+                "dependency-aware plan".to_owned(),
+            ],
         ),
         TaskKind::RiskReview => (
             AgentRole::Researcher,
-            vec!["risk inventory".to_owned(), "failure-mode evidence".to_owned()],
+            vec![
+                "risk inventory".to_owned(),
+                "failure-mode evidence".to_owned(),
+            ],
         ),
         TaskKind::Implementation => (
             AgentRole::Implementer,
-            vec!["patch or commit evidence".to_owned(), "focused tests".to_owned()],
+            vec![
+                "patch or commit evidence".to_owned(),
+                "focused tests".to_owned(),
+            ],
         ),
         TaskKind::Review => (
             AgentRole::Reviewer,
-            vec!["accepted execution evidence".to_owned(), "policy compliance".to_owned()],
+            vec![
+                "accepted execution evidence".to_owned(),
+                "policy compliance".to_owned(),
+            ],
         ),
         TaskKind::Verification => (
             AgentRole::Verifier,
-            vec!["acceptance criteria".to_owned(), "repository verification".to_owned()],
+            vec![
+                "acceptance criteria".to_owned(),
+                "repository verification".to_owned(),
+            ],
         ),
     };
     let delegation_allowed = matches!(role, AgentRole::Planner | AgentRole::Researcher);
@@ -684,10 +699,12 @@ mod tests {
                 .mode,
             ExecutionMode::Direct
         );
-        assert!(!directory
-            .path()
-            .join(".medusa/cache/repository-graph-v1.json")
-            .exists());
+        assert!(
+            !directory
+                .path()
+                .join(".medusa/cache/repository-graph-v1.json")
+                .exists()
+        );
     }
 
     #[test]
@@ -699,7 +716,9 @@ mod tests {
         fs::create_dir_all(directory.path().join("node_modules/pkg")).expect("node tree");
         fs::write(directory.path().join("target/debug/generated.rs"), "").expect("target file");
         fs::write(
-            directory.path().join("packages/tool/target/debug/generated.rs"),
+            directory
+                .path()
+                .join("packages/tool/target/debug/generated.rs"),
             "",
         )
         .expect("nested target file");
@@ -731,16 +750,17 @@ mod tests {
         git(&["init", "-q"]);
         git(&["config", "user.email", "medusa-tests@example.invalid"]);
         git(&["config", "user.name", "Medusa tests"]);
-        fs::write(directory.path().join(".gitignore"), "target/\nignored-cache/\n")
-            .expect("gitignore");
+        fs::write(
+            directory.path().join(".gitignore"),
+            "target/\nignored-cache/\n",
+        )
+        .expect("gitignore");
         fs::write(directory.path().join("src.rs"), "").expect("tracked source");
         fs::write(directory.path().join("notes.txt"), "").expect("untracked source");
         fs::create_dir_all(directory.path().join("target/debug")).expect("target tree");
-        fs::write(directory.path().join("target/debug/generated.rs"), "")
-            .expect("generated file");
+        fs::write(directory.path().join("target/debug/generated.rs"), "").expect("generated file");
         fs::create_dir_all(directory.path().join("ignored-cache")).expect("ignored tree");
-        fs::write(directory.path().join("ignored-cache/state.json"), "")
-            .expect("ignored file");
+        fs::write(directory.path().join("ignored-cache/state.json"), "").expect("ignored file");
         git(&["add", ".gitignore", "src.rs"]);
         git(&["commit", "-qm", "fixture"]);
 
@@ -748,9 +768,7 @@ mod tests {
         assert!(paths.iter().any(|path| path == "src.rs"));
         assert!(!paths.iter().any(|path| path == "notes.txt"));
         assert!(!paths.iter().any(|path| path.starts_with("target/")));
-        assert!(!paths
-            .iter()
-            .any(|path| path.starts_with("ignored-cache/")));
+        assert!(!paths.iter().any(|path| path.starts_with("ignored-cache/")));
 
         let planned = plan_for_repository(
             directory.path(),
@@ -946,10 +964,12 @@ mod tests {
             "test",
         )
         .unwrap();
-        assert!(projection(&ledger)
-            .iter()
-            .take(2)
-            .all(|step| step.status == AgentPlanStepStatus::InProgress));
+        assert!(
+            projection(&ledger)
+                .iter()
+                .take(2)
+                .all(|step| step.status == AgentPlanStepStatus::InProgress)
+        );
     }
 
     #[test]
@@ -960,7 +980,8 @@ mod tests {
             ..PromptDraft::default()
         };
         let planned = plan_for_repository(directory.path(), &draft).unwrap();
-        let outcome_path = persist_outcome(directory.path(), &draft, &planned, true, false).unwrap();
+        let outcome_path =
+            persist_outcome(directory.path(), &draft, &planned, true, false).unwrap();
         assert!(!outcome_path.exists());
     }
 }

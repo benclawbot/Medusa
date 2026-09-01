@@ -568,9 +568,6 @@ mod tests {
         assert_eq!(prepared.profile.provider, "openai-oauth");
         assert_eq!(prepared.profile.model, "gpt-5.6-luna");
         assert_eq!(prepared.profile.auth, "none");
-        assert_eq!(
-            prepared.profile.base_url.as_deref(),
-            None
-        );
+        assert_eq!(prepared.profile.base_url.as_deref(), None);
     }
 }

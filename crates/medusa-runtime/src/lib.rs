@@ -13,10 +13,10 @@ pub(crate) mod coordination {
     //! exists so coverage and visibility are measured per sub-module.
 
     pub mod delegation_contract;
-    pub mod production_orchestrator;
-    pub mod team_control;
     pub(crate) mod multi_agent_coordinator;
     pub(crate) mod mutating_worker_coordinator;
+    pub mod production_orchestrator;
+    pub mod team_control;
 }
 mod workspace_worker_manager;
 
@@ -46,7 +46,9 @@ use medusa_agent::{
     compact_session, update_session_objective,
 };
 use medusa_capabilities::CapabilityRegistry;
-use medusa_config::{Config, ConfigurationChanged, Mode, ProviderProfileStore};
+use medusa_config::{
+    Config, ConfigurationChanged, Mode, PermissionMode, PermissionStore, ProviderProfileStore,
+};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
     ImageSource, LazyConfiguredProviderManager, Message, MessageBlock, ModelProvider,
@@ -116,6 +118,9 @@ pub mod openai_realtime_session;
 pub mod openai_realtime_websocket;
 pub mod workspace;
 
+pub use crate::coordination::team_control::{
+    TeamControlPlane, TeamSnapshot, TeamWorkerLifecycle, TeamWorkerRegistration, TeamWorkerSnapshot,
+};
 pub use checkpoint_payload::{CheckpointFilePayload, RuntimeCheckpointPayload};
 pub use checkpoint_store::RuntimeCheckpointRecord;
 pub use error::RuntimeError;
@@ -130,9 +135,6 @@ pub use observer::{
     ObservationMessage, ObservationStage, ObservationVerification, ObservedPlanStep,
     SessionObservationSnapshot, SideQuestionCancelToken, SideQuestionRequest, SideQuestionResponse,
     answer_side_question, observe_session,
-};
-pub use crate::coordination::team_control::{
-    TeamControlPlane, TeamSnapshot, TeamWorkerLifecycle, TeamWorkerRegistration, TeamWorkerSnapshot,
 };
 
 use command_router::execute_slash_command_with_submission;
@@ -1100,6 +1102,10 @@ impl RuntimeState {
     }
 
     fn from_config_with_runtime(repo: PathBuf, mut config: Config) -> Result<Self, RuntimeError> {
+        let permission_mode = PermissionStore::user()
+            .and_then(|store| store.load())
+            .map_err(RuntimeError::agent)?;
+        config.agent.mode = permission_mode.execution_mode();
         let effective = runtime_config_effective_for_repo(&repo, &config)?;
         apply_runtime_route(&mut config, &effective)?;
         let mut state = Self::from_config(repo, config);
@@ -1129,6 +1135,17 @@ impl RuntimeState {
             team_control: TeamControlPlane::default(),
             codex_app_server: None,
         }
+    }
+
+    fn refresh_permission_mode(&mut self) -> Result<PermissionMode, RuntimeError> {
+        let permission_mode = PermissionStore::user()
+            .and_then(|store| store.load())
+            .map_err(RuntimeError::agent)?;
+        let execution_mode = permission_mode.execution_mode();
+        self.base_config.agent.mode = execution_mode;
+        self.config.agent.mode = execution_mode;
+        self.plan_mode = permission_mode.is_read_only();
+        Ok(permission_mode)
     }
 
     fn settings_event(&self) -> RuntimeEvent {
@@ -1694,28 +1711,72 @@ fn oauth_usage(value: Option<&serde_json::Value>, turn: u32, duration_ms: u64) -
     }
 }
 
-fn oauth_sandbox_policy(mode: Mode) -> (&'static str, &'static str) {
+fn persisted_permission_mode(fallback: Mode) -> PermissionMode {
+    PermissionStore::user()
+        .and_then(|store| store.load())
+        .unwrap_or(match fallback {
+            Mode::Yolo => PermissionMode::FullAccess,
+            Mode::Review => PermissionMode::AskForApproval,
+            Mode::ReadOnly => PermissionMode::ReadOnly,
+        })
+}
+
+fn oauth_sandbox_policy(mode: PermissionMode) -> (&'static str, &'static str) {
     match mode {
-        Mode::ReadOnly => ("never", "readOnly"),
-        Mode::Review | Mode::Yolo => ("on-request", "workspaceWrite"),
+        PermissionMode::FullAccess => ("never", "dangerFullAccess"),
+        PermissionMode::AskForApproval | PermissionMode::ApproveForMe => {
+            ("on-request", "workspaceWrite")
+        }
+        PermissionMode::ReadOnly => ("on-request", "readOnly"),
+    }
+}
+
+fn should_auto_approve_oauth(mode: PermissionMode, method: &str) -> bool {
+    match mode {
+        PermissionMode::FullAccess => matches!(
+            method,
+            "item/commandExecution/requestApproval"
+                | "item/fileChange/requestApproval"
+                | "item/permissions/requestApproval"
+        ),
+        PermissionMode::ApproveForMe => matches!(
+            method,
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
+        ),
+        PermissionMode::AskForApproval | PermissionMode::ReadOnly => false,
     }
 }
 
 #[cfg(test)]
 mod oauth_sandbox_contract_tests {
-    use super::{Mode, oauth_sandbox_policy};
+    use super::{PermissionMode, oauth_sandbox_policy, should_auto_approve_oauth};
 
     #[test]
-    fn uses_codex_app_server_sandbox_variants_for_thread_and_turn() {
-        assert_eq!(oauth_sandbox_policy(Mode::ReadOnly), ("never", "readOnly"));
+    fn uses_codex_app_server_permission_profiles_for_thread_and_turn() {
         assert_eq!(
-            oauth_sandbox_policy(Mode::Review),
+            oauth_sandbox_policy(PermissionMode::FullAccess),
+            ("never", "dangerFullAccess")
+        );
+        assert_eq!(
+            oauth_sandbox_policy(PermissionMode::AskForApproval),
             ("on-request", "workspaceWrite")
         );
         assert_eq!(
-            oauth_sandbox_policy(Mode::Yolo),
+            oauth_sandbox_policy(PermissionMode::ApproveForMe),
             ("on-request", "workspaceWrite")
         );
+        assert_eq!(
+            oauth_sandbox_policy(PermissionMode::ReadOnly),
+            ("on-request", "readOnly")
+        );
+        assert!(should_auto_approve_oauth(
+            PermissionMode::ApproveForMe,
+            "item/fileChange/requestApproval"
+        ));
+        assert!(!should_auto_approve_oauth(
+            PermissionMode::ApproveForMe,
+            "item/permissions/requestApproval"
+        ));
     }
 }
 
@@ -1822,7 +1883,8 @@ fn run_openai_oauth_prompt(
             Ok((thread_id.to_owned(), turn_id.to_owned(), request_id))
         } else {
             server.ensure_authenticated().map_err(RuntimeError::agent)?;
-            let (approval_policy, sandbox) = oauth_sandbox_policy(config.agent.mode);
+            let permission_mode = persisted_permission_mode(config.agent.mode);
+            let (approval_policy, sandbox) = oauth_sandbox_policy(permission_mode);
             let thread_id = server
                 .start_or_resume_thread(
                     &state.repo,
@@ -1923,6 +1985,13 @@ fn run_openai_oauth_prompt(
             }
             openai_oauth::CodexTurnEvent::Usage(value) => reported_usage = Some(value),
             openai_oauth::CodexTurnEvent::Approval(pending) => {
+                let permission_mode = persisted_permission_mode(config.agent.mode);
+                if should_auto_approve_oauth(permission_mode, &pending.method) {
+                    server
+                        .respond_pending_with_answer("approve")
+                        .map_err(RuntimeError::agent)?;
+                    continue;
+                }
                 let question_result = (|| -> Result<AgentQuestion, RuntimeError> {
                     let question = oauth_question(&pending)?;
                     session.pending_question = Some(question.clone());
@@ -2089,6 +2158,7 @@ fn run_prompt(
     accepted: Option<&Sender<Result<(), String>>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
     info!(repository = %state.repo.display(), "runtime prompt started");
+    state.refresh_permission_mode()?;
     let config = state.config.clone();
     let session_binding = state
         .session
@@ -2131,8 +2201,8 @@ fn run_prompt(
         crate::review::capture_review_baseline(&state.repo)
             .map_err(|error| RuntimeError::agent(error.to_string()))?;
     }
-    let coordinated =
-        execution_plan.mode == crate::coordination::production_orchestrator::ExecutionMode::Orchestrated;
+    let coordinated = execution_plan.mode
+        == crate::coordination::production_orchestrator::ExecutionMode::Orchestrated;
     let analysis_host = Arc::new(crate::analysis_tool::RuntimeAnalysisHost::new(
         state.repo.clone(),
         config.clone(),
@@ -2200,7 +2270,11 @@ fn run_prompt(
             .collect::<Vec<_>>()
     };
     if !pre_session_followups.is_empty() {
-        let session = state.session.as_mut().expect("session initialized");
+        let session = state.session.as_mut().ok_or_else(|| {
+            RuntimeError::InvalidCommand(
+                "session state disappeared after initialization".to_owned(),
+            )
+        })?;
         for followup in &pre_session_followups {
             medusa_agent::record_session_event(
                 session,
@@ -2273,7 +2347,9 @@ fn run_prompt(
             medusa_multi_agent_scheduler::speculation::policy_for(&execution_plan.planning)
                 .map_err(RuntimeError::agent)?;
         let preflight =
-            if crate::coordination::production_orchestrator::uses_deterministic_preflight(&execution_plan) {
+            if crate::coordination::production_orchestrator::uses_deterministic_preflight(
+                &execution_plan,
+            ) {
                 crate::coordination::multi_agent_coordinator::run_deterministic_fast_preflight(
                     &state.repo,
                     &config,
@@ -2428,24 +2504,26 @@ fn run_prompt(
         )
         .map_err(RuntimeError::agent)?;
     }
-    let implementation_evidence =
-        if crate::coordination::production_orchestrator::requires_mutation(&execution_plan) {
-            let preflight = coordinator_evidence.as_ref().ok_or_else(|| {
-                RuntimeError::agent("mutating execution requires coordinator preflight evidence")
-            })?;
-            if let Some(ledger) = execution_ledger.as_mut() {
-                crate::coordination::production_orchestrator::begin_kinds(
-                    ledger,
-                    &execution_plan,
-                    &[medusa_multi_agent_scheduler::TaskKind::Implementation],
-                    "implementation",
-                )
-                .map_err(RuntimeError::agent)?;
-                let _ = events.send(RuntimeEvent::Plan(
-                    crate::coordination::production_orchestrator::projection(ledger),
-                ));
-            }
-            let first_implementation = crate::coordination::mutating_worker_coordinator::run_implementation(
+    let implementation_evidence = if crate::coordination::production_orchestrator::requires_mutation(
+        &execution_plan,
+    ) {
+        let preflight = coordinator_evidence.as_ref().ok_or_else(|| {
+            RuntimeError::agent("mutating execution requires coordinator preflight evidence")
+        })?;
+        if let Some(ledger) = execution_ledger.as_mut() {
+            crate::coordination::production_orchestrator::begin_kinds(
+                ledger,
+                &execution_plan,
+                &[medusa_multi_agent_scheduler::TaskKind::Implementation],
+                "implementation",
+            )
+            .map_err(RuntimeError::agent)?;
+            let _ = events.send(RuntimeEvent::Plan(
+                crate::coordination::production_orchestrator::projection(ledger),
+            ));
+        }
+        let first_implementation =
+            crate::coordination::mutating_worker_coordinator::run_implementation(
                 &state.repo,
                 &config,
                 state.session_api_key.clone(),
@@ -2454,7 +2532,7 @@ fn run_prompt(
                 cancel,
                 (&state.team_control, events),
             );
-            let implementation = match first_implementation {
+        let implementation = match first_implementation {
                 Err(error)
                     if crate::coordination::mutating_worker_coordinator::is_speculation_invalidation(&error) =>
                 {
@@ -2477,40 +2555,40 @@ fn run_prompt(
                 }
                 result => result,
             };
-            match implementation {
-                Ok(evidence) => {
-                    if let Some(ledger) = execution_ledger.as_mut() {
-                        crate::coordination::production_orchestrator::succeed_kinds(
-                            ledger,
-                            &execution_plan,
-                            &[medusa_multi_agent_scheduler::TaskKind::Implementation],
-                            "immutable isolated implementation prepared for parent review",
-                        )
-                        .map_err(RuntimeError::agent)?;
-                        let _ = events.send(RuntimeEvent::Plan(
-                            crate::coordination::production_orchestrator::projection(ledger),
-                        ));
-                    }
-                    Some(evidence)
+        match implementation {
+            Ok(evidence) => {
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    crate::coordination::production_orchestrator::succeed_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[medusa_multi_agent_scheduler::TaskKind::Implementation],
+                        "immutable isolated implementation prepared for parent review",
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    let _ = events.send(RuntimeEvent::Plan(
+                        crate::coordination::production_orchestrator::projection(ledger),
+                    ));
                 }
-                Err(error) => {
-                    if let Some(ledger) = execution_ledger.as_mut() {
-                        let _ = crate::coordination::production_orchestrator::fail_kinds(
-                            ledger,
-                            &execution_plan,
-                            &[medusa_multi_agent_scheduler::TaskKind::Implementation],
-                            &error,
-                        );
-                        let _ = events.send(RuntimeEvent::Plan(
-                            crate::coordination::production_orchestrator::projection(ledger),
-                        ));
-                    }
-                    return Err(RuntimeError::agent(error));
-                }
+                Some(evidence)
             }
-        } else {
-            None
-        };
+            Err(error) => {
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    let _ = crate::coordination::production_orchestrator::fail_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[medusa_multi_agent_scheduler::TaskKind::Implementation],
+                        &error,
+                    );
+                    let _ = events.send(RuntimeEvent::Plan(
+                        crate::coordination::production_orchestrator::projection(ledger),
+                    ));
+                }
+                return Err(RuntimeError::agent(error));
+            }
+        }
+    } else {
+        None
+    };
     if let Some(evidence) = implementation_evidence.as_ref() {
         let session = state.session.as_mut().ok_or_else(|| {
             RuntimeError::agent("runtime session disappeared before prepared evidence recording")
@@ -2524,7 +2602,8 @@ fn run_prompt(
         )
         .map_err(RuntimeError::agent)?;
     }
-    let orchestration_context = crate::coordination::production_orchestrator::runtime_context(&execution_plan);
+    let orchestration_context =
+        crate::coordination::production_orchestrator::runtime_context(&execution_plan);
     let tool_policy_context =
         crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;
     let verification_plan = medusa_tool_control::verification_plan(&draft.text);
@@ -2602,7 +2681,8 @@ fn run_prompt(
                 if cancel_requested(cancel, submission) {
                     if let Some(ledger) = execution_ledger.as_mut() {
                         let _ = ledger.cancel_remaining("runtime cancellation requested");
-                        let projected = crate::coordination::production_orchestrator::projection(ledger);
+                        let projected =
+                            crate::coordination::production_orchestrator::projection(ledger);
                         session.plan = projected.clone();
                         let _ = events.send(RuntimeEvent::Plan(projected));
                     }
@@ -2752,7 +2832,8 @@ fn run_prompt(
                 if cancel_requested(cancel, submission) {
                     if let Some(ledger) = execution_ledger.as_mut() {
                         let _ = ledger.cancel_remaining("runtime cancellation requested");
-                        let projected = crate::coordination::production_orchestrator::projection(ledger);
+                        let projected =
+                            crate::coordination::production_orchestrator::projection(ledger);
                         session.plan = projected.clone();
                         let _ = events.send(RuntimeEvent::Plan(projected));
                     }
@@ -2804,8 +2885,8 @@ fn run_prompt(
         &result,
         Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished)
     );
-    let mut verified =
-        terminal_turn && !crate::coordination::production_orchestrator::requires_mutation(&execution_plan);
+    let mut verified = terminal_turn
+        && !crate::coordination::production_orchestrator::requires_mutation(&execution_plan);
     if coordinated {
         if let Some(evidence) = implementation_evidence.as_ref() {
             match &result {
