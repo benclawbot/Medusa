@@ -1,7 +1,6 @@
 use std::{fs, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_permissions::{PermissionMode, PermissionStore};
 use walkdir::WalkDir;
 
 use crate::{
@@ -34,26 +33,11 @@ fn is_ignored_directory(path: &Path) -> bool {
     })
 }
 
-fn active_permission_mode() -> PermissionMode {
-    PermissionStore::user()
-        .and_then(|store| store.load())
-        .unwrap_or(PermissionMode::AskForApproval)
-}
-
-fn automatically_authorize_external_file_access() -> bool {
-    active_permission_mode().auto_approves_routine_boundaries()
-}
-
 pub(crate) fn read(repo: &Path, relative: &str) -> MedusaResult<String> {
     if relative == "." {
         return Ok(repository_listing(repo));
     }
-    let requested = Path::new(relative);
-    let path = if requested.is_absolute() && automatically_authorize_external_file_access() {
-        approved_absolute_path(relative)?
-    } else {
-        safe_path(repo, relative)?
-    };
+    let path = safe_path(repo, relative)?;
     fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             MedusaError::new(
@@ -122,9 +106,6 @@ fn reject_git_metadata(relative: &str) -> MedusaResult<()> {
 
 pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {
     reject_git_metadata(relative)?;
-    if Path::new(relative).is_absolute() && automatically_authorize_external_file_access() {
-        return write_approved(relative, content);
-    }
     apply_atomic(
         repo,
         &[FileMutation {
@@ -154,9 +135,6 @@ pub(crate) fn write_with_context(
 
 pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
     reject_git_metadata(relative)?;
-    if Path::new(relative).is_absolute() && automatically_authorize_external_file_access() {
-        return create_dir_approved(relative);
-    }
     let path = safe_path(repo, relative)?;
     fs::create_dir_all(&path)?;
     Ok(format!("created directory {}", path.display()))
