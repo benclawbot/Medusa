@@ -1,0 +1,105 @@
+.permission-mode-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.permission-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary, #5f6368);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.permission-mode-trigger:hover,
+.permission-mode-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.permission-mode-trigger.full-access {
+  color: var(--warning-text, #c45f18);
+}
+
+.permission-mode-menu {
+  position: absolute;
+  z-index: 1000;
+  left: 0;
+  bottom: calc(100% + 10px);
+  width: min(390px, calc(100vw - 28px));
+  padding: 8px;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: 13px;
+  background: var(--surface-elevated, #fff);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18);
+}
+
+.permission-mode-heading {
+  padding: 7px 10px 9px;
+  color: var(--text-tertiary, #7b7f85);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.permission-mode-option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 4px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.permission-mode-option:hover,
+.permission-mode-option.active {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.permission-mode-option.danger strong {
+  color: var(--warning-text, #c45f18);
+}
+
+.permission-mode-option-mark {
+  min-height: 18px;
+  padding-top: 1px;
+  color: currentColor;
+  font-weight: 700;
+}
+
+.permission-mode-option-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permission-mode-option-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.permission-mode-option-copy small {
+  color: var(--text-secondary, #70757a);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.permission-mode-error {
+  margin: 6px 8px 3px;
+  color: var(--danger-text, #b3261e);
+  font-size: 11px;
+}
