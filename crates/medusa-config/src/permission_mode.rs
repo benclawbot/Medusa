@@ -27,6 +27,36 @@ pub enum PermissionMode {
     ReadOnly,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApprovalPolicy {
+    Never,
+    OnBoundary,
+    UnsafeOnly,
+    OnMutationOrNetwork,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SandboxProfile {
+    Unrestricted,
+    WorkspaceWrite,
+    ReadOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewerPolicy {
+    BypassRoutine,
+    RequireUser,
+    AutoReviewRoutine,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PermissionContext {
+    pub execution_mode: Mode,
+    pub approval_policy: ApprovalPolicy,
+    pub sandbox_profile: SandboxProfile,
+    pub reviewer_policy: ReviewerPolicy,
+}
+
 impl PermissionMode {
     pub const ALL: [Self; 4] = [
         Self::AskForApproval,
@@ -71,9 +101,41 @@ impl PermissionMode {
     #[must_use]
     pub const fn execution_mode(self) -> Mode {
         match self {
-            Self::FullAccess => Mode::Yolo,
-            Self::AskForApproval | Self::ApproveForMe => Mode::Review,
+            Self::FullAccess | Self::ApproveForMe => Mode::Yolo,
+            Self::AskForApproval => Mode::Review,
             Self::ReadOnly => Mode::ReadOnly,
+        }
+    }
+
+    /// Resolve the complete permission context in one value so callers cannot update only one
+    /// safety dimension when switching profiles.
+    #[must_use]
+    pub const fn context(self) -> PermissionContext {
+        match self {
+            Self::FullAccess => PermissionContext {
+                execution_mode: Mode::Yolo,
+                approval_policy: ApprovalPolicy::Never,
+                sandbox_profile: SandboxProfile::Unrestricted,
+                reviewer_policy: ReviewerPolicy::BypassRoutine,
+            },
+            Self::AskForApproval => PermissionContext {
+                execution_mode: Mode::Review,
+                approval_policy: ApprovalPolicy::OnBoundary,
+                sandbox_profile: SandboxProfile::WorkspaceWrite,
+                reviewer_policy: ReviewerPolicy::RequireUser,
+            },
+            Self::ApproveForMe => PermissionContext {
+                execution_mode: Mode::Yolo,
+                approval_policy: ApprovalPolicy::UnsafeOnly,
+                sandbox_profile: SandboxProfile::WorkspaceWrite,
+                reviewer_policy: ReviewerPolicy::AutoReviewRoutine,
+            },
+            Self::ReadOnly => PermissionContext {
+                execution_mode: Mode::ReadOnly,
+                approval_policy: ApprovalPolicy::OnMutationOrNetwork,
+                sandbox_profile: SandboxProfile::ReadOnly,
+                reviewer_policy: ReviewerPolicy::RequireUser,
+            },
         }
     }
 
@@ -242,5 +304,45 @@ mod tests {
         assert_eq!(PermissionMode::ALL[2].label(), "Full Access");
         assert_eq!(PermissionMode::ALL[3].label(), "Read Only");
         assert_eq!(PermissionMode::default(), PermissionMode::FullAccess);
+    }
+
+    #[test]
+    fn profiles_resolve_atomic_permission_contexts() {
+        assert_eq!(
+            PermissionMode::FullAccess.context(),
+            PermissionContext {
+                execution_mode: Mode::Yolo,
+                approval_policy: ApprovalPolicy::Never,
+                sandbox_profile: SandboxProfile::Unrestricted,
+                reviewer_policy: ReviewerPolicy::BypassRoutine,
+            }
+        );
+        assert_eq!(
+            PermissionMode::AskForApproval.context(),
+            PermissionContext {
+                execution_mode: Mode::Review,
+                approval_policy: ApprovalPolicy::OnBoundary,
+                sandbox_profile: SandboxProfile::WorkspaceWrite,
+                reviewer_policy: ReviewerPolicy::RequireUser,
+            }
+        );
+        assert_eq!(
+            PermissionMode::ApproveForMe.context(),
+            PermissionContext {
+                execution_mode: Mode::Yolo,
+                approval_policy: ApprovalPolicy::UnsafeOnly,
+                sandbox_profile: SandboxProfile::WorkspaceWrite,
+                reviewer_policy: ReviewerPolicy::AutoReviewRoutine,
+            }
+        );
+        assert_eq!(
+            PermissionMode::ReadOnly.context(),
+            PermissionContext {
+                execution_mode: Mode::ReadOnly,
+                approval_policy: ApprovalPolicy::OnMutationOrNetwork,
+                sandbox_profile: SandboxProfile::ReadOnly,
+                reviewer_policy: ReviewerPolicy::RequireUser,
+            }
+        );
     }
 }
