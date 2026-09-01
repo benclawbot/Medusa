@@ -1,21 +1,48 @@
 # Self-Update (`medusa update`)
 
 `medusa update` upgrades the running CLI binary to the latest verified
-revision on `main`. The flow has two phases:
+revision on `main`. The flow has three phases:
 
-## Phase 1 — Prebuilt artifact (default)
+## Phase 1 — Prebuilt artifact (fast path)
 
 If CI has published a revision-bound prebuilt binary for the running
 platform, `medusa update` downloads it, verifies its signed manifest, and
-swaps it into place atomically. This is the fast path and what production
-users see in the happy case.
+swaps it into place atomically. The prebuilt tarball is ~14 MB on Linux
+and downloads in ~2 seconds on a typical connection. This is the happy
+case and what production users see in the common path.
 
-## Phase 2 — Local incremental compile (fallback)
+## Phase 2 — Wait for the prebuilt artifact (default fallback)
 
-If the prebuilt is unavailable (CI still publishing, network failure,
-self-hosted runner), `medusa update` falls back to compiling locally from
-the verified `main` revision. The fallback uses **incremental compilation
-across invocations** to keep subsequent updates cheap.
+If CI has not yet finished publishing the prebuilt binary for the running
+revision (typical: 1–5 minutes after a `main` commit), `medusa update`
+polls the GitHub release endpoint every 15 seconds for up to **10 minutes**
+before giving up. This matches the behavior of Codex CLI and Claude Code:
+neither tool recompiles from source when the install method they manage
+already produces a prebuilt binary, and neither takes 15 minutes to update.
+
+Override the timeout with `--wait-for-prebuilt=<secs>` or the
+`MEDUSA_UPDATE_PREBUILT_TIMEOUT_SECS` env var.
+
+When the timeout elapses without the prebuilt artifact appearing, the
+update fails with a clear error message pointing the user at:
+- the `rolling-main-cli` GitHub Actions workflow to diagnose CI failures
+- `--wait-for-prebuilt=<longer>` to wait longer
+- `--local-build` to opt out of waiting and compile from source
+
+## Phase 3 — Local incremental compile (`--local-build`)
+
+When `--local-build` is passed (or the wait timed out and the user re-runs
+with `--local-build`), Medusa falls back to a local `cargo install` from
+the cached update directory. The build:
+
+- reuses an existing cached binary when the same revision + host triple
+  have been compiled before (cache short-circuit, sub-second)
+- otherwise runs a full `cargo install --release` with the cache short-circuit
+  at the workspace level (typical: 10–15 minutes on first run, ~6–12 minutes
+  on subsequent updates of the same revision)
+
+The local-build path exists for offline development and CI hermetic builds.
+Production deployments should rely on the prebuilt artifact.
 
 ### Cache location
 
