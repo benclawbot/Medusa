@@ -101,8 +101,8 @@ impl PermissionMode {
     #[must_use]
     pub const fn execution_mode(self) -> Mode {
         match self {
-            Self::FullAccess | Self::ApproveForMe => Mode::Yolo,
-            Self::AskForApproval => Mode::Review,
+            Self::FullAccess => Mode::Yolo,
+            Self::AskForApproval | Self::ApproveForMe => Mode::Review,
             Self::ReadOnly => Mode::ReadOnly,
         }
     }
@@ -125,7 +125,7 @@ impl PermissionMode {
                 reviewer_policy: ReviewerPolicy::RequireUser,
             },
             Self::ApproveForMe => PermissionContext {
-                execution_mode: Mode::Yolo,
+                execution_mode: Mode::Review,
                 approval_policy: ApprovalPolicy::UnsafeOnly,
                 sandbox_profile: SandboxProfile::WorkspaceWrite,
                 reviewer_policy: ReviewerPolicy::AutoReviewRoutine,
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(
             PermissionMode::ApproveForMe.context(),
             PermissionContext {
-                execution_mode: Mode::Yolo,
+                execution_mode: Mode::Review,
                 approval_policy: ApprovalPolicy::UnsafeOnly,
                 sandbox_profile: SandboxProfile::WorkspaceWrite,
                 reviewer_policy: ReviewerPolicy::AutoReviewRoutine,
