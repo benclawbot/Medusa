@@ -34,15 +34,47 @@
       "maturity": "production",
       "summary": "TUI, desktop, and headless interfaces use the shared frontend-neutral runtime.",
       "owner": "runtime maintainers",
-      "production_paths": ["crates/medusa-runtime", "crates/medusa-tui", "apps/medusa-desktop"],
-      "test_paths": ["crates/medusa-runtime", "crates/medusa-tui", "apps/medusa-desktop"],
-      "gates": ["CI", "Desktop", "Refactor Guardrails"],
-      "entrypoints": ["medusa", "apps/medusa-desktop"],
-      "supported_platforms": ["linux", "macos", "windows"],
+      "production_paths": [
+        "crates/medusa-runtime",
+        "crates/medusa-tui",
+        "apps/medusa-desktop"
+      ],
+      "test_paths": [
+        "crates/medusa-runtime",
+        "crates/medusa-tui",
+        "apps/medusa-desktop"
+      ],
+      "gates": [
+        "CI",
+        "Desktop",
+        "Refactor Guardrails"
+      ],
+      "entrypoints": [
+        "medusa",
+        "apps/medusa-desktop"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
       "external_dependencies": [],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["README.md", "docs/ARCHITECTURE.md", "docs/WORKSPACES.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "README.md",
+        "docs/ARCHITECTURE.md",
+        "docs/WORKSPACES.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -52,15 +84,43 @@
       "maturity": "production",
       "summary": "Sessions, prompts, memory, provenance, lifecycle state, and recall are durable.",
       "owner": "agent runtime maintainers",
-      "production_paths": ["crates/medusa-agent/src/session.rs", "crates/medusa-memory"],
-      "test_paths": ["crates/medusa-agent/src/session", "crates/medusa-memory"],
-      "gates": ["CI", "Release Gates"],
-      "entrypoints": ["medusa", "medusa run"],
-      "supported_platforms": ["linux", "macos", "windows"],
+      "production_paths": [
+        "crates/medusa-agent/src/session.rs",
+        "crates/medusa-memory"
+      ],
+      "test_paths": [
+        "crates/medusa-agent/src/session",
+        "crates/medusa-memory"
+      ],
+      "gates": [
+        "CI",
+        "Release Gates"
+      ],
+      "entrypoints": [
+        "medusa",
+        "medusa run"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
       "external_dependencies": [],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["README.md", "docs/CAPABILITY-EVIDENCE.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "README.md",
+        "docs/CAPABILITY-EVIDENCE.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -70,15 +130,41 @@
       "maturity": "production",
       "summary": "Guarded GitHub authentication and repository workflow operations are exposed through a service boundary.",
       "owner": "integration maintainers",
-      "production_paths": ["crates/medusa-github"],
-      "test_paths": ["crates/medusa-github"],
-      "gates": ["CI", "Release Gates"],
-      "entrypoints": ["medusa GitHub workflows"],
-      "supported_platforms": ["linux", "macos", "windows"],
-      "external_dependencies": ["GitHub API"],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["docs/CAPABILITY-EVIDENCE.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "production_paths": [
+        "crates/medusa-github"
+      ],
+      "test_paths": [
+        "crates/medusa-github"
+      ],
+      "gates": [
+        "CI",
+        "Release Gates"
+      ],
+      "entrypoints": [
+        "medusa GitHub workflows"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "external_dependencies": [
+        "GitHub API"
+      ],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "docs/CAPABILITY-EVIDENCE.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -88,15 +174,51 @@
       "maturity": "production",
       "summary": "Provider configuration, role routing, retries, failover, capability authority, typed reasoning exchange, context accounting, and compaction are runtime concerns.",
       "owner": "provider maintainers",
-      "production_paths": ["crates/medusa-provider", "crates/medusa-provider/src/reasoning_exchange.rs", "crates/medusa-runtime", "crates/medusa-agent"],
-      "test_paths": ["crates/medusa-provider", "crates/medusa-provider/src/reasoning_exchange.rs", "crates/medusa-runtime", "crates/medusa-agent/tests"],
-      "gates": ["CI", "Release Gates"],
-      "entrypoints": ["medusa", "medusa run", "medusa quickstart"],
-      "supported_platforms": ["linux", "macos", "windows"],
-      "external_dependencies": ["configured model provider"],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["README.md", "docs/CONFIGURATION.md", "docs/ARCHITECTURE.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "production_paths": [
+        "crates/medusa-provider",
+        "crates/medusa-provider/src/reasoning_exchange.rs",
+        "crates/medusa-runtime",
+        "crates/medusa-agent"
+      ],
+      "test_paths": [
+        "crates/medusa-provider",
+        "crates/medusa-provider/src/reasoning_exchange.rs",
+        "crates/medusa-runtime",
+        "crates/medusa-agent/tests"
+      ],
+      "gates": [
+        "CI",
+        "Release Gates"
+      ],
+      "entrypoints": [
+        "medusa",
+        "medusa run",
+        "medusa quickstart"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "external_dependencies": [
+        "configured model provider"
+      ],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "README.md",
+        "docs/CONFIGURATION.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -106,15 +228,51 @@
       "maturity": "production",
       "summary": "Identity, exact-action approvals, dedicated parent review, independent verification, integration authorization, transaction rollback, and durable decisions are enforced before execution is accepted.",
       "owner": "safety maintainers",
-      "production_paths": ["crates/medusa-agent/src/identity_guard.rs", "crates/medusa-agent/src/approval.rs", "crates/medusa-agent/src/transaction.rs", "crates/medusa-agent/src/engine.rs", "crates/medusa-runtime/src/mutation_transaction_state.rs", "crates/medusa-runtime/src/parent_reviewer.rs"],
-      "test_paths": ["crates/medusa-agent/tests/approval_safety.rs", "crates/medusa-agent/tests/identity_transaction_safety.rs", "crates/medusa-agent/tests/identity_grounding.rs", "crates/medusa-runtime"],
-      "gates": ["CI", "Release Gates", "Refactor Guardrails"],
-      "entrypoints": ["medusa", "medusa run"],
-      "supported_platforms": ["linux", "macos", "windows"],
+      "production_paths": [
+        "crates/medusa-agent/src/identity_guard.rs",
+        "crates/medusa-agent/src/approval.rs",
+        "crates/medusa-agent/src/transaction.rs",
+        "crates/medusa-agent/src/engine.rs",
+        "crates/medusa-runtime/src/mutation_transaction_state.rs",
+        "crates/medusa-runtime/src/parent_reviewer.rs"
+      ],
+      "test_paths": [
+        "crates/medusa-agent/tests/approval_safety.rs",
+        "crates/medusa-agent/tests/identity_transaction_safety.rs",
+        "crates/medusa-agent/tests/identity_grounding.rs",
+        "crates/medusa-runtime"
+      ],
+      "gates": [
+        "CI",
+        "Release Gates",
+        "Refactor Guardrails"
+      ],
+      "entrypoints": [
+        "medusa",
+        "medusa run"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
       "external_dependencies": [],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["README.md", "docs/SECURITY-HARDENING.md", "docs/ARCHITECTURE.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "README.md",
+        "docs/SECURITY-HARDENING.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -124,15 +282,41 @@
       "maturity": "production",
       "summary": "The daemon provides bounded concurrency, reconnect, cancellation, process-tree termination, graceful drain, and durable recovery.",
       "owner": "daemon maintainers",
-      "production_paths": ["crates/medusa-daemon"],
-      "test_paths": ["crates/medusa-daemon"],
-      "gates": ["Daemon", "Desktop", "CI"],
-      "entrypoints": ["medusa daemon", "desktop daemon adapter"],
-      "supported_platforms": ["linux", "macos", "windows"],
+      "production_paths": [
+        "crates/medusa-daemon"
+      ],
+      "test_paths": [
+        "crates/medusa-daemon"
+      ],
+      "gates": [
+        "Daemon",
+        "Desktop",
+        "CI"
+      ],
+      "entrypoints": [
+        "medusa daemon",
+        "desktop daemon adapter"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
       "external_dependencies": [],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["docs/CAPABILITY-EVIDENCE.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "docs/CAPABILITY-EVIDENCE.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -142,15 +326,45 @@
       "maturity": "production",
       "summary": "Release tags produce validated artifacts, checksums, SBOMs, provenance attestations, and draft-only publication.",
       "owner": "release maintainers",
-      "production_paths": ["scripts/release-evidence.py", ".github/workflows/publish-release.yml"],
-      "test_paths": ["scripts/release-evidence.py"],
-      "gates": ["CI", "Desktop", "Release Gates", "Refactor Guardrails"],
-      "entrypoints": ["publish-release workflow"],
-      "supported_platforms": ["linux", "macos", "windows"],
-      "external_dependencies": ["GitHub Actions artifact attestations"],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["docs/RELEASE.md", "docs/DESKTOP-DISTRIBUTION.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "production_paths": [
+        "scripts/release-evidence.py",
+        ".github/workflows/publish-release.yml"
+      ],
+      "test_paths": [
+        "scripts/release-evidence.py"
+      ],
+      "gates": [
+        "CI",
+        "Desktop",
+        "Release Gates",
+        "Refactor Guardrails"
+      ],
+      "entrypoints": [
+        "publish-release workflow"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "external_dependencies": [
+        "GitHub Actions artifact attestations"
+      ],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "docs/RELEASE.md",
+        "docs/DESKTOP-DISTRIBUTION.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -160,15 +374,44 @@
       "maturity": "production",
       "summary": "The CLI checks and applies verified immutable-main updates while respecting package-manager ownership.",
       "owner": "CLI maintainers",
-      "production_paths": ["crates/medusa-cli"],
-      "test_paths": ["crates/medusa-cli"],
-      "gates": ["CI", "Desktop", "Release Gates"],
-      "entrypoints": ["medusa update"],
-      "supported_platforms": ["linux", "macos", "windows"],
-      "external_dependencies": ["GitHub repository access"],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["README.md", "docs/RELEASE.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "production_paths": [
+        "crates/medusa-cli"
+      ],
+      "test_paths": [
+        "crates/medusa-cli"
+      ],
+      "gates": [
+        "CI",
+        "Desktop",
+        "Release Gates"
+      ],
+      "entrypoints": [
+        "medusa update"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "external_dependencies": [
+        "GitHub repository access"
+      ],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "README.md",
+        "docs/RELEASE.md",
+        "docs/SELF-UPDATE.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
       "dependencies": []
@@ -202,34 +445,120 @@
         "crates/medusa-workers",
         "scripts/performance/certify_parallel_mutation.py"
       ],
-      "gates": ["CI", "Daemon", "Desktop", "Refactor Guardrails"],
-      "entrypoints": ["medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation"],
-      "supported_platforms": ["linux", "macos", "windows"],
-      "external_dependencies": ["configured model provider", "Git for Git-backed parallel mutation only"],
-      "observability": ["docs/OBSERVABILITY.md", "docs/MULTI_AGENT_EXECUTION.md"],
-      "documentation": ["README.md", "docs/WORKSPACES.md", "docs/MULTI_AGENT_EXECUTION.md", "docs/MUTATING-WORKTREE-INTEGRATION.md", "docs/ARCHITECTURE.md", "docs/PRODUCTION-EXECUTION-TRACE.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "gates": [
+        "CI",
+        "Daemon",
+        "Desktop",
+        "Refactor Guardrails"
+      ],
+      "entrypoints": [
+        "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "external_dependencies": [
+        "configured model provider",
+        "Git for Git-backed parallel mutation only"
+      ],
+      "observability": [
+        "docs/OBSERVABILITY.md",
+        "docs/MULTI_AGENT_EXECUTION.md"
+      ],
+      "documentation": [
+        "README.md",
+        "docs/WORKSPACES.md",
+        "docs/MULTI_AGENT_EXECUTION.md",
+        "docs/MUTATING-WORKTREE-INTEGRATION.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PRODUCTION-EXECUTION-TRACE.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
-      "dependencies": ["shared-runtime", "durable-sessions-memory", "provider-context-resilience", "identity-approval-transactions"]
+      "dependencies": [
+        "shared-runtime",
+        "durable-sessions-memory",
+        "provider-context-resilience",
+        "identity-approval-transactions"
+      ]
     },
     {
       "id": "truthful-code-intelligence-levels",
       "maturity": "production",
       "summary": "The v2 registry and production tools report and execute exact per-language semantic depth, including repository-scoped TypeScript/JavaScript semantics and guarded rename.",
       "owner": "code intelligence maintainers",
-      "production_paths": ["crates/medusa-capabilities/src/registry.rs", "crates/medusa-intelligence/src/capabilities.rs", "crates/medusa-intelligence/src/typescript_workspace.rs", "crates/medusa-intelligence/src/lsp.rs", "crates/medusa-intelligence/src/lsp_navigation.rs", "crates/medusa-intelligence/src/lsp_actions.rs", "crates/medusa-intelligence/src/guarded_rename.rs", "crates/medusa-agent/src/tools/intelligence.rs"],
-      "test_paths": ["crates/medusa-capabilities/src/registry.rs", "crates/medusa-intelligence/src/capabilities.rs", "crates/medusa-intelligence/src/typescript_workspace.rs", "crates/medusa-intelligence/src/guarded_rename.rs", "crates/medusa-intelligence/benches/typescript_workspace.rs", "crates/medusa-agent/src/lib.rs"],
-      "gates": ["CI", "Refactor Guardrails", "Release Gates"],
-      "entrypoints": ["semantic_capabilities", "code_index", "typescript_semantic", "symbol_rename"],
-      "supported_platforms": ["linux", "macos", "windows"],
-      "external_dependencies": ["typescript-language-server for TypeScript/JavaScript semantic operations"],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["docs/CODE-INTELLIGENCE-CAPABILITIES.md", "docs/architecture/typescript-code-intelligence.md", "docs/explicit-capabilities.md", "docs/BENCHMARKS.md"],
-      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "deterministic freshness and repository switching proven", "monorepo, ignored, generated, and large-workspace fixtures present", "performance benchmark present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "production_paths": [
+        "crates/medusa-capabilities/src/registry.rs",
+        "crates/medusa-intelligence/src/capabilities.rs",
+        "crates/medusa-intelligence/src/typescript_workspace.rs",
+        "crates/medusa-intelligence/src/lsp.rs",
+        "crates/medusa-intelligence/src/lsp_navigation.rs",
+        "crates/medusa-intelligence/src/lsp_actions.rs",
+        "crates/medusa-intelligence/src/guarded_rename.rs",
+        "crates/medusa-agent/src/tools/intelligence.rs"
+      ],
+      "test_paths": [
+        "crates/medusa-capabilities/src/registry.rs",
+        "crates/medusa-intelligence/src/capabilities.rs",
+        "crates/medusa-intelligence/src/typescript_workspace.rs",
+        "crates/medusa-intelligence/src/guarded_rename.rs",
+        "crates/medusa-intelligence/benches/typescript_workspace.rs",
+        "crates/medusa-agent/src/lib.rs"
+      ],
+      "gates": [
+        "CI",
+        "Refactor Guardrails",
+        "Release Gates"
+      ],
+      "entrypoints": [
+        "semantic_capabilities",
+        "code_index",
+        "typescript_semantic",
+        "symbol_rename"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "external_dependencies": [
+        "typescript-language-server for TypeScript/JavaScript semantic operations"
+      ],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
+        "docs/architecture/typescript-code-intelligence.md",
+        "docs/explicit-capabilities.md",
+        "docs/BENCHMARKS.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "deterministic freshness and repository switching proven",
+        "monorepo, ignored, generated, and large-workspace fixtures present",
+        "performance benchmark present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
       "default_enabled": true,
       "opt_in": null,
-      "dependencies": ["shared-runtime"]
+      "dependencies": [
+        "shared-runtime"
+      ]
     }
   ]
 }
