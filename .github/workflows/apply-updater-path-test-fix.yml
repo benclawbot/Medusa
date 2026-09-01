@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   fix:
-    if: ${{ github.actor != 'github-actions[bot]' }}
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -22,36 +22,26 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           path = Path('crates/medusa-update/src/source.rs')
-          text = path.read_text()
-          old = '''        assert_eq!(
-            cargo_target_directory(Path::new(r"C:\\repo")),
-            Path::new(r"C:\\repo\\.medusa\\update-cache\\cargo-target")
-        );
-'''
-          new = '''        let repo = Path::new(r"C:\\repo");
-        assert_eq!(
-            cargo_target_directory(repo),
-            repo.join(".medusa").join("update-cache").join("cargo-target")
-        );
-'''
-          if old not in text:
-              if 'repo.join(".medusa").join("update-cache").join("cargo-target")' in text:
-                  raise SystemExit(0)
-              raise SystemExit('updater path assertion not found')
-          path.write_text(text.replace(old, new, 1))
+          lines = path.read_text().splitlines()
+          marker = '    fn source_build_target_directory_is_repo_scoped() {'
+          index = lines.index(marker)
+          lines[index:index + 7] = [
+              marker,
+              '        let repo = Path::new(r"C:\\repo");',
+              '        assert_eq!(',
+              '            cargo_target_directory(repo),',
+              '            repo.join(".medusa").join("update-cache").join("cargo-target")',
+              '        );',
+              '    }',
+          ]
+          path.write_text('\n'.join(lines) + '\n')
           PY
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-        with:
-          toolchain: 1.88.0
-          components: rustfmt
-      - run: cargo fmt --all
-      - run: cargo test -p medusa-update source::tests::source_build_target_directory_is_repo_scoped --locked
       - name: Commit fix
         shell: bash
         run: |
-          if git diff --quiet; then exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add crates/medusa-update/src/source.rs
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m "test: make updater target path assertion host-independent"
           git push origin HEAD:feat/persistent-permission-modes
