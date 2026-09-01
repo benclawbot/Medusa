@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "35b0693f1bec5e90e821a5d325c5348913da2e39c78dcdb14cce206f15c79ead"
+      "sha256": "502b7a8179a284b3e695c593b9ca5e3e8584e95b39fe6c89c4eb264445a6ac64"
     },
     {
       "path": "SECURITY.md",
@@ -111,7 +111,7 @@
     {
       "path": "docs/CHATGPT-OAUTH.md",
       "disposition": "current",
-      "sha256": "a3ce8a1b6d55d7b526fcc9895ca110515048f5e81d85bc2200e489a7bcaa1a6a"
+      "sha256": "6d6946935083ca9bf10e7625ad1829ef3ba4fa57ad4facf8e68645d17389a6d9"
     },
     {
       "path": "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
@@ -131,7 +131,7 @@
     {
       "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "9c64aa7cdc187417201b0060c8ef5f369046c67af96075d2d2474626b2ea39a8"
+      "sha256": "de1d1b979b252f2a51404646c7040e66bc3185377da004e314acc11ab5b78438"
     },
     {
       "path": "docs/DAEMON-CONCURRENCY.md",
@@ -246,12 +246,12 @@
     {
       "path": "docs/PROVIDER-DELIVERY.md",
       "disposition": "current",
-      "sha256": "75634be5f1bca7e58a8dc3d7d3b6a1bbb9eb99fb3a7877c832bb5ab82fccd5fc"
+      "sha256": "21986d0360f1dc759d13290e6e2d38678c585341fdf0051f12e6670f26e27b12"
     },
     {
       "path": "docs/PROVIDER-SUPPORT.md",
       "disposition": "current",
-      "sha256": "953c789b6ff577adc90e5c7d3c210a68184e60c0946f1c5e9f6726391073ed40"
+      "sha256": "2db5e83c0853f3aa97ae7c84862693afe92264fe1505820a5c351d803f4ed91e"
     },
     {
       "path": "docs/PUBLIC-API-BASELINE.md",
@@ -276,7 +276,7 @@
     {
       "path": "docs/RELEASE.md",
       "disposition": "current",
-      "sha256": "c2ce347884be824ac3639b7234eb9935b775871d596e955f58ed0d55786ca921"
+      "sha256": "6341cefe30ce1d7157dd4bef81575e8231d44c924ea65ef7ff404c10ee2d04d4"
     },
     {
       "path": "docs/SAFETY-RECOVERY-PROOF.md",
@@ -396,7 +396,7 @@
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "c42bd942c8914ef62e4b322636f9d35a454c3773cb2f97f21ce03a708c90b093"
+      "sha256": "ba1bdc1e3548b50bb4c3451c19301fb5b51add4543a1ea087ed752acddb2fb3e"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
@@ -406,7 +406,7 @@
     {
       "path": "docs/architecture/PREBUILT-UPDATES.md",
       "disposition": "current",
-      "sha256": "18edeccdebb74014858dc70a48783e018f0f8d4a62b1ccd23083a3b5a62230d4"
+      "sha256": "5f1ed338a69e518b8db9341deb7afdb47e5d9fcbbe6e8b94e102601668ba7a5b"
     },
     {
       "path": "docs/architecture/RELEASE-POLICY.md",
@@ -456,7 +456,7 @@
     {
       "path": "docs/architecture/decisions/0008-main-default-explicit-release-updates.md",
       "disposition": "current",
-      "sha256": "a5454453e8c8491ed2edd3f1ae84205d8153b829967415d842f33dee82abda8f"
+      "sha256": "977db2f86813fdbfd25ead3dbd139e65b2a77dcd9a0782b6d4d0d392b186d509"
     },
     {
       "path": "docs/architecture/decisions/0009-browser-preview-certification.md",
@@ -501,7 +501,7 @@
     {
       "path": "docs/architecture/shared-configuration-authority.md",
       "disposition": "current",
-      "sha256": "6598405ea4cee12be443220b64d837bfadb8ce05e83c4dc1b2282f6f080be8dd"
+      "sha256": "7b943d159cec96a06502e093962b65444e535aa1e114f19b08b8f656b00ff9a6"
     },
     {
       "path": "docs/architecture/tui-configuration-command.md",
@@ -561,7 +561,7 @@
     {
       "path": "docs/model-selection-parity.md",
       "disposition": "current",
-      "sha256": "f664f91d39ccb1e99854b50bd9d5906a8151e877f6fa2c835a438d6884b3372e"
+      "sha256": "83fdccf368ab2f42e066a4f91bb67f0afbb1c7ab31c027d4c0af93bc0817264a"
     },
     {
       "path": "docs/multimodal-attachments.md",
@@ -591,7 +591,7 @@
     {
       "path": "docs/repository-indexing.md",
       "disposition": "current",
-      "sha256": "e54b76eb2d504c6002aed624274873da5398129bfb2152cf425a0e6b1d6a72bf"
+      "sha256": "172a1e964d7abe01a994f1dab842ee7f3ae50bde57dbecda845be8d6421dccba"
     },
     {
       "path": "docs/resilience-certification.md",
@@ -639,6 +639,11 @@
       "sha256": "caf58dcc684c79f3b6aae9f57aab43d4c8c5000e7c20c13b7ca62069ec5144be"
     },
     {
+      "path": "docs/superpowers/plans/2026-08-26-codex-app-server-oauth.md",
+      "disposition": "current",
+      "sha256": "047650e0fd6ecafaf1242a065dcf2f93c6317af83a3cb28bde663800ed8f39f6"
+    },
+    {
       "path": "docs/superpowers/specs/2026-07-12-complete-installation-guide-design.md",
       "disposition": "historical",
       "sha256": "89f941c76f366917b1a03ba3ea93338e0c3936a550e9f191e6e785b5e1b9ee84"
@@ -654,6 +659,11 @@
       "sha256": "80f4b6036f2f35bccda9984a644a4a0272734cde82f1fb15f4d135f7d2d80a66"
     },
     {
+      "path": "docs/superpowers/specs/2026-08-26-codex-app-server-oauth-design.md",
+      "disposition": "current",
+      "sha256": "59fe319d19d6f6d4ae96857cdae883e4ad194d4d759074346656cbc27fdc7176"
+    },
+    {
       "path": "docs/telegram-bot-api-transport.md",
       "disposition": "current",
       "sha256": "8954ac490ef2191947a03ab6ff56d71670707ebe96d86f62b105b6483c38247b"
@@ -661,7 +671,7 @@
     {
       "path": "docs/testing/realtime-voice.md",
       "disposition": "current",
-      "sha256": "fee4eab1481031c7a719de2ed59188f9c4246b0820354d98bce7cb307a9ef75f"
+      "sha256": "6a9b7e5b4f9aae605fd26e650014bcd8c81aa1af53a3678e646f73e40d758cf1"
     },
     {
       "path": "docs/tool-output-adapters.md",
@@ -701,7 +711,7 @@
     {
       "path": "docs/turn-memory-pipeline.md",
       "disposition": "current",
-      "sha256": "ced3b6fe8edf20aeddc517a14ddf5453a86cb5a934cc1c49aa7339831be87b1c"
+      "sha256": "58b21482c784452200435299d84a86b0d93967138054d1bed5b17591e5199115"
     },
     {
       "path": "docs/usability/README.md",
@@ -756,7 +766,7 @@
     {
       "path": "scripts/e2e/README.md",
       "disposition": "current",
-      "sha256": "52d805be5f1f6c3ea1baf06dc3e6d1f260cd18fb4d17d2a47f3f0d4e3accc8d0"
+      "sha256": "ebe66e42ac4ccb5fbfb21390f9c6a91ada848286bfa59c5c706c383a41ecefdc"
     },
     {
       "path": "tools/local-bridge/README.md",
