@@ -9,7 +9,8 @@ use sha2::{Digest, Sha256};
 
 use super::support::write_atomic;
 use super::{DurableImplementationState, ImplementationStatus, WorkerRun};
-use crate::{RuntimeEvent, team_control::TeamControlPlane};
+use crate::RuntimeEvent;
+use crate::coordination::team_control::TeamControlPlane;
 
 fn digest(value: impl AsRef<[u8]>) -> String {
     hex::encode(Sha256::digest(value.as_ref()))

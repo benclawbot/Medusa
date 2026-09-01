@@ -1,0 +1,14 @@
+name: "Cargo Locked"
+description: "Run a `cargo` subcommand against the committed Cargo.lock, asserting no drift."
+
+inputs:
+  command:
+    description: "The cargo subcommand to run (e.g. 'check --workspace --locked', 'metadata --locked --format-version 1')."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Run locked cargo ${{ inputs.command }}
+      shell: bash
+      run: cargo ${{ inputs.command }}

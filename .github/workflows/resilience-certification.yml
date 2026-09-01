@@ -47,10 +47,12 @@ jobs:
       PROPTEST_CASES: '256'
       PROPTEST_MAX_SHRINK_ITERS: '4096'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
       - name: Run deterministic resilience primitives
         run: cargo test -p medusa-testkit --locked -- --nocapture
       - name: Run protocol property and malformed-input certification
@@ -90,10 +92,12 @@ jobs:
       PROPTEST_CASES: '4096'
       PROPTEST_MAX_SHRINK_ITERS: '32768'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
       - name: Run deep protocol and deterministic fault campaign
         run: cargo test -p medusa-testkit -p medusa-protocol --locked -- --nocapture
       - name: Run deep authority state-machine and recovery suites

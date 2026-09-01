@@ -25,13 +25,15 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
-    multi_agent_coordinator::CoordinatorEvidence,
-    mutating_worker_coordinator::{ImplementationEvidence, ParallelImplementationEvidence},
+    coordination::{
+        multi_agent_coordinator::CoordinatorEvidence,
+        mutating_worker_coordinator::{ImplementationEvidence, ParallelImplementationEvidence},
+        production_orchestrator::{AgentRole, ProductionExecutionPlan},
+    },
     mutation_transaction::{
         MutationLifecycle, MutationTransaction, ParentReviewAuthorization, PreparedMutationInput,
         authorize_after_parent_review, cancel_transaction,
     },
-    production_orchestrator::{AgentRole, ProductionExecutionPlan},
 };
 
 const BATCH_WORKER_LABEL: &str = "parallel-batch";
@@ -84,7 +86,7 @@ pub fn prepare_combined(
         return Ok(evidence);
     }
 
-    let parallel = crate::mutating_worker_coordinator::run_parallel_implementations(
+    let parallel = crate::coordination::mutating_worker_coordinator::run_parallel_implementations(
         repo,
         config,
         session_api_key.clone(),

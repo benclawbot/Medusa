@@ -1,4 +1,12 @@
-[alias]
-product-acceptance = "run --quiet -p medusa-cli --bin medusa-product-acceptance --"
-medusa-proof = "run --quiet -p medusa-cli --bin medusa-proof --"
-provider-diagnostic = "run --quiet -p medusa-cli --bin medusa-provider-diagnostic --"
+[build]
+# Use all 4 cores for compilation
+jobs = 4
+
+[profile.dev]
+# No debug info for faster dev builds
+debug = 0
+incremental = true
+
+[profile.test]
+debug = 0
+incremental = true

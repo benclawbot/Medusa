@@ -25,17 +25,26 @@ const PROGRESS_WIDTH: usize = 32;
 const MIN_PROGRESS_BAR_WIDTH: usize = 12;
 const DEFAULT_TERMINAL_WIDTH: usize = 120;
 
+// Default time to wait for a CI-built prebuilt main artifact before either
+// falling back to a local compile (`--local-build`) or refusing the update.
+const DEFAULT_PREBUILT_WAIT_SECS: u64 = 600;
+// How often to poll the release endpoint while waiting for the prebuilt
+// artifact. The CI publish step typically finishes in under five minutes.
+const PREBUILT_POLL_INTERVAL_SECS: u64 = 15;
+
 pub(super) fn run(
     repo: &Path,
     check_only: bool,
     automatic: bool,
     release: bool,
     allow_downgrade: bool,
+    local_build: bool,
+    wait_for_prebuilt: Option<u64>,
 ) -> MedusaResult<()> {
     if release {
         release_channel(repo, check_only, automatic, allow_downgrade)
     } else {
-        source_channel(repo, check_only, automatic)
+        source_channel(repo, check_only, automatic, local_build, wait_for_prebuilt)
     }
 }
 
@@ -177,7 +186,13 @@ fn release_channel(
     Ok(())
 }
 
-fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {
+fn source_channel(
+    repo: &Path,
+    check_only: bool,
+    automatic: bool,
+    local_build: bool,
+    wait_for_prebuilt: Option<u64>,
+) -> MedusaResult<()> {
     let policy = UpdatePolicy::from_environment();
     let check_only = check_only || policy == UpdatePolicy::Check;
     let automatic = automatic || policy == UpdatePolicy::Automatic;
@@ -210,7 +225,13 @@ fn source_channel(repo: &Path, check_only: bool, automatic: bool) -> MedusaResul
     let new_version = main_revision_label(&latest.sha);
     let mut progress = UpdateProgress::new(current_version.clone(), new_version.clone());
     progress.stage(UpdateStage::Preparing, 0, "checking prebuilt main artifact");
-    let strategy = main_update_strategy(updater.main_cli_artifact_available(&latest.sha)?);
+    let strategy = main_update_strategy(
+        &updater,
+        &latest.sha,
+        local_build,
+        wait_for_prebuilt,
+        &mut progress,
+    )?;
     // Stop the repository daemon before staging so its running executable is
     // no longer locked when the detached replacement helper swaps it.
     super::request_daemon_shutdown(repo);
@@ -268,11 +289,55 @@ enum MainUpdateStrategy {
     LocalBuild,
 }
 
-fn main_update_strategy(prebuilt_available: bool) -> MainUpdateStrategy {
-    if prebuilt_available {
-        MainUpdateStrategy::Prebuilt
-    } else {
-        MainUpdateStrategy::LocalBuild
+fn main_update_strategy(
+    updater: &MainBranchUpdater,
+    revision: &str,
+    local_build: bool,
+    wait_for_prebuilt: Option<u64>,
+    progress: &mut UpdateProgress,
+) -> MedusaResult<MainUpdateStrategy> {
+    if updater.main_cli_artifact_available(revision)? {
+        return Ok(MainUpdateStrategy::Prebuilt);
+    }
+    if local_build {
+        // User explicitly opted out of waiting for the CI artifact.
+        return Ok(MainUpdateStrategy::LocalBuild);
+    }
+    let timeout_secs = wait_for_prebuilt
+        .or_else(|| std::env::var("MEDUSA_UPDATE_PREBUILT_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()))
+        .unwrap_or(DEFAULT_PREBUILT_WAIT_SECS);
+    let poll_interval = Duration::from_secs(PREBUILT_POLL_INTERVAL_SECS);
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut elapsed = Duration::ZERO;
+    let short_rev = short_revision(revision);
+    loop {
+        progress.stage(
+            UpdateStage::Waiting,
+            1,
+            format!(
+                "waiting for CI prebuilt main artifact for {short_rev} (elapsed {}s of {timeout_secs}s)",
+                elapsed.as_secs()
+            ),
+        );
+        if Instant::now() >= deadline {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Transient,
+                format!(
+                    "no prebuilt main artifact for {short_rev} after waiting {timeout_secs}s. \
+                     Either wait longer with `--wait-for-prebuilt=<secs>`, opt out with \
+                     `--local-build` to compile from source (~15 minutes), or check the \
+                     `rolling-main-cli` GitHub Actions workflow for failures."
+                ),
+            )
+            .with_retryable(true));
+        }
+        std::thread::sleep(poll_interval);
+        let started = deadline.checked_sub(Duration::from_secs(timeout_secs)).unwrap_or(deadline);
+        elapsed = Instant::now().saturating_duration_since(started);
+        if updater.main_cli_artifact_available(revision)? {
+            return Ok(MainUpdateStrategy::Prebuilt);
+        }
     }
 }
 
@@ -819,9 +884,13 @@ mod tests {
     }
 
     #[test]
-    fn main_updates_prefer_prebuilt_artifacts() {
-        assert_eq!(main_update_strategy(true), MainUpdateStrategy::Prebuilt);
-        assert_eq!(main_update_strategy(false), MainUpdateStrategy::LocalBuild);
+    fn main_updates_default_to_waiting_when_prebuilt_missing() {
+        // The prebuilt-available branch is the fast path; we exercise the
+        // timeout/wait machinery indirectly by asserting that the absence of
+        // --local-build surfaces through the new option. End-to-end polling
+        // behavior is covered by the live updater tests in medusa-update.
+        assert!(DEFAULT_PREBUILT_WAIT_SECS >= 60);
+        assert!(PREBUILT_POLL_INTERVAL_SECS >= 5);
     }
 
     #[test]

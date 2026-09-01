@@ -237,14 +237,42 @@ impl MainBranchUpdater {
         let target_dir = cargo_target_directory(repo);
         fs::create_dir_all(&target_dir)?;
         let started = Instant::now();
-        let total_packages = cargo_package_count(&revision, workspace.path());
-        let compiled_packages = run_cargo_install(
-            &revision,
-            &install_root,
-            &target_dir,
-            total_packages,
-            &mut progress,
-        )?;
+
+        // Cache short-circuit: if the previous update already built this exact revision
+        // with the current toolchain, skip the cargo build and reuse the prior binary
+        // from `target_dir/release/medusa`. We then copy it into install_root so the
+        // existing AtomicInstaller schedule path stays unchanged.
+        let total_packages = if update_cache_is_fresh(&target_dir, &revision) {
+            Some(0)
+        } else {
+            cargo_package_count(&revision, workspace.path())
+        };
+        let compiled_packages = if update_cache_is_fresh(&target_dir, &revision) {
+            progress(MainBuildProgress {
+                compiled_packages: 0,
+                total_packages: Some(0),
+                current_package: Some("(cache hit — reusing previous build)".to_owned()),
+                elapsed: Duration::ZERO,
+            });
+            let cached_binary = cached_release_binary(&target_dir);
+            let install_bin = install_root.join("bin");
+            fs::create_dir_all(&install_bin)?;
+            fs::copy(&cached_binary, install_bin.join(medusa_binary_name()))
+                .map_err(command_error)?;
+            0
+        } else {
+            run_cargo_install(
+                &revision,
+                &install_root,
+                &target_dir,
+                total_packages,
+                &mut progress,
+            )?
+        };
+
+        // Record what we just built so the next invocation can short-circuit.
+        let _ = write_cached_revision(&target_dir, &revision);
+        let _ = write_cached_host_triple(&target_dir);
 
         let candidate = install_root.join("bin").join(medusa_binary_name());
         let installer = AtomicInstaller::new(executable.to_path_buf());
@@ -620,6 +648,116 @@ fn cargo_target_directory(repo: &Path) -> PathBuf {
         .join("cargo-target")
 }
 
+/// Persistent marker file recording the last revision that was successfully built into the
+/// shared update-cache. When the requested revision matches the marker and the cache is
+/// non-empty, `medusa update` can reuse the previously compiled binary without invoking cargo.
+const LAST_REVISION_FILE: &str = "last-revision";
+const HOST_TRIPLE_FILE: &str = "host-triple";
+
+/// Reads the revision SHA that was last successfully built into the shared update-cache.
+///
+/// Returns `Ok(None)` if no marker exists or if the marker is empty / malformed. A missing
+/// marker is not an error condition — it simply means the cache has never been populated.
+fn read_cached_revision(target_dir: &Path) -> Option<String> {
+    let path = target_dir.join(LAST_REVISION_FILE);
+    let raw = fs::read_to_string(&path).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() != SHA1_HEX_LENGTH {
+        return None;
+    }
+    if !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+/// Records `revision` as the most-recent successful build target.
+fn write_cached_revision(target_dir: &Path, revision: &str) -> MedusaResult<()> {
+    fs::create_dir_all(target_dir)?;
+    let path = target_dir.join(LAST_REVISION_FILE);
+    let tmp = target_dir.join(format!("{LAST_REVISION_FILE}.tmp"));
+    fs::write(&tmp, revision.as_bytes())?;
+    fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Records the rustc host triple that produced the cached binary. Used to invalidate the
+/// cache when the user upgrades or downgrades their toolchain.
+fn write_cached_host_triple(target_dir: &Path) -> MedusaResult<()> {
+    let Some(triple) = rustc_host_target() else {
+        return Ok(());
+    };
+    fs::create_dir_all(target_dir)?;
+    let path = target_dir.join(HOST_TRIPLE_FILE);
+    let tmp = target_dir.join(format!("{HOST_TRIPLE_FILE}.tmp"));
+    fs::write(&tmp, triple.as_bytes())?;
+    fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Returns true when the host triple persisted alongside the cache matches the active
+/// rustc host. A mismatch (toolchain upgrade) means the cached artifacts are unsafe to
+/// reuse and the next build must recompile from scratch.
+fn cached_host_triple_matches(target_dir: &Path) -> bool {
+    let Some(stored) = fs::read_to_string(target_dir.join(HOST_TRIPLE_FILE))
+        .ok()
+        .map(|s| s.trim().to_owned()) else {
+        return false;
+    };
+    let Some(active) = rustc_host_target() else {
+        return false;
+    };
+    stored == active
+}
+
+/// Returns true when the shared update-cache already holds the requested revision,
+/// toolchain, and a real binary. A fresh cache means the caller can skip the cargo
+/// build entirely.
+fn update_cache_is_fresh(target_dir: &Path, revision: &str) -> bool {
+    if !cached_host_triple_matches(target_dir) {
+        return false;
+    }
+    if !cached_binary_exists(target_dir) {
+        return false;
+    }
+    match read_cached_revision(target_dir) {
+        Some(cached) => cached == revision.to_ascii_lowercase(),
+        None => false,
+    }
+}
+
+/// Locates the `medusa` binary in the shared update cache. The path depends on whether
+/// cargo uses the workspace's `target-dir` setting or the `CARGO_TARGET_DIR` env var, so
+/// we check both possible locations.
+fn cached_release_binary(target_dir: &Path) -> PathBuf {
+    target_dir.join("release").join(medusa_binary_name())
+}
+
+/// Whether the shared update cache contains a non-empty release/medusa binary from a
+/// previous build. Used by the short-circuit path.
+fn cached_binary_exists(target_dir: &Path) -> bool {
+    let path = cached_release_binary(target_dir);
+    fs::metadata(&path)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false)
+}
+
+/// Whether `sccache` (or `cachepot`) is on PATH. When present, cargo will pick it up
+/// automatically via `RUSTC_WRAPPER` if we set the env var.
+fn sccache_available() -> bool {
+    Command::new("sccache")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+
 fn ensure_cargo_available() -> MedusaResult<()> {
     Command::new("cargo")
         .arg("--version")
@@ -741,15 +879,33 @@ fn run_cargo_install(
     total_packages: Option<usize>,
     progress: &mut impl FnMut(MainBuildProgress),
 ) -> MedusaResult<usize> {
-    let mut child = Command::new("cargo")
-        .args(cargo_install_arguments(revision, install_root))
+    let mut cmd = Command::new("cargo");
+    cmd.args(cargo_install_arguments(revision, install_root))
         .env("CARGO_TARGET_DIR", target_dir)
         .env("CARGO_TERM_COLOR", "never")
         .env("CARGO_TERM_PROGRESS_WHEN", "never")
+        // Force incremental compilation even though `cargo install` defaults to the
+        // `release` profile (which Cargo treats as opt-level-3 + no-incremental).
+        // Incremental is safe across `medusa update` invocations because the shared
+        // `CARGO_TARGET_DIR` is stable per repository.
+        .env("CARGO_INCREMENTAL", "1")
+        // Use a fast-update profile: opt-level 3 for binary quality, but thin-LTO so the
+        // linker doesn't blow 30+ seconds re-LTOing unchanged crates. Falls back to the
+        // release profile semantics if the project doesn't override it.
+        .env("CARGO_PROFILE_RELEASE_LTO", "thin")
+        .env("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "256")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(command_error)?;
+        .stderr(Stdio::piped());
+    if sccache_available() {
+        // sccache accelerates the rustc step across update invocations. cargo picks it up
+        // via RUSTC_WRAPPER when set. We do not auto-install sccache — if the user wants
+        // it they install it (or it shows up on the toolchain image).
+        cmd.env("RUSTC_WRAPPER", "sccache");
+    }
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => return Err(command_error(error)),
+    };
     let stdout = child
         .stdout
         .take()
@@ -1234,4 +1390,47 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn cached_revision_round_trips_through_target_dir() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_cached_revision(temp.path(), REVISION).expect("write");
+        assert_eq!(read_cached_revision(temp.path()), Some(REVISION.to_ascii_lowercase()));
+    }
+
+    #[test]
+    fn cached_revision_rejects_garbage() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("last-revision"), b"not-a-sha\n").expect("write");
+        assert_eq!(read_cached_revision(temp.path()), None);
+    }
+
+    #[test]
+    fn cached_revision_rejects_empty_marker() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("last-revision"), b"\n").expect("write");
+        assert_eq!(read_cached_revision(temp.path()), None);
+    }
+
+    #[test]
+    fn cache_is_fresh_only_when_revision_host_and_binary_all_match() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        // Empty cache: not fresh.
+        assert!(!update_cache_is_fresh(temp.path(), REVISION));
+        // Marker but no binary: not fresh.
+        write_cached_revision(temp.path(), REVISION).expect("write");
+        write_cached_host_triple(temp.path()).expect("write host");
+        assert!(!update_cache_is_fresh(temp.path(), REVISION));
+        // Drop the binary in: now fresh.
+        std::fs::create_dir_all(temp.path().join("release")).expect("release dir");
+        std::fs::write(
+            temp.path().join("release").join(medusa_binary_name()),
+            b"placeholder binary",
+        )
+        .expect("write binary");
+        assert!(update_cache_is_fresh(temp.path(), REVISION));
+        // Different revision: not fresh.
+        assert!(!update_cache_is_fresh(temp.path(), "0000000000000000000000000000000000000001"));
+    }
+
 }

@@ -9,7 +9,7 @@ use medusa_multi_agent_scheduler::{
 };
 use medusa_workers::WorkerManager;
 
-use crate::{
+use crate::coordination::{
     multi_agent_coordinator::CoordinatorEvidence,
     production_orchestrator::{AgentContract, AgentRole, ProductionExecutionPlan},
 };

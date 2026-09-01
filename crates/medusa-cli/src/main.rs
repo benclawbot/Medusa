@@ -104,6 +104,17 @@ enum CommandKind {
         /// Permit an intentional version or rollout-sequence rollback on the release path.
         #[arg(long, requires = "release")]
         allow_downgrade: bool,
+        /// Fall back to compiling from source when no prebuilt main artifact is available.
+        /// Without this flag, `medusa update` waits for CI to publish a prebuilt artifact
+        /// (typically <1 minute on a fast connection) instead of spending ~15 minutes
+        /// compiling locally.
+        #[arg(long, conflicts_with = "wait_for_prebuilt")]
+        local_build: bool,
+        /// Wait for the CI prebuilt main artifact to appear before updating, instead of
+        /// immediately falling back to a local build. Accepts an optional timeout in
+        /// seconds (default 600 = 10 minutes). Use `--local-build` to skip the wait.
+        #[arg(long, value_name = "TIMEOUT_SECS", default_missing_value = "600", num_args = 0..=1)]
+        wait_for_prebuilt: Option<u64>,
     },
     Search {
         pattern: String,
@@ -329,7 +340,17 @@ fn run() -> MedusaResult<()> {
             automatic,
             release,
             allow_downgrade,
-        } => update_command::run(&repo, check, automatic, release, allow_downgrade),
+            local_build,
+            wait_for_prebuilt,
+        } => update_command::run(
+            &repo,
+            check,
+            automatic,
+            release,
+            allow_downgrade,
+            local_build,
+            wait_for_prebuilt,
+        ),
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
@@ -1419,6 +1440,8 @@ mod tests {
                 automatic: false,
                 release: false,
                 allow_downgrade: false,
+                local_build: false,
+                wait_for_prebuilt: None,
             })
         ));
     }
@@ -1434,8 +1457,60 @@ mod tests {
                 automatic: false,
                 release: true,
                 allow_downgrade: false,
+                ..
             })
         ));
+    }
+
+    #[test]
+    fn update_local_build_is_parsed() {
+        let cli = Cli::try_parse_from(["medusa", "update", "--local-build", "--check"])
+            .expect("parse --local-build");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Update {
+                local_build: true,
+                wait_for_prebuilt: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn update_wait_for_prebuilt_accepts_default_and_explicit_timeout() {
+        let cli_bare = Cli::try_parse_from(["medusa", "update", "--wait-for-prebuilt", "--check"])
+            .expect("parse bare --wait-for-prebuilt");
+        assert!(matches!(
+            cli_bare.command,
+            Some(CommandKind::Update {
+                local_build: false,
+                wait_for_prebuilt: Some(600),
+                ..
+            })
+        ));
+        let cli_explicit =
+            Cli::try_parse_from(["medusa", "update", "--wait-for-prebuilt=120", "--check"])
+                .expect("parse explicit --wait-for-prebuilt=120");
+        assert!(matches!(
+            cli_explicit.command,
+            Some(CommandKind::Update {
+                local_build: false,
+                wait_for_prebuilt: Some(120),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn update_local_build_and_wait_are_mutually_exclusive() {
+        assert!(Cli::try_parse_from([
+            "medusa",
+            "update",
+            "--local-build",
+            "--wait-for-prebuilt",
+            "--check",
+        ])
+        .is_err());
     }
 
     #[test]

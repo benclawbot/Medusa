@@ -1,9 +1,7 @@
 use std::{cell::Cell, sync::mpsc};
 
-use crate::{
-    production_orchestrator::{self, AgentRole},
-    prompt::PromptDraft,
-};
+use crate::prompt::PromptDraft;
+use crate::coordination::production_orchestrator::{self, AgentRole};
 
 use super::*;
 
@@ -63,7 +61,7 @@ fn repository(
         plan_fingerprint: plan.fingerprint.clone(),
         repository_fingerprint: "repository-fingerprint".to_owned(),
         workers: vec![
-            crate::multi_agent_coordinator::WorkerEvidence {
+            crate::coordination::multi_agent_coordinator::WorkerEvidence {
                 task_id: "analyze".to_owned(),
                 worker_id: "worker-analyze".to_owned(),
                 role: AgentRole::Planner,
@@ -76,7 +74,7 @@ fn repository(
                 turns: 1,
                 summary: "planner evidence".to_owned(),
             },
-            crate::multi_agent_coordinator::WorkerEvidence {
+            crate::coordination::multi_agent_coordinator::WorkerEvidence {
                 task_id: "risk-review".to_owned(),
                 worker_id: "worker-risk-review".to_owned(),
                 role: AgentRole::Researcher,

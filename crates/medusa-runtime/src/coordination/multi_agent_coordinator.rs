@@ -31,8 +31,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+use crate::{RuntimeActivity, RuntimeActivityKind, RuntimeEvent};
+use super::{
     delegation_contract::{DelegationRequest, policy_for, resolve_delegation},
     production_orchestrator::{
         AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
@@ -305,7 +305,7 @@ where
                 let _ = events.send(RuntimeEvent::Team(snapshot));
             }
         }
-        if !crate::production_orchestrator::requires_mutation(plan) {
+        if !super::production_orchestrator::requires_mutation(plan) {
             let _ = events.send(RuntimeEvent::Team(control.finish()));
         }
         return Ok(restored);
@@ -649,7 +649,7 @@ where
         state_path: evidence_path.clone(),
     };
     write_atomic(&evidence_path, &persisted)?;
-    if !crate::production_orchestrator::requires_mutation(plan) {
+    if !super::production_orchestrator::requires_mutation(plan) {
         let _ = events.send(RuntimeEvent::Team(control.finish()));
     }
     let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
@@ -1134,7 +1134,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{production_orchestrator, prompt::PromptDraft};
+    use crate::{coordination::production_orchestrator, prompt::PromptDraft};
 
     fn find_state_file(repo: &Path, file_name: &str) -> PathBuf {
         let executions = repo.join(".medusa").join("executions");

@@ -19,10 +19,12 @@ jobs:
   diagnostic:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
       - name: Format provider diagnostic
         run: cargo fmt --all -- --check
       - name: Test provider diagnostic

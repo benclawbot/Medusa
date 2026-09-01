@@ -17,10 +17,9 @@ use serde_json::{Value, json};
 use crate::{
     RuntimeController, RuntimeEvent, SubmissionState,
     analysis_workspace::{AnalysisDelegationKind, AnalysisOperation, AnalysisValue},
+    coordination::team_control::TeamControlPlane,
     invariants::RuntimeInvariantRegistry,
-    multi_agent_coordinator, production_orchestrator,
     prompt::PromptDraft,
-    team_control::TeamControlPlane,
 };
 
 const MAX_OBJECTIVE_BYTES: usize = 8 * 1024;
@@ -117,16 +116,16 @@ impl RuntimeAnalysisHost {
             attachments: Vec::new(),
             revision: 0,
         };
-        let plan = production_orchestrator::plan_for_repository(&self.repo, &draft)
+        let plan = crate::coordination::production_orchestrator::plan_for_repository(&self.repo, &draft)
             .map_err(|error| invalid(error.to_string()))?;
-        if production_orchestrator::requires_mutation(&plan)
+        if crate::coordination::production_orchestrator::requires_mutation(&plan)
             || plan.tasks.iter().any(|task| !task.write_paths.is_empty())
         {
             return Err(policy(
                 "analysis workspace may delegate only read-only child work; repository mutation must return to the parent Medusa transaction path",
             ));
         }
-        let evidence = multi_agent_coordinator::run_preflight(
+        let evidence = crate::coordination::multi_agent_coordinator::run_preflight(
             &self.repo,
             &self.config,
             self.session_api_key.clone(),

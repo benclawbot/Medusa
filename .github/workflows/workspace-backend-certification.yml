@@ -36,8 +36,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Test directory mutation backend
         run: cargo test -p medusa-runtime workspace_worker_manager --locked
       - name: Test public workspace lifecycle
@@ -52,8 +52,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate architecture claims
         run: python3 scripts/check-product-architecture.py
       - name: Validate capability evidence

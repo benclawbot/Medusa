@@ -31,12 +31,12 @@ jobs:
     name: Workspace coverage >= 75%
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: llvm-tools-preview
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-llvm-cov
@@ -61,10 +61,12 @@ jobs:
     name: Named adversarial regressions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
       - name: Install Linux sandbox backend
         shell: bash
         run: |
@@ -98,16 +100,16 @@ jobs:
     needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - run: bash scripts/fuzz-smoke.sh
 
   chaos-and-migrations:
     needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - run: bash scripts/chaos-smoke.sh
       - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact --locked -- --exact
 
@@ -119,10 +121,12 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
       - name: Build release package
         run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Smoke test package on Unix
@@ -151,8 +155,8 @@ jobs:
     needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-deny,cargo-audit
@@ -190,10 +194,12 @@ jobs:
       LIVE_E2E_TIMEOUT_SECONDS: '1500'
       LIVE_E2E_HEARTBEAT_SECONDS: '60'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1 >/dev/null
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
       - name: Install Linux sandbox backend
         shell: bash
         run: |

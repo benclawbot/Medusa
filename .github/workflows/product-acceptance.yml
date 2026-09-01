@@ -42,7 +42,9 @@ jobs:
           shared-key: medusa-pr-build
           add-job-id-key: "false"
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
       - name: Install Linux sandbox backend
         shell: bash
         run: |
@@ -77,14 +79,16 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: medusa-pr-build
           add-job-id-key: "false"
       - name: Validate committed dependency authority
-        run: cargo metadata --locked --format-version 1
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
       - name: Install Linux sandbox backend
         if: runner.os == 'Linux'
         shell: bash

@@ -16,13 +16,8 @@ jobs:
     if: ${{ github.event.pull_request.head.ref == 'agent/652-daemon-wire-frontend-contract' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: agent/652-daemon-wire-frontend-contract
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: clippy,rustfmt
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
       - name: Disambiguate verified server signature anchor
         run: |
           python3 - <<'PY'
