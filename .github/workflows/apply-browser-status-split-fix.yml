@@ -1,0 +1,45 @@
+name: Apply browser status split fix
+
+on:
+  push:
+    branches:
+      - feat/persistent-permission-modes
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: feat/persistent-permission-modes
+          fetch-depth: 0
+      - name: Teach browser checker about split registry
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/check-browser-status.py')
+          text = path.read_text()
+          old = '    registry = read(root, "crates/medusa-capabilities/src/registry.rs")\n'
+          new = ('    registry = read(root, "crates/medusa-capabilities/src/registry.rs")\n'
+                 '    registry += "\\n" + read(root, "crates/medusa-capabilities/src/registry_inner.rs")\n')
+          if old not in text:
+              if 'registry_inner.rs' in text:
+                  raise SystemExit(0)
+              raise SystemExit('registry binding not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Validate browser status checker
+        run: python3 scripts/check-browser-status.py
+      - name: Commit fix
+        shell: bash
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/check-browser-status.py
+          git commit -m "fix: follow split capability registry in browser check"
+          git push origin HEAD:feat/persistent-permission-modes
