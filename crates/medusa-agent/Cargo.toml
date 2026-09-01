@@ -25,6 +25,7 @@ medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-improvement = { path = "../medusa-improvement" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
+medusa-permissions.workspace = true
 medusa-process-containment.workspace = true
 medusa-process-registry = { path = "../medusa-process-registry" }
 medusa-skill = { path = "../medusa-skill" }
