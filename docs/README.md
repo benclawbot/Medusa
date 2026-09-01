@@ -4,6 +4,11 @@ Use this index to find the repository's main operator and maintainer references.
 
 Every tracked Markdown document and its current or historical disposition is recorded in [`documentation-inventory.json`](documentation-inventory.json). See [documentation governance](DOCUMENTATION-GOVERNANCE.md) for the link, review, and drift policy.
 
+## Reference
+
+- [Glossary](glossary.md) — index of the `medusa-*` concept namespace.
+- [Security model](SECURITY-MODEL.md) — trust boundary, threat model, containment per platform, verification gate, durability vs. irreversibility.
+
 ## Using Medusa
 
 - [TUI keyboard shortcuts](tui-keyboard-shortcuts.md) — interactive composer, transcript, run, and modal controls.

@@ -4,6 +4,10 @@
 
 # Medusa
 
+
+
+> **One-line pitch:** Local-first Rust coding agent. Plan, Execute Safely, Recover — across CLI, TUI, desktop, daemon, and Telegram. Bounded multi-agent mutation with a typed verification gate. Workspace-aware (Git with a conflict-aware DAG, or directory with isolated snapshots). Durable authority under `.medusa/`.
+
 A local-first, workspace-aware agent written in Rust. Medusa can work in Git repositories, ordinary directories, or explicit ephemeral workspaces. It turns objectives into explicit plans, coordinates bounded specialist agents, isolates mutation, runs guarded commands, verifies results, preserves durable evidence, and resumes work across the CLI, terminal UI, desktop app, daemon, and Telegram.
 
 The product model is **Plan, Execute Safely, Recover**:
@@ -21,6 +25,16 @@ The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/archit
 The runtime also contains an accepted **transactional component-runtime contract** for safe incremental harness evolution: stable component generations, scoped host context, resource ownership, reversible effect journals, declarative dependencies, committed-versus-target provider views, ordered retirement, versioned desired state with compare-and-swap updates, health-validated replacement, containment-bound capabilities, validated self-modification proposals, explicit external-commit semantics, and deterministic fault/invariant checks. This is an adoption seam, not a claim that every production subsystem has already been migrated to component lifecycle management.
 
 ---
+
+
+
+## Security model
+
+Medusa's trust boundary, threat model, containment per platform, and verification guarantees are documented in [`docs/SECURITY-MODEL.md`](docs/SECURITY-MODEL.md). Report vulnerabilities per [`SECURITY.md`](SECURITY.md).
+
+## Glossary
+
+The full `medusa-*` concept namespace (Plan / Execute Safely / Recover, MutationDag, IntegrationBarrier, WorkerLease, ReasoningHandoffV1, etc.) is indexed in [`docs/glossary.md`](docs/glossary.md).
 
 ## Contents
 
