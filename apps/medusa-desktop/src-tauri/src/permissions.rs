@@ -59,7 +59,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             labels,
-            vec!["Ask for approval", "Approve for me", "Full Access", "Read Only"]
+            vec![
+                "Ask for approval",
+                "Approve for me",
+                "Full Access",
+                "Read Only"
+            ]
         );
     }
 }
