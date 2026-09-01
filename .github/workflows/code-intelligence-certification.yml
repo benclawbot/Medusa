@@ -41,7 +41,9 @@ jobs:
       - name: Verify language-server availability
         run: typescript-language-server --version
       - name: Require committed dependency graph
-        run: cargo metadata --format-version 1 --locked --no-deps
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --format-version 1 --locked --no-deps"
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint intelligence and production dispatcher

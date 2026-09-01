@@ -90,7 +90,9 @@ jobs:
           node-version: "22"
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
       - name: Validate committed exact-build dependency authority
-        run: cargo metadata --locked --format-version 1
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
       - name: Install Linux containment backend
         if: runner.os == 'Linux'
         shell: bash

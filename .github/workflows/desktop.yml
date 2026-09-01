@@ -76,7 +76,9 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Validate committed dependency authority
-        run: cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked --format-version 1
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked --format-version 1"
       - name: Check desktop formatting
         run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
       - name: Capture desktop rustfmt patch
