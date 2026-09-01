@@ -1125,6 +1125,17 @@ impl RuntimeState {
         }
     }
 
+    fn refresh_permission_mode(&mut self) -> Result<PermissionMode, RuntimeError> {
+        let permission_mode = PermissionStore::user()
+            .and_then(|store| store.load())
+            .map_err(RuntimeError::agent)?;
+        let execution_mode = permission_mode.execution_mode();
+        self.base_config.agent.mode = execution_mode;
+        self.config.agent.mode = execution_mode;
+        self.plan_mode = permission_mode.is_read_only();
+        Ok(permission_mode)
+    }
+
     fn settings_event(&self) -> RuntimeEvent {
         // A route configured with auth=none is ready without a Medusa-managed
         // API key. This includes ChatGPT OAuth, whose credential store is owned
@@ -2135,6 +2146,7 @@ fn run_prompt(
     accepted: Option<&Sender<Result<(), String>>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
     info!(repository = %state.repo.display(), "runtime prompt started");
+    state.refresh_permission_mode()?;
     let config = state.config.clone();
     let session_binding = state
         .session
