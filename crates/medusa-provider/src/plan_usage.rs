@@ -1,4 +1,8 @@
-use std::{fs, path::PathBuf, sync::{Mutex, OnceLock}};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
 
 use medusa_config::ProviderProfileCatalog;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -42,7 +46,9 @@ impl ProviderPlanUsage {
 pub fn latest_provider_plan_usage() -> MedusaResult<Option<ProviderPlanUsage>> {
     let path = usage_path()?;
     match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(plan_store_error),
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(plan_store_error),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(plan_store_error(error)),
     }
@@ -91,6 +97,9 @@ fn persist(usage: &ProviderPlanUsage) -> MedusaResult<()> {
     let bytes = serde_json::to_vec_pretty(usage).map_err(plan_store_error)?;
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, bytes).map_err(plan_store_error)?;
+    if path.exists() {
+        fs::remove_file(&path).map_err(plan_store_error)?;
+    }
     fs::rename(&temporary, &path).map_err(plan_store_error)
 }
 
@@ -164,16 +173,18 @@ fn scaled_basis_points(value: f64, scale: f64) -> u16 {
     if !value.is_finite() || value <= 0.0 {
         return 0;
     }
-    let basis_points = (value * 10_000.0 / scale).round().clamp(0.0, 10_000.0);
+    let basis_points = (value * 10_000.0 / scale)
+        .round()
+        .clamp(0.0, 10_000.0);
     basis_points as u16
 }
 
 fn parse_timestamp(value: &str) -> Option<i64> {
-    value
-        .trim()
-        .parse::<i64>()
-        .ok()
-        .or_else(|| OffsetDateTime::parse(value.trim(), &Rfc3339).ok().map(|value| value.unix_timestamp()))
+    value.trim().parse::<i64>().ok().or_else(|| {
+        OffsetDateTime::parse(value.trim(), &Rfc3339)
+            .ok()
+            .map(|value| value.unix_timestamp())
+    })
 }
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -201,10 +212,20 @@ mod tests {
     #[test]
     fn parses_openai_codex_primary_window() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-codex-primary-used-percent", HeaderValue::from_static("42.5"));
-        headers.insert("x-codex-primary-window-minutes", HeaderValue::from_static("300"));
-        headers.insert("x-codex-primary-reset-at", HeaderValue::from_static("2000000000"));
-        let usage = parse_provider_plan_usage("openai_oauth", "gpt-test", &headers).expect("usage");
+        headers.insert(
+            "x-codex-primary-used-percent",
+            HeaderValue::from_static("42.5"),
+        );
+        headers.insert(
+            "x-codex-primary-window-minutes",
+            HeaderValue::from_static("300"),
+        );
+        headers.insert(
+            "x-codex-primary-reset-at",
+            HeaderValue::from_static("2000000000"),
+        );
+        let usage =
+            parse_provider_plan_usage("openai_oauth", "gpt-test", &headers).expect("usage");
         assert_eq!(usage.window_seconds, 18_000);
         assert_eq!(usage.used_basis_points, 4_250);
         assert_eq!(usage.reset_at_unix, Some(2_000_000_000));
@@ -221,7 +242,8 @@ mod tests {
             "anthropic-ratelimit-unified-5h-reset",
             HeaderValue::from_static("2033-05-18T03:33:20Z"),
         );
-        let usage = parse_provider_plan_usage("anthropic", "claude-test", &headers).expect("usage");
+        let usage =
+            parse_provider_plan_usage("anthropic", "claude-test", &headers).expect("usage");
         assert_eq!(usage.window_seconds, 18_000);
         assert_eq!(usage.used_basis_points, 8_750);
         assert_eq!(usage.reset_at_unix, Some(2_000_000_000));
