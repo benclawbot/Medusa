@@ -34,9 +34,9 @@ jobs:
           count = 0
           for path in sorted(Path('.github/workflows').glob('*.yml')):
               text = path.read_text(encoding='utf-8')
-              yaml.safe_load(text)
               if local not in text:
                   continue
+              yaml.safe_load(text)
               count += 1
               first_local = text.index(local)
               if checkout not in text[:first_local]:
