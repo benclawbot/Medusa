@@ -962,7 +962,8 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                         }
                         if let Some(reset_at) = provider_plan_reset_at(&error) {
                             earliest_plan_reset = Some(
-                                earliest_plan_reset.map_or(reset_at, |current: i64| current.min(reset_at)),
+                                earliest_plan_reset
+                                    .map_or(reset_at, |current: i64| current.min(reset_at)),
                             );
                         }
                         final_error = Some(error.clone());
@@ -1081,8 +1082,8 @@ fn wait_for_provider_plan_reset(
         if now >= reset_at_unix.saturating_add(1) {
             return Ok(());
         }
-        let remaining = u64::try_from(reset_at_unix.saturating_add(1).saturating_sub(now))
-            .unwrap_or(1);
+        let remaining =
+            u64::try_from(reset_at_unix.saturating_add(1).saturating_sub(now)).unwrap_or(1);
         sleeper(POLL.min(Duration::from_secs(remaining.max(1))));
     }
 }

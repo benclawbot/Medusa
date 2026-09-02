@@ -137,15 +137,11 @@ fn parse_openai(provider: &str, model: &str, headers: &HeaderMap) -> Option<Prov
     })
 }
 
-fn parse_anthropic(
-    provider: &str,
-    model: &str,
-    headers: &HeaderMap,
-) -> Option<ProviderPlanUsage> {
+fn parse_anthropic(provider: &str, model: &str, headers: &HeaderMap) -> Option<ProviderPlanUsage> {
     let utilization = header_f64(headers, "anthropic-ratelimit-unified-5h-utilization")?;
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let reset_at_unix = header_str(headers, "anthropic-ratelimit-unified-5h-reset")
-        .and_then(parse_timestamp);
+    let reset_at_unix =
+        header_str(headers, "anthropic-ratelimit-unified-5h-reset").and_then(parse_timestamp);
     Some(ProviderPlanUsage {
         provider: provider.to_owned(),
         model: model.to_owned(),
@@ -173,9 +169,7 @@ fn scaled_basis_points(value: f64, scale: f64) -> u16 {
     if !value.is_finite() || value <= 0.0 {
         return 0;
     }
-    let basis_points = (value * 10_000.0 / scale)
-        .round()
-        .clamp(0.0, 10_000.0);
+    let basis_points = (value * 10_000.0 / scale).round().clamp(0.0, 10_000.0);
     basis_points as u16
 }
 
@@ -224,8 +218,7 @@ mod tests {
             "x-codex-primary-reset-at",
             HeaderValue::from_static("2000000000"),
         );
-        let usage =
-            parse_provider_plan_usage("openai_oauth", "gpt-test", &headers).expect("usage");
+        let usage = parse_provider_plan_usage("openai_oauth", "gpt-test", &headers).expect("usage");
         assert_eq!(usage.window_seconds, 18_000);
         assert_eq!(usage.used_basis_points, 4_250);
         assert_eq!(usage.reset_at_unix, Some(2_000_000_000));
@@ -242,8 +235,7 @@ mod tests {
             "anthropic-ratelimit-unified-5h-reset",
             HeaderValue::from_static("2033-05-18T03:33:20Z"),
         );
-        let usage =
-            parse_provider_plan_usage("anthropic", "claude-test", &headers).expect("usage");
+        let usage = parse_provider_plan_usage("anthropic", "claude-test", &headers).expect("usage");
         assert_eq!(usage.window_seconds, 18_000);
         assert_eq!(usage.used_basis_points, 8_750);
         assert_eq!(usage.reset_at_unix, Some(2_000_000_000));

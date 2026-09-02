@@ -287,7 +287,9 @@ fn classify_status_with_body(
             serde_json::Value::from(reset_at),
         );
         if let Ok(value) = serde_json::to_value(&plan_usage) {
-            error.context.insert("provider_plan_usage".to_owned(), value);
+            error
+                .context
+                .insert("provider_plan_usage".to_owned(), value);
         }
     }
     error
@@ -369,33 +371,60 @@ mod tests {
     #[test]
     fn provider_plan_limit_is_distinct_from_generic_429() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-codex-primary-used-percent", HeaderValue::from_static("100"));
-        headers.insert("x-codex-primary-reset-at", HeaderValue::from_static("2000000000"));
+        headers.insert(
+            "x-codex-primary-used-percent",
+            HeaderValue::from_static("100"),
+        );
+        headers.insert(
+            "x-codex-primary-reset-at",
+            HeaderValue::from_static("2000000000"),
+        );
         let usage = crate::plan_usage::infer_provider_plan_usage(&headers).expect("plan usage");
         let error = classify_status_with_body(
             StatusCode::TOO_MANY_REQUESTS,
-            BoundedBody { bytes: b"limit".to_vec(), truncated: false },
+            BoundedBody {
+                bytes: b"limit".to_vec(),
+                truncated: false,
+            },
             Some(60),
             Some(usage),
         );
-        assert_eq!(error.context.get("provider_plan_limit"), Some(&serde_json::Value::Bool(true)));
-        assert_eq!(error.context.get("provider_plan_reset_at_unix"), Some(&serde_json::Value::from(2_000_000_000_i64)));
+        assert_eq!(
+            error.context.get("provider_plan_limit"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            error.context.get("provider_plan_reset_at_unix"),
+            Some(&serde_json::Value::from(2_000_000_000_i64))
+        );
     }
 
     #[test]
     fn ordinary_429_stays_short_retry_even_when_plan_usage_is_partial() {
         let mut headers = HeaderMap::new();
-        headers.insert("x-codex-primary-used-percent", HeaderValue::from_static("42"));
-        headers.insert("x-codex-primary-reset-at", HeaderValue::from_static("2000000000"));
+        headers.insert(
+            "x-codex-primary-used-percent",
+            HeaderValue::from_static("42"),
+        );
+        headers.insert(
+            "x-codex-primary-reset-at",
+            HeaderValue::from_static("2000000000"),
+        );
         let usage = crate::plan_usage::infer_provider_plan_usage(&headers).expect("plan usage");
         let error = classify_status_with_body(
             StatusCode::TOO_MANY_REQUESTS,
-            BoundedBody { bytes: b"rpm".to_vec(), truncated: false },
+            BoundedBody {
+                bytes: b"rpm".to_vec(),
+                truncated: false,
+            },
             Some(2),
             Some(usage),
         );
         assert_eq!(error.context.get("provider_plan_limit"), None);
-        assert_eq!(error.context.get("retry_after_seconds"), Some(&serde_json::Value::from(2_u64)));
+        assert_eq!(
+            error.context.get("retry_after_seconds"),
+            Some(&serde_json::Value::from(2_u64))
+        );
     }
 
     #[test]
