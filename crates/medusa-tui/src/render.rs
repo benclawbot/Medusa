@@ -172,12 +172,69 @@ pub(super) fn context_meter_line(app: &AppState) -> String {
         "█".repeat(usize::try_from(filled).unwrap_or(usize::MAX)),
         "░".repeat(usize::try_from(SEGMENTS.saturating_sub(filled)).unwrap_or_default())
     );
-    format!(
+    let context = format!(
         "context [{bar}] {}/{} ({percent}%) · auto-compact {}%",
         format_token_count(used),
         format_token_count(window),
         app.auto_compact_percent(),
-    )
+    );
+    provider_plan_meter().map_or(context.clone(), |plan| format!("{context} · {plan}"))
+}
+
+fn provider_plan_meter() -> Option<String> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    static CACHE: OnceLock<Mutex<Option<(Instant, Option<medusa_provider::ProviderPlanUsage>)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = cache.lock().ok()?;
+    let refresh = cache
+        .as_ref()
+        .is_none_or(|(observed, _)| observed.elapsed() >= Duration::from_secs(1));
+    if refresh {
+        let usage = medusa_provider::latest_provider_plan_usage().ok().flatten();
+        *cache = Some((Instant::now(), usage));
+    }
+    let usage = cache.as_ref()?.1.as_ref()?;
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let fresh_until = usage
+        .reset_at_unix
+        .unwrap_or_else(|| usage.observed_at_unix.saturating_add(usage.window_seconds as i64));
+    if fresh_until <= now {
+        return None;
+    }
+    const SEGMENTS: u16 = 10;
+    let filled = usage.used_basis_points.saturating_mul(SEGMENTS) / 10_000;
+    let bar = format!(
+        "{}{}",
+        "█".repeat(usize::from(filled)),
+        "░".repeat(usize::from(SEGMENTS.saturating_sub(filled)))
+    );
+    let percent = u32::from(usage.used_basis_points) / 100;
+    let window = format_window(usage.window_seconds);
+    let reset = usage
+        .reset_after_seconds(now)
+        .map(|seconds| format!(" · resets {}", format_window(seconds)))
+        .unwrap_or_default();
+    Some(format!(
+        "plan {} {window} [{bar}] {percent}%{reset}",
+        usage.provider
+    ))
+}
+
+fn format_window(seconds: u64) -> String {
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if hours > 0 && minutes > 0 {
+        format!("{hours}h{minutes:02}m")
+    } else if hours > 0 {
+        format!("{hours}h")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn format_cost(microusd: u64) -> String {
@@ -335,7 +392,7 @@ fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
         ));
         let selected = modal.settings_selected_choice();
         for (index, check) in modal.settings_doctor_checks().into_iter().enumerate() {
-            let is_selected = index == selected;
+            let is_selected = index == modal.settings_selected_choice();
             lines.push(StyledLine::with_marker(
                 if is_selected { "› " } else { "  " },
                 if is_selected { Color::Magenta } else { Color::DarkGrey },
