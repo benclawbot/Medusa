@@ -46,7 +46,7 @@ pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRe
 pub use model_discovery::{ModelDiscoveryError, discover_models};
 pub use openai::OpenAiProvider;
 pub use openai_streaming::OpenAiStreamAccumulator;
-pub use plan_usage::ProviderPlanUsage;
+pub use plan_usage::{ProviderPlanUsage, latest_provider_plan_usage};
 pub use reasoning_exchange::{
     Alternative, Assumption, AssumptionStatus, ContinuationDisposition, ContinuationModelBinding,
     Decision, EvidenceRef, HandoffPolicy, HandoffSource, HandoffTarget, HandoffTransfer,
@@ -76,7 +76,6 @@ pub(crate) use http::{
     cancelled_provider_error, provider_error, provider_response_error, run_cancellable_request,
     shared_async_http_client, shared_blocking_http_client,
 };
-pub(crate) use plan_usage::parse_provider_plan_usage;
 
 #[cfg(test)]
 extern crate self as tempfile;
