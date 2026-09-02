@@ -24,6 +24,7 @@ image = { version = "=0.25.5", default-features = false, features = ["gif", "jpe
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-protocol = { path = "../medusa-protocol" }
+medusa-provider = { path = "../medusa-provider" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
 serde.workspace = true
