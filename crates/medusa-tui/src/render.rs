@@ -218,10 +218,15 @@ pub(super) struct UiIdentity {
     model: String,
     effort: String,
     permission: String,
+    build: Option<String>,
 }
 
 impl UiIdentity {
     pub(super) fn for_repo(repo: &Path) -> Self {
+        Self::for_repo_with_build(repo, None)
+    }
+
+    pub(super) fn for_repo_with_build(repo: &Path, build: Option<&str>) -> Self {
         let project = repo.join(".medusa/config.toml");
         let project = project.exists().then_some(project);
         let config =
@@ -239,6 +244,7 @@ impl UiIdentity {
             permission: PermissionStore::user()
                 .and_then(|store| store.load())
                 .map_or_else(|_| PermissionMode::FullAccess.label().to_owned(), |mode| mode.label().to_owned()),
+            build: build.map(str::to_owned),
         }
     }
 
@@ -467,10 +473,15 @@ pub(super) fn render_frame(
         row,
         StyledLine::new(
             format!(
-                "{} · {} {}",
+                "{} · {} {}{}",
                 identity.project,
                 app.model_label.as_deref().unwrap_or(&identity.model),
                 app.effort_label.as_deref().unwrap_or(&identity.effort),
+                identity
+                    .build
+                    .as_deref()
+                    .map(|build| format!(" · {build}"))
+                    .unwrap_or_default(),
             ),
             Color::Cyan,
         ),

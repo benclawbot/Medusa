@@ -59,6 +59,7 @@ pub struct TuiOptions {
     pub initial_prompt: Option<String>,
     pub resume_session: Option<String>,
     pub continue_latest: bool,
+    pub build_label: Option<String>,
 }
 
 impl TuiOptions {
@@ -70,6 +71,7 @@ impl TuiOptions {
             initial_prompt: None,
             resume_session: None,
             continue_latest: false,
+            build_label: None,
         }
     }
 
@@ -125,6 +127,29 @@ mod tests {
         let mut options = TuiOptions::for_repo("/tmp/example");
         options.socket = Some(PathBuf::from("/tmp/medusa.sock"));
         assert_eq!(options.socket_path(), PathBuf::from("/tmp/medusa.sock"));
+    }
+
+    #[test]
+    fn build_label_is_rendered_in_session_header() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "build-label",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
+        let identity = UiIdentity::for_repo_with_build(
+            directory.path(),
+            Some("1.0.7.1 · main abcdef123456"),
+        );
+        let frame = render_frame(&identity, &app, 100, 24);
+        assert!(
+            frame
+                .iter()
+                .any(|line| line.text.contains("1.0.7.1 · main abcdef123456"))
+        );
     }
 
     #[test]

@@ -15,4 +15,6 @@ fn main() {
             .unwrap_or_else(|| "unknown".to_owned())
     });
     println!("cargo:rustc-env=MEDUSA_BUILD_COMMIT={revision}");
+    let short_revision = revision.get(..12).unwrap_or(&revision);
+    println!("cargo:rustc-env=MEDUSA_BUILD_COMMIT_SHORT={short_revision}");
 }
