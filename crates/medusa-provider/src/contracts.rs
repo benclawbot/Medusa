@@ -155,6 +155,16 @@ pub struct ProviderAttemptDescriptor {
     pub conditional_launch_after_ms: Option<u64>,
 }
 
+/// Internal marker separating the stable system prefix from per-turn context.
+pub const DYNAMIC_SYSTEM_CONTEXT_MARKER: &str = "\n\n[MEDUSA_DYNAMIC_SYSTEM_CONTEXT]\n";
+
+pub(crate) fn split_dynamic_system_context(system: &str) -> (&str, Option<&str>) {
+    let Some((stable, dynamic)) = system.split_once(DYNAMIC_SYSTEM_CONTEXT_MARKER) else {
+        return (system, None);
+    };
+    (stable, (!dynamic.trim().is_empty()).then_some(dynamic))
+}
+
 /// One model request.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ModelRequest {

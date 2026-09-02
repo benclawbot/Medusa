@@ -10,7 +10,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::{DesktopCommanderSettings, desktop_commander_tool_is_mutating};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
-    ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase,
+    DYNAMIC_SYSTEM_CONTEXT_MARKER, ImageSource, Message, MessageBlock, ProviderCapabilities,
+    ProviderExecutionPhase,
 };
 use time::OffsetDateTime;
 
@@ -78,6 +79,17 @@ pub(crate) fn system_prompt_with_discovery_error(
     error: &str,
 ) -> String {
     system_prompt_with_capability_state(mode, repo, additional_context, None, Some(error))
+}
+
+pub(crate) fn append_dynamic_system_context(prompt: &mut String, additional_context: Option<&str>) {
+    prompt.push_str(DYNAMIC_SYSTEM_CONTEXT_MARKER);
+    if let Some(context) = additional_context
+        .map(str::trim)
+        .filter(|context| !context.is_empty())
+    {
+        prompt.push_str("\n\nExplicit user-selected context for the current agent turn:\n");
+        prompt.push_str(context);
+    }
 }
 
 fn system_prompt_with_capability_state(

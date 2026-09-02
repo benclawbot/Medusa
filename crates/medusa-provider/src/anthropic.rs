@@ -16,7 +16,7 @@ use crate::{
     MessageBlock, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
     ProviderStreamEvent, ResponseBlock, Usage, async_response_error, async_response_json,
     blocking_response_error, blocking_response_json, provider_error, run_cancellable_request,
-    shared_async_http_client, shared_blocking_http_client,
+    shared_async_http_client, shared_blocking_http_client, split_dynamic_system_context,
 };
 
 type WireHistory = Arc<Mutex<HashMap<String, Arc<Vec<Value>>>>>;
@@ -114,13 +114,18 @@ impl MiniMaxProvider {
         {
             object.insert("cache_control".to_owned(), json!({"type": "ephemeral"}));
         }
+        let (stable_system, dynamic_system) = split_dynamic_system_context(&request.system);
+        let mut system = vec![json!({
+            "type": "text",
+            "text": stable_system,
+            "cache_control": {"type": "ephemeral"}
+        })];
+        if let Some(dynamic_system) = dynamic_system {
+            system.push(json!({"type": "text", "text": dynamic_system}));
+        }
         json!({
             "model": self.model,
-            "system": [{
-                "type": "text",
-                "text": request.system,
-                "cache_control": {"type": "ephemeral"}
-            }],
+            "system": system,
             "messages": self.request_messages(request),
             "tools": tools,
             "max_tokens": request.max_tokens,
@@ -947,6 +952,19 @@ mod tests {
         let body = provider.request_body(&request);
         assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
         assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn dynamic_system_context_is_after_the_cached_system_breakpoint() {
+        let provider = test_provider();
+        let mut request = empty_request();
+        request.system = format!("stable{}\n\nvolatile", crate::DYNAMIC_SYSTEM_CONTEXT_MARKER);
+        let body = provider.request_body(&request);
+        assert_eq!(body["system"].as_array().map(Vec::len), Some(2));
+        assert_eq!(body["system"][0]["text"], "stable");
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["system"][1]["text"], "\n\nvolatile");
+        assert!(body["system"][1].get("cache_control").is_none());
     }
 
     #[test]

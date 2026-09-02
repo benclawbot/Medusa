@@ -26,7 +26,7 @@ use crate::{
     ProviderExecutionPhase, ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent,
     RouteLatencyPolicy, RouteLatencyStats, RouteSelectionReceipt, VerifiedRouteContext,
     VerifiedRouteEvidence, VerifiedRoutingPolicy, hedge_decision, latency_aware_route_order,
-    select_verified_route_with_latency_policy,
+    select_verified_route_with_latency_policy, split_dynamic_system_context,
 };
 
 /// Observable health state for a configured provider position.
@@ -378,10 +378,11 @@ fn prompt_envelope(
     profile: &ProviderRouteProfile,
     request: &ModelRequest,
 ) -> MedusaResult<PromptEnvelope> {
+    let (stable_system, dynamic_system) = split_dynamic_system_context(&request.system);
     let mut segments = Vec::new();
-    if !request.system.trim().is_empty() {
+    if !stable_system.trim().is_empty() {
         segments.push(
-            PromptSegment::new("system", request.system.clone(), true)
+            PromptSegment::new("system", stable_system.to_owned(), true)
                 .map_err(cache_validation_error)?,
         );
     }
@@ -395,6 +396,12 @@ fn prompt_envelope(
                 true,
             )
             .map_err(cache_validation_error)?,
+        );
+    }
+    if let Some(dynamic_system) = dynamic_system {
+        segments.push(
+            PromptSegment::new("system_dynamic", dynamic_system.to_owned(), false)
+                .map_err(cache_validation_error)?,
         );
     }
     if !request.messages.is_empty() {
@@ -1136,6 +1143,31 @@ mod tests {
         second.messages[0].content = vec![MessageBlock::Text {
             text: "different turn".into(),
         }];
+        let first = prompt_envelope(&profile, &first).expect("first envelope");
+        let second = prompt_envelope(&profile, &second).expect("second envelope");
+        assert_eq!(
+            first.stable_prefix_fingerprint(),
+            second.stable_prefix_fingerprint()
+        );
+        assert_ne!(
+            first.full_prompt_fingerprint(),
+            second.full_prompt_fingerprint()
+        );
+    }
+
+    #[test]
+    fn dynamic_system_context_preserves_the_stable_prefix_fingerprint() {
+        let profile = profile("cache-route");
+        let mut first = request();
+        first.system = format!(
+            "stable system{}\n\nvolatile one",
+            crate::DYNAMIC_SYSTEM_CONTEXT_MARKER
+        );
+        let mut second = first.clone();
+        second.system = format!(
+            "stable system{}\n\nvolatile two",
+            crate::DYNAMIC_SYSTEM_CONTEXT_MARKER
+        );
         let first = prompt_envelope(&profile, &first).expect("first envelope");
         let second = prompt_envelope(&profile, &second).expect("second envelope");
         assert_eq!(

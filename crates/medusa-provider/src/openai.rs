@@ -5,13 +5,14 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{Client as AsyncClient, Url, blocking::Client as BlockingClient};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{
     ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
     OpenAiPromptTokenDetails, ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role,
     Usage, async_response_error, blocking_response_error, openai_transport, provider_error,
     provider_response_error, run_cancellable_request, shared_async_http_client,
-    shared_blocking_http_client,
+    shared_blocking_http_client, split_dynamic_system_context,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +31,7 @@ pub struct OpenAiProvider {
     base_url: String,
     api_key: Option<String>,
     model: String,
+    prompt_cache_key: Option<String>,
     capabilities: ProviderCapabilities,
 }
 
@@ -86,12 +88,21 @@ impl OpenAiProvider {
 
         let registry_capabilities = model_capabilities(&config.model.provider, &config.model.name);
         let image_input = registry_capabilities.image_input;
+        let prompt_cache_key = (registry_capabilities.prompt_caching
+            && is_canonical_openai_endpoint(&base_url))
+        .then(|| {
+            let mut hasher = Sha256::new();
+            hasher.update(b"medusa/openai/");
+            hasher.update(config.model.name.as_bytes());
+            format!("{:x}", hasher.finalize())
+        });
         Ok(Self {
             blocking_client: shared_blocking_http_client()?,
             async_client: shared_async_http_client()?,
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model: config.model.name.clone(),
+            prompt_cache_key,
             capabilities: ProviderCapabilities {
                 image_input,
                 supported_image_media_types: if image_input {
@@ -124,7 +135,24 @@ impl OpenAiProvider {
     }
 
     fn request_body(&self, request: &ModelRequest, streaming: bool) -> MedusaResult<Value> {
-        let mut messages = vec![json!({"role": "system", "content": request.system})];
+        let (stable_system, dynamic_system) = split_dynamic_system_context(&request.system);
+        let system_content = if self.prompt_cache_key.is_some() {
+            let mut content = vec![json!({
+                "type": "text",
+                "text": stable_system,
+                "prompt_cache_breakpoint": {"mode": "explicit"}
+            })];
+            if let Some(dynamic_system) = dynamic_system {
+                content.push(json!({"type": "text", "text": dynamic_system}));
+            }
+            Value::Array(content)
+        } else {
+            Value::String(format!(
+                "{stable_system}{}",
+                dynamic_system.unwrap_or_default()
+            ))
+        };
+        let mut messages = vec![json!({"role": "system", "content": system_content})];
         for message in &request.messages {
             let role = match message.role {
                 Role::User => "user",
@@ -230,6 +258,9 @@ impl OpenAiProvider {
         }
         if streaming {
             body["stream_options"] = json!({"include_usage": true});
+        }
+        if let Some(key) = &self.prompt_cache_key {
+            body["prompt_cache_key"] = json!(key);
         }
         Ok(body)
     }
@@ -577,6 +608,7 @@ mod tests {
             base_url: "https://example.invalid/v1".to_owned(),
             api_key: None,
             model: "gpt-5".to_owned(),
+            prompt_cache_key: None,
             capabilities: ProviderCapabilities {
                 image_input,
                 supported_image_media_types: vec!["image/png".to_owned()],
@@ -654,6 +686,59 @@ mod tests {
             .expect("request body");
         assert_eq!(body["stream"], Value::Bool(true));
         assert_eq!(body["stream_options"]["include_usage"], Value::Bool(true));
+        assert!(body["prompt_cache_key"].is_string());
+        assert_eq!(
+            body["messages"][0]["content"][0]["prompt_cache_breakpoint"]["mode"],
+            "explicit"
+        );
+    }
+
+    #[test]
+    fn canonical_openai_splits_dynamic_system_context_at_the_cache_breakpoint() {
+        let mut config = Config::default();
+        config.model.provider = "openai".to_owned();
+        config.model.protocol = "openai".to_owned();
+        let provider =
+            OpenAiProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
+                .expect("openai provider");
+        let mut request = empty_request();
+        request.system = format!("stable{}\n\nvolatile", crate::DYNAMIC_SYSTEM_CONTEXT_MARKER);
+        let body = provider
+            .request_body(&request, false)
+            .expect("request body");
+        assert_eq!(
+            body["messages"][0]["content"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            body["messages"][0]["content"][0]["prompt_cache_breakpoint"]["mode"],
+            "explicit"
+        );
+        assert!(
+            body["messages"][0]["content"][1]
+                .get("prompt_cache_breakpoint")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn openai_prompt_cache_key_is_stable_for_a_model_route() {
+        let mut config = Config::default();
+        config.model.provider = "openai".to_owned();
+        config.model.protocol = "openai".to_owned();
+        let provider =
+            OpenAiProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
+                .expect("openai provider");
+        let first = provider
+            .request_body(&empty_request(), false)
+            .expect("request body")["prompt_cache_key"]
+            .clone();
+        let second = provider
+            .request_body(&empty_request(), false)
+            .expect("request body")["prompt_cache_key"]
+            .clone();
+        assert_eq!(first, second);
+        assert_eq!(first.as_str().map(str::len), Some(64));
     }
 
     #[test]

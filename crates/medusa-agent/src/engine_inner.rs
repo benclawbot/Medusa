@@ -1588,13 +1588,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                 Ok(registry) => system_prompt_with_registry(
                     self.config.agent.mode,
                     &session.repo,
-                    additional_system_context,
+                    None,
                     registry.as_ref(),
                 ),
                 Err(error) => system_prompt_with_discovery_error(
                     self.config.agent.mode,
                     &session.repo,
-                    additional_system_context,
+                    None,
                     &error.to_string(),
                 ),
             };
@@ -1603,6 +1603,12 @@ impl<P: ModelProvider> AgentEngine<P> {
         assembly_provenance.insert(
             "base_system_projection".to_owned(),
             effective_request::fragment_fingerprint(&system),
+        );
+        append_dynamic_system_context(
+            &mut system,
+            (!self.general_chat)
+                .then_some(additional_system_context)
+                .flatten(),
         );
         if let Some(team) = &self.team_context {
             let team_context = team.prompt_context()?;

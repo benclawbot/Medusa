@@ -125,6 +125,14 @@ impl ModelProvider for LazyRoute {
         self.state.initialize()?.complete(request)
     }
 
+    fn complete_streaming(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.state.initialize()?.complete_streaming(request, sink)
+    }
+
     fn complete_cancellable(
         &self,
         request: &ModelRequest,
@@ -255,6 +263,14 @@ impl LazyConfiguredProviderManager {
 impl ModelProvider for LazyConfiguredProviderManager {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
         self.manager.complete(request)
+    }
+
+    fn complete_streaming(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.manager.complete_streaming(request, sink)
     }
 
     fn complete_cancellable(

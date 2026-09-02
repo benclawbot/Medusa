@@ -29,11 +29,12 @@ struct OpenAiPromptTokenDetails {
 
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
+pub(crate) use contracts::split_dynamic_system_context;
 pub(crate) use contracts::strip_hidden_reasoning;
 pub use contracts::{
-    ImageSource, Message, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
-    ProviderAttemptDescriptor, ProviderAttemptKind, ProviderCapabilities, ProviderExecutionPhase,
-    ResponseBlock, Role, ToolDefinition, Usage,
+    DYNAMIC_SYSTEM_CONTEXT_MARKER, ImageSource, Message, MessageBlock, ModelProvider, ModelRequest,
+    ModelResponse, ProviderAttemptDescriptor, ProviderAttemptKind, ProviderCapabilities,
+    ProviderExecutionPhase, ResponseBlock, Role, ToolDefinition, Usage,
 };
 pub use health_store::ProviderHealthStore;
 pub use hedge_acceptance::{
