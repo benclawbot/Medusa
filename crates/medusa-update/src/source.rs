@@ -210,7 +210,7 @@ impl MainBranchUpdater {
                 repo.to_string_lossy().into_owned(),
                 "--fresh".to_owned(),
             ],
-            detached: false,
+            detached: cfg!(windows),
             sequence_file: None,
             rollout_sequence: None,
         };
@@ -282,7 +282,7 @@ impl MainBranchUpdater {
                 repo.to_string_lossy().into_owned(),
                 "--fresh".to_owned(),
             ],
-            detached: false,
+            detached: cfg!(windows),
             sequence_file: None,
             rollout_sequence: None,
         };

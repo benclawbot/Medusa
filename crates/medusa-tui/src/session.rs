@@ -36,7 +36,10 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         options.initial_prompt.clone().unwrap_or_default(),
         clipboard,
     )?;
-    let mut identity = UiIdentity::for_repo(&options.repo);
+    let mut identity = UiIdentity::for_repo_with_build(
+        &options.repo,
+        options.build_label.as_deref(),
+    );
     let mut runtime = runtime_for_options(&options).map_err(runtime_error)?;
     let mut terminal = TerminalGuard::enter()?;
     run_loop(

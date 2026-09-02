@@ -46,10 +46,15 @@ use walkdir::WalkDir;
 
 use super::oauth_preflight;
 
+const CLI_DISPLAY_VERSION: &str = concat!(
+    "1.0.7.1 · main ",
+    env!("MEDUSA_BUILD_COMMIT_SHORT")
+);
+
 #[derive(Parser, Debug)]
 #[command(
     name = "medusa",
-    version = medusa_update::CURRENT_RELEASE_ID,
+    version = CLI_DISPLAY_VERSION,
     about = "Autonomous coding agent",
     after_help = "Run `medusa` without a subcommand to open the interactive terminal. Use `medusa config` to change provider preferences and `medusa run` for headless execution."
 )]
@@ -260,6 +265,7 @@ fn run() -> MedusaResult<()> {
         oauth_preflight::run_if_needed(&config)?;
         medusa_update::acknowledge_update_health()?;
         let mut options = TuiOptions::for_repo(repo);
+        options.build_label = Some(CLI_DISPLAY_VERSION.to_owned());
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;
         options.continue_latest = cli.r#continue;
