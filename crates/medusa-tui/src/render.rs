@@ -181,11 +181,35 @@ pub(super) fn context_meter_line(app: &AppState) -> String {
     provider_plan_meter().map_or(context.clone(), |plan| format!("{context} · {plan}"))
 }
 
+#[derive(Clone, Debug, serde::Deserialize)]
+struct ProviderPlanUsageSnapshot {
+    provider: String,
+    window_seconds: u64,
+    used_basis_points: u16,
+    reset_at_unix: Option<i64>,
+    observed_at_unix: i64,
+}
+
+impl ProviderPlanUsageSnapshot {
+    fn reset_after_seconds(&self, now_unix: i64) -> Option<u64> {
+        self.reset_at_unix
+            .and_then(|reset| u64::try_from(reset.saturating_sub(now_unix)).ok())
+            .filter(|seconds| *seconds > 0)
+    }
+}
+
+fn read_provider_plan_usage() -> Option<ProviderPlanUsageSnapshot> {
+    let catalog = medusa_config::ProviderProfileCatalog::user().ok()?;
+    let path = catalog.root().join("provider-plan-usage.json");
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 fn provider_plan_meter() -> Option<String> {
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
 
-    static CACHE: OnceLock<Mutex<Option<(Instant, Option<medusa_provider::ProviderPlanUsage>)>>> =
+    static CACHE: OnceLock<Mutex<Option<(Instant, Option<ProviderPlanUsageSnapshot>)>>> =
         OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache.lock().ok()?;
@@ -193,14 +217,14 @@ fn provider_plan_meter() -> Option<String> {
         .as_ref()
         .is_none_or(|(observed, _)| observed.elapsed() >= Duration::from_secs(1));
     if refresh {
-        let usage = medusa_provider::latest_provider_plan_usage().ok().flatten();
-        *cache = Some((Instant::now(), usage));
+        *cache = Some((Instant::now(), read_provider_plan_usage()));
     }
     let usage = cache.as_ref()?.1.as_ref()?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let window_seconds = i64::try_from(usage.window_seconds).unwrap_or(i64::MAX);
     let fresh_until = usage
         .reset_at_unix
-        .unwrap_or_else(|| usage.observed_at_unix.saturating_add(usage.window_seconds as i64));
+        .unwrap_or_else(|| usage.observed_at_unix.saturating_add(window_seconds));
     if fresh_until <= now {
         return None;
     }
@@ -392,7 +416,7 @@ fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
         ));
         let selected = modal.settings_selected_choice();
         for (index, check) in modal.settings_doctor_checks().into_iter().enumerate() {
-            let is_selected = index == modal.settings_selected_choice();
+            let is_selected = index == selected;
             lines.push(StyledLine::with_marker(
                 if is_selected { "› " } else { "  " },
                 if is_selected { Color::Magenta } else { Color::DarkGrey },
