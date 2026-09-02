@@ -10,7 +10,8 @@ use serde_json::Value;
 
 use crate::{
     ModelResponse, OpenAiStreamAccumulator, ProviderStreamEvent, async_response_error,
-    blocking_response_error, provider_error, run_cancellable_request,
+    blocking_response_error, plan_usage::observe_provider_plan_headers, provider_error,
+    run_cancellable_request,
 };
 
 const READ_BUFFER_BYTES: usize = 8 * 1024;
@@ -30,6 +31,7 @@ pub(crate) fn complete_blocking(
     if !response.status().is_success() {
         return Err(blocking_response_error(response));
     }
+    let _ = observe_provider_plan_headers(response.headers());
 
     let mut decoder = SseDecoder::default();
     let mut accumulator = OpenAiStreamAccumulator::default();
@@ -71,8 +73,6 @@ pub(crate) fn complete_cancellable(
 ) -> MedusaResult<ModelResponse> {
     let (sender, receiver) = mpsc::channel::<ProviderStreamEvent>();
     thread::scope(|scope| {
-        // The worker owns its sender. Keeping the outer sender alive while waiting
-        // on the receiver would prevent the event loop from observing completion.
         let worker_sender = sender.clone();
         let worker = scope.spawn(move || {
             run_cancellable_request(cancel, async {
@@ -84,6 +84,7 @@ pub(crate) fn complete_cancellable(
                 if !response.status().is_success() {
                     return Err(async_response_error(response).await);
                 }
+                let _ = observe_provider_plan_headers(response.headers());
 
                 let mut decoder = SseDecoder::default();
                 let mut accumulator = OpenAiStreamAccumulator::default();
