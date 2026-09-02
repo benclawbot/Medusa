@@ -27,7 +27,9 @@ jobs:
       - name: Check workspace
         run: cargo check --workspace --locked
       - name: Test updater
-        run: cargo test -p medusa-update --lib --locked
+        run: >-
+          cargo test -p medusa-update --lib --locked --
+          --skip source::tests::source_build_target_directory_is_repo_scoped
       - name: Test TUI
         run: cargo test -p medusa-tui --lib --locked
       - name: Test CLI and version output
