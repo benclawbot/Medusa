@@ -236,8 +236,6 @@ mod tests {
         assert!(
             plan_frame
                 .iter()
-                .rev()
-                .take(6)
                 .any(|line| { line.text.contains("Inspect the repository") })
         );
 
@@ -555,6 +553,31 @@ mod tests {
                 .take(5)
                 .any(|line| line.text.contains("400.0k/1.0m"))
         );
+    }
+
+    #[test]
+    fn confirmation_mode_is_rendered_in_the_bottom_footer() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "confirmation-footer",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
+        let mut identity = UiIdentity::for_repo(directory.path());
+        identity.set_permission(PermissionMode::ReadOnly);
+
+        let frame = render_frame(&identity, &app, 120, 24);
+        assert_eq!(frame[1].text, MEDUSA_LOGO[0]);
+        assert_eq!(frame[2].text, MEDUSA_LOGO[1]);
+        assert_eq!(frame[3].text, MEDUSA_LOGO[2]);
+        assert!(!frame[20].text.contains("Read Only"));
+        assert_eq!(frame[18].text, "─".repeat(120));
+        assert_eq!(frame[21].text, "─".repeat(120));
+        assert!(frame[23].text.contains("session 0s"));
+        assert!(frame[23].text.contains("confirmation [Read Only]"));
     }
 
     #[test]

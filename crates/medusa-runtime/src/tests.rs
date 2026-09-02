@@ -844,6 +844,65 @@ fn runtime_atomically_reopens_input_only_when_followups_are_empty() {
     assert!(!submission.lock().expect("submission state").busy);
 }
 
+#[test]
+fn configuration_changes_queue_while_the_current_turn_finishes() {
+    let directory = tempdir().expect("temporary directory");
+    let submission = Arc::new(Mutex::new(SubmissionState {
+        busy: true,
+        active_session_id: Some("session-1".to_owned()),
+        ..SubmissionState::default()
+    }));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (_frontend_tx, frontend_rx) = mpsc::channel();
+    let (event_sender, _runtime_event_rx) = mpsc::channel();
+    let runtime = RuntimeController {
+        commands: command_tx,
+        events: frontend_rx,
+        cancel: Arc::new(AtomicBool::new(false)),
+        submission,
+        event_sender,
+        team_control: TeamControlPlane::default(),
+        repo: directory.path().to_path_buf(),
+        invariants: Arc::new(Mutex::new(RuntimeInvariantRegistry::default())),
+    };
+
+    runtime
+        .configure_model(ModelConfiguration {
+            provider: "minimax".to_owned(),
+            model: "MiniMax-M2.7".to_owned(),
+            effort: Effort::High,
+            api_key: None,
+            base_url: None,
+        })
+        .expect("model changes should queue behind the active turn");
+    assert!(matches!(
+        command_rx.recv().expect("model configuration command"),
+        RuntimeCommand::ConfigureModel(ModelConfiguration {
+            effort: Effort::High,
+            ..
+        })
+    ));
+
+    runtime
+        .run_command(SlashCommand::Effort {
+            effort: Some(Effort::Low),
+        })
+        .expect("effort changes should queue behind the active turn");
+    assert!(matches!(
+        command_rx.recv().expect("effort command"),
+        RuntimeCommand::Slash(SlashCommand::Effort {
+            effort: Some(Effort::Low)
+        })
+    ));
+
+    assert!(matches!(
+        runtime.run_command(SlashCommand::Plan {
+            task: Some("start another agent task".to_owned()),
+        }),
+        Err(RuntimeError::Busy)
+    ));
+}
+
 fn durable_runtime_session(repo: &Path) -> medusa_agent::AgentSession {
     medusa_agent::AgentSession {
         id: SessionId::new(),

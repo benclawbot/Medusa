@@ -582,7 +582,11 @@ impl RuntimeController {
             return Ok(());
         }
         let mut submission = lock_submission(&self.submission);
-        if submission.busy {
+        let can_queue_while_busy = matches!(
+            &command,
+            SlashCommand::Config(_) | SlashCommand::Effort { .. }
+        );
+        if submission.busy && !can_queue_while_busy {
             return Err(RuntimeError::Busy);
         }
         if command.runs_agent() {
@@ -598,9 +602,8 @@ impl RuntimeController {
 
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
         self.check_runtime_invariants("configure-model")?;
-        if lock_submission(&self.submission).busy {
-            return Err(RuntimeError::Busy);
-        }
+        // Model changes are applied by the single runtime worker. If a turn is
+        // still finishing, queue the change so it takes effect on the next turn.
         self.commands
             .send(RuntimeCommand::ConfigureModel(configuration))
             .map_err(|_| RuntimeError::WorkerStopped)

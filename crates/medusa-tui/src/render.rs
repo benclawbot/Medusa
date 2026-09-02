@@ -453,6 +453,10 @@ pub(super) fn render_frame(
         return frame;
     }
     let mut row = usize::from(HEADER_TOP_PADDING);
+    for logo_line in MEDUSA_LOGO {
+        set_frame_line(&mut frame, row, StyledLine::new(logo_line, Color::Cyan));
+        row = row.saturating_add(1);
+    }
     let status = if app.is_waiting_for_answer() {
         running_status(app)
     } else {
@@ -463,19 +467,18 @@ pub(super) fn render_frame(
         row,
         StyledLine::new(
             format!(
-                "Medusa · {} · {} {} · {}",
+                "{} · {} {}",
                 identity.project,
                 app.model_label.as_deref().unwrap_or(&identity.model),
                 app.effort_label.as_deref().unwrap_or(&identity.effort),
-                status,
             ),
             Color::Cyan,
         ),
     );
     row = row.saturating_add(1);
-    set_frame_line(&mut frame, row, separator_line(width));
+    set_frame_line(&mut frame, row, StyledLine::new(status, Color::DarkGrey));
 
-    let header_height = HEADER_TOP_PADDING + 2;
+    let header_height = HEADER_TOP_PADDING + 5;
     let question_modal = app.question_modal();
     let model_modal = app.model_modal();
     let modal_lines = question_modal
@@ -484,19 +487,12 @@ pub(super) fn render_frame(
         .unwrap_or_default();
     let is_modal = question_modal.is_some() || model_modal.is_some();
     let plan_panel = if !is_modal && app.task_list_visible {
-        let mut details = vec![StyledLine::new(
-            session_metrics_line(app, width),
-            Color::DarkGrey,
-        )];
-        if let Some(plan) = app.plan.as_ref() {
-            details.extend(plan_lines(plan));
-        }
-        details
+        app.plan.as_ref().map(plan_lines).unwrap_or_default()
     } else {
         Vec::new()
     };
     let panel_rows = u16::try_from(plan_panel.len()).unwrap_or(u16::MAX);
-    let base_composer_rows = 5_u16.saturating_add(panel_rows);
+    let base_composer_rows = 6_u16.saturating_add(panel_rows);
     let suggestions = if !is_modal {
         command_suggestions(&app.composer.draft.text, app.repository())
     } else {
@@ -548,9 +544,9 @@ pub(super) fn render_frame(
     }
 
     let mut bottom_row = usize::from(height.saturating_sub(composer_height));
-    set_frame_line(&mut frame, bottom_row, separator_line(width));
-    bottom_row = bottom_row.saturating_add(1);
     if is_modal {
+        set_frame_line(&mut frame, bottom_row, separator_line(width));
+        bottom_row = bottom_row.saturating_add(1);
         for line in modal_lines
             .into_iter()
             .take(usize::from(composer_height.saturating_sub(3)))
@@ -612,6 +608,12 @@ pub(super) fn render_frame(
         );
         bottom_row = bottom_row.saturating_add(1);
     }
+    set_frame_line(
+        &mut frame,
+        bottom_row,
+        StyledLine::new("─".repeat(usize::from(width)), Color::White),
+    );
+    bottom_row = bottom_row.saturating_add(1);
     let prompt = if app.composer.draft.text.is_empty() {
         if app.is_running() {
             "Add a follow-up for the next turn...".to_owned()
@@ -621,7 +623,6 @@ pub(super) fn render_frame(
     } else {
         composer_prompt_text(&app.composer.draft.text)
     };
-    let prompt = format!("{prompt}  [{}]", identity.permission);
     set_frame_line(
         &mut frame,
         bottom_row,
@@ -643,7 +644,11 @@ pub(super) fn render_frame(
         StyledLine::new(context_meter_line(app), Color::Grey),
     );
     bottom_row = bottom_row.saturating_add(1);
-    set_frame_line(&mut frame, bottom_row, separator_line(width));
+    set_frame_line(
+        &mut frame,
+        bottom_row,
+        StyledLine::new("─".repeat(usize::from(width)), Color::White),
+    );
     bottom_row = bottom_row.saturating_add(1);
     set_frame_line(
         &mut frame,
@@ -652,10 +657,23 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+e activity details"
+                "shift+tab confirmation · enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+e activity details"
             } else {
-                "enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+e activity details"
+                "shift+tab confirmation · enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+e activity details"
             },
+            Color::DarkGrey,
+        ),
+    );
+    bottom_row = bottom_row.saturating_add(1);
+    set_frame_line(
+        &mut frame,
+        bottom_row,
+        StyledLine::new(
+            format!(
+                "{} · confirmation [{}]",
+                session_metrics_line(app, width),
+                identity.permission
+            ),
             Color::DarkGrey,
         ),
     );

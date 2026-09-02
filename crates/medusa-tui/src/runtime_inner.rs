@@ -782,14 +782,14 @@ impl RuntimeController {
         if self.submission_in_flight.load(Ordering::Acquire) {
             return Err(RuntimeError::Busy);
         }
-        try_lock_state(&self.state)?.run_command(command)
+        lock_state(&self.state).run_command(command)
     }
 
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
         if self.submission_in_flight.load(Ordering::Acquire) {
             return Err(RuntimeError::Busy);
         }
-        try_lock_state(&self.state)?.configure_model(configuration)
+        lock_state(&self.state).configure_model(configuration)
     }
 
     pub fn execute_recovery(
@@ -801,7 +801,7 @@ impl RuntimeController {
         if self.submission_in_flight.load(Ordering::Acquire) {
             return Err(RuntimeError::Busy);
         }
-        try_lock_state(&self.state)?.execute_recovery(view, request, preflight)
+        lock_state(&self.state).execute_recovery(view, request, preflight)
     }
 
     pub fn cancel(&self) -> bool {
@@ -905,16 +905,6 @@ where
         return Err(RuntimeError::WorkerStopped);
     }
     Ok(SubmitDisposition::Started)
-}
-
-fn try_lock_state(
-    state: &Arc<Mutex<DaemonRuntimeState>>,
-) -> Result<std::sync::MutexGuard<'_, DaemonRuntimeState>, RuntimeError> {
-    match state.try_lock() {
-        Ok(state) => Ok(state),
-        Err(TryLockError::Poisoned(poisoned)) => Ok(poisoned.into_inner()),
-        Err(TryLockError::WouldBlock) => Err(RuntimeError::Busy),
-    }
 }
 
 fn lock_state<T>(state: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

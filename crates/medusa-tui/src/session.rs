@@ -165,10 +165,9 @@ pub(super) fn run_loop(
             if ctrl_l_redraw(&terminal_event) {
                 continue;
             }
-            if handle_permission_mode_shortcut(&terminal_event, identity, app, runtime)? {
-                continue;
-            }
-            if handle_permission_mode_shortcut(&terminal_event, identity, app, runtime)? {
+            if !modal_open
+                && handle_permission_mode_shortcut(&terminal_event, identity, app, runtime)?
+            {
                 continue;
             }
             if handle_mouse_selection(app, identity, &terminal_event)? {
@@ -248,6 +247,12 @@ pub(super) fn run_loop(
                 last_frame = None;
                 continue;
             }
+            if !modal_open
+                && handle_permission_mode_shortcut(&terminal_event, identity, app, runtime)?
+            {
+                last_frame = None;
+                continue;
+            }
             if handle_mouse_selection(app, identity, &terminal_event)? {
                 last_frame = None;
                 continue;
@@ -271,7 +276,7 @@ fn handle_permission_mode_shortcut(
     let Event::Key(key) = terminal_event else {
         return Ok(false);
     };
-    if key.kind != KeyEventKind::Press || key.code != KeyCode::BackTab {
+    if !is_permission_mode_shortcut(key) {
         return Ok(false);
     }
     if app.is_running() {
@@ -290,6 +295,12 @@ fn handle_permission_mode_shortcut(
     *runtime = RuntimeController::start(app.repository().to_path_buf());
     app.status = format!("permissions: {}", next.label());
     Ok(true)
+}
+
+fn is_permission_mode_shortcut(key: &crossterm::event::KeyEvent) -> bool {
+    key.kind == KeyEventKind::Press
+        && (key.code == KeyCode::BackTab
+            || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT)))
 }
 
 fn handle_mouse_selection(
@@ -821,6 +832,27 @@ mod tests {
         ] {
             assert!(!is_continuation_intent(input), "{input}");
         }
+    }
+
+    #[test]
+    fn permission_shortcut_accepts_shift_tab_variants_only_on_press() {
+        assert!(is_permission_mode_shortcut(&crossterm::event::KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::NONE,
+        )));
+        assert!(is_permission_mode_shortcut(&crossterm::event::KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::SHIFT,
+        )));
+        assert!(!is_permission_mode_shortcut(&crossterm::event::KeyEvent::new(
+            KeyCode::Tab,
+            KeyModifiers::NONE,
+        )));
+
+        let mut release =
+            crossterm::event::KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert!(!is_permission_mode_shortcut(&release));
     }
 
     #[test]
