@@ -34,13 +34,19 @@ jobs:
           count = 0
           for path in sorted(Path('.github/workflows').glob('*.yml')):
               text = path.read_text(encoding='utf-8')
-              if local not in text:
+              lines = text.splitlines()
+              indexes = [
+                  i for i, line in enumerate(lines)
+                  if line.strip() == local or line.strip() == f"- {local}"
+              ]
+              if not indexes:
                   continue
               yaml.safe_load(text)
               count += 1
-              first_local = text.index(local)
-              if checkout not in text[:first_local]:
-                  raise SystemExit(f"{path}: setup-rust is used before repository checkout")
+              for index in indexes:
+                  prefix = "\n".join(lines[max(0, index - 8):index])
+                  if checkout not in prefix:
+                      raise SystemExit(f"{path}: setup-rust is used before repository checkout")
           if count == 0:
               raise SystemExit('no setup-rust consumers found')
           print(f'validated {count} workflows using setup-rust')
