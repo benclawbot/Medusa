@@ -1,6 +1,12 @@
+use std::{fs, path::PathBuf, sync::{Mutex, OnceLock}};
+
+use medusa_config::ProviderProfileCatalog;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+const PLAN_USAGE_FILE: &str = "provider-plan-usage.json";
 
 /// Provider-reported subscription/model-plan usage for one rolling window.
 ///
@@ -32,6 +38,34 @@ impl ProviderPlanUsage {
     }
 }
 
+/// Reads the latest provider-specific plan observation recorded by the daemon/provider process.
+pub fn latest_provider_plan_usage() -> MedusaResult<Option<ProviderPlanUsage>> {
+    let path = usage_path()?;
+    match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(plan_store_error),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(plan_store_error(error)),
+    }
+}
+
+/// Observes provider-specific plan headers and durably publishes the active plan window.
+/// Generic `Retry-After`/rate-limit headers are intentionally ignored here.
+pub(crate) fn observe_provider_plan_headers(headers: &HeaderMap) -> Option<ProviderPlanUsage> {
+    let usage = infer_provider_plan_usage(headers)?;
+    let _ = persist(&usage);
+    Some(usage)
+}
+
+pub(crate) fn infer_provider_plan_usage(headers: &HeaderMap) -> Option<ProviderPlanUsage> {
+    if headers.contains_key("anthropic-ratelimit-unified-5h-utilization") {
+        parse_anthropic("anthropic", "", headers)
+    } else if headers.contains_key("x-codex-primary-used-percent") {
+        parse_openai("openai/codex", "", headers)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn parse_provider_plan_usage(
     provider: &str,
     model: &str,
@@ -45,6 +79,33 @@ pub(crate) fn parse_provider_plan_usage(
     } else {
         None
     }
+}
+
+fn persist(usage: &ProviderPlanUsage) -> MedusaResult<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| plan_store_error("provider plan usage lock was poisoned"))?;
+    let path = usage_path()?;
+    let bytes = serde_json::to_vec_pretty(usage).map_err(plan_store_error)?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, bytes).map_err(plan_store_error)?;
+    fs::rename(&temporary, &path).map_err(plan_store_error)
+}
+
+fn usage_path() -> MedusaResult<PathBuf> {
+    let root = ProviderProfileCatalog::user()?.root().to_path_buf();
+    fs::create_dir_all(&root).map_err(plan_store_error)?;
+    Ok(root.join(PLAN_USAGE_FILE))
+}
+
+fn plan_store_error(error: impl std::fmt::Display) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        format!("provider plan usage state is unavailable: {error}"),
+    )
 }
 
 fn parse_openai(provider: &str, model: &str, headers: &HeaderMap) -> Option<ProviderPlanUsage> {
@@ -92,8 +153,6 @@ fn percent_to_basis_points(value: f64) -> u16 {
 }
 
 fn fraction_to_basis_points(value: f64) -> u16 {
-    // Anthropic utilization is normally a 0..=1 ratio. Tolerate a percentage-shaped value from
-    // compatible gateways without turning it into 100x usage.
     if value > 1.0 {
         percent_to_basis_points(value)
     } else {
@@ -173,5 +232,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("60"));
         assert!(parse_provider_plan_usage("other", "model", &headers).is_none());
+        assert!(infer_provider_plan_usage(&headers).is_none());
     }
 }
