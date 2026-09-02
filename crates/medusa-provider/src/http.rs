@@ -275,6 +275,7 @@ fn classify_status_with_body(
     }
     if status == StatusCode::TOO_MANY_REQUESTS
         && let Some(plan_usage) = plan_usage
+        && plan_usage.exhausted()
         && let Some(reset_at) = plan_usage.reset_at_unix
     {
         error.context.insert(
@@ -379,6 +380,22 @@ mod tests {
         );
         assert_eq!(error.context.get("provider_plan_limit"), Some(&serde_json::Value::Bool(true)));
         assert_eq!(error.context.get("provider_plan_reset_at_unix"), Some(&serde_json::Value::from(2_000_000_000_i64)));
+    }
+
+    #[test]
+    fn ordinary_429_stays_short_retry_even_when_plan_usage_is_partial() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-codex-primary-used-percent", HeaderValue::from_static("42"));
+        headers.insert("x-codex-primary-reset-at", HeaderValue::from_static("2000000000"));
+        let usage = crate::plan_usage::infer_provider_plan_usage(&headers).expect("plan usage");
+        let error = classify_status_with_body(
+            StatusCode::TOO_MANY_REQUESTS,
+            BoundedBody { bytes: b"rpm".to_vec(), truncated: false },
+            Some(2),
+            Some(usage),
+        );
+        assert_eq!(error.context.get("provider_plan_limit"), None);
+        assert_eq!(error.context.get("retry_after_seconds"), Some(&serde_json::Value::from(2_u64)));
     }
 
     #[test]
