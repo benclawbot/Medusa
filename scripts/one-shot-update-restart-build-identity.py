@@ -1,0 +1,192 @@
+from pathlib import Path
+import re
+
+
+def read(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def write(path: str, text: str) -> None:
+    Path(path).write_text(text, encoding="utf-8")
+
+
+# Make the short immutable build revision available to medusa-cli.
+path = "crates/medusa-cli/build.rs"
+text = read(path)
+old = '    println!("cargo:rustc-env=MEDUSA_BUILD_COMMIT={revision}");\n'
+new = (
+    '    println!("cargo:rustc-env=MEDUSA_BUILD_COMMIT={revision}");\n'
+    '    let short_revision = revision.get(..12).unwrap_or(&revision);\n'
+    '    println!("cargo:rustc-env=MEDUSA_BUILD_COMMIT_SHORT={short_revision}");\n'
+)
+assert text.count(old) == 1, "unexpected medusa-cli build.rs shape"
+write(path, text.replace(old, new, 1))
+
+# Report the immutable rolling-main build in --version and pass it into the TUI.
+path = "crates/medusa-cli/src/main.rs"
+text = read(path)
+marker = 'use super::oauth_preflight;\n\n'
+replacement = (
+    'use super::oauth_preflight;\n\n'
+    'const CLI_DISPLAY_VERSION: &str = concat!(\n'
+    '    "1.0.7.1 · main ",\n'
+    '    env!("MEDUSA_BUILD_COMMIT_SHORT")\n'
+    ');\n\n'
+)
+assert text.count(marker) == 1, "unexpected CLI import marker"
+text = text.replace(marker, replacement, 1)
+old_version = '    version = medusa_update::CURRENT_RELEASE_ID,\n'
+assert text.count(old_version) == 1, "unexpected clap version declaration"
+text = text.replace(old_version, '    version = CLI_DISPLAY_VERSION,\n', 1)
+old_options = '        let mut options = TuiOptions::for_repo(repo);\n        options.initial_prompt = cli.prompt;\n'
+new_options = (
+    '        let mut options = TuiOptions::for_repo(repo);\n'
+    '        options.build_label = Some(CLI_DISPLAY_VERSION.to_owned());\n'
+    '        options.initial_prompt = cli.prompt;\n'
+)
+assert text.count(old_options) == 1, "unexpected TUI options setup"
+write(path, text.replace(old_options, new_options, 1))
+
+# Carry an optional build label through the public TUI options.
+path = "crates/medusa-tui/src/lib.rs"
+text = read(path)
+old_fields = '    pub resume_session: Option<String>,\n    pub continue_latest: bool,\n'
+new_fields = '    pub resume_session: Option<String>,\n    pub continue_latest: bool,\n    pub build_label: Option<String>,\n'
+assert text.count(old_fields) == 1, "unexpected TuiOptions fields"
+text = text.replace(old_fields, new_fields, 1)
+old_defaults = '            resume_session: None,\n            continue_latest: false,\n'
+new_defaults = '            resume_session: None,\n            continue_latest: false,\n            build_label: None,\n'
+assert text.count(old_defaults) == 1, "unexpected TuiOptions defaults"
+write(path, text.replace(old_defaults, new_defaults, 1))
+
+# Initialize the UI identity with the build supplied by the canonical CLI.
+path = "crates/medusa-tui/src/session.rs"
+text = read(path)
+old = '    let mut identity = UiIdentity::for_repo(&options.repo);\n'
+new = (
+    '    let mut identity = UiIdentity::for_repo_with_build(\n'
+    '        &options.repo,\n'
+    '        options.build_label.as_deref(),\n'
+    '    );\n'
+)
+assert text.count(old) == 1, "unexpected UiIdentity initialization"
+write(path, text.replace(old, new, 1))
+
+# Render the build next to model/effort without breaking existing direct TUI callers.
+path = "crates/medusa-tui/src/render.rs"
+text = read(path)
+old_struct = (
+    'pub(super) struct UiIdentity {\n'
+    '    project: String,\n'
+    '    model: String,\n'
+    '    effort: String,\n'
+    '    permission: String,\n'
+    '}\n\n'
+    'impl UiIdentity {\n'
+    '    pub(super) fn for_repo(repo: &Path) -> Self {\n'
+)
+new_struct = (
+    'pub(super) struct UiIdentity {\n'
+    '    project: String,\n'
+    '    model: String,\n'
+    '    effort: String,\n'
+    '    permission: String,\n'
+    '    build: Option<String>,\n'
+    '}\n\n'
+    'impl UiIdentity {\n'
+    '    pub(super) fn for_repo(repo: &Path) -> Self {\n'
+    '        Self::for_repo_with_build(repo, None)\n'
+    '    }\n\n'
+    '    pub(super) fn for_repo_with_build(repo: &Path, build: Option<&str>) -> Self {\n'
+)
+assert text.count(old_struct) == 1, "unexpected UiIdentity definition"
+text = text.replace(old_struct, new_struct, 1)
+old_permission = (
+    '            permission: PermissionStore::user()\n'
+    '                .and_then(|store| store.load())\n'
+    '                .map_or_else(|_| PermissionMode::FullAccess.label().to_owned(), |mode| mode.label().to_owned()),\n'
+    '        }\n'
+)
+new_permission = (
+    '            permission: PermissionStore::user()\n'
+    '                .and_then(|store| store.load())\n'
+    '                .map_or_else(|_| PermissionMode::FullAccess.label().to_owned(), |mode| mode.label().to_owned()),\n'
+    '            build: build.map(str::to_owned),\n'
+    '        }\n'
+)
+assert text.count(old_permission) == 1, "unexpected UiIdentity constructor tail"
+text = text.replace(old_permission, new_permission, 1)
+old_header = (
+    '            format!(\n'
+    '                "{} · {} {}",\n'
+    '                identity.project,\n'
+    '                app.model_label.as_deref().unwrap_or(&identity.model),\n'
+    '                app.effort_label.as_deref().unwrap_or(&identity.effort),\n'
+    '            ),\n'
+)
+new_header = (
+    '            format!(\n'
+    '                "{} · {} {}{}",\n'
+    '                identity.project,\n'
+    '                app.model_label.as_deref().unwrap_or(&identity.model),\n'
+    '                app.effort_label.as_deref().unwrap_or(&identity.effort),\n'
+    '                identity\n'
+    '                    .build\n'
+    '                    .as_deref()\n'
+    '                    .map(|build| format!(" · {build}"))\n'
+    '                    .unwrap_or_default(),\n'
+    '            ),\n'
+)
+assert text.count(old_header) == 1, "unexpected TUI identity header"
+write(path, text.replace(old_header, new_header, 1))
+
+# A Windows updater helper is itself detached/no-console. The replacement CLI must
+# therefore start independently so it receives a visible console instead of inheriting
+# the helper's invisible console. Unix keeps the existing same-terminal behavior.
+path = "crates/medusa-update/src/source.rs"
+text = read(path)
+needle = '            detached: false,\n'
+assert text.count(needle) == 2, "unexpected rolling-main Restart call count"
+write(path, text.replace(needle, '            detached: cfg!(windows),\n'))
+
+# Apply the same visible Windows handoff to the verified stable-release updater.
+path = "crates/medusa-cli/src/update_command.rs"
+text = read(path)
+pattern = re.compile(
+    r'(let restart = Restart \{\n\s+arguments: vec!\[.*?"--continue"\.to_owned\(\),\n\s+\],\n\s+)detached: false,',
+    re.S,
+)
+text, count = pattern.subn(r'\1detached: cfg!(windows),', text, count=1)
+assert count == 1, "stable release Restart block not found"
+write(path, text)
+
+# Add a focused regression test for build visibility to the existing TUI test module.
+path = "crates/medusa-tui/src/lib.rs"
+text = read(path)
+insertion = (
+    '    #[test]\n'
+    '    fn build_label_is_rendered_in_session_header() {\n'
+    '        let directory = tempfile::tempdir().expect("tempdir");\n'
+    '        let mut app = AppState::new(\n'
+    '            directory.path().to_path_buf(),\n'
+    '            "build-label",\n'
+    '            "",\n'
+    '            Arc::new(UnsupportedClipboard),\n'
+    '        )\n'
+    '        .expect("app");\n'
+    '        app.dismiss_welcome_for_event(&Event::Paste(String::new()));\n'
+    '        let identity = UiIdentity::for_repo_with_build(\n'
+    '            directory.path(),\n'
+    '            Some("1.0.7.1 · main abcdef123456"),\n'
+    '        );\n'
+    '        let frame = render_frame(&identity, &app, 100, 24);\n'
+    '        assert!(\n'
+    '            frame\n'
+    '                .iter()\n'
+    '                .any(|line| line.text.contains("1.0.7.1 · main abcdef123456"))\n'
+    '        );\n'
+    '    }\n\n'
+)
+anchor = '    #[test]\n    fn ctrl_l_requests_a_terminal_redraw() {\n'
+assert text.count(anchor) == 1, "TUI test insertion anchor missing"
+write(path, text.replace(anchor, insertion + anchor, 1))
