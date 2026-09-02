@@ -3,11 +3,17 @@ from pathlib import Path
 CHECKOUT = "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
 LOCAL = "uses: ./.github/actions/setup-rust"
 
+
+def is_local_action_use(line: str) -> bool:
+    stripped = line.strip()
+    return stripped == LOCAL or stripped == f"- {LOCAL}"
+
+
 changed = []
 for path in sorted(Path('.github/workflows').glob('*.yml')):
     text = path.read_text(encoding='utf-8')
     lines = text.splitlines(keepends=True)
-    indexes = [i for i, line in enumerate(lines) if LOCAL in line]
+    indexes = [i for i, line in enumerate(lines) if is_local_action_use(line)]
     if not indexes:
         continue
 
@@ -16,14 +22,15 @@ for path in sorted(Path('.github/workflows').glob('*.yml')):
         index = original_index + offset
         uses_line = lines[index]
         uses_indent = len(uses_line) - len(uses_line.lstrip(' '))
-        step_indent = max(uses_indent - 2, 0)
+        stripped_uses = uses_line.strip()
+        step_indent = uses_indent if stripped_uses.startswith('- ') else max(uses_indent - 2, 0)
 
         step_start = index
         while step_start > 0:
-            previous = lines[step_start - 1]
-            stripped = previous.lstrip(' ')
-            indent = len(previous) - len(stripped)
-            if indent == step_indent and stripped.startswith('- '):
+            current = lines[step_start]
+            current_stripped = current.lstrip(' ')
+            current_indent = len(current) - len(current_stripped)
+            if current_indent == step_indent and current_stripped.startswith('- '):
                 break
             step_start -= 1
 
