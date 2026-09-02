@@ -16,6 +16,8 @@ jobs:
     if: ${{ github.event.pull_request.head.ref == 'agent/652-daemon-wire-frontend-contract' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Disambiguate verified server signature anchor

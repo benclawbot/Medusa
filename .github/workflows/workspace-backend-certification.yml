@@ -36,6 +36,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Test directory mutation backend
@@ -52,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Validate architecture claims
