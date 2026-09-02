@@ -3289,7 +3289,6 @@ pub fn recovery_action_context(
 mod recovery;
 
 #[rustfmt::skip]
-
 /// Production task-contract and schedule definitions used by the runtime coordinator.
 ///
 /// The shipped coordinated path is `RuntimeController -> run_prompt ->
