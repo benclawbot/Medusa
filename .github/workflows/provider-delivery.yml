@@ -34,7 +34,7 @@ jobs:
       - name: Test provider diagnostic
         run: cargo test -p medusa-cli --bin medusa-provider-diagnostic --locked
       - name: Validate deterministic local route
-        run: cargo provider-diagnostic --config examples/provider-diagnostic/local.toml --output provider-diagnostic.json
+        run: cargo run -p medusa-cli --bin medusa-provider-diagnostic --locked -- --config examples/provider-diagnostic/local.toml --output provider-diagnostic.json
       - name: Validate report contract
         run: python3 scripts/validate-provider-diagnostic-report.py provider-diagnostic.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
