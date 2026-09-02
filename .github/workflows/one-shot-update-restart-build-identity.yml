@@ -1,0 +1,53 @@
+name: One-shot update restart and build identity fix
+
+on:
+  push:
+    branches:
+      - fix/update-restart-and-build-identity
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/update-restart-and-build-identity
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Apply source changes
+        run: python scripts/one-shot-update-restart-build-identity.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Check workspace
+        run: cargo check --workspace --locked
+      - name: Test updater
+        run: cargo test -p medusa-update --lib --locked
+      - name: Test TUI
+        run: cargo test -p medusa-tui --lib --locked
+      - name: Test CLI and version output
+        shell: bash
+        run: |
+          cargo test -p medusa-cli --bin medusa --locked
+          cargo build -p medusa-cli --bin medusa --locked
+          version="$(target/debug/medusa --version)"
+          echo "$version"
+          [[ "$version" == *"1.0.7.1 · main "* ]]
+          [[ "$version" != *"unknown"* ]]
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          rm -f .github/workflows/one-shot-update-restart-build-identity.yml
+          rm -f scripts/one-shot-update-restart-build-identity.py
+          rm -f .github/update-restart-trigger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: restart after updates and expose build identity"
+          git push origin HEAD:fix/update-restart-and-build-identity
