@@ -10,6 +10,7 @@ repository.workspace = true
 flate2 = "1.1"
 hex.workspace = true
 medusa-core.workspace = true
+medusa-process-containment.workspace = true
 reqwest.workspace = true
 ring.workspace = true
 semver.workspace = true

@@ -11,11 +11,13 @@ use std::os::windows::process::CommandExt;
 
 use flate2::read::GzDecoder;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_process_containment::process_start_marker;
 
 use crate::model::invalid;
 
 pub const HEALTH_FILE_ENV: &str = "MEDUSA_UPDATE_HEALTH_FILE";
 const HEALTH_CHECK_ATTEMPTS: usize = 600;
+const UPDATE_LOCK_SCHEMA: &str = "2";
 
 /// Whether a binary may be self-replaced or is owned by a package manager.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -131,32 +133,21 @@ impl AtomicInstaller {
         if restart.rollout_sequence == Some(0) {
             return Err(invalid("rollout sequence must be positive"));
         }
-        self.recover_interrupted()?;
         let directory = self
             .target
             .parent()
             .ok_or_else(|| invalid("update target has no parent directory"))?;
         let lock = directory.join(".medusa-update.lock");
-        let mut lock_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)
-            .map_err(|error| {
-                if error.kind() == io::ErrorKind::AlreadyExists {
-                    invalid("another Medusa update is already staged")
-                } else {
-                    io_error(error)
-                }
-            })?;
-        writeln!(lock_file, "parent_pid={parent_pid}")?;
-        lock_file.sync_all()?;
+        let mut lock_file = acquire_update_lock(&lock, parent_pid)?;
 
         let staged = staged_path(&self.target);
         let backup = backup_path(&self.target);
         let state = directory.join(".medusa-update-state");
         let health = directory.join(".medusa-update-health");
         let helper = helper_path(&self.target);
+        let mut helper_process = None;
         let result = (|| -> MedusaResult<()> {
+            self.recover_interrupted()?;
             if staged.exists() {
                 fs::remove_file(&staged)?;
             }
@@ -191,10 +182,22 @@ impl AtomicInstaller {
             storage::atomic_write(&helper, script.as_bytes())?;
             #[cfg(unix)]
             set_executable(&helper)?;
-            helper_command(&helper).spawn().map_err(io_error)?;
+            let child = helper_command(&helper).spawn().map_err(io_error)?;
+            let child_pid = child.id();
+            helper_process = Some(child);
+            writeln!(lock_file, "helper_pid={child_pid}")?;
+            if let Some(identity) = process_identity(child_pid)? {
+                writeln!(lock_file, "helper_identity={identity}")?;
+            }
+            writeln!(lock_file, "helper_ready=1")?;
+            lock_file.sync_all()?;
             Ok(())
         })();
         if result.is_err() {
+            if let Some(mut child) = helper_process {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
             let _ = fs::remove_file(&lock);
             let _ = fs::remove_file(&staged);
             let _ = fs::remove_file(&helper);
@@ -213,6 +216,106 @@ impl AtomicInstaller {
         let update = self.schedule_replace(candidate, restart, std::process::id())?;
         Ok(Some(update.backup))
     }
+}
+
+fn acquire_update_lock(lock: &Path, parent_pid: u32) -> MedusaResult<fs::File> {
+    loop {
+        match OpenOptions::new().write(true).create_new(true).open(lock) {
+            Ok(mut file) => {
+                let result = (|| -> MedusaResult<()> {
+                    writeln!(file, "schema={UPDATE_LOCK_SCHEMA}")?;
+                    writeln!(file, "parent_pid={parent_pid}")?;
+                    if let Some(identity) = process_identity(parent_pid)? {
+                        writeln!(file, "parent_identity={identity}")?;
+                    }
+                    writeln!(file, "lock_ready=1")?;
+                    file.sync_all()?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    let _ = fs::remove_file(lock);
+                    return Err(error);
+                }
+                return Ok(file);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if update_owner_is_alive(lock)? {
+                    return Err(invalid("another Medusa update is already staged"));
+                }
+                match fs::remove_file(lock) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(io_error(error)),
+                }
+            }
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+}
+
+fn update_owner_is_alive(lock: &Path) -> MedusaResult<bool> {
+    let content = match fs::read_to_string(lock) {
+        Ok(content) => content,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(io_error(error)),
+    };
+    let Some(parent_pid) = lock_field(&content, "parent_pid").and_then(|value| value.parse().ok())
+    else {
+        return Ok(true);
+    };
+    let schema = lock_field(&content, "schema");
+    if schema.is_some_and(|value| value != UPDATE_LOCK_SCHEMA) {
+        return Ok(true);
+    }
+    if schema.is_some() && lock_field(&content, "lock_ready") != Some("1") {
+        if process_matches(parent_pid, lock_field(&content, "parent_identity"))? {
+            return Ok(true);
+        }
+        return Ok(true);
+    }
+    if process_matches(parent_pid, lock_field(&content, "parent_identity"))? {
+        return Ok(true);
+    }
+    if let Some(helper_value) = lock_field(&content, "helper_pid") {
+        let Ok(helper_pid) = helper_value.parse() else {
+            return Ok(true);
+        };
+        if lock_field(&content, "helper_ready") != Some("1") {
+            return Ok(true);
+        }
+        if process_matches(helper_pid, lock_field(&content, "helper_identity"))? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn lock_field<'a>(content: &'a str, name: &str) -> Option<&'a str> {
+    content
+        .lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix('='))
+}
+
+fn process_identity(pid: u32) -> MedusaResult<Option<String>> {
+    process_start_marker(pid).map_err(io_error).map(|marker| {
+        marker.map(|marker| {
+            format!(
+                "{}|{}|{}",
+                marker.platform,
+                marker.value,
+                marker.boot_id.unwrap_or_default()
+            )
+        })
+    })
+}
+
+fn process_matches(pid: u32, expected_identity: Option<&str>) -> MedusaResult<bool> {
+    let observed_identity = process_identity(pid)?;
+    Ok(match (expected_identity, observed_identity) {
+        (None, Some(_)) => true,
+        (Some(expected), Some(observed)) => expected == observed,
+        (_, None) => false,
+    })
 }
 
 fn helper_command(script: &Path) -> Command {
@@ -658,6 +761,39 @@ mod tests {
                 .schedule_replace(&candidate, &Restart::default(), 1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn stale_update_lock_is_reclaimed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let lock = directory.path().join(".medusa-update.lock");
+        fs::write(&lock, "parent_pid=4294967295\n").expect("stale lock");
+        assert!(!update_owner_is_alive(&lock).expect("inspect stale lock"));
+
+        let new_lock = acquire_update_lock(&lock, std::process::id()).expect("reclaim lock");
+        drop(new_lock);
+        let contents = fs::read_to_string(&lock).expect("read lock");
+        assert!(contents.contains("schema=2"));
+        assert!(contents.contains("lock_ready=1"));
+    }
+
+    #[test]
+    fn active_update_lock_is_preserved() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let lock = directory.path().join(".medusa-update.lock");
+        let identity = process_identity(std::process::id())
+            .expect("process identity")
+            .expect("current process identity");
+        fs::write(
+            &lock,
+            format!(
+                "schema=2\nparent_pid={}\nparent_identity={identity}\nlock_ready=1\n",
+                std::process::id()
+            ),
+        )
+        .expect("active lock");
+
+        assert!(update_owner_is_alive(&lock).expect("inspect lock"));
     }
 
     #[test]

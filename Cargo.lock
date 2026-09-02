@@ -1862,6 +1862,7 @@ dependencies = [
  "flate2",
  "hex",
  "medusa-core",
+ "medusa-process-containment",
  "reqwest",
  "ring",
  "semver",
