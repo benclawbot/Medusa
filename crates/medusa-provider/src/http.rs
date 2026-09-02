@@ -12,6 +12,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{Client as AsyncClient, StatusCode, blocking::Client as BlockingClient};
 use serde::de::DeserializeOwned;
 
+use crate::{ProviderPlanUsage, plan_usage::observe_provider_plan_headers};
+
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// Maximum provider error-body bytes retained in diagnostics.
@@ -117,22 +119,25 @@ pub(crate) fn cancelled_provider_error() -> MedusaError {
 pub(crate) fn blocking_response_error(response: reqwest::blocking::Response) -> MedusaError {
     let status = response.status();
     let retry_after_seconds = retry_after_seconds(response.headers());
+    let plan_usage = observe_provider_plan_headers(response.headers());
     let body = read_blocking_bounded(response, PROVIDER_ERROR_BODY_LIMIT_BYTES).unwrap_or_default();
-    classify_status_with_body(status, body, retry_after_seconds)
+    classify_status_with_body(status, body, retry_after_seconds, plan_usage)
 }
 
 pub(crate) async fn async_response_error(response: reqwest::Response) -> MedusaError {
     let status = response.status();
     let retry_after_seconds = retry_after_seconds(response.headers());
+    let plan_usage = observe_provider_plan_headers(response.headers());
     let body = read_async_bounded(response, PROVIDER_ERROR_BODY_LIMIT_BYTES)
         .await
         .unwrap_or_default();
-    classify_status_with_body(status, body, retry_after_seconds)
+    classify_status_with_body(status, body, retry_after_seconds, plan_usage)
 }
 
 pub(crate) fn blocking_response_json<T: DeserializeOwned>(
     response: reqwest::blocking::Response,
 ) -> MedusaResult<T> {
+    let _ = observe_provider_plan_headers(response.headers());
     let body =
         read_blocking_bounded(response, PROVIDER_SUCCESS_BODY_LIMIT_BYTES).map_err(|error| {
             provider_response_error(format!("could not read provider response body: {error}"))
@@ -143,6 +148,7 @@ pub(crate) fn blocking_response_json<T: DeserializeOwned>(
 pub(crate) async fn async_response_json<T: DeserializeOwned>(
     response: reqwest::Response,
 ) -> MedusaResult<T> {
+    let _ = observe_provider_plan_headers(response.headers());
     let body = read_async_bounded(response, PROVIDER_SUCCESS_BODY_LIMIT_BYTES)
         .await
         .map_err(provider_error)?;
@@ -223,6 +229,7 @@ pub(crate) fn classify_status(
             truncated: false,
         },
         retry_after_seconds,
+        None,
     )
 }
 
@@ -230,6 +237,7 @@ fn classify_status_with_body(
     status: StatusCode,
     body: BoundedBody,
     retry_after_seconds: Option<u64>,
+    plan_usage: Option<ProviderPlanUsage>,
 ) -> MedusaError {
     let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
     let category = if retryable {
@@ -264,6 +272,22 @@ fn classify_status_with_body(
             "retry_after_seconds".to_owned(),
             serde_json::Value::from(seconds),
         );
+    }
+    if status == StatusCode::TOO_MANY_REQUESTS
+        && let Some(plan_usage) = plan_usage
+        && let Some(reset_at) = plan_usage.reset_at_unix
+    {
+        error.context.insert(
+            "provider_plan_limit".to_owned(),
+            serde_json::Value::Bool(true),
+        );
+        error.context.insert(
+            "provider_plan_reset_at_unix".to_owned(),
+            serde_json::Value::from(reset_at),
+        );
+        if let Ok(value) = serde_json::to_value(&plan_usage) {
+            error.context.insert("provider_plan_usage".to_owned(), value);
+        }
     }
     error
 }
@@ -304,6 +328,8 @@ mod tests {
         time::Instant,
     };
 
+    use reqwest::header::{HeaderMap, HeaderValue};
+
     use super::*;
 
     #[test]
@@ -337,6 +363,22 @@ mod tests {
             error.context.get("retry_after_seconds"),
             Some(&serde_json::Value::from(7_u64))
         );
+    }
+
+    #[test]
+    fn provider_plan_limit_is_distinct_from_generic_429() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-codex-primary-used-percent", HeaderValue::from_static("100"));
+        headers.insert("x-codex-primary-reset-at", HeaderValue::from_static("2000000000"));
+        let usage = crate::plan_usage::infer_provider_plan_usage(&headers).expect("plan usage");
+        let error = classify_status_with_body(
+            StatusCode::TOO_MANY_REQUESTS,
+            BoundedBody { bytes: b"limit".to_vec(), truncated: false },
+            Some(60),
+            Some(usage),
+        );
+        assert_eq!(error.context.get("provider_plan_limit"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(error.context.get("provider_plan_reset_at_unix"), Some(&serde_json::Value::from(2_000_000_000_i64)));
     }
 
     #[test]
