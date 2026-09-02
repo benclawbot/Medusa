@@ -821,8 +821,6 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                     false,
                     None,
                 )?)?;
-                // The secondary is an explicit conditional intent. It is persisted before the
-                // race starts, and the race outcome records whether the delayed candidate launched.
                 audit(&self.provider_attempt_descriptor(
                     decision.secondary_index,
                     secondary_ordinal,
@@ -871,7 +869,8 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
         }
 
         let mut final_error = None;
-        for (position, index) in route_order.iter().copied().enumerate() {
+        let mut earliest_plan_reset = None;
+        'routes: for (position, index) in route_order.iter().copied().enumerate() {
             let provider = &self.providers[index];
             let has_fallback = position + 1 < route_order.len();
             let policy = self
@@ -937,10 +936,6 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                             first_token_ms,
                             response.usage,
                         )?;
-                        // Prompt-cache telemetry is observational. A clock adjustment,
-                        // poisoned telemetry lock, or malformed telemetry must never discard a
-                        // provider response that already completed successfully (and may already
-                        // have streamed output to the caller).
                         let _ =
                             self.record_prompt_cache_observation(index, request, response.usage);
                         self.record_success(index)?;
@@ -964,6 +959,11 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                         self.record_error(index, &error)?;
                         if route_stream_started {
                             return Err(error);
+                        }
+                        if let Some(reset_at) = provider_plan_reset_at(&error) {
+                            earliest_plan_reset = Some(
+                                earliest_plan_reset.map_or(reset_at, |current: i64| current.min(reset_at)),
+                            );
                         }
                         final_error = Some(error.clone());
                         match classify_error(&error, has_fallback) {
@@ -995,13 +995,32 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                                 break;
                             }
                             RetryDisposition::Permanent | RetryDisposition::Failover => {
+                                if earliest_plan_reset.is_some() {
+                                    break 'routes;
+                                }
                                 return Err(error);
                             }
-                            RetryDisposition::Retry => return Err(error),
+                            RetryDisposition::Retry => {
+                                if earliest_plan_reset.is_some() {
+                                    break 'routes;
+                                }
+                                return Err(error);
+                            }
                         }
                     }
                 }
             }
+        }
+
+        if let Some(reset_at) = earliest_plan_reset {
+            wait_for_provider_plan_reset(cancel, reset_at, self.sleeper)?;
+            return self.complete_with_cancel_and_sink_audited(
+                request,
+                phase,
+                cancel,
+                sink,
+                before_attempt,
+            );
         }
 
         Err(final_error.unwrap_or_else(|| {
@@ -1025,6 +1044,46 @@ fn classify_error(error: &MedusaError, has_fallback: bool) -> RetryDisposition {
         RetryDisposition::Failover
     } else {
         RetryDisposition::Permanent
+    }
+}
+
+fn provider_plan_reset_at(error: &MedusaError) -> Option<i64> {
+    let is_plan_limit = error
+        .context
+        .get("provider_plan_limit")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !is_plan_limit {
+        return None;
+    }
+    let reset_at = error
+        .context
+        .get("provider_plan_reset_at_unix")
+        .and_then(Value::as_i64)?;
+    (reset_at > OffsetDateTime::now_utc().unix_timestamp()).then_some(reset_at)
+}
+
+fn wait_for_provider_plan_reset(
+    cancel: Option<&AtomicBool>,
+    reset_at_unix: i64,
+    sleeper: fn(Duration),
+) -> MedusaResult<()> {
+    const POLL: Duration = Duration::from_secs(1);
+    loop {
+        if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Transient,
+                "provider plan-limit wait cancelled",
+            ));
+        }
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        if now >= reset_at_unix.saturating_add(1) {
+            return Ok(());
+        }
+        let remaining = u64::try_from(reset_at_unix.saturating_add(1).saturating_sub(now))
+            .unwrap_or(1);
+        sleeper(POLL.min(Duration::from_secs(remaining.max(1))));
     }
 }
 
