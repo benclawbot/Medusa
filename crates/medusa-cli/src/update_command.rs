@@ -367,6 +367,7 @@ enum UpdateStage {
     Downloading,
     Verifying,
     Installing,
+    #[cfg(not(windows))]
     Complete,
 }
 
@@ -379,6 +380,7 @@ impl UpdateStage {
             Self::Downloading => "Downloading",
             Self::Verifying => "Verifying",
             Self::Installing => "Installing",
+            #[cfg(not(windows))]
             Self::Complete => "Complete",
         }
     }
@@ -391,6 +393,7 @@ impl UpdateStage {
             Self::Downloading => "\u{1b}[34m",
             Self::Verifying => "\u{1b}[35m",
             Self::Installing => "\u{1b}[32m",
+            #[cfg(not(windows))]
             Self::Complete => "\u{1b}[1;32m",
         }
     }
@@ -553,6 +556,7 @@ impl UpdateProgress {
         let _ = stderr.flush();
     }
 
+    #[cfg(not(windows))]
     fn finish(&mut self) {
         self.stage(UpdateStage::Complete, 100, "ready");
         if self.enabled {
