@@ -351,7 +351,7 @@ mod tests {
             "observation",
             ContextKind::Observation,
             2,
-            &"x".repeat(800),
+            &"x".repeat(2000),
         ));
         let assembled = value.assemble().expect("assembly");
         assert_eq!(assembled.omitted_context_ids, vec!["observation"]);
@@ -364,7 +364,7 @@ mod tests {
             "blocker",
             ContextKind::Blocker,
             2,
-            &"x".repeat(800),
+            &"x".repeat(2000),
         ));
         assert_eq!(
             value.assemble(),
