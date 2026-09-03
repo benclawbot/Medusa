@@ -72,6 +72,7 @@ pub(crate) fn infer_provider_plan_usage(headers: &HeaderMap) -> Option<ProviderP
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_provider_plan_usage(
     provider: &str,
     model: &str,
