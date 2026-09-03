@@ -4,7 +4,10 @@
 //! capability so a caller cannot replace an active session's controlling `client_id` merely by
 //! submitting another owner/resume envelope.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use medusa_config::Config;
 use medusa_protocol::frontend::{
@@ -27,6 +30,7 @@ pub use base::{
 pub struct FrontendControlPlane {
     inner: base::FrontendControlPlane,
     control_clients: BTreeMap<String, String>,
+    applied_control_transitions: BTreeSet<String>,
 }
 
 impl FrontendControlPlane {
@@ -35,6 +39,7 @@ impl FrontendControlPlane {
         Self {
             inner: base::FrontendControlPlane::new(repo, config),
             control_clients: BTreeMap::new(),
+            applied_control_transitions: BTreeSet::new(),
         }
     }
 
@@ -92,9 +97,15 @@ impl FrontendControlPlane {
     ) -> Result<FrontendCommandAcknowledgement, FrontendControlError> {
         self.validate_control_claim(&envelope)?;
         let client_id = envelope.client_id.clone();
+        let idempotency_key = envelope.idempotency_key.clone();
         let command = envelope.command.clone();
         let acknowledgement = self.inner.dispatch(envelope)?;
-        self.record_successful_control_transition(&client_id, &command, &acknowledgement);
+        self.record_successful_control_transition(
+            &idempotency_key,
+            &client_id,
+            &command,
+            &acknowledgement,
+        );
         Ok(acknowledgement)
     }
 
@@ -125,10 +136,18 @@ impl FrontendControlPlane {
 
     fn record_successful_control_transition(
         &mut self,
+        idempotency_key: &str,
         client_id: &str,
         command: &FrontendCommand,
         acknowledgement: &FrontendCommandAcknowledgement,
     ) {
+        if !self
+            .applied_control_transitions
+            .insert(idempotency_key.to_owned())
+        {
+            return;
+        }
+
         match command {
             FrontendCommand::CreateSession { .. } => {
                 if let FrontendControlResult::SubmissionAccepted { session_id, .. } =
@@ -222,5 +241,45 @@ mod tests {
             validate_control_client(&control_clients, "session-a", "desktop-a", false),
             Err(FrontendControlError::RuntimeNotActive(session)) if session == "session-a"
         ));
+    }
+
+    #[test]
+    fn cached_authority_transition_cannot_revoke_new_controller() {
+        let repository = tempfile::tempdir().expect("repository");
+        let mut plane = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        plane
+            .control_clients
+            .insert("session-a".to_owned(), "owner-a".to_owned());
+        let acknowledgement = FrontendCommandAcknowledgement {
+            command_id: "command-a".to_owned(),
+            idempotency_key: "idempotency-a".to_owned(),
+            session_id: Some("session-a".to_owned()),
+            result: FrontendControlResult::CommandAccepted {
+                session_id: "session-a".to_owned(),
+                command: "new".to_owned(),
+            },
+        };
+
+        plane.record_successful_control_transition(
+            "idempotency-a",
+            "owner-a",
+            &FrontendCommand::NewSession,
+            &acknowledgement,
+        );
+        assert!(!plane.control_clients.contains_key("session-a"));
+
+        plane
+            .control_clients
+            .insert("session-a".to_owned(), "owner-b".to_owned());
+        plane.record_successful_control_transition(
+            "idempotency-a",
+            "owner-a",
+            &FrontendCommand::NewSession,
+            &acknowledgement,
+        );
+        assert_eq!(
+            plane.control_clients.get("session-a").map(String::as_str),
+            Some("owner-b")
+        );
     }
 }
