@@ -139,7 +139,9 @@ fn schedule_windows_direct_replace(
 
 #[cfg(windows)]
 fn candidate_version_label(candidate: &Path) -> String {
-    let output = std::process::Command::new(candidate).arg("--version").output();
+    let output = std::process::Command::new(candidate)
+        .arg("--version")
+        .output();
     let Ok(output) = output else {
         return "new main build".to_owned();
     };
