@@ -104,8 +104,10 @@ pub(super) fn validate_changed_paths(
         .collect::<Vec<_>>();
     for path in paths {
         let normalized = normalize(path);
-        if normalized.starts_with(".git/") || normalized == ".git" {
-            return Err("worker attempted to include Git metadata in its commit".to_owned());
+        if is_protected_control_path(&normalized) {
+            return Err(format!(
+                "worker attempted to mutate protected Medusa control-plane path `{normalized}`"
+            ));
         }
         if !allowed.iter().any(|scope| scope_allows(scope, &normalized)) {
             return Err(format!(
@@ -121,6 +123,12 @@ fn normalize(path: &str) -> String {
         .trim_start_matches("./")
         .trim_end_matches('/')
         .to_owned()
+}
+
+fn is_protected_control_path(path: &str) -> bool {
+    matches!(path, ".git" | ".medusa")
+        || path.starts_with(".git/")
+        || path.starts_with(".medusa/")
 }
 
 fn scope_allows(scope: &str, path: &str) -> bool {
@@ -253,7 +261,9 @@ pub(super) fn now_ms() -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{IMPLEMENTER_AUTHORITY_BOUNDARY, role_bounded_dependency_output};
+    use super::{
+        IMPLEMENTER_AUTHORITY_BOUNDARY, is_protected_control_path, role_bounded_dependency_output,
+    };
 
     #[test]
     fn readonly_dependency_claims_cannot_redefine_implementer_authority() {
@@ -271,5 +281,15 @@ mod tests {
                     .rfind("IMPLEMENTER AUTHORITY")
                     .expect("authority boundary")
         );
+    }
+
+    #[test]
+    fn repository_wide_scope_never_grants_control_plane_paths() {
+        for protected in [".git", ".git/config", ".medusa", ".medusa/continuity/a.json"] {
+            assert!(is_protected_control_path(protected), "{protected}");
+        }
+        for normal in ["src/lib.rs", "Cargo.toml", "docs/design.md"] {
+            assert!(!is_protected_control_path(normal), "{normal}");
+        }
     }
 }
