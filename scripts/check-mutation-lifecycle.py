@@ -17,7 +17,7 @@ errors: list[str] = []
 if "integrate_prepared(" in coordinator or ".integrate_successful(" in coordinator:
     errors.append("mutating coordinator still integrates before parent review")
 
-provider = runtime.find("ConfiguredProvider::manager_from_config")
+provider = runtime.find("LazyConfiguredProviderManager::from_config")
 completion = runtime.find("complete_after_parent_review", provider)
 if provider < 0 or completion < provider:
     errors.append("dedicated transaction review is not connected to runtime completion")
