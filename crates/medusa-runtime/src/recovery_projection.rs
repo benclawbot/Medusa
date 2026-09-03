@@ -366,11 +366,9 @@ mod tests {
             &first.checkpoint.fingerprint,
         )
         .expect("first payload");
-        let expected = checkpoint_payload::current_repository_fingerprint(
-            repository.path(),
-            &first_payload,
-        )
-        .expect("selected fingerprint");
+        let expected =
+            checkpoint_payload::current_repository_fingerprint(repository.path(), &first_payload)
+                .expect("selected fingerprint");
 
         assert_eq!(record.current_repository_fingerprint, expected);
     }
