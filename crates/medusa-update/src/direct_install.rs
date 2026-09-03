@@ -2,9 +2,7 @@ use std::path::{Path, PathBuf};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
-use crate::install::{
-    AtomicInstaller as LegacyAtomicInstaller, Restart, ScheduledUpdate,
-};
+use crate::install::{AtomicInstaller as LegacyAtomicInstaller, Restart, ScheduledUpdate};
 
 /// Platform install facade. Unix keeps the existing health-checked handoff;
 /// Windows uses a small external helper that stops Medusa, replaces the exact
@@ -39,6 +37,7 @@ impl AtomicInstaller {
         restart: &Restart,
         parent_pid: u32,
     ) -> MedusaResult<ScheduledUpdate> {
+        let _ = &self.target;
         #[cfg(windows)]
         {
             let _ = (restart, parent_pid);
@@ -63,12 +62,9 @@ fn schedule_windows_direct_replace(
 ) -> MedusaResult<ScheduledUpdate> {
     use std::{
         fs::{self, OpenOptions},
-        io::Read,
         os::windows::process::CommandExt,
         process::{Command, Stdio},
     };
-
-    use sha2::{Digest, Sha256};
 
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
@@ -135,12 +131,10 @@ fn schedule_windows_direct_replace(
         .spawn()
         .map_err(io_error)?;
 
-    Ok(ScheduledUpdate {
-        helper,
-        backup,
-        state,
-        health,
-    })
+    // The running executable cannot replace itself on Windows. Once the helper
+    // is live, exit immediately so it can stop the remaining Medusa processes,
+    // swap medusa.exe, verify the installed bytes, and emit the only 100% line.
+    std::process::exit(0)
 }
 
 #[cfg(windows)]
@@ -214,8 +208,8 @@ function Fail-Update([string]$message) {{
   exit 1
 }}
 
-# Stop every Medusa process that is executing this installation. The helper is
-# PowerShell, so it remains alive while medusa.exe itself is released.
+# Stop every Medusa process executing this exact installed medusa.exe. The
+# helper is PowerShell, so medusa.exe is released before replacement begins.
 Get-Process -Name 'medusa' -ErrorAction SilentlyContinue | ForEach-Object {{
   try {{
     if ($_.Path -eq $target) {{ Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }}
@@ -327,7 +321,9 @@ mod tests {
             "main (deadbeef1234)",
         );
         let stop = script.find("Stop-Process").expect("stop processes");
-        let replace = script.find("Move-Item -LiteralPath $staged").expect("replace executable");
+        let replace = script
+            .find("Move-Item -LiteralPath $staged")
+            .expect("replace executable");
         let complete = script.find("100% · Complete").expect("completion output");
         assert!(stop < replace);
         assert!(replace < complete);
