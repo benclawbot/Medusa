@@ -733,13 +733,13 @@ pub(super) fn render_frame(
     set_frame_line(
         &mut frame,
         bottom_row,
-        StyledLine::new(context_meter_line(app), Color::Grey),
+        StyledLine::new("─".repeat(usize::from(width)), Color::White),
     );
     bottom_row = bottom_row.saturating_add(1);
     set_frame_line(
         &mut frame,
         bottom_row,
-        StyledLine::new("─".repeat(usize::from(width)), Color::White),
+        StyledLine::new(context_meter_line(app), Color::Grey),
     );
     bottom_row = bottom_row.saturating_add(1);
     set_frame_line(
