@@ -28,6 +28,8 @@ mod tests;
 
 pub use models::*;
 
+pub(crate) const TURN_FINISHED_MARKER_PREFIX: &str = "[medusa:turn-finished] ";
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum ActivityDetailKey {
     Id(String),
@@ -714,8 +716,16 @@ impl AppState {
     }
 
     pub fn finish_run(&mut self) {
-        self.run_started_at = None;
+        let elapsed_seconds = self
+            .run_started_at
+            .take()
+            .map(|started_at| started_at.elapsed().as_secs());
         self.assistant_stream_active = false;
+        if let Some(elapsed_seconds) = elapsed_seconds {
+            self.transcript.push(TranscriptEntry::System(format!(
+                "{TURN_FINISHED_MARKER_PREFIX}{elapsed_seconds}"
+            )));
+        }
     }
 
     pub fn tick(&mut self) -> bool {
