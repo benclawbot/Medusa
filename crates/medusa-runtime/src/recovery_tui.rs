@@ -164,9 +164,7 @@ fn validate_restore_evidence(
         || preflight.unresolved_risks != unresolved_risks
         || preflight.repository_preconditions_verified != repository_preconditions_verified
     {
-        return Err(
-            "recovery preflight evidence no longer matches the live repository".to_owned(),
-        );
+        return Err("recovery preflight evidence no longer matches the live repository".to_owned());
     }
     Ok(())
 }
@@ -326,8 +324,8 @@ mod tests {
         let checkpoint =
             crate::checkpoint_store::materialize(repository.path(), session.id.as_str())
                 .expect("checkpoint");
-        let payload = checkpoint_payload::materialize(repository.path(), &checkpoint)
-            .expect("payload");
+        let payload =
+            checkpoint_payload::materialize(repository.path(), &checkpoint).expect("payload");
         fs::write(repository.path().join("src/lib.rs"), "changed").expect("change");
         let preview = checkpoint_payload::preview(repository.path(), &payload).expect("preview");
         let current =
@@ -380,8 +378,6 @@ mod tests {
         validate_restore_evidence(repository.path(), &view, &request, &preflight)
             .expect("fresh preview");
         fs::write(repository.path().join("src/lib.rs"), "changed again").expect("drift");
-        assert!(
-            validate_restore_evidence(repository.path(), &view, &request, &preflight).is_err()
-        );
+        assert!(validate_restore_evidence(repository.path(), &view, &request, &preflight).is_err());
     }
 }
