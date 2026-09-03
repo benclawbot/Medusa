@@ -12,8 +12,7 @@ use medusa_protocol::frontend::{
 };
 
 use crate::{
-    artifact_store::FrontendArtifactExport,
-    live_session::LiveSessionReplayView,
+    artifact_store::FrontendArtifactExport, live_session::LiveSessionReplayView,
     protocol::FrontendArtifactKind,
 };
 
@@ -58,8 +57,7 @@ impl FrontendControlPlane {
         mime_type: Option<String>,
         bytes: Vec<u8>,
     ) -> Result<String, FrontendControlError> {
-        self.inner
-            .ingest_attachment(display_name, mime_type, bytes)
+        self.inner.ingest_attachment(display_name, mime_type, bytes)
     }
 
     pub fn ingest_artifact(
@@ -196,7 +194,9 @@ fn validate_control_client(
         Some(authorized) if authorized == client_id => Ok(()),
         Some(_) => Err(FrontendControlError::ReadOnlyClient(client_id.to_owned())),
         None if allow_unclaimed => Ok(()),
-        None => Err(FrontendControlError::RuntimeNotActive(session_id.to_owned())),
+        None => Err(FrontendControlError::RuntimeNotActive(
+            session_id.to_owned(),
+        )),
     }
 }
 
@@ -207,9 +207,7 @@ mod tests {
     #[test]
     fn established_control_client_cannot_be_replaced() {
         let control_clients = BTreeMap::from([("session-a".to_owned(), "owner-a".to_owned())]);
-        assert!(
-            validate_control_client(&control_clients, "session-a", "owner-a", false).is_ok()
-        );
+        assert!(validate_control_client(&control_clients, "session-a", "owner-a", false).is_ok());
         assert!(matches!(
             validate_control_client(&control_clients, "session-a", "attacker", true),
             Err(FrontendControlError::ReadOnlyClient(client)) if client == "attacker"
@@ -219,9 +217,7 @@ mod tests {
     #[test]
     fn resume_can_reestablish_control_only_when_unclaimed() {
         let control_clients = BTreeMap::new();
-        assert!(
-            validate_control_client(&control_clients, "session-a", "desktop-a", true).is_ok()
-        );
+        assert!(validate_control_client(&control_clients, "session-a", "desktop-a", true).is_ok());
         assert!(matches!(
             validate_control_client(&control_clients, "session-a", "desktop-a", false),
             Err(FrontendControlError::RuntimeNotActive(session)) if session == "session-a"
