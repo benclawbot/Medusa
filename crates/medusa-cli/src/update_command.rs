@@ -520,13 +520,15 @@ impl UpdateProgress {
             stderr,
             "{}",
             render_progress_line_with_width(
-                self.stage,
-                &self.stage_label,
-                percent,
-                &self.detail,
-                &self.current_version,
-                &self.new_version,
-                self.colors,
+                ProgressLine {
+                    stage: self.stage,
+                    stage_label: &self.stage_label,
+                    percent,
+                    detail: &self.detail,
+                    current_version: &self.current_version,
+                    new_version: &self.new_version,
+                    colors: self.colors,
+                },
                 self.terminal_width,
             )
         );
@@ -596,6 +598,16 @@ fn estimate_build_percent(elapsed: Duration, compiled_packages: usize, total_pac
     BUILD_PHASE_START.saturating_add((ratio * span).round() as u8)
 }
 
+struct ProgressLine<'a> {
+    stage: UpdateStage,
+    stage_label: &'a str,
+    percent: u8,
+    detail: &'a str,
+    current_version: &'a str,
+    new_version: &'a str,
+    colors: bool,
+}
+
 #[cfg(test)]
 fn render_progress_line(
     stage: UpdateStage,
@@ -606,27 +618,29 @@ fn render_progress_line(
     colors: bool,
 ) -> String {
     render_progress_line_with_width(
+        ProgressLine {
+            stage,
+            stage_label: stage.label(),
+            percent,
+            detail,
+            current_version,
+            new_version,
+            colors,
+        },
+        usize::MAX,
+    )
+}
+
+fn render_progress_line_with_width(line: ProgressLine<'_>, terminal_width: usize) -> String {
+    let ProgressLine {
         stage,
-        stage.label(),
+        stage_label,
         percent,
         detail,
         current_version,
         new_version,
         colors,
-        usize::MAX,
-    )
-}
-
-fn render_progress_line_with_width(
-    stage: UpdateStage,
-    stage_label: &str,
-    percent: u8,
-    detail: &str,
-    current_version: &str,
-    new_version: &str,
-    colors: bool,
-    terminal_width: usize,
-) -> String {
+    } = line;
     let percent = percent.min(100);
     let percent_label = if stage == UpdateStage::Building {
         format!("{percent:3}% est.")
@@ -804,13 +818,15 @@ mod tests {
     #[test]
     fn build_progress_line_shows_compiled_and_total_crates() {
         let line = render_progress_line_with_width(
-            UpdateStage::Building,
-            "Building 235/305 crates",
-            77,
-            "02:10 elapsed · medusa-runtime",
-            "1.0.6 (old)",
-            "1.0.7 (new)",
-            false,
+            ProgressLine {
+                stage: UpdateStage::Building,
+                stage_label: "Building 235/305 crates",
+                percent: 77,
+                detail: "02:10 elapsed · medusa-runtime",
+                current_version: "1.0.6 (old)",
+                new_version: "1.0.7 (new)",
+                colors: false,
+            },
             120,
         );
 
@@ -854,13 +870,15 @@ mod tests {
     #[test]
     fn progress_line_is_width_safe_for_narrow_windows_terminals() {
         let line = render_progress_line_with_width(
-            UpdateStage::Downloading,
-            "Downloading",
-            42,
-            "123.4 MiB / 567.8 MiB · 12.4 MiB/s · ETA 00:37",
-            "1.0.5 (5b97a73ef0d4)",
-            "1.0.5 (5c17d7f00f4f)",
-            false,
+            ProgressLine {
+                stage: UpdateStage::Downloading,
+                stage_label: "Downloading",
+                percent: 42,
+                detail: "123.4 MiB / 567.8 MiB · 12.4 MiB/s · ETA 00:37",
+                current_version: "1.0.5 (5b97a73ef0d4)",
+                new_version: "1.0.5 (5c17d7f00f4f)",
+                colors: false,
+            },
             80,
         );
         let visible = line.trim_start_matches('\r');
@@ -889,8 +907,8 @@ mod tests {
         // timeout/wait machinery indirectly by asserting that the absence of
         // --local-build surfaces through the new option. End-to-end polling
         // behavior is covered by the live updater tests in medusa-update.
-        assert!(DEFAULT_PREBUILT_WAIT_SECS >= 60);
-        assert!(PREBUILT_POLL_INTERVAL_SECS >= 5);
+        assert!(std::hint::black_box(DEFAULT_PREBUILT_WAIT_SECS) >= 60);
+        assert!(std::hint::black_box(PREBUILT_POLL_INTERVAL_SECS) >= 5);
     }
 
     #[test]

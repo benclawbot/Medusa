@@ -1,3 +1,7 @@
+[alias]
+product-acceptance = "run --quiet -p medusa-cli --bin medusa-product-acceptance --"
+medusa-proof = "run --quiet -p medusa-cli --bin medusa-proof --"
+
 [build]
 # Use all 4 cores for compilation
 jobs = 4

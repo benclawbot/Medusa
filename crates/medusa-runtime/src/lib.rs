@@ -5,19 +5,7 @@ mod openai_oauth;
 // === coordination submodule group ===
 // Bounded multi-agent coordination and mutating worker execution.
 // Grouped under a single parent so coverage can be measured per sub-module.
-pub(crate) mod coordination {
-    //! Production team coordination: bounded multi-agent preflight and
-    //! worktree-isolated mutating worker execution.
-    //!
-    //! Submodules are kept flat in `src/` for review ergonomics; this group
-    //! exists so coverage and visibility are measured per sub-module.
-
-    pub mod delegation_contract;
-    pub(crate) mod multi_agent_coordinator;
-    pub(crate) mod mutating_worker_coordinator;
-    pub mod production_orchestrator;
-    pub mod team_control;
-}
+pub(crate) mod coordination;
 mod workspace_worker_manager;
 
 pub use crate::git_workers::{IntegrationReceipt, Worker, WorkerState};
@@ -3289,7 +3277,6 @@ pub fn recovery_action_context(
 mod recovery;
 
 #[rustfmt::skip]
-
 /// Production task-contract and schedule definitions used by the runtime coordinator.
 ///
 /// The shipped coordinated path is `RuntimeController -> run_prompt ->

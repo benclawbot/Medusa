@@ -51,9 +51,11 @@ pub async fn desktop_model_registry(
     refresh: Option<bool>,
     provider: Option<String>,
 ) -> Result<ModelRegistry, String> {
-    tauri::async_runtime::spawn_blocking(move || desktop_model_registry_sync(refresh, provider.as_deref()))
-        .await
-        .map_err(|error| format!("model discovery task failed: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        desktop_model_registry_sync(refresh, provider.as_deref())
+    })
+    .await
+    .map_err(|error| format!("model discovery task failed: {error}"))?
 }
 
 fn desktop_model_registry_sync(
@@ -204,14 +206,13 @@ mod tests {
             model: "gpt-5.6-luna".to_owned(),
             ..ProviderProfile::default()
         };
-        let registry = model_registry_for_profile(
-            &profile,
-            Err(DiscoveryFailure::Offline),
-            None,
-            1,
-        );
+        let registry =
+            model_registry_for_profile(&profile, Err(DiscoveryFailure::Offline), None, 1);
         assert_eq!(
-            registry.find("gpt-5.6-luna").expect("curated model").availability,
+            registry
+                .find("gpt-5.6-luna")
+                .expect("curated model")
+                .availability,
             ModelAvailability::TemporarilyUnavailable
         );
     }

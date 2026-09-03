@@ -31,6 +31,10 @@ jobs:
     name: Workspace coverage >= 75%
     runs-on: ubuntu-latest
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
@@ -61,6 +65,10 @@ jobs:
     name: Named adversarial regressions
     runs-on: ubuntu-latest
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
@@ -100,6 +108,10 @@ jobs:
     needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - run: bash scripts/fuzz-smoke.sh
@@ -108,6 +120,10 @@ jobs:
     needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - run: bash scripts/chaos-smoke.sh
@@ -121,6 +137,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority
@@ -155,6 +175,10 @@ jobs:
     needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
@@ -194,6 +218,10 @@ jobs:
       LIVE_E2E_TIMEOUT_SECONDS: '1500'
       LIVE_E2E_HEARTBEAT_SECONDS: '60'
     steps:
+      - name: Bootstrap repository for local actions
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Validate committed dependency authority

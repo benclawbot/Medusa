@@ -11,51 +11,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  phase1-remediation:
-    name: Phase 1 remediation
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/high-severity-verified-findings'
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: fix/high-severity-verified-findings
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt,clippy
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          shared-key: medusa-pr-build
-          add-job-id-key: "false"
-      - name: Apply verified Phase 1 fixes
-        run: python3 scripts/apply-phase1-remediation.py
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Targeted tests
-        env:
-          MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
-        run: cargo test -p medusa-mcp-cache -p medusa-capabilities -p medusa-recovery-coordinator -p medusa-review-model -p medusa-provider -p medusa-agent --all-features --locked
-      - name: Workspace clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: Commit verified product changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          git checkout origin/main -- .github/workflows/ci.yml scripts/check-repository-artifacts.py
-          rm -f .github/workflows/phase1-high-severity-fix.yml
-          rm -f .github/workflows/phase1-pr-remediation.yml
-          rm -f scripts/apply-phase1-remediation.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "fix: close verified high-severity correctness gaps"
-          git push origin HEAD:fix/high-severity-verified-findings
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
