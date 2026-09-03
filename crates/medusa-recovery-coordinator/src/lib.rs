@@ -143,8 +143,9 @@ impl RecoveryCoordinator {
     ) -> Result<RecoveryDecision, RecoveryError> {
         validate_candidate(candidate)?;
         self.validate_lock(lock, &candidate.transaction_id)?;
+        let candidate_key = candidate_fingerprint(candidate);
 
-        if let Some(existing) = self.completed.get(&candidate.transaction_id) {
+        if let Some(existing) = self.completed.get(&candidate_key) {
             return Ok(existing.clone());
         }
 
@@ -182,14 +183,12 @@ impl RecoveryCoordinator {
                 RecoveryAction::Quarantine,
                 "rollback evidence missing",
             );
-            self.completed
-                .insert(candidate.transaction_id.clone(), decision.clone());
+            self.completed.insert(candidate_key, decision.clone());
             return Ok(decision);
         }
 
         let decision = build_decision(candidate, action, reason);
-        self.completed
-            .insert(candidate.transaction_id.clone(), decision.clone());
+        self.completed.insert(candidate_key, decision.clone());
         Ok(decision)
     }
 
@@ -235,6 +234,26 @@ fn validate_candidate(candidate: &RecoveryCandidate) -> Result<(), RecoveryError
         }
     }
     Ok(())
+}
+
+fn candidate_fingerprint(candidate: &RecoveryCandidate) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(candidate.transaction_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(candidate.execution_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(format!("{:?}", candidate.phase).as_bytes());
+    hasher.update(candidate.checkpoint_sequence.to_be_bytes());
+    hasher.update(candidate.checkpoint_fingerprint.as_bytes());
+    hasher.update(candidate.snapshot_fingerprint.as_bytes());
+    hasher.update(candidate.replay_fingerprint.as_bytes());
+    if let Some(rollback) = &candidate.rollback_fingerprint {
+        hasher.update([1]);
+        hasher.update(rollback.as_bytes());
+    } else {
+        hasher.update([0]);
+    }
+    hex::encode(hasher.finalize())
 }
 
 fn build_decision(
@@ -340,13 +359,28 @@ mod tests {
     }
 
     #[test]
-    fn recovery_is_idempotent() {
+    fn recovery_is_idempotent_for_identical_candidate_evidence() {
         let mut coordinator = RecoveryCoordinator::default();
         let lock = coordinator.acquire_lock("tx", "node-a", 1).unwrap();
         let item = candidate("tx", TransactionPhase::Committing);
         let first = coordinator.decide(&item, &lock).unwrap();
         let second = coordinator.decide(&item, &lock).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn changed_candidate_evidence_never_reuses_stale_decision() {
+        let mut coordinator = RecoveryCoordinator::default();
+        let lock = coordinator.acquire_lock("tx", "node-a", 1).unwrap();
+        let committing = candidate("tx", TransactionPhase::Committing);
+        let committed = candidate("tx", TransactionPhase::Committed);
+
+        let first = coordinator.decide(&committing, &lock).unwrap();
+        let second = coordinator.decide(&committed, &lock).unwrap();
+
+        assert_eq!(first.action, RecoveryAction::ResumeCommit);
+        assert_eq!(second.action, RecoveryAction::NoOp);
+        assert_ne!(first.evidence_fingerprint, second.evidence_fingerprint);
     }
 
     #[test]
