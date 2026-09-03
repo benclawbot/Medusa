@@ -166,24 +166,32 @@ fn release_channel(
         sequence_file: Some(repo.join(".medusa/update-sequence")),
         rollout_sequence: Some(release.rollout_sequence),
     };
-    // Stop the repository daemon before staging so its running executable is
-    // no longer locked when the detached replacement helper swaps it.
     super::request_daemon_shutdown(repo);
     installer.schedule_replace(&candidate, &restart, std::process::id())?;
     staging_timer.finish("atomic-handoff-staged", Some(artifact.bytes), None)?;
-    progress.stage(UpdateStage::Installing, 98, "atomic restart staged");
-    diagnostics
-        .phase(UpdatePhase::RestartHandoff)
-        .finish("health-check-pending", None, None)?;
-    progress.finish();
-    println!(
-        "Medusa update installed and staged: {}. Restarting.",
-        version_transition(
-            &current_release_id.to_string(),
-            &release.release_id.to_string(),
-        )
-    );
-    Ok(())
+
+    #[cfg(windows)]
+    {
+        progress.stage(UpdateStage::Installing, 99, "replacing executable");
+        wait_for_windows_replacement();
+    }
+
+    #[cfg(not(windows))]
+    {
+        progress.stage(UpdateStage::Installing, 98, "atomic restart staged");
+        diagnostics
+            .phase(UpdatePhase::RestartHandoff)
+            .finish("health-check-pending", None, None)?;
+        progress.finish();
+        println!(
+            "Medusa update installed and staged: {}. Restarting.",
+            version_transition(
+                &current_release_id.to_string(),
+                &release.release_id.to_string(),
+            )
+        );
+        Ok(())
+    }
 }
 
 fn source_channel(
@@ -218,9 +226,6 @@ fn source_channel(
         return Ok(());
     }
 
-    // Rolling `main` artifacts do not carry a release semver. Showing the
-    // package version here is misleading because every main build can share
-    // that value; the immutable revision is the actual version being updated.
     let current_version = main_revision_label(current);
     let new_version = main_revision_label(&latest.sha);
     let mut progress = UpdateProgress::new(current_version.clone(), new_version.clone());
@@ -232,8 +237,6 @@ fn source_channel(
         wait_for_prebuilt,
         &mut progress,
     )?;
-    // Stop the repository daemon before staging so its running executable is
-    // no longer locked when the detached replacement helper swaps it.
     super::request_daemon_shutdown(repo);
     match strategy {
         MainUpdateStrategy::Prebuilt => progress.stage(
@@ -261,18 +264,28 @@ fn source_channel(
             |snapshot| progress.build(snapshot),
         )?,
     };
-    progress.stage(UpdateStage::Installing, 98, "atomic restart staged");
-    progress.finish();
-    let update_kind = match strategy {
-        MainUpdateStrategy::Prebuilt => "downloaded",
-        MainUpdateStrategy::LocalBuild => "built",
-    };
-    println!(
-        "Medusa update {} and staged: {}. Restarting.",
-        update_kind,
-        version_transition(&current_version, &new_version),
-    );
-    Ok(())
+
+    #[cfg(windows)]
+    {
+        progress.stage(UpdateStage::Installing, 99, "replacing executable");
+        wait_for_windows_replacement();
+    }
+
+    #[cfg(not(windows))]
+    {
+        progress.stage(UpdateStage::Installing, 98, "atomic restart staged");
+        progress.finish();
+        let update_kind = match strategy {
+            MainUpdateStrategy::Prebuilt => "downloaded",
+            MainUpdateStrategy::LocalBuild => "built",
+        };
+        println!(
+            "Medusa update {} and staged: {}. Restarting.",
+            update_kind,
+            version_transition(&current_version, &new_version),
+        );
+        Ok(())
+    }
 }
 
 fn short_revision(revision: &str) -> &str {
@@ -300,11 +313,14 @@ fn main_update_strategy(
         return Ok(MainUpdateStrategy::Prebuilt);
     }
     if local_build {
-        // User explicitly opted out of waiting for the CI artifact.
         return Ok(MainUpdateStrategy::LocalBuild);
     }
     let timeout_secs = wait_for_prebuilt
-        .or_else(|| std::env::var("MEDUSA_UPDATE_PREBUILT_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()))
+        .or_else(|| {
+            std::env::var("MEDUSA_UPDATE_PREBUILT_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
         .unwrap_or(DEFAULT_PREBUILT_WAIT_SECS);
     let poll_interval = Duration::from_secs(PREBUILT_POLL_INTERVAL_SECS);
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -333,7 +349,9 @@ fn main_update_strategy(
             .with_retryable(true));
         }
         std::thread::sleep(poll_interval);
-        let started = deadline.checked_sub(Duration::from_secs(timeout_secs)).unwrap_or(deadline);
+        let started = deadline
+            .checked_sub(Duration::from_secs(timeout_secs))
+            .unwrap_or(deadline);
         elapsed = Instant::now().saturating_duration_since(started);
         if updater.main_cli_artifact_available(revision)? {
             return Ok(MainUpdateStrategy::Prebuilt);
@@ -552,6 +570,13 @@ impl Drop for UpdateProgress {
     }
 }
 
+#[cfg(windows)]
+fn wait_for_windows_replacement() -> ! {
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+    }
+}
+
 fn require_automatic_for_unattended(automatic: bool) -> MedusaResult<()> {
     if automatic || std::io::stdin().is_terminal() {
         Ok(())
@@ -589,7 +614,6 @@ fn policy_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
-// Helpers are kept above the test module so all-target Clippy can lint the test target.
 fn estimate_build_percent(elapsed: Duration, compiled_packages: usize, total_packages: usize) -> u8 {
     let time_ratio = elapsed.as_secs_f64() / BUILD_ESTIMATE.as_secs_f64();
     let pieces_ratio = compiled_packages as f64 / total_packages.max(1) as f64;
@@ -698,9 +722,7 @@ fn render_progress_line_with_width(line: ProgressLine<'_>, terminal_width: usize
             "{prefix}\u{1b}[1;36mUpdating Medusa\u{1b}[0m {title} [{bar}] {percent_label} · {stage_label} · {detail}"
         )
     } else {
-        format!(
-            "{prefix}{visible_line}"
-        )
+        format!("{prefix}{visible_line}")
     }
 }
 
@@ -745,7 +767,9 @@ fn download_detail(downloaded: u64, total: Option<u64>, elapsed: Duration) -> St
             } else {
                 format!(
                     " · ETA {}",
-                    format_elapsed(Duration::from_secs_f64(eta_seconds.min(99.0 * 60.0 * 60.0)))
+                    format_elapsed(Duration::from_secs_f64(
+                        eta_seconds.min(99.0 * 60.0 * 60.0),
+                    ))
                 )
             };
             format!(
@@ -903,10 +927,6 @@ mod tests {
 
     #[test]
     fn main_updates_default_to_waiting_when_prebuilt_missing() {
-        // The prebuilt-available branch is the fast path; we exercise the
-        // timeout/wait machinery indirectly by asserting that the absence of
-        // --local-build surfaces through the new option. End-to-end polling
-        // behavior is covered by the live updater tests in medusa-update.
         assert!(std::hint::black_box(DEFAULT_PREBUILT_WAIT_SECS) >= 60);
         assert!(std::hint::black_box(PREBUILT_POLL_INTERVAL_SECS) >= 5);
     }
