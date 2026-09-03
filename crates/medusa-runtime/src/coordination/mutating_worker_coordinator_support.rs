@@ -316,7 +316,10 @@ mod tests {
             assert!(is_protected_control_path(protected), "{protected}");
             let error = validate_changed_paths(&contract, &[protected.to_owned()])
                 .expect_err("protected path must be denied");
-            assert!(error.contains("protected Medusa control-plane path"), "{error}");
+            assert!(
+                error.contains("protected Medusa control-plane path"),
+                "{error}"
+            );
         }
         for normal in ["src/lib.rs", "Cargo.toml", "docs/design.md"] {
             assert!(!is_protected_control_path(normal), "{normal}");
