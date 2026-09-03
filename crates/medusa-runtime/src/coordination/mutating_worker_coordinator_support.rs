@@ -126,9 +126,7 @@ fn normalize(path: &str) -> String {
 }
 
 fn is_protected_control_path(path: &str) -> bool {
-    matches!(path, ".git" | ".medusa")
-        || path.starts_with(".git/")
-        || path.starts_with(".medusa/")
+    matches!(path, ".git" | ".medusa") || path.starts_with(".git/") || path.starts_with(".medusa/")
 }
 
 fn scope_allows(scope: &str, path: &str) -> bool {
@@ -285,7 +283,12 @@ mod tests {
 
     #[test]
     fn repository_wide_scope_never_grants_control_plane_paths() {
-        for protected in [".git", ".git/config", ".medusa", ".medusa/continuity/a.json"] {
+        for protected in [
+            ".git",
+            ".git/config",
+            ".medusa",
+            ".medusa/continuity/a.json",
+        ] {
             assert!(is_protected_control_path(protected), "{protected}");
         }
         for normal in ["src/lib.rs", "Cargo.toml", "docs/design.md"] {
