@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'crates/medusa-agent/src/journal.rs'
+      - 'crates/**/recovery*.rs'
       - 'docs/durable-journal-policy.md'
       - 'benchmarks/performance/692-journal-persistence.json'
       - '.github/workflows/journal-durability-certification.yml'
@@ -11,6 +12,7 @@ on:
     branches: [main]
     paths:
       - 'crates/medusa-agent/src/journal.rs'
+      - 'crates/**/recovery*.rs'
       - 'docs/durable-journal-policy.md'
       - 'benchmarks/performance/692-journal-persistence.json'
       - '.github/workflows/journal-durability-certification.yml'

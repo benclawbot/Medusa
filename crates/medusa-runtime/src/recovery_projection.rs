@@ -132,10 +132,8 @@ fn build_record(
     }
     let selected_payload = checkpoint_payload::load(repo, session_id, selected_id)?;
     let selected_preview = checkpoint_payload::preview(repo, &selected_payload)?;
-    let latest_payload =
-        checkpoint_payload::load(repo, session_id, &latest.checkpoint.fingerprint)?;
     let current_repository_fingerprint =
-        checkpoint_payload::current_repository_fingerprint(repo, &latest_payload)?;
+        checkpoint_payload::current_repository_fingerprint(repo, &selected_payload)?;
     let interrupted_operation = matches!(latest_step.as_str(), "runtime_failed" | "session_failed")
         .then(|| latest_step.replace('_', " "));
 
@@ -319,6 +317,60 @@ mod tests {
         assert_eq!(preview.files[0].path, "src/lib.rs");
         assert!(preview.files[0].would_overwrite_uncommitted_work);
         assert!(!preview.repository_matches_checkpoint_base);
+    }
+
+    #[test]
+    fn selected_older_checkpoint_uses_its_own_fingerprint_scope() {
+        let repository = tempdir().expect("repository");
+        let mut session = session(repository.path());
+        record_file_boundary(repository.path(), &mut session);
+        crate::record_controller_event(
+            repository.path(),
+            session.id.as_str(),
+            Actor::Coordinator,
+            EventPayload::RuntimeTurnFinished,
+        )
+        .expect("first turn boundary");
+        let first = checkpoint_store::latest(repository.path(), session.id.as_str())
+            .expect("latest")
+            .expect("first checkpoint");
+
+        fs::write(repository.path().join("src/extra.rs"), "later").expect("extra file");
+        record_session_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::FileTransactionCommitted {
+                paths: vec!["src/extra.rs".to_owned()],
+                rollback_ref: "rollback-extra".to_owned(),
+            },
+        )
+        .expect("extra file event");
+        crate::record_controller_event(
+            repository.path(),
+            session.id.as_str(),
+            Actor::Coordinator,
+            EventPayload::RuntimeTurnFinished,
+        )
+        .expect("second turn boundary");
+
+        let record = build_record(
+            repository.path(),
+            session.id.as_str(),
+            Some(&first.checkpoint.fingerprint),
+        )
+        .expect("recovery record")
+        .expect("active recovery");
+        let first_payload = checkpoint_payload::load(
+            repository.path(),
+            session.id.as_str(),
+            &first.checkpoint.fingerprint,
+        )
+        .expect("first payload");
+        let expected =
+            checkpoint_payload::current_repository_fingerprint(repository.path(), &first_payload)
+                .expect("selected fingerprint");
+
+        assert_eq!(record.current_repository_fingerprint, expected);
     }
 
     #[test]

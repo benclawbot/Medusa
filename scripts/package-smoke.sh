@@ -17,7 +17,14 @@ workspace_version="$(
   ' Cargo.toml
 )"
 test -n "$workspace_version"
-"$medusa_binary" --version | grep -Fx "medusa $workspace_version"
+version_line="$("$medusa_binary" --version)"
+case "$version_line" in
+  "medusa $workspace_version"|"medusa $workspace_version."*|"medusa $workspace_version "*) ;;
+  *)
+    printf 'unexpected medusa version: %s\n' "$version_line" >&2
+    exit 1
+    ;;
+esac
 "$recall_binary" --help | grep -F 'medusa-recall'
 "$github_operation_binary" --help | grep -F 'medusa-github-operation'
 tmp="$(mktemp -d)"

@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::MedusaResult;
+#[cfg(windows)]
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
 
 use crate::install::{AtomicInstaller as LegacyAtomicInstaller, Restart, ScheduledUpdate};
 
@@ -40,8 +42,9 @@ impl AtomicInstaller {
         let _ = &self.target;
         #[cfg(windows)]
         {
+            retain_legacy_installer_api();
             let _ = (restart, parent_pid);
-            return schedule_windows_direct_replace(&self.target, candidate);
+            schedule_windows_direct_replace(&self.target, candidate)
         }
         #[cfg(not(windows))]
         {
@@ -50,9 +53,24 @@ impl AtomicInstaller {
     }
 
     pub fn replace(&self, candidate: &Path, restart: &Restart) -> MedusaResult<Option<PathBuf>> {
-        let update = self.schedule_replace(candidate, restart, std::process::id())?;
-        Ok(Some(update.backup))
+        #[cfg(windows)]
+        {
+            let update = self.schedule_replace(candidate, restart, std::process::id())?;
+            Ok(Some(update.backup))
+        }
+        #[cfg(not(windows))]
+        {
+            self.legacy.replace(candidate, restart)
+        }
     }
+}
+
+#[cfg(windows)]
+fn retain_legacy_installer_api() {
+    let _ = (
+        LegacyAtomicInstaller::schedule_replace,
+        LegacyAtomicInstaller::replace,
+    );
 }
 
 #[cfg(windows)]
@@ -139,7 +157,9 @@ fn schedule_windows_direct_replace(
 
 #[cfg(windows)]
 fn candidate_version_label(candidate: &Path) -> String {
-    let output = std::process::Command::new(candidate).arg("--version").output();
+    let output = std::process::Command::new(candidate)
+        .arg("--version")
+        .output();
     let Ok(output) = output else {
         return "new main build".to_owned();
     };
@@ -280,6 +300,7 @@ fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+#[cfg(windows)]
 fn invalid(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
@@ -288,6 +309,7 @@ fn invalid(message: impl Into<String>) -> MedusaError {
     )
 }
 
+#[cfg(windows)]
 fn io_error(error: impl std::fmt::Display) -> MedusaError {
     MedusaError::new(
         ErrorCode::ToolExecutionFailed,

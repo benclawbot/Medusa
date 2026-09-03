@@ -251,9 +251,19 @@ fn is_execution_critical(item: &ContextItem) -> bool {
     )
 }
 
+/// Conservative tokenizer-independent estimate for prompt budgeting.
+///
+/// Every non-whitespace UTF-8 byte is charged as one token. This intentionally overcharges normal
+/// words and, unlike a four-characters-per-token rule, cannot make hashes, base64, minified code,
+/// random identifiers, punctuation, or multibyte text artificially cheap. Provider-native
+/// tokenizers can replace this estimate at the call site when exact accounting is available.
 #[must_use]
 pub fn estimate_tokens(content: &str) -> usize {
-    content.len()
+    content
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .map(char::len_utf8)
+        .fold(0usize, usize::saturating_add)
 }
 
 fn fingerprint(bytes: &[u8]) -> String {
@@ -322,7 +332,7 @@ mod tests {
             "observation",
             ContextKind::Observation,
             2,
-            &"x".repeat(800),
+            &"x".repeat(2000),
         ));
         let assembled = value.assemble().expect("assembly");
         assert_eq!(assembled.omitted_context_ids, vec!["observation"]);
@@ -335,7 +345,7 @@ mod tests {
             "blocker",
             ContextKind::Blocker,
             2,
-            &"x".repeat(800),
+            &"x".repeat(2000),
         ));
         assert_eq!(
             value.assemble(),
@@ -351,5 +361,26 @@ mod tests {
             value.assemble(),
             Err("stable section and tool names must be unique")
         );
+    }
+
+    #[test]
+    fn token_estimate_is_not_raw_byte_length() {
+        let content = "This is a normal English sentence with repeated words.";
+        assert!(estimate_tokens(content) < content.len());
+        assert!(estimate_tokens(content) >= content.split_whitespace().count());
+    }
+
+    #[test]
+    fn token_estimate_charges_punctuation_and_non_ascii_conservatively() {
+        assert_eq!(estimate_tokens("{}[](),;"), 8);
+        assert_eq!(estimate_tokens("你好世界"), 12);
+    }
+
+    #[test]
+    fn token_estimate_does_not_discount_high_entropy_ascii() {
+        let hash = "a3f19b807e2d44c19f0a6d7b8c9e102f";
+        let base64 = "QWxhZGRpbjpvcGVuIHNlc2FtZQ==";
+        assert_eq!(estimate_tokens(hash), hash.len());
+        assert_eq!(estimate_tokens(base64), base64.len());
     }
 }
