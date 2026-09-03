@@ -23,7 +23,7 @@ read this once before opening a design discussion.
   outputs. See [`docs/CAPABILITY-EVIDENCE.md` § Multi-agent](CAPABILITY-EVIDENCE.md).
 - **IntegrationBarrier** — staging point where accepted parallel children are aggregated
   in deterministic dependency order before final review. See
-  [`crates/medusa-runtime` `integration_barrier.rs`](../crates/medusa-runtime/src/integration_barrier.rs).
+  [`medusa-multi-agent-scheduler::mutation_dag`](../crates/medusa-multi-agent-scheduler/src/mutation_dag.rs).
 - **ImmutableCandidate** — content-addressed workspace candidate persisted by a worker.
   Independent verification reads from this; only authorized integration mutates the
   primary workspace.
@@ -38,10 +38,6 @@ read this once before opening a design discussion.
 
 ## Provider / cross-model context
 
-- **EffectiveModelRequestManifest** — provider-neutral record of what was actually
-  requested (model, route, role, inputs, evidence references). Enables deterministic
-  request reconstruction across providers. See
-  [`crates/medusa-runtime/src/effective_model_request_manifest.rs`](../crates/medusa-runtime/src/effective_model_request_manifest.rs).
 - **ProviderContinuationState** — provider-native opaque continuation bytes. Exact-bound
   by provider/protocol/route/model/session by default. Redacted from debug and
   serialization. Has no provider-neutral transcript or prompt rendering path. Unsupported

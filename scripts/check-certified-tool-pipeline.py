@@ -44,7 +44,7 @@ def main() -> int:
     pipeline = PIPELINE.read_text(encoding="utf-8")
     tools = TOOLS.read_text(encoding="utf-8")
     engine = ENGINE.read_text(encoding="utf-8")
-    if 'include!("engine_inner.rs");' in engine:
+    if ENGINE_INNER.is_file():
         engine += "\n" + ENGINE_INNER.read_text(encoding="utf-8")
 
     ordered(

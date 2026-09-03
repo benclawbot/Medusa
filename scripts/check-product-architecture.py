@@ -71,9 +71,11 @@ def validate(root: Path) -> None:
     trace = read(root, "docs/PRODUCTION-EXECUTION-TRACE.md")
     workspaces = read(root, "docs/WORKSPACES.md")
     multi_agent = read(root, "docs/MULTI_AGENT_EXECUTION.md")
-    planning = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
-    read_only_coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
-    mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
+    planning = read(root, "crates/medusa-runtime/src/coordination/production_orchestrator.rs")
+    read_only_coordinator = read(root, "crates/medusa-runtime/src/coordination/multi_agent_coordinator.rs")
+    mutating_coordinator = read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs")
+    mutating_coordinator += "\n" + read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs")
+    mutating_coordinator += "\n" + read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_support.rs")
     mutation_transaction = read(root, "crates/medusa-runtime/src/mutation_transaction_state.rs")
     parallel_mutation = read(root, "crates/medusa-runtime/src/parallel_mutation.rs")
     parallel_batch = read(root, "crates/medusa-runtime/src/parallel_mutation_batch.rs")
@@ -81,6 +83,7 @@ def validate(root: Path) -> None:
     workspace_api = read(root, "crates/medusa-runtime/src/workspace.rs")
     workers = read(root, "crates/medusa-workers/src/lib.rs")
     runtime = read(root, "crates/medusa-runtime/src/lib.rs")
+    coordination = read(root, "crates/medusa-runtime/src/coordination/mod.rs")
     readme = read(root, "README.md")
     cargo_text = read(root, "Cargo.toml")
 
@@ -106,7 +109,7 @@ def validate(root: Path) -> None:
     metadata = tomllib.loads(cargo_text).get("workspace", {}).get("metadata", {}).get("medusa", {})
     expected = {
         "production_execution_model": "bounded-teammates-with-workspace-isolated-mutation",
-        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> workspace-isolated candidate verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence",
+        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> coordination::multi_agent_coordinator::run_preflight -> coordination::mutating_worker_coordinator::run_implementation when required -> workspace-isolated candidate verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence",
         "orchestration_planning": "production runtime path; task contracts drive durable read-only preflight, conflict-aware bounded Git parallel mutation when safe, and isolated Git or directory implementation",
         "subagent_delegation": "production; bounded read-only planner and risk-reviewer teammates plus centrally scheduled Git mutation DAG children when safe; directory mutation remains one isolated snapshot implementer; nested delegation is denied",
         "verification_gate": "typed-evidence-and-changed-component-authority",
@@ -141,7 +144,10 @@ def validate(root: Path) -> None:
     require(contributor, "Production mutating worker coordinator", "docs/CONTRIBUTOR-ARCHITECTURE.md")
     require(contributor, "called by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
 
-    require(runtime, "mod production_orchestrator;", "runtime root")
+    require(runtime, "pub(crate) mod coordination;", "runtime root")
+    require(coordination, "pub(crate) mod multi_agent_coordinator;", "coordination root")
+    require(coordination, "pub(crate) mod mutating_worker_coordinator;", "coordination root")
+    require(coordination, "pub mod production_orchestrator;", "coordination root")
     require(runtime, "pub mod orchestration_planning", "runtime root")
     forbid(runtime, "pub mod production_orchestrator;", "runtime root")
     require(runtime, "fn run_prompt(", "runtime implementation")
