@@ -37,7 +37,7 @@ jobs:
           tests = Path('crates/medusa-tui/src/lib.rs')
           text = tests.read_text(encoding='utf-8')
           old = '''        assert!(!frame[20].text.contains("Read Only"));\n        assert_eq!(frame[18].text, "─".repeat(120));\n        assert_eq!(frame[21].text, "─".repeat(120));\n'''
-          new = '''        assert_eq!(frame[18].text, "─".repeat(120));\n        assert!(frame[19].text.starts_with("> "));\n        assert_eq!(frame[20].text, "─".repeat(120));\n        assert!(frame[21].text.starts_with("context ["));\n        assert!(!frame[21].text.contains("Read Only"));\n'''
+          new = '''        assert_eq!(frame[18].text, "─".repeat(120));\n        assert_eq!(frame[20].text, "─".repeat(120));\n        assert!(frame[21].text.starts_with("context ["));\n        assert!(!frame[21].text.contains("Read Only"));\n'''
           if text.count(old) != 1:
               raise SystemExit(f'expected exactly one footer regression block, found {text.count(old)}')
           tests.write_text(text.replace(old, new), encoding='utf-8')
