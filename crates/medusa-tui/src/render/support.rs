@@ -77,8 +77,8 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                     &draft.text
                 };
                 lines.extend(conversation_block_lines(
-                    "    You  ",
-                    Color::Cyan,
+                    "› ",
+                    Color::White,
                     text,
                     Color::White,
                     Some(Color::DarkGrey),
@@ -88,7 +88,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 ));
                 for attachment in &draft.attachments {
                     lines.extend(conversation_block_lines(
-                        "            ",
+                        "  ",
                         Color::DarkGrey,
                         &format!("[attachment] {}", attachment_label(attachment)),
                         Color::White,
@@ -102,8 +102,8 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
             TranscriptEntry::Assistant(text) => {
                 previous_activity_group = None;
                 lines.extend(super::markdown::markdown_block_lines(
-                    "Medusa  ",
-                    Color::Magenta,
+                    "",
+                    Color::White,
                     text,
                     width,
                 ));
@@ -125,11 +125,40 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
             }
             TranscriptEntry::System(message) => {
                 previous_activity_group = None;
-                lines.extend(system_lines(message, width));
+                if let Some(elapsed_seconds) = message
+                    .strip_prefix(app::TURN_FINISHED_MARKER_PREFIX)
+                    .and_then(|value| value.parse::<u64>().ok())
+                {
+                    lines.push(worked_for_line(elapsed_seconds, width));
+                } else {
+                    lines.extend(system_lines(message, width));
+                }
             }
         }
     }
     lines
+}
+
+fn format_worked_duration(seconds: u64) -> String {
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes:02}m {seconds:02}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds:02}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn worked_for_line(seconds: u64, width: u16) -> StyledLine {
+    let prefix = format!("─ Worked for {} ", format_worked_duration(seconds));
+    let width = usize::from(width);
+    let mut text = prefix.chars().take(width).collect::<String>();
+    let remaining = width.saturating_sub(text.chars().count());
+    text.push_str(&"─".repeat(remaining));
+    StyledLine::new(text, Color::DarkGrey)
 }
 
 fn conversation_block_lines(
