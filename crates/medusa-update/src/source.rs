@@ -50,7 +50,7 @@ pub struct MainBuildProgress {
     pub elapsed: Duration,
 }
 
-/// Phase reported while a revision-scoped prebuilt main artifact is being staged.
+/// Phase reported while a revision-scoped prebuilt main artifact update is staged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MainArtifactPhase {
     Waiting,
@@ -1369,9 +1369,10 @@ mod tests {
 
     #[test]
     fn source_build_target_directory_is_repo_scoped() {
+        let repo = Path::new("repo-root");
         assert_eq!(
-            cargo_target_directory(Path::new(r"C:\repo")),
-            Path::new(r"C:\repo\.medusa\update-cache\cargo-target")
+            cargo_target_directory(repo),
+            repo.join(".medusa").join("update-cache").join("cargo-target")
         );
     }
 
