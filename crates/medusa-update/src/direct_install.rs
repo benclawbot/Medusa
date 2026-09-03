@@ -42,8 +42,9 @@ impl AtomicInstaller {
         let _ = &self.target;
         #[cfg(windows)]
         {
+            retain_legacy_installer_api();
             let _ = (restart, parent_pid);
-            return schedule_windows_direct_replace(&self.target, candidate);
+            schedule_windows_direct_replace(&self.target, candidate)
         }
         #[cfg(not(windows))]
         {
@@ -62,6 +63,12 @@ impl AtomicInstaller {
             self.legacy.replace(candidate, restart)
         }
     }
+}
+
+#[cfg(windows)]
+fn retain_legacy_installer_api() {
+    let _ = LegacyAtomicInstaller::schedule_replace;
+    let _ = LegacyAtomicInstaller::replace;
 }
 
 #[cfg(windows)]
