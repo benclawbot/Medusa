@@ -251,9 +251,38 @@ fn is_execution_critical(item: &ContextItem) -> bool {
     )
 }
 
+/// Conservative tokenizer-independent estimate for prompt budgeting.
+///
+/// ASCII word-like runs are charged at roughly four characters per token. Punctuation and every
+/// non-ASCII scalar are charged individually so code, JSON, and multilingual text do not become
+/// artificially cheap. Provider-native tokenizers can replace this estimate at the call site when
+/// exact accounting is available.
 #[must_use]
 pub fn estimate_tokens(content: &str) -> usize {
-    content.len()
+    let mut tokens = 0usize;
+    let mut ascii_word_run = 0usize;
+
+    let flush_ascii_run = |tokens: &mut usize, run: &mut usize| {
+        if *run > 0 {
+            *tokens = tokens.saturating_add(run.div_ceil(4));
+            *run = 0;
+        }
+    };
+
+    for character in content.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            ascii_word_run = ascii_word_run.saturating_add(1);
+            continue;
+        }
+
+        flush_ascii_run(&mut tokens, &mut ascii_word_run);
+        if character.is_ascii_whitespace() {
+            continue;
+        }
+        tokens = tokens.saturating_add(1);
+    }
+    flush_ascii_run(&mut tokens, &mut ascii_word_run);
+    tokens
 }
 
 fn fingerprint(bytes: &[u8]) -> String {
@@ -351,5 +380,18 @@ mod tests {
             value.assemble(),
             Err("stable section and tool names must be unique")
         );
+    }
+
+    #[test]
+    fn token_estimate_is_not_raw_byte_length() {
+        let content = "This is a normal English sentence with repeated words.";
+        assert!(estimate_tokens(content) < content.len());
+        assert!(estimate_tokens(content) >= content.split_whitespace().count());
+    }
+
+    #[test]
+    fn token_estimate_charges_punctuation_and_non_ascii_conservatively() {
+        assert_eq!(estimate_tokens("{}[](),;"), 8);
+        assert_eq!(estimate_tokens("你好世界"), 4);
     }
 }
