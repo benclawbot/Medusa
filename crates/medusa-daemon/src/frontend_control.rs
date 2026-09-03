@@ -246,7 +246,8 @@ mod tests {
     #[test]
     fn cached_authority_transition_cannot_revoke_new_controller() {
         let repository = tempfile::tempdir().expect("repository");
-        let mut plane = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let mut plane =
+            FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
         plane
             .control_clients
             .insert("session-a".to_owned(), "owner-a".to_owned());
