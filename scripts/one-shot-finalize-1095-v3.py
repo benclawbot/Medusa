@@ -44,3 +44,15 @@ new = '''    engine = ENGINE.read_text(encoding="utf-8")
 if old not in text:
     raise SystemExit("certified tool engine split read site not found")
 certified.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+update = Path("crates/medusa-cli/src/update_command.rs")
+text = update.read_text(encoding="utf-8")
+old = '''        assert!(DEFAULT_PREBUILT_WAIT_SECS >= 60);
+        assert!(PREBUILT_POLL_INTERVAL_SECS >= 5);
+'''
+new = '''        assert!(std::hint::black_box(DEFAULT_PREBUILT_WAIT_SECS) >= 60);
+        assert!(std::hint::black_box(PREBUILT_POLL_INTERVAL_SECS) >= 5);
+'''
+if old not in text:
+    raise SystemExit("updater constant default assertions not found")
+update.write_text(text.replace(old, new, 1), encoding="utf-8")
