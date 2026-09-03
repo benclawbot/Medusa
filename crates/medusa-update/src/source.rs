@@ -1372,7 +1372,9 @@ mod tests {
         let repo = Path::new("repo-root");
         assert_eq!(
             cargo_target_directory(repo),
-            repo.join(".medusa").join("update-cache").join("cargo-target")
+            repo.join(".medusa")
+                .join("update-cache")
+                .join("cargo-target")
         );
     }
 
