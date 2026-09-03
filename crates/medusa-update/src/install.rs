@@ -115,9 +115,9 @@ impl AtomicInstaller {
         Ok(false)
     }
 
-    /// Stages the candidate beside the running executable and starts a detached helper.
-    /// The helper waits for this process to exit, swaps atomically, requires a startup
-    /// health marker, and restores the backup if the new process exits or times out.
+    /// Stages the candidate beside the running executable and starts a replacement helper.
+    /// On Windows the helper owns the final handoff: it stops processes using this exact
+    /// installation, replaces the executable, verifies the new binary, and reports success.
     pub fn schedule_replace(
         &self,
         candidate: &Path,
@@ -321,10 +321,6 @@ fn process_matches(pid: u32, expected_identity: Option<&str>) -> MedusaResult<bo
 fn helper_command(script: &Path) -> Command {
     if cfg!(windows) {
         #[cfg(windows)]
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        #[cfg(windows)]
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        #[cfg(windows)]
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         let mut command = Command::new("powershell");
         command
@@ -337,8 +333,11 @@ fn helper_command(script: &Path) -> Command {
                 "-File",
             ])
             .arg(script);
+        // Keep the helper in the caller's console so it can report 100% only after
+        // the executable has actually been replaced. It is still a separate process,
+        // which lets it terminate the running Medusa binary before moving the new one.
         #[cfg(windows)]
-        command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
         command
     } else {
         let mut command = Command::new("sh");
@@ -449,12 +448,6 @@ fn windows_replace_script(
     lock: &Path,
     restart: &Restart,
 ) -> String {
-    let arguments = restart
-        .arguments
-        .iter()
-        .map(|argument| powershell_quote(argument))
-        .collect::<Vec<_>>()
-        .join(", ");
     let sequence_file = restart
         .sequence_file
         .as_deref()
@@ -464,15 +457,6 @@ fn windows_replace_script(
         .rollout_sequence
         .map(|value| powershell_quote(&value.to_string()))
         .unwrap_or_else(|| powershell_quote(""));
-    let start_process = if restart.detached {
-        format!(
-            "return Start-Process -FilePath $target -ArgumentList @({arguments}) -WorkingDirectory $workingDirectory -PassThru"
-        )
-    } else {
-        format!(
-            "return Start-Process -FilePath $target -ArgumentList @({arguments}) -WorkingDirectory $workingDirectory -PassThru -NoNewWindow"
-        )
-    };
     format!(
         r##"$ErrorActionPreference = 'Stop'
 $parentPid = {parent_pid}
@@ -484,21 +468,64 @@ $health = {health}
 $lock = {lock}
 $sequenceFile = {sequence_file}
 $sequenceValue = {sequence_value}
-function Start-UpdatedProcess {{
-  $workingDirectory = Split-Path -Parent $target
-  {start_process}
-}}
-function Restore-Previous([object]$Child) {{
-  if ($null -ne $Child) {{ Stop-Process -Id $Child.Id -Force -ErrorAction SilentlyContinue }}
+
+function Restore-Previous([string]$Reason) {{
   Remove-Item $target -Force -ErrorAction SilentlyContinue
   if (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}
   Set-Content -LiteralPath $state -Value 'rolled-back' -Encoding ascii
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
-  Start-UpdatedProcess | Out-Null
+  Write-Error "Medusa update failed: $Reason"
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
   exit 1
 }}
-while (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}
+
+# schedule_replace writes helper_ready only after the helper process has started.
+# Waiting for that marker prevents us from killing the parent before staging is durable.
+$helperReady = $false
+for ($i = 0; $i -lt 200; $i++) {{
+  if (Test-Path -LiteralPath $lock) {{
+    $helperReady = Select-String -LiteralPath $lock -Pattern '^helper_ready=1$' -Quiet -ErrorAction SilentlyContinue
+    if ($helperReady) {{ break }}
+  }}
+  Start-Sleep -Milliseconds 10
+}}
+if (-not $helperReady) {{
+  Set-Content -LiteralPath $state -Value 'helper-not-ready' -Encoding ascii
+  Remove-Item $lock -Force -ErrorAction SilentlyContinue
+  exit 1
+}}
+Start-Sleep -Milliseconds 100
+
+$targetFull = [System.IO.Path]::GetFullPath($target)
+function Get-TargetMedusaProcesses {{
+  @(
+    Get-Process -Name 'medusa' -ErrorAction SilentlyContinue | Where-Object {{
+      try {{
+        [string]::Equals(
+          [System.IO.Path]::GetFullPath($_.Path),
+          $targetFull,
+          [System.StringComparison]::OrdinalIgnoreCase
+        )
+      }} catch {{
+        $_.Id -eq $parentPid
+      }}
+    }}
+  )
+}}
+
+# Stop every Medusa process using this exact installation, including the updater itself.
+Get-TargetMedusaProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+for ($i = 0; $i -lt 100; $i++) {{
+  if ((Get-TargetMedusaProcesses).Count -eq 0) {{ break }}
+  Start-Sleep -Milliseconds 100
+}}
+if ((Get-TargetMedusaProcesses).Count -ne 0) {{
+  Set-Content -LiteralPath $state -Value 'stop-failed' -Encoding ascii
+  Remove-Item $lock -Force -ErrorAction SilentlyContinue
+  Write-Error 'Medusa update failed: could not stop all processes using medusa.exe'
+  exit 1
+}}
+
 Remove-Item $health,$backup -Force -ErrorAction SilentlyContinue
 Set-Content -LiteralPath $state -Value 'swapping' -Encoding ascii
 try {{
@@ -508,33 +535,35 @@ try {{
   if (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}
   Set-Content -LiteralPath $state -Value 'swap-failed' -Encoding ascii
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
+  Write-Error "Medusa update failed while replacing medusa.exe: $($_.Exception.Message)"
   exit 1
 }}
-$child = $null
+
 try {{
-  $env:{health_env} = $health
-  $child = Start-UpdatedProcess
-  Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
-  for ($i = 0; $i -lt {health_check_attempts}; $i++) {{
-    if (Test-Path -LiteralPath $health) {{
-      if ($sequenceFile) {{
-        Set-Content -LiteralPath "$sequenceFile.tmp" -Value $sequenceValue -Encoding ascii
-        Move-Item -LiteralPath "$sequenceFile.tmp" -Destination $sequenceFile -Force
-      }}
-      Set-Content -LiteralPath $state -Value 'healthy' -Encoding ascii
-      Remove-Item $backup,$lock,$PSCommandPath -Force -ErrorAction SilentlyContinue
-      exit 0
-    }}
-    if ($child.HasExited) {{ break }}
-    Start-Sleep -Milliseconds 100
-    $child.Refresh()
+  $versionOutput = (& $target --version 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($versionOutput)) {{
+    throw 'replacement executable did not pass --version verification'
   }}
+  if ($sequenceFile) {{
+    Set-Content -LiteralPath "$sequenceFile.tmp" -Value $sequenceValue -Encoding ascii
+    Move-Item -LiteralPath "$sequenceFile.tmp" -Destination $sequenceFile -Force
+  }}
+  Set-Content -LiteralPath $state -Value 'updated' -Encoding ascii
+  Remove-Item $backup,$lock -Force -ErrorAction SilentlyContinue
+
+  Write-Host ''
+  Write-Host 'Updating Medusa [████████████████████████████████] 100% · Complete'
+  if ($versionOutput -match 'main\s+([0-9a-fA-F]{{12}})') {{
+    Write-Host ("Updated to: main (" + $Matches[1].ToLowerInvariant() + ")")
+  }} else {{
+    $displayVersion = $versionOutput -replace '^medusa\s+', ''
+    Write-Host ("Updated to: " + $displayVersion)
+  }}
+  Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
+  exit 0
 }} catch {{
-  Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
-  Restore-Previous $child
+  Restore-Previous $_.Exception.Message
 }}
-Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
-Restore-Previous $child
 "##,
         backup = powershell_quote_path(backup),
         target = powershell_quote_path(target),
@@ -542,9 +571,6 @@ Restore-Previous $child
         state = powershell_quote_path(state),
         health = powershell_quote_path(health),
         lock = powershell_quote_path(lock),
-        health_env = HEALTH_FILE_ENV,
-        start_process = start_process,
-        health_check_attempts = HEALTH_CHECK_ATTEMPTS,
     )
 }
 
@@ -806,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn scripts_require_health_and_contain_rollback() {
+    fn scripts_keep_unix_health_checks_and_windows_direct_replacement() {
         let restart = Restart {
             arguments: vec!["--repo".into(), "repository with spaces".into()],
             detached: false,
@@ -839,30 +865,16 @@ mod tests {
             Path::new(r"C:\bin\lock"),
             &restart,
         );
-        assert!(windows.contains(HEALTH_FILE_ENV));
-        assert!(windows.contains("rolled-back"));
-        assert!(windows.contains("Start-Process"));
-        assert!(windows.contains("-NoNewWindow"));
-        assert!(windows.matches("-NoNewWindow").count() >= 1);
-        assert!(windows.contains("-WorkingDirectory"));
-        assert!(windows.contains("Restore-Previous"));
+        assert!(windows.contains("Get-TargetMedusaProcesses"));
+        assert!(windows.contains("Stop-Process -Force"));
+        assert!(windows.contains("Move-Item -LiteralPath $candidate -Destination $target -Force"));
+        assert!(windows.contains("$target --version"));
+        assert!(windows.contains("100% · Complete"));
+        assert!(windows.contains("Updated to: main ("));
         assert!(windows.contains("sequence file"));
         assert!(windows.contains("42"));
-
-        let detached_windows = windows_replace_script(
-            42,
-            Path::new(r"C:\bin\previous.exe"),
-            Path::new(r"C:\bin\medusa.exe"),
-            Path::new(r"C:\bin\new.exe"),
-            Path::new(r"C:\bin\state"),
-            Path::new(r"C:\bin\health"),
-            Path::new(r"C:\bin\lock"),
-            &Restart {
-                detached: true,
-                ..restart
-            },
-        );
-        assert!(!detached_windows.contains("-NoNewWindow"));
+        assert!(!windows.contains("Start-UpdatedProcess"));
+        assert!(!windows.contains("-NoNewWindow"));
     }
 
     #[test]
