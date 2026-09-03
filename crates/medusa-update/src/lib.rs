@@ -5,6 +5,7 @@
 //! health-checked atomic installation with rollback.
 
 mod diagnostics;
+mod direct_install;
 mod github;
 mod install;
 pub mod manifest;
@@ -17,9 +18,10 @@ mod source;
 pub const CURRENT_RELEASE_ID: &str = "1.0.7.1";
 
 pub use diagnostics::{PhaseTimer, UpdateDiagnostics, UpdatePhase, UpdatePhaseRecord};
+pub use direct_install::AtomicInstaller;
 pub use github::{GithubReleaseClient, ReleaseClient};
 pub use install::{
-    AtomicInstaller, HEALTH_FILE_ENV, InstallKind, InstallLocation, Restart, ScheduledUpdate,
+    HEALTH_FILE_ENV, InstallKind, InstallLocation, Restart, ScheduledUpdate,
     acknowledge_update_health,
 };
 pub use manifest::{
