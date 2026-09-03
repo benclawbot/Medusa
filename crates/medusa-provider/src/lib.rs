@@ -13,6 +13,7 @@ mod model_discovery;
 mod openai;
 mod openai_streaming;
 mod openai_transport;
+mod plan_usage;
 mod reasoning_exchange;
 mod route_latency;
 mod route_metrics_store;
@@ -45,6 +46,7 @@ pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRe
 pub use model_discovery::{ModelDiscoveryError, discover_models};
 pub use openai::OpenAiProvider;
 pub use openai_streaming::OpenAiStreamAccumulator;
+pub use plan_usage::{ProviderPlanUsage, latest_provider_plan_usage};
 pub use reasoning_exchange::{
     Alternative, Assumption, AssumptionStatus, ContinuationDisposition, ContinuationModelBinding,
     Decision, EvidenceRef, HandoffPolicy, HandoffSource, HandoffTarget, HandoffTransfer,

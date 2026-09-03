@@ -172,12 +172,93 @@ pub(super) fn context_meter_line(app: &AppState) -> String {
         "█".repeat(usize::try_from(filled).unwrap_or(usize::MAX)),
         "░".repeat(usize::try_from(SEGMENTS.saturating_sub(filled)).unwrap_or_default())
     );
-    format!(
+    let context = format!(
         "context [{bar}] {}/{} ({percent}%) · auto-compact {}%",
         format_token_count(used),
         format_token_count(window),
         app.auto_compact_percent(),
-    )
+    );
+    provider_plan_meter().map_or(context.clone(), |plan| format!("{context} · {plan}"))
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct ProviderPlanUsageSnapshot {
+    provider: String,
+    window_seconds: u64,
+    used_basis_points: u16,
+    reset_at_unix: Option<i64>,
+    observed_at_unix: i64,
+}
+
+impl ProviderPlanUsageSnapshot {
+    fn reset_after_seconds(&self, now_unix: i64) -> Option<u64> {
+        self.reset_at_unix
+            .and_then(|reset| u64::try_from(reset.saturating_sub(now_unix)).ok())
+            .filter(|seconds| *seconds > 0)
+    }
+}
+
+fn read_provider_plan_usage() -> Option<ProviderPlanUsageSnapshot> {
+    let catalog = medusa_config::ProviderProfileCatalog::user().ok()?;
+    let path = catalog.root().join("provider-plan-usage.json");
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn provider_plan_meter() -> Option<String> {
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    static CACHE: OnceLock<Mutex<Option<(Instant, Option<ProviderPlanUsageSnapshot>)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = cache.lock().ok()?;
+    let refresh = cache
+        .as_ref()
+        .is_none_or(|(observed, _)| observed.elapsed() >= Duration::from_secs(1));
+    if refresh {
+        *cache = Some((Instant::now(), read_provider_plan_usage()));
+    }
+    let usage = cache.as_ref()?.1.as_ref()?;
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let window_seconds = i64::try_from(usage.window_seconds).unwrap_or(i64::MAX);
+    let fresh_until = usage
+        .reset_at_unix
+        .unwrap_or_else(|| usage.observed_at_unix.saturating_add(window_seconds));
+    if fresh_until <= now {
+        return None;
+    }
+    const SEGMENTS: u16 = 10;
+    let filled = usage.used_basis_points.saturating_mul(SEGMENTS) / 10_000;
+    let bar = format!(
+        "{}{}",
+        "█".repeat(usize::from(filled)),
+        "░".repeat(usize::from(SEGMENTS.saturating_sub(filled)))
+    );
+    let percent = u32::from(usage.used_basis_points) / 100;
+    let window = format_window(usage.window_seconds);
+    let reset = usage
+        .reset_after_seconds(now)
+        .map(|seconds| format!(" · resets {}", format_window(seconds)))
+        .unwrap_or_default();
+    Some(format!(
+        "plan {} {window} [{bar}] {percent}%{reset}",
+        usage.provider
+    ))
+}
+
+fn format_window(seconds: u64) -> String {
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if hours > 0 && minutes > 0 {
+        format!("{hours}h{minutes:02}m")
+    } else if hours > 0 {
+        format!("{hours}h")
+    } else if minutes > 0 {
+        format!("{minutes}m")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn format_cost(microusd: u64) -> String {
