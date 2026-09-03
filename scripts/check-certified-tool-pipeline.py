@@ -11,6 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 PIPELINE = ROOT / "crates/medusa-agent/src/tool_pipeline.rs"
 TOOLS = ROOT / "crates/medusa-agent/src/tools/mod.rs"
 ENGINE = ROOT / "crates/medusa-agent/src/engine.rs"
+ENGINE_INNER = ROOT / "crates/medusa-agent/src/engine_inner.rs"
 DOC = ROOT / "docs/TOOL-EXECUTION-PIPELINE.md"
 
 REQUIRED_STAGES = [
@@ -43,6 +44,8 @@ def main() -> int:
     pipeline = PIPELINE.read_text(encoding="utf-8")
     tools = TOOLS.read_text(encoding="utf-8")
     engine = ENGINE.read_text(encoding="utf-8")
+    if ENGINE_INNER.is_file():
+        engine += "\n" + ENGINE_INNER.read_text(encoding="utf-8")
 
     ordered(
         pipeline,

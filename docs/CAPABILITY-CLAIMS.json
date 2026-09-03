@@ -422,13 +422,13 @@
       "summary": "Coordinated prompts dispatch bounded read-only planner and risk-review teammates; safe Git mutation can dispatch up to three conflict-aware isolated implementers with deterministic aggregate staging, while ordinary directories use one isolated content-addressed snapshot implementer under the same review, verification, authorization, integration, rollback, and recovery authority.",
       "owner": "agent runtime maintainers",
       "production_paths": [
-        "crates/medusa-runtime/src/multi_agent_coordinator.rs",
-        "crates/medusa-runtime/src/mutating_worker_coordinator.rs",
+        "crates/medusa-runtime/src/coordination/multi_agent_coordinator.rs",
+        "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs",
         "crates/medusa-runtime/src/parallel_mutation.rs",
         "crates/medusa-runtime/src/parallel_mutation_batch.rs",
         "crates/medusa-runtime/src/workspace_worker_manager.rs",
         "crates/medusa-runtime/src/workspace.rs",
-        "crates/medusa-runtime/src/production_orchestrator.rs",
+        "crates/medusa-runtime/src/coordination/production_orchestrator.rs",
         "crates/medusa-runtime/src/lib.rs",
         "crates/medusa-agent/src/team.rs",
         "crates/medusa-agent/src/worker_execution.rs",
@@ -436,11 +436,11 @@
         "crates/medusa-multi-agent-scheduler"
       ],
       "test_paths": [
-        "crates/medusa-runtime/src/multi_agent_coordinator.rs",
-        "crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs",
+        "crates/medusa-runtime/src/coordination/multi_agent_coordinator.rs",
+        "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_tests.rs",
         "crates/medusa-runtime/src/workspace_worker_manager.rs",
         "crates/medusa-runtime/src/workspace.rs",
-        "crates/medusa-runtime/src/production_orchestrator.rs",
+        "crates/medusa-runtime/src/coordination/production_orchestrator.rs",
         "crates/medusa-agent/src/team.rs",
         "crates/medusa-workers",
         "scripts/performance/certify_parallel_mutation.py"
@@ -452,7 +452,7 @@
         "Refactor Guardrails"
       ],
       "entrypoints": [
-        "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation"
+        "medusa-runtime::RuntimeController -> run_prompt -> coordination::multi_agent_coordinator::run_preflight -> coordination::mutating_worker_coordinator::run_implementation"
       ],
       "supported_platforms": [
         "linux",

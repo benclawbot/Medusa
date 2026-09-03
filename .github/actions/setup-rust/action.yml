@@ -1,20 +1,9 @@
 name: "Setup Rust"
-description: "Checkout the repo and install the pinned Rust 1.88.0 toolchain with clippy + rustfmt components."
-
-inputs:
-  ref:
-    description: "Git ref to checkout (defaults to the workflow's trigger ref)."
-    required: false
-    default: ""
+description: "Install the pinned Rust 1.88.0 toolchain with clippy + rustfmt components. The calling workflow must checkout the repository first."
 
 runs:
   using: composite
   steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ inputs.ref }}
-
     - name: Install pinned Rust toolchain
       uses: dtolnay/rust-toolchain@1.88.0
       with:
