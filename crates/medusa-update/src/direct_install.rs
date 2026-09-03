@@ -67,8 +67,10 @@ impl AtomicInstaller {
 
 #[cfg(windows)]
 fn retain_legacy_installer_api() {
-    let _ = LegacyAtomicInstaller::schedule_replace;
-    let _ = LegacyAtomicInstaller::replace;
+    let _ = (
+        LegacyAtomicInstaller::schedule_replace,
+        LegacyAtomicInstaller::replace,
+    );
 }
 
 #[cfg(windows)]
