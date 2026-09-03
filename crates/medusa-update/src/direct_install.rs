@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::MedusaResult;
+#[cfg(windows)]
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
 
 use crate::install::{AtomicInstaller as LegacyAtomicInstaller, Restart, ScheduledUpdate};
 
@@ -50,8 +52,15 @@ impl AtomicInstaller {
     }
 
     pub fn replace(&self, candidate: &Path, restart: &Restart) -> MedusaResult<Option<PathBuf>> {
-        let update = self.schedule_replace(candidate, restart, std::process::id())?;
-        Ok(Some(update.backup))
+        #[cfg(windows)]
+        {
+            let update = self.schedule_replace(candidate, restart, std::process::id())?;
+            Ok(Some(update.backup))
+        }
+        #[cfg(not(windows))]
+        {
+            self.legacy.replace(candidate, restart)
+        }
     }
 }
 
@@ -282,6 +291,7 @@ fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+#[cfg(windows)]
 fn invalid(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
@@ -290,6 +300,7 @@ fn invalid(message: impl Into<String>) -> MedusaError {
     )
 }
 
+#[cfg(windows)]
 fn io_error(error: impl std::fmt::Display) -> MedusaError {
     MedusaError::new(
         ErrorCode::ToolExecutionFailed,
