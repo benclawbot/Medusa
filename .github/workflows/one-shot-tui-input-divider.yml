@@ -25,13 +25,22 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          path = Path('crates/medusa-tui/src/render.rs')
-          text = path.read_text(encoding='utf-8')
+
+          render = Path('crates/medusa-tui/src/render.rs')
+          text = render.read_text(encoding='utf-8')
           old = '''    bottom_row = bottom_row.saturating_add(1);\n    set_frame_line(\n        &mut frame,\n        bottom_row,\n        StyledLine::new(context_meter_line(app), Color::Grey),\n    );\n    bottom_row = bottom_row.saturating_add(1);\n    set_frame_line(\n        &mut frame,\n        bottom_row,\n        StyledLine::new("─".repeat(usize::from(width)), Color::White),\n    );\n'''
           new = '''    bottom_row = bottom_row.saturating_add(1);\n    set_frame_line(\n        &mut frame,\n        bottom_row,\n        StyledLine::new("─".repeat(usize::from(width)), Color::White),\n    );\n    bottom_row = bottom_row.saturating_add(1);\n    set_frame_line(\n        &mut frame,\n        bottom_row,\n        StyledLine::new(context_meter_line(app), Color::Grey),\n    );\n'''
           if text.count(old) != 1:
               raise SystemExit(f'expected exactly one composer context/divider block, found {text.count(old)}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          render.write_text(text.replace(old, new), encoding='utf-8')
+
+          tests = Path('crates/medusa-tui/src/lib.rs')
+          text = tests.read_text(encoding='utf-8')
+          old = '''        assert!(!frame[20].text.contains("Read Only"));\n        assert_eq!(frame[18].text, "─".repeat(120));\n        assert_eq!(frame[21].text, "─".repeat(120));\n'''
+          new = '''        assert_eq!(frame[18].text, "─".repeat(120));\n        assert!(frame[19].text.starts_with("> "));\n        assert_eq!(frame[20].text, "─".repeat(120));\n        assert!(frame[21].text.starts_with("context ["));\n        assert!(!frame[21].text.contains("Read Only"));\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one footer regression block, found {text.count(old)}')
+          tests.write_text(text.replace(old, new), encoding='utf-8')
       - name: Format check
         run: cargo fmt --all -- --check
       - name: TUI tests
@@ -41,6 +50,6 @@ jobs:
           rm .github/workflows/one-shot-tui-input-divider.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-tui/src/render.rs .github/workflows/one-shot-tui-input-divider.yml
+          git add crates/medusa-tui/src/render.rs crates/medusa-tui/src/lib.rs .github/workflows/one-shot-tui-input-divider.yml
           git commit -m "fix(tui): keep context meter below input divider"
           git push origin HEAD:fix/tui-input-divider-layout
