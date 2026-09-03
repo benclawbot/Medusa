@@ -259,9 +259,32 @@ pub(super) fn now_ms() -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::coordination::production_orchestrator::{
+        AgentContract, AgentRole, DelegationPolicy,
+    };
+
     use super::{
         IMPLEMENTER_AUTHORITY_BOUNDARY, is_protected_control_path, role_bounded_dependency_output,
+        validate_changed_paths,
     };
+
+    fn repository_wide_contract() -> AgentContract {
+        AgentContract {
+            task_id: "implement".to_owned(),
+            role: AgentRole::Implementer,
+            objective: "implement safely".to_owned(),
+            dependencies: Vec::new(),
+            allowed_write_paths: vec!["repository".to_owned()],
+            required_evidence: Vec::new(),
+            delegation: DelegationPolicy {
+                allowed: false,
+                max_depth: 0,
+                max_parallel_subagents: 0,
+                parent_must_review: true,
+                parent_must_integrate: true,
+            },
+        }
+    }
 
     #[test]
     fn readonly_dependency_claims_cannot_redefine_implementer_authority() {
@@ -283,6 +306,7 @@ mod tests {
 
     #[test]
     fn repository_wide_scope_never_grants_control_plane_paths() {
+        let contract = repository_wide_contract();
         for protected in [
             ".git",
             ".git/config",
@@ -290,9 +314,14 @@ mod tests {
             ".medusa/continuity/a.json",
         ] {
             assert!(is_protected_control_path(protected), "{protected}");
+            let error = validate_changed_paths(&contract, &[protected.to_owned()])
+                .expect_err("protected path must be denied");
+            assert!(error.contains("protected Medusa control-plane path"), "{error}");
         }
         for normal in ["src/lib.rs", "Cargo.toml", "docs/design.md"] {
             assert!(!is_protected_control_path(normal), "{normal}");
+            validate_changed_paths(&contract, &[normal.to_owned()])
+                .expect("repository scope should permit normal path");
         }
     }
 }
