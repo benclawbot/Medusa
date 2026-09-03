@@ -253,36 +253,17 @@ fn is_execution_critical(item: &ContextItem) -> bool {
 
 /// Conservative tokenizer-independent estimate for prompt budgeting.
 ///
-/// ASCII word-like runs are charged at roughly four characters per token. Punctuation and every
-/// non-ASCII scalar are charged individually so code, JSON, and multilingual text do not become
-/// artificially cheap. Provider-native tokenizers can replace this estimate at the call site when
-/// exact accounting is available.
+/// Every non-whitespace UTF-8 byte is charged as one token. This intentionally overcharges normal
+/// words and, unlike a four-characters-per-token rule, cannot make hashes, base64, minified code,
+/// random identifiers, punctuation, or multibyte text artificially cheap. Provider-native
+/// tokenizers can replace this estimate at the call site when exact accounting is available.
 #[must_use]
 pub fn estimate_tokens(content: &str) -> usize {
-    let mut tokens = 0usize;
-    let mut ascii_word_run = 0usize;
-
-    let flush_ascii_run = |tokens: &mut usize, run: &mut usize| {
-        if *run > 0 {
-            *tokens = tokens.saturating_add(run.div_ceil(4));
-            *run = 0;
-        }
-    };
-
-    for character in content.chars() {
-        if character.is_ascii_alphanumeric() || character == '_' {
-            ascii_word_run = ascii_word_run.saturating_add(1);
-            continue;
-        }
-
-        flush_ascii_run(&mut tokens, &mut ascii_word_run);
-        if character.is_ascii_whitespace() {
-            continue;
-        }
-        tokens = tokens.saturating_add(1);
-    }
-    flush_ascii_run(&mut tokens, &mut ascii_word_run);
-    tokens
+    content
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .map(char::len_utf8)
+        .fold(0usize, usize::saturating_add)
 }
 
 fn fingerprint(bytes: &[u8]) -> String {
@@ -392,6 +373,14 @@ mod tests {
     #[test]
     fn token_estimate_charges_punctuation_and_non_ascii_conservatively() {
         assert_eq!(estimate_tokens("{}[](),;"), 8);
-        assert_eq!(estimate_tokens("你好世界"), 4);
+        assert_eq!(estimate_tokens("你好世界"), 12);
+    }
+
+    #[test]
+    fn token_estimate_does_not_discount_high_entropy_ascii() {
+        let hash = "a3f19b807e2d44c19f0a6d7b8c9e102f";
+        let base64 = "QWxhZGRpbjpvcGVuIHNlc2FtZQ==";
+        assert_eq!(estimate_tokens(hash), hash.len());
+        assert_eq!(estimate_tokens(base64), base64.len());
     }
 }
