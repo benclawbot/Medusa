@@ -175,31 +175,45 @@ jobs:
           $executable = (Resolve-Path 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe').Path
           $process = Start-Process -FilePath $executable -PassThru
           try {
-            $page = $null
+            $packagedUrl = $null
+            $observedUrls = @()
             for ($attempt = 0; $attempt -lt 120; $attempt++) {
               if ($process.HasExited) {
                 throw "packaged desktop exited before WebView2 became ready (exit $($process.ExitCode))"
               }
               try {
                 $targets = @(Invoke-RestMethod -Uri 'http://127.0.0.1:9222/json/list' -TimeoutSec 1)
-                $page = $targets | Where-Object { $_.type -eq 'page' } | Select-Object -First 1
+                $pageUrls = @(
+                  $targets |
+                    Where-Object { $_.type -eq 'page' } |
+                    ForEach-Object { [string]$_.url }
+                )
+                if ($pageUrls.Count -gt 0) {
+                  $observedUrls = @($observedUrls + $pageUrls | Select-Object -Unique)
+                }
+                $developmentUrl = $pageUrls |
+                  Where-Object { $_ -match 'localhost:5173' } |
+                  Select-Object -First 1
+                if ($null -ne $developmentUrl) {
+                  throw "development Vite origin leaked into rolling desktop: $developmentUrl"
+                }
+                $packagedUrl = $pageUrls |
+                  Where-Object { $_ -match '^https?://tauri\.localhost(?:/|$)' } |
+                  Select-Object -First 1
               } catch {
-                $page = $null
+                if ($_.Exception.Message -like 'development Vite origin leaked*') {
+                  throw
+                }
+                $packagedUrl = $null
               }
-              if ($null -ne $page) { break }
+              if ($null -ne $packagedUrl) { break }
               Start-Sleep -Milliseconds 250
             }
-            if ($null -eq $page) {
-              throw 'packaged desktop never exposed a WebView2 page'
+            if ($null -eq $packagedUrl) {
+              $observed = if ($observedUrls.Count -gt 0) { $observedUrls -join ', ' } else { '<none>' }
+              throw "packaged desktop never navigated to the Tauri production origin; observed: $observed"
             }
-            $url = [string]$page.url
-            Write-Host "Packaged desktop WebView URL: $url"
-            if ($url -match 'localhost:5173') {
-              throw "development Vite origin leaked into rolling desktop: $url"
-            }
-            if ($url -notmatch '^https?://tauri\.localhost(?:/|$)') {
-              throw "unexpected packaged Tauri origin: $url"
-            }
+            Write-Host "Packaged desktop WebView URL: $packagedUrl"
           } finally {
             if (-not $process.HasExited) {
               Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
