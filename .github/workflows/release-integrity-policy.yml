@@ -34,6 +34,7 @@ jobs:
         run: |
           python3 scripts/release-workflow-policy.py self-test
           python3 scripts/stable-release-publication-policy.py self-test
+          python3 -m py_compile scripts/verify-stable-release-authority.py
       - name: Enforce immutable release workflow policy
         run: |
           python3 scripts/release-workflow-policy.py check --root .
