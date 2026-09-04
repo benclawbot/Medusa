@@ -88,7 +88,7 @@ $targetFull = [System.IO.Path]::GetFullPath($target)
 function Get-TargetProcesses {{
   @(
     Get-Process -ErrorAction SilentlyContinue | Where-Object {{
-      if ($_.Id -eq $parentPid) {{
+      if ($parentPid -ne 0 -and $_.Id -eq $parentPid) {{
         $true
       }} else {{
         try {{
