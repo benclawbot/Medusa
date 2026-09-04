@@ -13,12 +13,24 @@ def read_workflow(name: str) -> str:
     return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 
 
-def test_refresh_release_trigger_is_live_and_same_repo() -> None:
-    workflow = read_workflow("refresh-cli-release-assets.yml")
-    assert 'workflows: ["Publish Release"]' in workflow
-    assert 'workflows: ["Publish Draft Release"]' not in workflow
-    gate = "github.event.workflow_run.head_repository.full_name == github.repository"
-    assert workflow.count(gate) >= 2
+def test_stable_release_is_complete_before_publication() -> None:
+    refresh = ROOT / ".github" / "workflows" / "refresh-cli-release-assets.yml"
+    assert not refresh.exists(), "stable release assets must never be refreshed after publication"
+
+    publisher = read_workflow("publish-release.yml")
+    assert publisher.count("--bin medusa-recall") == 3
+    assert publisher.count("medusa-recall") >= 9
+    assert 'gh release create "$RELEASE_TAG" release-assets/*' in publisher
+    assert "--draft" in publisher
+
+    for name in ("sign-release-manifest.yml", "sign-release-manifest-recovery.yml"):
+        signer = read_workflow(name)
+        assert "--json isDraft --jq '.isDraft'" in signer
+        assert "refusing to mutate published stable assets" in signer
+        assert 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false' in signer
+        assert signer.index("gh release upload") < signer.index(
+            'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false'
+        )
 
 
 def test_rolling_desktop_uses_tauri_production_build() -> None:
@@ -76,7 +88,7 @@ def test_openai_oauth_never_uses_latest() -> None:
 
 def main() -> int:
     tests = [
-        test_refresh_release_trigger_is_live_and_same_repo,
+        test_stable_release_is_complete_before_publication,
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,
         test_secret_live_provider_pr_gate_is_same_repo,
