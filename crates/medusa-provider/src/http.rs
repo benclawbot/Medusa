@@ -233,32 +233,82 @@ pub(crate) fn classify_status(
     )
 }
 
+/// Body fragments showing the provider refused on billing, quota, or plan
+/// grounds rather than a transient throttle. Retrying a spent quota only
+/// burns time before the same refusal, so these fail fast with an
+/// actionable message instead of the raw provider blob.
+const QUOTA_BODY_SIGNALS: &[&str] = &[
+    "usage limit",
+    "usage_limit",
+    "quota",
+    "billing",
+    "insufficient",
+    "out of credit",
+    "upgrade to",
+    "plan limit",
+    "payment required",
+];
+
+fn body_signals_quota_limit(excerpt: &str) -> bool {
+    let lowered = excerpt.to_lowercase();
+    QUOTA_BODY_SIGNALS
+        .iter()
+        .any(|signal| lowered.contains(signal))
+}
+
+/// First line of a provider error body, capped so the surfaced message stays
+/// scannable. The full body is preserved in error context.
+fn headline_of(excerpt: &str) -> String {
+    const LIMIT: usize = 200;
+    let first = excerpt.lines().next().unwrap_or("").trim();
+    if first.len() <= LIMIT {
+        first.to_owned()
+    } else {
+        format!("{}...", first[..LIMIT].trim_end())
+    }
+}
+
 fn classify_status_with_body(
     status: StatusCode,
     body: BoundedBody,
     retry_after_seconds: Option<u64>,
     plan_usage: Option<ProviderPlanUsage>,
 ) -> MedusaError {
-    let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
-    let category = if retryable {
+    let excerpt = String::from_utf8_lossy(&body.bytes);
+    let quota = status.is_client_error() && body_signals_quota_limit(&excerpt);
+    let retryable =
+        !quota && (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error());
+    let category = if quota {
+        ErrorCategory::Policy
+    } else if retryable {
         ErrorCategory::Transient
     } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
         ErrorCategory::Policy
     } else {
         ErrorCategory::Validation
     };
-    let excerpt = String::from_utf8_lossy(&body.bytes);
     let truncation = if body.truncated {
         format!(" [provider error body truncated at {PROVIDER_ERROR_BODY_LIMIT_BYTES} bytes]")
     } else {
         String::new()
     };
-    let mut error = MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        category,
-        format!("provider returned HTTP {status}: {excerpt}{truncation}"),
-    )
-    .with_retryable(retryable);
+    let message = if quota {
+        format!(
+            "provider plan/quota limit (HTTP {status}): {}. Check billing or plan usage, wait for reset, or switch provider with `medusa config`{truncation}",
+            headline_of(&excerpt),
+        )
+    } else {
+        format!("provider returned HTTP {status}: {excerpt}{truncation}")
+    };
+    let mut error =
+        MedusaError::new(ErrorCode::DependencyUnavailable, category, message)
+            .with_retryable(retryable);
+    if quota {
+        error.context.insert(
+            "provider_error_body".to_owned(),
+            serde_json::Value::from(excerpt.into_owned()),
+        );
+    }
     error.context.insert(
         "provider_error_body_limit_bytes".to_owned(),
         serde_json::Value::from(PROVIDER_ERROR_BODY_LIMIT_BYTES as u64),
@@ -271,6 +321,12 @@ fn classify_status_with_body(
         error.context.insert(
             "retry_after_seconds".to_owned(),
             serde_json::Value::from(seconds),
+        );
+    }
+    if quota {
+        error.context.insert(
+            "provider_plan_limit".to_owned(),
+            serde_json::Value::Bool(true),
         );
     }
     if status == StatusCode::TOO_MANY_REQUESTS
@@ -352,6 +408,48 @@ mod tests {
             assert!(error.to_string().contains("cancelled"));
             assert!(started.elapsed() < Duration::from_secs(2));
         });
+    }
+
+    #[test]
+    fn quota_403_fails_fast_with_actionable_message() {
+        let body = "You've hit your usage limit. Upgrade to Pro for more credits.
+Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at midnight UTC.";
+        let error = classify_status(StatusCode::FORBIDDEN, body.into(), None);
+        assert!(!error.retryable);
+        assert_eq!(
+            error.context.get("provider_plan_limit"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        let message = error.to_string();
+        assert!(message.contains("plan/quota limit"));
+        assert!(message.contains("medusa config"));
+        assert!(!message.contains("midnight UTC"));
+        assert_eq!(
+            error.context.get("provider_error_body"),
+            Some(&serde_json::Value::from(body))
+        );
+    }
+
+    #[test]
+    fn quota_429_skips_retry_backoff() {
+        let error = classify_status(
+            StatusCode::TOO_MANY_REQUESTS,
+            "quota exceeded for this billing account".into(),
+            None,
+        );
+        assert!(!error.retryable);
+        assert_eq!(
+            error.context.get("provider_plan_limit"),
+            Some(&serde_json::Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn neutral_403_stays_untagged() {
+        let error = classify_status(StatusCode::FORBIDDEN, "access denied".into(), None);
+        assert!(!error.retryable);
+        assert_eq!(error.context.get("provider_plan_limit"), None);
+        assert!(error.to_string().contains("access denied"));
     }
 
     #[test]
