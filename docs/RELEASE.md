@@ -25,15 +25,15 @@ Medusa 1.0 source builds require Rust 1.88 or newer. Desktop and browser develop
 - Windows CLI archive and NSIS installer;
 - deterministic CycloneDX SBOM, checksums, compatibility notes, license, and release guide.
 
-The build workflow rejects missing, duplicate, symlinked, or path-escaping assets and attests the CI-produced bytes with GitHub/Sigstore provenance.
+The build workflow rejects missing, duplicate, symlinked, or path-escaping assets, attests the CI-produced bytes with GitHub/Sigstore provenance, and creates the GitHub release as a draft. Stable release assets are not rewritten after publication.
 
-A published release is not update-eligible until `Sign Release Manifest` completes. That protected workflow downloads the existing CI-produced release assets, regenerates a canonical `medusa-release-manifest-v2`, signs the exact manifest bytes with Ed25519, verifies the signature against the repository public key, attests the manifest authority, and uploads:
+`Sign Release Manifest` is the publication boundary. The protected workflow operates only on the still-draft release, downloads the complete CI-produced assets, regenerates a canonical `medusa-release-manifest-v2`, signs the exact manifest bytes with Ed25519, verifies the signature against the repository public key, attests the manifest authority, and uploads:
 
 - `medusa-release-manifest.json`;
 - `medusa-release-manifest.sig.json`;
 - `SHA256SUMS`.
 
-The release updater fails closed while those assets are absent or invalid.
+Only after those authority files are attached and verified does the workflow publish the draft. A post-publish matrix then downloads the public Linux, macOS, and Windows CLI archives and runs the released `medusa update --check --release` against the public GitHub API. A failed public verification is a failed release workflow, not an invitation to mutate the published assets.
 
 ## Manifest trust
 
@@ -115,13 +115,13 @@ Path-free release phase diagnostics are appended to `.medusa/update-diagnostics.
 
 ## Platform signatures
 
-`Sign Draft Release` provides platform publisher signatures independently of the updater manifest:
+`Sign Draft Release` provides platform publisher signatures independently of the updater manifest and only while a release remains a draft:
 
 - Windows Authenticode signing and timestamp verification;
 - macOS Developer ID signing, notarization, stapling, and Gatekeeper assessment;
 - Linux keyless Sigstore signatures for distributed package blobs.
 
-The Ed25519 manifest proves the updater's release authority and exact artifact metadata. Platform signatures prove publisher/platform identity. GitHub attestations prove workflow provenance. SHA-256 proves byte identity. These controls are complementary.
+When platform-native signing is required, complete it before approving or rerunning the manifest-authority signer so the Ed25519 manifest binds the final signed bytes. The Ed25519 manifest proves the updater's release authority and exact artifact metadata. Platform signatures prove publisher/platform identity. GitHub attestations prove workflow provenance. SHA-256 proves byte identity. These controls are complementary.
 
 See [Release signing](RELEASE-SIGNING.md), [Desktop distribution](DESKTOP-DISTRIBUTION.md), [Release compatibility](COMPATIBILITY.md), and [Verified prebuilt update architecture](architecture/PREBUILT-UPDATES.md).
 
