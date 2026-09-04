@@ -1,0 +1,58 @@
+name: Temporary wire rolling signature verification
+
+on:
+  push:
+    branches:
+      - fix/signed-rolling-main-artifacts
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/signed-rolling-main-artifacts
+      - name: Patch rolling updater manifest reads
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-update/src/source.rs')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '    copy_with_progress, verify_artifact,\n};',
+              '    copy_with_progress, rolling_signature, verify_artifact,\n};',
+              1,
+          )
+          old = '''            let manifest: RollingMainArtifact = self\n                .asset_response_until_with_progress(\n                    &manifest_name,\n                    revision,\n                    deadline,\n                    &mut waiting,\n                )?\n                .json()\n                .map_err(asset_error)?;\n'''
+          new = '''            let manifest_bytes = self\n                .asset_response_until_with_progress(\n                    &manifest_name,\n                    revision,\n                    deadline,\n                    &mut waiting,\n                )?\n                .bytes()\n                .map_err(asset_error)?;\n            let signature_name = format!("{manifest_name}.sig.json");\n            let signature_bytes = self\n                .asset_response_until_with_progress(\n                    &signature_name,\n                    revision,\n                    deadline,\n                    &mut waiting,\n                )?\n                .bytes()\n                .map_err(asset_error)?;\n            rolling_signature::verify(&manifest_bytes, &signature_bytes)?;\n            let manifest: RollingMainArtifact =\n                serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;\n'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected waiting manifest shape')
+          text = text.replace(old, new, 1)
+
+          old = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Ok(false);\n        };\n        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;\n'''
+          new = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Ok(false);\n        };\n        let manifest_bytes = response.bytes().map_err(asset_error)?;\n        let signature_name = format!("{manifest_name}.sig.json");\n        let Some(signature) = self.asset_response_once(&signature_name, revision)? else {\n            return Ok(false);\n        };\n        let signature_bytes = signature.bytes().map_err(asset_error)?;\n        rolling_signature::verify(&manifest_bytes, &signature_bytes)?;\n        let manifest: RollingMainArtifact =\n            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;\n'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected availability manifest shape')
+          text = text.replace(old, new, 1)
+
+          old = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Err(not_published(revision));\n        };\n        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;\n        manifest.validate(revision, asset_name)?;\n        Ok(manifest)\n'''
+          new = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Err(not_published(revision));\n        };\n        let manifest_bytes = response.bytes().map_err(asset_error)?;\n        let signature_name = format!("{manifest_name}.sig.json");\n        let Some(signature) = self.asset_response_once(&signature_name, revision)? else {\n            return Err(not_published(revision));\n        };\n        let signature_bytes = signature.bytes().map_err(asset_error)?;\n        rolling_signature::verify(&manifest_bytes, &signature_bytes)?;\n        let manifest: RollingMainArtifact =\n            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;\n        manifest.validate(revision, asset_name)?;\n        Ok(manifest)\n'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected one-shot manifest shape')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8', newline='\n')
+          PY
+          cargo fmt --all
+          git add crates/medusa-update/src/source.rs crates/medusa-update/src/rolling_signature.rs crates/medusa-update/src/lib.rs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Require signed rolling main manifests"
+          git push origin HEAD:fix/signed-rolling-main-artifacts
