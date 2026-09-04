@@ -55,10 +55,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  sign-cli:
+    name: Sign rolling CLI authority
+    if: github.ref == 'refs/heads/main'
+    needs: build-cli
+    uses: ./.github/workflows/sign-rolling-artifacts.yml
+    with:
+      artifact-pattern: rolling-main-cli-*
+      output-artifact: rolling-main-cli-signed
+
   publish-cli:
     name: Publish rolling CLI early
     if: github.ref == 'refs/heads/main'
-    needs: build-cli
+    needs: sign-cli
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -72,10 +81,9 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: rolling-main-cli-*
+          name: rolling-main-cli-signed
           path: release-assets
-          merge-multiple: true
-      - name: Verify complete exact-revision CLI bundle
+      - name: Verify complete exact-revision signed CLI bundle
         shell: bash
         env:
           EXPECTED_REVISION: ${{ github.sha }}
@@ -104,7 +112,7 @@ jobs:
               --draft \
               --prerelease \
               --title "Medusa rolling main $GITHUB_SHA" \
-              --notes "Immutable prebuilt CLI transport for main commit $GITHUB_SHA. Desktop assets are appended after their slower builds complete; stable releases remain separately signed."
+              --notes "Immutable prebuilt CLI transport for main commit $GITHUB_SHA. Every manifest is independently signed by the protected release authority. Desktop assets are appended after their slower builds complete."
           fi
 
           gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
@@ -131,8 +139,8 @@ jobs:
           for archive in release-assets/*.tar.gz release-assets/*.zip; do
             gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY" --clobber
           done
-          for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do
-            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+          for authority in release-assets/*.json; do
+            gh release upload main-latest "$authority" --repo "$GITHUB_REPOSITORY" --clobber
           done
           if [[ "$(gh release view main-latest --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
             gh release edit main-latest --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
@@ -240,10 +248,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  sign-desktop:
+    name: Sign rolling desktop authority
+    if: github.ref == 'refs/heads/main'
+    needs: build-desktop
+    uses: ./.github/workflows/sign-rolling-artifacts.yml
+    with:
+      artifact-pattern: rolling-main-desktop-*
+      output-artifact: rolling-main-desktop-signed
+
   publish-desktop:
     name: Append rolling desktop assets
     if: github.ref == 'refs/heads/main'
-    needs: [build-desktop, publish-cli]
+    needs: [sign-desktop, publish-cli]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -257,10 +274,9 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: rolling-main-desktop-*
+          name: rolling-main-desktop-signed
           path: release-assets
-          merge-multiple: true
-      - name: Verify complete exact-revision desktop bundle
+      - name: Verify complete exact-revision signed desktop bundle
         shell: bash
         env:
           EXPECTED_REVISION: ${{ github.sha }}
@@ -286,8 +302,8 @@ jobs:
           fi
 
           # The CLI release is already visible. Desktop assets are appended
-          # under distinct names, so a client can only observe a complete
-          # desktop manifest after its matching bytes have been uploaded.
+          # under distinct names; the updater refuses them until the matching
+          # protected-authority signature is present and valid.
           gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
 
       - name: Refresh the legacy rolling desktop alias
@@ -305,6 +321,6 @@ jobs:
               gh release upload main-latest "$artifact" --repo "$GITHUB_REPOSITORY" --clobber
             fi
           done
-          for manifest in release-assets/medusa-desktop-main-*.json; do
-            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+          for authority in release-assets/medusa-desktop-main-*.json; do
+            gh release upload main-latest "$authority" --repo "$GITHUB_REPOSITORY" --clobber
           done
