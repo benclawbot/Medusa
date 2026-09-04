@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-# Workspace members must remain reachable from shipped roots; architecture policy enforces this invariant.
+# Every workspace member must remain reachable from a shipped root; architecture policy enforces this invariant.
 members = [
   "crates/medusa-core",
   "crates/medusa-evidence",
