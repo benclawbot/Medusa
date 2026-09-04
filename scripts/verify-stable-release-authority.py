@@ -81,6 +81,29 @@ def verify(tag: str, repo: str, root: Path, require_draft: bool) -> None:
         manifest_bytes = manifest_path.read_bytes()
         manifest = load_json(manifest_path)
         signature = load_json(signature_path)
+
+        release_id = manifest.get("release_id")
+        if release_id != tag.removeprefix("v"):
+            raise VerificationError("downloaded manifest release_id does not match release tag")
+        source = manifest.get("source")
+        if not isinstance(source, dict):
+            raise VerificationError("manifest source must be an object")
+        if source.get("repository") != repo:
+            raise VerificationError("manifest source repository does not match release repository")
+        revision = source.get("revision")
+        if not isinstance(revision, str) or len(revision) != 40:
+            raise VerificationError("manifest source revision is not a full commit SHA")
+        tag_revision = run(
+            "gh",
+            "api",
+            f"repos/{repo}/commits/{tag}",
+            "--jq",
+            ".sha",
+            capture=True,
+        )
+        if tag_revision != revision:
+            raise VerificationError("release tag moved away from the manifest source revision")
+
         if signature.get("schema") != "medusa-release-signature-v1":
             raise VerificationError("unexpected release signature schema")
         if signature.get("algorithm") != "Ed25519":
@@ -135,7 +158,7 @@ def verify(tag: str, repo: str, root: Path, require_draft: bool) -> None:
             for line in checksums_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         )
-        if provided_checksums != checksum_lines:
+        if provided_checksums != sorted(checksum_lines):
             raise VerificationError("SHA256SUMS does not match final manifest evidence")
 
         key_id = signature.get("key_id")
