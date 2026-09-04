@@ -4,7 +4,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
-pub(crate) fn source_files(repo: &Path) -> Vec<PathBuf> {
+pub fn source_files(repo: &Path) -> Vec<PathBuf> {
     let mut paths = WalkDir::new(repo)
         .into_iter()
         .filter_map(Result::ok)

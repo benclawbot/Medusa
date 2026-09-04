@@ -79,6 +79,7 @@ pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, Retrie
 pub use review::ReviewImpact;
 pub use rust_structured_edit::{RustStructuredEditPlanner, rust_snapshot_ast_nodes};
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
+pub use support::source_files;
 pub use structured_edit::{
     EditMetadata, EditPreconditions, EditPreview, EditRange, FileSnapshot, StructuredEditAudit,
     StructuredEditError, StructuredEditPlan, StructuredFileOperation, StructuredTextEdit,

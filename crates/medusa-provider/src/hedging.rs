@@ -39,7 +39,7 @@ impl HedgePolicy {
     #[must_use]
     pub const fn production_default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             min_primary_samples: 8,
             delay_multiplier_milli: 1_500,
             max_delay_ms: 8_000,
@@ -218,7 +218,10 @@ mod tests {
             &profiles,
             &telemetry,
             1_024,
-            HedgePolicy::production_default(),
+            HedgePolicy {
+                enabled: true,
+                ..HedgePolicy::production_default()
+            },
             RouteLatencyPolicy::default(),
         )
         .expect("hedge decision");
@@ -287,6 +290,7 @@ mod tests {
         let profiles = vec![profile("primary"), profile("secondary")];
         let telemetry = vec![stats(4_000, 10), stats(100, 10)];
         let policy = HedgePolicy {
+            enabled: true,
             max_duplicate_cost_microusd: Some(500),
             ..HedgePolicy::production_default()
         };
@@ -313,6 +317,7 @@ mod tests {
             ..stats(100, 10)
         };
         let policy = HedgePolicy {
+            enabled: true,
             max_duplicate_cost_microusd: Some(500),
             ..HedgePolicy::production_default()
         };
@@ -359,6 +364,7 @@ mod tests {
             ..stats(200, 10)
         };
         let policy = HedgePolicy {
+            enabled: true,
             max_duplicate_cost_microusd: Some(500),
             ..HedgePolicy::production_default()
         };
@@ -376,6 +382,23 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn production_default_disables_duplicate_generation() {
+        assert!(!HedgePolicy::production_default().enabled);
+        let profiles = vec![profile("primary"), profile("secondary")];
+        assert!(
+            hedge_decision(
+                &[0, 1],
+                &profiles,
+                &[stats(4_000, 10), stats(100, 10)],
+                1_024,
+                HedgePolicy::production_default(),
+                RouteLatencyPolicy::default(),
+            )
+            .is_none()
+        );
+    }
+
     fn operator_can_disable_hedging() {
         let profiles = vec![profile("primary"), profile("secondary")];
         assert!(

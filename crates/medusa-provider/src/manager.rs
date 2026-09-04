@@ -40,6 +40,12 @@ pub struct ProviderHealth {
     pub last_error: Option<String>,
 }
 
+/// Hard ceiling for per-route retries. Config may allow up to 8, but fan-out
+/// across routes multiplies billed calls, so the effective value is clamped.
+const MAX_ROUTE_RETRIES: u8 = 2;
+/// Consecutive failures after which a route is skipped while a fallback remains.
+const ROUTE_BREAKER_THRESHOLD: u64 = 5;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RetryDisposition {
     Retry,
@@ -114,6 +120,7 @@ pub struct ProviderManager<P> {
     )>,
     last_route_selection_receipt: Mutex<Option<RouteSelectionReceipt>>,
     hedge_policy: HedgePolicy,
+    consecutive_failures: Mutex<Vec<u64>>,
     sleeper: fn(Duration),
 }
 
@@ -162,6 +169,7 @@ impl<P> ProviderManager<P> {
             verified_routing: None,
             last_route_selection_receipt: Mutex::new(None),
             hedge_policy: HedgePolicy::default(),
+            consecutive_failures: Mutex::new(Vec::new()),
             sleeper: thread::sleep,
         }
     }
@@ -169,7 +177,7 @@ impl<P> ProviderManager<P> {
     #[must_use]
     pub fn with_retries(mut self, retries_per_provider: u8) -> Self {
         for profile in &mut self.profiles {
-            profile.retry.max_retries = retries_per_provider;
+            profile.retry.max_retries = retries_per_provider.min(MAX_ROUTE_RETRIES);
         }
         self
     }
@@ -324,6 +332,11 @@ impl<P> ProviderManager<P> {
     }
 
     fn record_success(&self, index: usize) -> MedusaResult<()> {
+        if let Ok(mut counts) = self.consecutive_failures.lock()
+            && let Some(count) = counts.get_mut(index)
+        {
+            *count = 0;
+        }
         self.state.record_success(index)
     }
 
@@ -332,6 +345,12 @@ impl<P> ProviderManager<P> {
     }
 
     fn record_error(&self, index: usize, error: &MedusaError) -> MedusaResult<()> {
+        if let Ok(mut counts) = self.consecutive_failures.lock() {
+            if counts.len() <= index {
+                counts.resize(index + 1, 0);
+            }
+            counts[index] = counts[index].saturating_add(1);
+        }
         self.state.record_error(index, error)
     }
 
@@ -341,6 +360,33 @@ impl<P> ProviderManager<P> {
 
     fn record_failover(&self, index: usize) -> MedusaResult<()> {
         self.state.record_failover(index)
+    }
+
+    fn tripped_routes(&self) -> Vec<bool> {
+        let counts = self.consecutive_failures.lock().ok();
+        match counts {
+            Some(counts) => counts
+                .iter()
+                .map(|count| *count >= ROUTE_BREAKER_THRESHOLD)
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Skips routes past consecutive failures while a fallback remains.
+    /// Fails open to the full order when every route has tripped.
+    fn apply_route_breaker(&self, route_order: Vec<usize>) -> Vec<usize> {
+        let tripped = self.tripped_routes();
+        let filtered: Vec<usize> = route_order
+            .iter()
+            .copied()
+            .filter(|index| !tripped.get(*index).copied().unwrap_or(false))
+            .collect();
+        if filtered.is_empty() {
+            route_order
+        } else {
+            filtered
+        }
     }
 }
 
@@ -791,6 +837,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
             route_order.retain(|index| *index != pinned_index);
             route_order.insert(0, pinned_index);
         }
+        let route_order = self.apply_route_breaker(route_order);
         let hedge = if pinned_index.is_none() {
             hedge_decision(
                 &route_order,
@@ -877,7 +924,8 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                 .profiles
                 .get(index)
                 .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
-            for attempt in 0..=policy.max_retries {
+            let max_retries = policy.max_retries.min(MAX_ROUTE_RETRIES);
+            for attempt in 0..=max_retries {
                 let kind = if attempt > 0 {
                     ProviderAttemptKind::Retry
                 } else if position > 0 {
@@ -968,7 +1016,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                         }
                         final_error = Some(error.clone());
                         match classify_error(&error, has_fallback) {
-                            RetryDisposition::Retry if attempt < policy.max_retries => {
+                            RetryDisposition::Retry if attempt < max_retries => {
                                 let delay_ms = policy.delay_ms(&error, index, attempt);
                                 self.record_retry(index, delay_ms)?;
                                 self.latency.record_retry_attempt(index)?;
@@ -1404,6 +1452,87 @@ mod tests {
         assert_eq!(manager.last_completed_provider(), None);
         assert_eq!(manager.execution_status(), None);
         assert_eq!(manager.route_latency()[0].validation_errors, 1);
+    }
+
+    #[test]
+    fn retry_ceiling_clamps_configured_max() {
+        let (provider, calls) = provider(Err(failure(ErrorCategory::Transient, true)));
+        let manager = ProviderManager::new(vec![provider])
+            .with_policy(RouteRetryPolicy {
+                max_retries: 8,
+                base_delay_ms: 1,
+                max_delay_ms: 5_000,
+                jitter_ms: 0,
+            })
+            .without_sleep();
+
+        assert!(manager.complete(&request()).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(manager.health()[0].retries, 2);
+    }
+
+    #[test]
+    fn breaker_skips_tripped_route_while_fallback_remains() {
+        let (primary, _) = provider(Ok(success()));
+        let (fallback, _) = provider(Ok(success()));
+        let manager = ProviderManager::new(vec![primary, fallback]);
+        let error = failure(ErrorCategory::Transient, true);
+
+        for _ in 0..5 {
+            manager.record_error(0, &error).expect("record error");
+        }
+        assert_eq!(
+            manager.apply_route_breaker(vec![0, 1]),
+            vec![1],
+            "tripped primary is skipped while a fallback remains"
+        );
+        manager.record_success(0).expect("record success");
+        assert_eq!(
+            manager.apply_route_breaker(vec![0, 1]),
+            vec![0, 1],
+            "success resets the consecutive-failure count"
+        );
+        for _ in 0..5 {
+            manager.record_error(0, &error).expect("record error");
+            manager.record_error(1, &error).expect("record error");
+        }
+        assert_eq!(
+            manager.apply_route_breaker(vec![0, 1]),
+            vec![0, 1],
+            "fails open when every route has tripped"
+        );
+    }
+
+    #[test]
+    fn flapping_primary_is_routed_around_with_bounded_waste() {
+        let (primary, primary_calls) = provider(Err(failure(ErrorCategory::Transient, true)));
+        let (fallback, fallback_calls) = provider(Ok(success()));
+        let manager =
+            ProviderManager::new(vec![primary, fallback]).without_sleep();
+
+        for turn in 0..4 {
+            let mut request = request();
+            request.messages[0].content = vec![MessageBlock::Text {
+                text: format!("turn {turn}"),
+            }];
+            manager.complete(&request).expect("fallback response");
+        }
+        assert!(
+            primary_calls.load(Ordering::SeqCst) <= 2,
+            "flapping primary is attempted at most on cold turns"
+        );
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn breaker_fails_open_when_every_route_tripped() {
+        let (provider, calls) = provider(Err(failure(ErrorCategory::Transient, true)));
+        let manager = ProviderManager::new(vec![provider]).without_sleep();
+
+        for _ in 0..3 {
+            assert!(manager.complete(&request()).is_err());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
     }
 
     #[test]

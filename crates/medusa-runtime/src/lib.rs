@@ -2696,6 +2696,7 @@ fn run_prompt(
                     Mode::Review => ProviderExecutionPhase::HighRiskReview,
                     Mode::Yolo => ProviderExecutionPhase::Implementation,
                 };
+                let mut cached_turn_context: Option<String> = None;
                 let outcome = loop {
                     let attempt_signature = format!("{provider_signature}:attempt:{next_attempt}");
                     let attempt = retry_guard
@@ -2718,25 +2719,34 @@ fn run_prompt(
                         ],
                     }));
                     let provider_started_at = std::time::Instant::now();
-                    let trajectory_context = if general_chat {
-                        String::new()
-                    } else {
-                        crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?
-                    };
-                    let repository_context = if general_chat {
-                        String::new()
-                    } else {
-                        crate::repository_context::assemble_and_render(
-                            &state.repo,
-                            &session,
-                            &draft.text,
-                        )?
-                    };
-                    let turn_context =
-                        format!("{skill_context}\n\n{trajectory_context}\n\n{repository_context}");
+                    // Built once per turn and reused across provider attempts; a retry
+                    // moves into Repair precisely when the session changed underneath
+                    // the context, which is the only case that needs a rebuild.
+                    if cached_turn_context.is_none()
+                        || matches!(provider_phase, ProviderExecutionPhase::Repair)
+                    {
+                        let trajectory_context = if general_chat {
+                            String::new()
+                        } else {
+                            crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?
+                        };
+                        let repository_context = if general_chat {
+                            String::new()
+                        } else {
+                            crate::repository_context::assemble_and_render(
+                                &state.repo,
+                                &session,
+                                &draft.text,
+                            )?
+                        };
+                        cached_turn_context = Some(format!("{skill_context}\n\n{trajectory_context}\n\n{repository_context}"));
+                    }
+                    let turn_context = cached_turn_context.as_deref().ok_or_else(|| {
+                        RuntimeError::agent("runtime turn context disappeared before execution")
+                    })?;
                     match engine.step_with_observer_and_context_and_turn_instruction_for_phase(
                         &mut session,
-                        Some(turn_context.as_str()),
+                        Some(turn_context),
                         turn_instruction,
                         provider_phase,
                         |update| {

@@ -1,3 +1,8 @@
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+};
+
 use crate::session::{AgentSession, journal};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::desktop_commander_tool_is_mutating;
@@ -376,6 +381,65 @@ fn transition(
     Ok(())
 }
 
+/// Last fully verified chain tip per session: (verified event count, tip checksum).
+///
+/// Journal appends are serialized under a per-session lock and append-only, so a
+/// matching anchor implies an identical prefix and only the suffix needs checks.
+/// Any anchor mismatch (truncation, replacement, fresh process) falls back to a
+/// full verification, which then records the new anchor.
+fn verified_tips() -> &'static Mutex<HashMap<String, (usize, String)>> {
+    static TIPS: OnceLock<Mutex<HashMap<String, (usize, String)>>> = OnceLock::new();
+    TIPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn record_verified_tip(session_id: &str, events: &[EventEnvelope]) {
+    let tip = events
+        .last()
+        .map(|event| event.checksum.clone())
+        .unwrap_or_default();
+    if let Ok(mut tips) = verified_tips().lock() {
+        tips.insert(session_id.to_owned(), (events.len(), tip));
+    }
+}
+
+/// Incremental variant of [`verify_chain`] for live session journals: previously
+/// verified prefixes are skipped by anchor, new suffixes are fully validated.
+pub(crate) fn verify_chain_incremental(
+    session_id: &str,
+    events: &[EventEnvelope],
+) -> MedusaResult<()> {
+    let anchor = verified_tips()
+        .lock()
+        .ok()
+        .and_then(|tips| tips.get(session_id).cloned());
+    if let Some((verified_len, tip)) = anchor
+        && verified_len <= events.len()
+        && (verified_len == 0 || events[verified_len - 1].checksum == tip)
+    {
+        let mut previous = if verified_len == 0 {
+            None
+        } else {
+            Some(events[verified_len - 1].checksum.as_str())
+        };
+        for event in &events[verified_len..] {
+            event.validate()?;
+            if event.previous_hash.as_deref() != previous {
+                return Err(MedusaError::new(
+                    ErrorCode::ChecksumMismatch,
+                    ErrorCategory::Persistence,
+                    "event chain previous hash mismatch",
+                ));
+            }
+            previous = Some(event.checksum.as_str());
+        }
+        record_verified_tip(session_id, events);
+        return Ok(());
+    }
+    verify_chain(events)?;
+    record_verified_tip(session_id, events);
+    Ok(())
+}
+
 pub(crate) fn verify_chain(events: &[EventEnvelope]) -> MedusaResult<()> {
     // Keep the #685 lane contract linked into production until the entrypoint wiring tranche.
     let _lane_selector = execution_lane::select_execution_lane;
@@ -397,6 +461,46 @@ pub(crate) fn verify_chain(events: &[EventEnvelope]) -> MedusaResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_verify_skips_prefix_and_catches_tampering() {
+        use medusa_core::{CorrelationId, SessionId};
+        use medusa_protocol::Actor;
+        use time::OffsetDateTime;
+
+        fn push(events: &mut Vec<EventEnvelope>, session_id: &SessionId, sequence: u64) {
+            let event = EventEnvelope::new(
+                sequence,
+                session_id.clone(),
+                Actor::Coordinator,
+                CorrelationId::new(),
+                EventPayload::SessionResumed,
+                events.last().map(|event| event.checksum.clone()),
+                OffsetDateTime::now_utc(),
+            )
+            .expect("event");
+            events.push(event);
+        }
+
+        let session_id = SessionId::new();
+        let key = session_id.to_string();
+        let mut events = Vec::new();
+        for sequence in 1..=3u64 {
+            push(&mut events, &session_id, sequence);
+        }
+        verify_chain_incremental(&key, &events).expect("initial chain verifies");
+        for sequence in 4..=5u64 {
+            push(&mut events, &session_id, sequence);
+        }
+        verify_chain_incremental(&key, &events).expect("appended suffix verifies");
+
+        let mut tampered = events.clone();
+        tampered[4].checksum = "deadbeef".to_owned();
+        assert!(verify_chain_incremental(&key, &tampered).is_err());
+
+        let truncated = events[..3].to_vec();
+        verify_chain_incremental(&key, &truncated).expect("truncation falls back to full verify");
+    }
 
     #[test]
     fn mutation_attribution_uses_same_successful_tool_contract_as_engine() {

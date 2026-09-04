@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use super::{AgentSession, fallback_storage_root};
-use crate::evidence::verify_chain;
+use crate::evidence::{verify_chain, verify_chain_incremental};
 
 const JOURNAL_MAGIC: &[u8; 8] = b"MDJNL002";
 const FRAME_HEADER_BYTES: usize = std::mem::size_of::<u32>() + 32;
@@ -68,7 +68,7 @@ pub(crate) fn append_payload_committed(
 ) -> MedusaResult<EventEnvelope> {
     let lock = session_lock(&session.repo, &session.id);
     let _guard = lock_mutex(&lock);
-    verify_chain(&session.events)?;
+    verify_chain_incremental(&session.id.to_string(), &session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
     let state = read_journal(&path, &session.id, true, true)?;
@@ -262,7 +262,7 @@ pub(crate) fn append_event(
 ) -> MedusaResult<AppendDisposition> {
     let lock = session_lock(&session.repo, &session.id);
     let _guard = lock_mutex(&lock);
-    verify_chain(&session.events)?;
+    verify_chain_incremental(&session.id.to_string(), &session.events)?;
     event.validate()?;
     if event.session_id != session.id {
         return Err(persistence_error(
@@ -353,7 +353,7 @@ where
 }
 
 fn commit_snapshot_locked(session: &AgentSession) -> MedusaResult<AgentSession> {
-    verify_chain(&session.events)?;
+    verify_chain_incremental(&session.id.to_string(), &session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
     let state = read_journal(&path, &session.id, true, false)?;
@@ -479,7 +479,7 @@ fn ensure_initialized(session: &AgentSession) -> MedusaResult<()> {
 }
 
 fn initialize_journal(session: &AgentSession) -> MedusaResult<()> {
-    verify_chain(&session.events)?;
+    verify_chain_incremental(&session.id.to_string(), &session.events)?;
     let primary = primary_journal_path(&session.repo, &session.id);
     match write_journal(&primary, session) {
         Ok(()) => Ok(()),
@@ -491,7 +491,7 @@ fn initialize_journal(session: &AgentSession) -> MedusaResult<()> {
 }
 
 fn rewrite_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
-    verify_chain(&session.events)?;
+    verify_chain_incremental(&session.id.to_string(), &session.events)?;
     write_journal(path, session)
 }
 
@@ -741,7 +741,7 @@ fn validate_committed_snapshot(
     session: &AgentSession,
 ) -> MedusaResult<()> {
     validate_snapshot_identity(&session.repo, session_id, session)?;
-    verify_chain(&session.events)?;
+    verify_chain_incremental(&session.id.to_string(), &session.events)?;
     let expected_cursor = u64::try_from(events.len()).unwrap_or(u64::MAX);
     if cursor != expected_cursor || session.events.len() != events.len() {
         return Err(persistence_error(

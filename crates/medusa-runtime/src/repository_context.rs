@@ -1,12 +1,14 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::SystemTime,
 };
 
 use medusa_agent::AgentSession;
 use medusa_core::hidden_command;
-use medusa_intelligence::{CodeIndex, RetrievalBudget, Symbol};
+use medusa_intelligence::{CodeIndex, RetrievalBudget, Symbol, source_files};
 use sha2::{Digest, Sha256};
 
 use crate::RuntimeError;
@@ -16,6 +18,8 @@ const SOURCE_RESULT_BUDGET: usize = 16;
 const SOURCE_RESULT_TOKEN_BUDGET: usize = 1_200;
 const POLICY_BYTE_BUDGET: usize = 12 * 1024;
 const RENDER_BYTE_BUDGET: usize = 36 * 1024;
+/// Process-wide CodeIndex entries; a process normally serves one repository.
+const INDEX_CACHE_CAPACITY: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RankedEvidence {
@@ -46,6 +50,69 @@ pub(crate) struct RepositoryContextAssembly {
     verification_reasons: Vec<String>,
 }
 
+struct CachedIndex {
+    state_key: String,
+    index: CodeIndex,
+}
+
+fn index_cache() -> &'static Mutex<HashMap<PathBuf, CachedIndex>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedIndex>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Cache key over exactly the indexed inputs: git HEAD (only when the target
+/// is itself a repository root) plus the relative path, size, and mtime of
+/// every indexed source file.
+///
+/// Deliberately not `git status --porcelain --untracked-files=all`: git
+/// discovers repositories by walking up, so a temp dir under a home-dir repo
+/// would inherit a multi-hundred-megabyte status scan that churns with every
+/// unrelated file (session journals, caches) and never lets the cache hit.
+fn repo_state_key(repo: &Path) -> String {
+    let mut hasher = Sha256::new();
+    if repo.join(".git").exists()
+        && let Some(head) = git_output(repo, &["rev-parse", "HEAD"])
+    {
+        hasher.update(head.trim().as_bytes());
+    }
+    for path in source_files(repo) {
+        let relative = path.strip_prefix(repo).unwrap_or(&path);
+        hasher.update(relative.to_string_lossy().as_bytes());
+        if let Ok(metadata) = fs::metadata(&path) {
+            hasher.update(metadata.len().to_le_bytes());
+            if let Ok(modified) = metadata.modified()
+                && let Ok(age) = modified.duration_since(SystemTime::UNIX_EPOCH)
+            {
+                hasher.update(age.as_nanos().to_le_bytes());
+            }
+        }
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn cached_code_index(repo: &Path, state_key: &str) -> Result<CodeIndex, RuntimeError> {
+    if let Ok(cache) = index_cache().lock()
+        && let Some(entry) = cache.get(repo)
+        && entry.state_key == state_key
+    {
+        return Ok(entry.index.clone());
+    }
+    let index = CodeIndex::build(repo).map_err(|error| RuntimeError::agent(error.to_string()))?;
+    if let Ok(mut cache) = index_cache().lock() {
+        if cache.len() >= INDEX_CACHE_CAPACITY && !cache.contains_key(repo) {
+            cache.clear();
+        }
+        cache.insert(
+            repo.to_path_buf(),
+            CachedIndex {
+                state_key: state_key.to_owned(),
+                index: index.clone(),
+            },
+        );
+    }
+    Ok(index)
+}
+
 pub(crate) fn assemble_and_render(
     repo: &Path,
     session: &AgentSession,
@@ -60,7 +127,8 @@ fn assemble(
     session: &AgentSession,
     turn_query: &str,
 ) -> Result<RepositoryContextAssembly, RuntimeError> {
-    let index = CodeIndex::build(repo).map_err(|error| RuntimeError::agent(error.to_string()))?;
+    let state_key = repo_state_key(repo);
+    let index = cached_code_index(repo, &state_key)?;
     let query = effective_query(session, turn_query);
     let report = index.retrieve(
         repo,
@@ -180,7 +248,7 @@ fn assemble(
     let impact = medusa_intelligence::select_tests_with_index(&index, &selected_paths);
 
     let policies = load_policy_evidence(repo);
-    let repository_fingerprint = repository_fingerprint(repo, &selected, &policies);
+    let repository_fingerprint = repository_fingerprint(&state_key, &selected, &policies);
 
     Ok(RepositoryContextAssembly {
         query,
@@ -367,17 +435,12 @@ fn load_policy_evidence(repo: &Path) -> Vec<PolicyEvidence> {
 }
 
 fn repository_fingerprint(
-    repo: &Path,
+    state_key: &str,
     selected: &[RankedEvidence],
     policies: &[PolicyEvidence],
 ) -> String {
     let mut hasher = Sha256::new();
-    if let Some(head) = git_output(repo, &["rev-parse", "HEAD"]) {
-        hasher.update(head.as_bytes());
-    }
-    if let Some(status) = git_output(repo, &["status", "--porcelain=v1", "--untracked-files=all"]) {
-        hasher.update(status.as_bytes());
-    }
+    hasher.update(state_key.as_bytes());
     for item in selected {
         hasher.update(item.path.to_string_lossy().as_bytes());
         hasher.update(item.start_line.to_le_bytes());
@@ -527,6 +590,22 @@ mod tests {
                 .iter()
                 .any(|item| item.content.contains("{ 2 }"))
         );
+    }
+
+    #[test]
+    fn cached_index_reuses_snapshot_without_rebuild() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            directory.path().join("lib.rs"),
+            "pub fn cached_target() -> usize { 1 }
+",
+        )
+        .expect("source");
+        let session = session(directory.path(), "fix cached_target");
+        let first = assemble(directory.path(), &session, "cached_target").expect("first");
+        let second = assemble(directory.path(), &session, "cached_target").expect("second");
+        assert_eq!(first.repository_fingerprint, second.repository_fingerprint);
+        assert_eq!(first.selected, second.selected);
     }
 
     #[test]
