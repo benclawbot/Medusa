@@ -23,29 +23,32 @@ def test_stable_release_is_complete_before_publication() -> None:
     assert publisher.count("medusa-recall") >= 9
     assert 'gh release create "$RELEASE_TAG" release-assets/*' in publisher
     assert "--draft" in publisher
+    assert "--clobber" not in publisher
 
-    allowed_clobber_writers = {
-        "sign-release-manifest.yml",
-        "sign-release-manifest-recovery.yml",
-    }
-    clobber_writers = {
-        path.name
-        for path in WORKFLOWS.glob("*.yml")
-        if "--clobber" in path.read_text(encoding="utf-8")
-    }
-    assert clobber_writers <= allowed_clobber_writers, clobber_writers
-
+    primary_name = "sign-release-manifest.yml"
+    recovery_name = "sign-release-manifest-recovery.yml"
     verifier_path = "./.github/workflows/verify-published-release.yml"
-    for name in sorted(allowed_clobber_writers):
+    for name in (primary_name, recovery_name):
         signer = read_workflow(name)
         assert "--json isDraft --jq '.isDraft'" in signer
         assert "refusing to mutate published stable assets" in signer
+        assert "--clobber" in signer
         assert 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false' in signer
         assert signer.index("gh release upload") < signer.index(
             'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false'
         )
         assert verifier_path in signer
         assert signer.index('gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false') < signer.index(verifier_path)
+
+    # No other workflow that follows the normal stable Publish Release path may
+    # overwrite release assets. Rolling-main publication is intentionally mutable
+    # and is not a semver stable release.
+    stable_followup_clobber_writers = []
+    for path in WORKFLOWS.glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        if 'workflows: ["Publish Release"]' in text and "--clobber" in text:
+            stable_followup_clobber_writers.append(path.name)
+    assert stable_followup_clobber_writers == [primary_name], stable_followup_clobber_writers
 
     verifier = read_workflow("verify-published-release.yml")
     for archive in (
