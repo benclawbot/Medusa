@@ -382,7 +382,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn production_default_disables_duplicate_generation() {
         assert!(!HedgePolicy::production_default().enabled);
         let profiles = vec![profile("primary"), profile("secondary")];
@@ -399,6 +398,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn operator_can_disable_hedging() {
         let profiles = vec![profile("primary"), profile("secondary")];
         assert!(

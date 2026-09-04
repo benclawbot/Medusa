@@ -159,25 +159,11 @@ function formatTimestamp(timestamp: number): string {
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+  // Tauri serves a secure context, so the async clipboard API is always present.
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("The clipboard is unavailable.");
   }
-
-  const fallback = document.createElement("textarea");
-  fallback.value = text;
-  fallback.setAttribute("readonly", "true");
-  fallback.style.position = "fixed";
-  fallback.style.opacity = "0";
-  document.body.appendChild(fallback);
-  fallback.select();
-  try {
-    if (!document.execCommand("copy")) {
-      throw new Error("The clipboard is unavailable.");
-    }
-  } finally {
-    fallback.remove();
-  }
+  await navigator.clipboard.writeText(text);
 }
 
 function readImage(file: File): Promise<DesktopAttachment> {

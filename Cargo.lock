@@ -1628,13 +1628,8 @@ dependencies = [
 name = "medusa-progress"
 version = "1.0.7"
 dependencies = [
- "hex",
  "medusa-core",
- "medusa-goal",
  "serde",
- "serde_json",
- "sha2",
- "tempfile",
 ]
 
 [[package]]

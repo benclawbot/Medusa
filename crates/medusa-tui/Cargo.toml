@@ -6,8 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-path = "src/lib_root.rs"
 
 [[bin]]
 name = "medusa-tui"

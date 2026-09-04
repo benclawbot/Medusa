@@ -10,14 +10,7 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
-import {
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   applyReviewAction,
   exportReviewAudit,
@@ -26,7 +19,7 @@ import {
   type ReviewProvenance,
   type ReviewWorkspace,
 } from "./reviewApi";
-import { useDesktopToolRequest } from "./desktop-tools";
+import { useDockShell } from "./useDockShell";
 import {
   canPresentVerifiedCompletion,
   evidenceFreshness,
@@ -34,7 +27,6 @@ import {
   type DiffCell,
   type DiffLanguage,
 } from "./reviewDiff";
-import { useDialogFocus } from "./useDialogFocus";
 
 const empty: ReviewWorkspace = {
   snapshot: {
@@ -242,7 +234,6 @@ function ProvenancePanel({
 }
 
 export function DiffDock() {
-  const [open, setOpen] = useState(false);
   const [repo, setRepo] = useState(
     () => window.localStorage.getItem("medusa.desktop.repo") ?? "",
   );
@@ -252,12 +243,7 @@ export function DiffDock() {
   const [filter, setFilter] = useState("all");
   const [layout, setLayout] = useState<"unified" | "side-by-side">("unified");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string>();
-  const dialogRef = useRef<HTMLElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  const openFromRail = useCallback(() => setOpen(true), []);
-  useDesktopToolRequest("review", openFromRail);
-  useDialogFocus(open, dialogRef, close);
+  const { open, setOpen, close, error, setError, dialogRef } = useDockShell<HTMLElement>("review");
 
   const refresh = useCallback(async () => {
     const currentRepo = window.localStorage.getItem("medusa.desktop.repo") ?? "";

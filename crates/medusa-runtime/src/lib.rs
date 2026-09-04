@@ -2909,7 +2909,7 @@ fn run_prompt(
                         state.session_api_key.clone(),
                     )
                     .map_err(RuntimeError::agent)?;
-                    match crate::mutation_transaction::complete_after_parent_review(
+                    match crate::parent_reviewer::complete(
                         &evidence.transaction_path,
                         &state.repo,
                         &review_provider,

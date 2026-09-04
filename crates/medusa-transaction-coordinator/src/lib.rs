@@ -301,3 +301,232 @@ fn fingerprint_record(record: &TransactionRecord) -> Result<String, CoordinatorE
         .map_err(|error| CoordinatorError::Serialization(error.to_string()))?;
     Ok(hex::encode(Sha256::digest(encoded)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fp(seed: u8) -> Fingerprint {
+        hex::encode([seed; 32])
+    }
+
+    fn two_participants() -> Vec<Participant> {
+        vec![
+            Participant {
+                worker_id: "b".to_owned(),
+                lease_epoch: 1,
+                intent_fingerprint: fp(1),
+            },
+            Participant {
+                worker_id: "a".to_owned(),
+                lease_epoch: 2,
+                intent_fingerprint: fp(2),
+            },
+        ]
+    }
+
+    fn created() -> (TransactionCoordinator, String) {
+        let mut coordinator = TransactionCoordinator::default();
+        coordinator
+            .create("tx-1", "exec-1", 0, two_participants(), fp(9))
+            .expect("create");
+        (coordinator, "tx-1".to_owned())
+    }
+
+    fn drive(coordinator: &mut TransactionCoordinator, id: &str, phases: &[TransactionPhase]) {
+        for next in phases {
+            coordinator.transition(id, next.clone()).expect("transition");
+        }
+    }
+
+    #[test]
+    fn create_sorts_participants_and_fingerprints() {
+        let (coordinator, id) = created();
+        let record = coordinator.record(&id).expect("record");
+        assert_eq!(record.phase, TransactionPhase::Created);
+        assert_eq!(record.participants[0].worker_id, "a");
+        coordinator.verify(&id).expect("verify");
+    }
+
+    #[test]
+    fn create_rejects_bad_input() {
+        let mut coordinator = TransactionCoordinator::default();
+        assert_eq!(
+            coordinator.create("", "exec", 0, two_participants(), fp(9)),
+            Err(CoordinatorError::EmptyTransactionId)
+        );
+        assert_eq!(
+            coordinator.create("tx", "", 0, two_participants(), fp(9)),
+            Err(CoordinatorError::EmptyExecutionId)
+        );
+        assert_eq!(
+            coordinator.create("tx", "exec", 0, two_participants(), "nope".to_owned()),
+            Err(CoordinatorError::InvalidFingerprint)
+        );
+        let mut dupes = two_participants();
+        dupes.push(dupes[0].clone());
+        assert!(matches!(
+            coordinator.create("tx", "exec", 0, dupes, fp(9)),
+            Err(CoordinatorError::DuplicateParticipant(_))
+        ));
+    }
+
+    #[test]
+    fn unanimous_prepared_votes_commit() {
+        let (mut coordinator, id) = created();
+        drive(
+            &mut coordinator,
+            &id,
+            &[
+                TransactionPhase::Resolving,
+                TransactionPhase::Preparing,
+                TransactionPhase::Prepared,
+            ],
+        );
+        for (worker, epoch) in [("a", 2), ("b", 1)] {
+            coordinator
+                .vote(
+                    &id,
+                    Vote::Prepared {
+                        worker_id: worker.to_owned(),
+                        lease_epoch: epoch,
+                    },
+                )
+                .expect("vote");
+        }
+        assert_eq!(
+            coordinator.decide(&id).expect("decide"),
+            Decision::Commit
+        );
+    }
+
+    #[test]
+    fn reject_or_missing_vote_aborts() {
+        let (mut coordinator, id) = created();
+        drive(
+            &mut coordinator,
+            &id,
+            &[
+                TransactionPhase::Resolving,
+                TransactionPhase::Preparing,
+                TransactionPhase::Prepared,
+            ],
+        );
+        // Missing vote from b aborts first.
+        assert!(matches!(
+            coordinator.decide(&id).expect("decide"),
+            Decision::Abort { .. }
+        ));
+        coordinator
+            .vote(
+                &id,
+                Vote::Reject {
+                    worker_id: "a".to_owned(),
+                    lease_epoch: 2,
+                    reason: "disk full".to_owned(),
+                },
+            )
+            .expect("vote");
+        assert_eq!(
+            coordinator.decide(&id).expect("decide"),
+            Decision::Abort {
+                reason: "disk full".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn vote_guards_unknown_stale_and_duplicate() {
+        let (mut coordinator, id) = created();
+        // Voting outside Preparing/Prepared is rejected.
+        assert_eq!(
+            coordinator.vote(
+                &id,
+                Vote::Prepared {
+                    worker_id: "a".to_owned(),
+                    lease_epoch: 2,
+                }
+            ),
+            Err(CoordinatorError::InvalidVotingPhase)
+        );
+        drive(
+            &mut coordinator,
+            &id,
+            &[
+                TransactionPhase::Resolving,
+                TransactionPhase::Preparing,
+            ],
+        );
+        assert!(matches!(
+            coordinator.vote(
+                &id,
+                Vote::Prepared {
+                    worker_id: "ghost".to_owned(),
+                    lease_epoch: 0,
+                }
+            ),
+            Err(CoordinatorError::UnknownParticipant(_))
+        ));
+        assert!(matches!(
+            coordinator.vote(
+                &id,
+                Vote::Prepared {
+                    worker_id: "a".to_owned(),
+                    lease_epoch: 99,
+                }
+            ),
+            Err(CoordinatorError::StaleLease { .. })
+        ));
+        coordinator
+            .vote(
+                &id,
+                Vote::Prepared {
+                    worker_id: "a".to_owned(),
+                    lease_epoch: 2,
+                },
+            )
+            .expect("vote");
+        assert!(matches!(
+            coordinator.vote(
+                &id,
+                Vote::Prepared {
+                    worker_id: "a".to_owned(),
+                    lease_epoch: 2,
+                }
+            ),
+            Err(CoordinatorError::DuplicateVote(_))
+        ));
+    }
+
+    #[test]
+    fn illegal_transitions_rejected() {
+        let (mut coordinator, id) = created();
+        assert_eq!(
+            coordinator.transition(&id, TransactionPhase::Committed),
+            Err(CoordinatorError::InvalidTransition)
+        );
+        assert_eq!(
+            coordinator.transition("missing", TransactionPhase::Resolving),
+            Err(CoordinatorError::InvalidTransition)
+        );
+    }
+
+    #[test]
+    fn evidence_and_tamper_detection() {
+        let (mut coordinator, id) = created();
+        coordinator
+            .attach_evidence(&id, Some(fp(3)), None, Some(fp(4)))
+            .expect("attach");
+        coordinator.verify(&id).expect("verify");
+        let record = coordinator
+            .records
+            .get_mut(&id)
+            .expect("record")
+            .clone();
+        coordinator.records.get_mut(&id).expect("record").sequence = record.sequence + 1;
+        assert_eq!(
+            coordinator.verify(&id),
+            Err(CoordinatorError::FingerprintMismatch)
+        );
+    }
+}

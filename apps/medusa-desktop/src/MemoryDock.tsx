@@ -1,17 +1,11 @@
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { MemoryBrowser } from "./MemoryBrowser";
-import { useDesktopToolRequest } from "./desktop-tools";
-import { useDialogFocus } from "./useDialogFocus";
+import { useDockShell } from "./useDockShell";
 
 export function MemoryDock() {
-  const [open, setOpen] = useState(false);
   const [repo, setRepo] = useState(() => window.localStorage.getItem("medusa.desktop.repo") ?? "");
-  const dialogRef = useRef<HTMLElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  const openFromRail = useCallback(() => setOpen(true), []);
-  useDesktopToolRequest("memory", openFromRail);
-  useDialogFocus(open, dialogRef, close);
+  const { open, setOpen, close, dialogRef } = useDockShell<HTMLElement>("memory");
 
   useEffect(() => {
     if (!open) return;

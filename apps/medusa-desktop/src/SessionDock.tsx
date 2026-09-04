@@ -9,7 +9,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   listRuntimeSessions,
   readRuntimeSession,
@@ -17,8 +17,7 @@ import {
   type SessionDetail,
   type SessionSummary,
 } from "./runtime";
-import { useDesktopToolRequest } from "./desktop-tools";
-import { useDialogFocus } from "./useDialogFocus";
+import { useDockShell } from "./useDockShell";
 import "./session-dock.css";
 
 function currentRepo(): string {
@@ -45,18 +44,12 @@ function sessionStatus(session: SessionSummary): { label: string; className: str
 }
 
 export function SessionDock() {
-  const [open, setOpen] = useState(false);
   const [repo, setRepo] = useState(currentRepo);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selected, setSelected] = useState<SessionDetail>();
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState<string>();
-  const dialogRef = useRef<HTMLElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  const openFromRail = useCallback(() => setOpen(true), []);
-  useDesktopToolRequest("sessions", openFromRail);
-  useDialogFocus(open, dialogRef, close);
+  const { open, setOpen, close, error, setError, dialogRef } = useDockShell<HTMLElement>("sessions");
 
   useEffect(() => {
     if (!open) return;

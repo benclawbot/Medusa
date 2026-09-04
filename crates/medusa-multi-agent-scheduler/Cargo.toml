@@ -6,9 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-path = "src/lib_wrapper.rs"
-
 [dependencies]
 medusa-evidence.workspace = true
 serde.workspace = true

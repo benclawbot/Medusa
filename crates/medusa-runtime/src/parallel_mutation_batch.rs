@@ -32,8 +32,9 @@ use crate::{
     },
     mutation_transaction::{
         MutationLifecycle, MutationTransaction, ParentReviewAuthorization, PreparedMutationInput,
-        authorize_after_parent_review, cancel_transaction,
+        cancel_transaction,
     },
+    parent_reviewer::authorize,
 };
 
 const BATCH_WORKER_LABEL: &str = "parallel-batch";
@@ -338,7 +339,7 @@ fn authorize_children<P: medusa_provider::ModelProvider>(
             .iter()
             .find(|task| task.id == child.task_id)
             .ok_or_else(|| format!("mutation DAG lost task {}", child.task_id))?;
-        match authorize_after_parent_review(
+        match authorize(
             &child.evidence.transaction_path,
             repo,
             provider,

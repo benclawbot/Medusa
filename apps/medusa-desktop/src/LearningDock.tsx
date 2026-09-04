@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Download, RefreshCw, ShieldCheck, X } from "lucide-react";
 import {
   exportLearningAudit,
@@ -10,8 +10,7 @@ import {
   type LearningReviewItem,
   type LearningReviewSnapshot,
 } from "./learningApi";
-import { useDesktopToolRequest } from "./desktop-tools";
-import { useDialogFocus } from "./useDialogFocus";
+import { useDockShell } from "./useDockShell";
 import "./learning-dock.css";
 
 function actions(item: LearningReviewItem) {
@@ -27,17 +26,11 @@ function actions(item: LearningReviewItem) {
 }
 
 export function LearningDock() {
-  const [open, setOpen] = useState(false);
   const [data, setData] = useState<LearningReviewSnapshot>();
   const [filter, setFilter] = useState("");
-  const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const repo = window.localStorage.getItem("medusa.desktop.repo") ?? "";
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  const openFromRail = useCallback(() => setOpen(true), []);
-  useDesktopToolRequest("learning", openFromRail);
-  useDialogFocus(open, dialogRef, close);
+  const { open, setOpen, close, error, setError, dialogRef } = useDockShell<HTMLDivElement>("learning");
 
   const reload = async () => {
     if (!repo) return;
