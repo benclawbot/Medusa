@@ -27,7 +27,7 @@ jobs:
 
           cargo = Path('Cargo.toml')
           text = cargo.read_text()
-          text = text.replace('    "crates/medusa-goal",\n', '')
+          text = text.replace('  "crates/medusa-goal",\n', '')
           cargo.write_text(text)
 
           tui_cargo = Path('crates/medusa-tui/Cargo.toml')
