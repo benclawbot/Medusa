@@ -28,10 +28,14 @@ jobs:
 
           architecture = Path("scripts/check-product-architecture.py")
           text = architecture.read_text(encoding="utf-8")
-          stale = '    mutating_coordinator = read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs")\n'
-          if text.count(stale) != 1:
-              raise SystemExit("expected one stale mutating coordinator architecture input")
-          architecture.write_text(text.replace(stale, ""), encoding="utf-8")
+          old = (
+              '    mutating_coordinator = read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs")\n'
+              '    mutating_coordinator += "\\n" + read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs")\n'
+          )
+          new = '    mutating_coordinator = read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs")\n'
+          if text.count(old) != 1:
+              raise SystemExit("expected one stale mutating coordinator architecture input pair")
+          architecture.write_text(text.replace(old, new), encoding="utf-8")
 
           app = Path("crates/medusa-tui/src/app.rs")
           text = app.read_text(encoding="utf-8")
