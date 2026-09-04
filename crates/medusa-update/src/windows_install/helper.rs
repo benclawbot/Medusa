@@ -136,7 +136,22 @@ try {{
   exit 1
 }}
 
-$actualHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+try {{
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {{
+    $stream = [System.IO.File]::OpenRead($target)
+    try {{
+      $hashBytes = $sha256.ComputeHash($stream)
+    }} finally {{
+      $stream.Dispose()
+    }}
+  }} finally {{
+    $sha256.Dispose()
+  }}
+  $actualHash = ([System.BitConverter]::ToString($hashBytes) -replace '-', '').ToLowerInvariant()
+}} catch {{
+  Restore-Previous ("installed executable SHA-256 verification failed: " + $_.Exception.Message) $null
+}}
 if ($actualHash -ne $expectedHash) {{
   Restore-Previous 'installed executable failed SHA-256 verification' $null
 }}
