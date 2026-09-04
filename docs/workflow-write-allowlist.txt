@@ -3,9 +3,8 @@
 # Format: workflow path, a pipe (`|`), then the least-privilege justification.
 # Keep this list intentionally small. The workflow hygiene guard rejects broad,
 # self-modifying, or unexplained entries.
-.github/workflows/publish-release.yml|Creates and uploads immutable release artifacts only after the release gate succeeds; it does not modify repository source.
-.github/workflows/refresh-cli-release-assets.yml|Replaces CLI release assets for an existing release from a reviewed workflow dispatch; it does not modify repository source.
+.github/workflows/publish-release.yml|Creates and uploads the complete stable release artifact set to a draft release; it does not modify repository source.
 .github/workflows/rolling-main-cli.yml|Publishes verified CLI assets for one main revision as soon as the CLI matrix completes, appends slower desktop assets later, and refreshes the legacy compatibility alias; it does not modify repository source or push commits.
 .github/workflows/sign-draft-release.yml|Uploads detached signatures and verified checksums to an existing draft release; it does not publish the release or modify repository source.
-.github/workflows/sign-release-manifest-recovery.yml|Manual recovery authority uploads only an independently verified manifest, detached recovery signature, checksums, and attestations to an existing immutable release; it never pushes commits or publishes the release.
-.github/workflows/sign-release-manifest.yml|Primary authority uploads only the independently verified release manifest, detached signature, checksums, and attestations after the Publish Release workflow succeeds; it never pushes commits or publishes the release.
+.github/workflows/sign-release-manifest-recovery.yml|Manual recovery authority uploads signed authority only while the stable release is draft, then a separate non-secret job verifies final release bytes and publishes the draft; it never pushes commits.
+.github/workflows/sign-release-manifest.yml|Primary authority uploads signed authority only while the stable release is draft, then a separate non-secret job verifies final release bytes and publishes the draft; it never pushes commits.

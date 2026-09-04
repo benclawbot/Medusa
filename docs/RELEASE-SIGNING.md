@@ -2,26 +2,28 @@
 
 Medusa separates build provenance, platform publisher signing, and updater release authority.
 
-- `Publish Release` assembles and attests CI-produced artifacts.
-- `Sign Draft Release` applies platform-native signatures to an existing draft.
-- `Sign Release Manifest` creates the Ed25519 authority consumed by `medusa update --release` after a release is published.
+- `Publish Release` assembles and attests CI-produced artifacts and creates a draft GitHub release.
+- `Sign Draft Release` applies platform-native signatures only to an existing draft.
+- `Sign Release Manifest` creates the Ed25519 authority consumed by `medusa update --release`, publishes the completed draft, and then verifies the released updater against the public GitHub API.
 
-All signing jobs use the protected `release-signing` environment.
+Platform signing uses the protected `release-signing` environment. Primary updater-authority signing uses `release-signing-primary`; recovery authority signing uses the independently protected `release-signing-recovery` environment.
 
 ## Required repository configuration
 
-Create a GitHub environment named `release-signing` with required reviewers. Restrict deployment branches to `main` and release tags. Store credentials only as encrypted environment secrets. No signing key or password may be stored in repository content, build artifacts, logs, release notes, or caches.
+Create the protected signing environments with required reviewers and restrict deployment branches to `main` and release tags. Store credentials only as encrypted environment secrets. No signing key or password may be stored in repository content, build artifacts, logs, release notes, or caches.
 
 ### Updater Ed25519 authority
 
 - `MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM`: PEM-encoded private Ed25519 key matching the active `primary` entry in `release/keys/keyring.json`.
-- `MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM`: independently generated PEM-encoded private Ed25519 key matching the active `recovery` entry.
+- `MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM`: independently generated private Ed25519 key matching the active `recovery` entry.
 
-`Sign Release Manifest` downloads the existing CI-produced assets from a stable release, regenerates the canonical `medusa-release-manifest-v2`, signs the exact bytes with the primary authority by default, verifies the result against the matching repository public key, attests the manifest, and uploads the manifest, signature envelope, and checksum inventory. A protected manual dispatch may select the recovery authority without editing the workflow or replacing the primary secret.
+`Sign Release Manifest` accepts only a draft stable release. It downloads the complete CI-produced assets, regenerates the canonical `medusa-release-manifest-v2`, signs the exact bytes with the primary authority by default, verifies the result against the matching repository public key, attests the manifest, and uploads the manifest, signature envelope, and checksum inventory while the release is still a draft. It then publishes the draft and invokes the cross-platform public-release verifier.
 
-The private key is written only to a mode-0600 temporary runner file and removed through a shell trap. The workflow fails when the secret is absent, the tag does not match synchronized repository versions, the release assets are incomplete, any asset basename is duplicated, an asset escapes the download directory, signing fails, or local verification fails.
+The private key is written only to a mode-0600 temporary runner file and removed through a shell trap. The workflow fails when the secret is absent, the tag does not match synchronized repository versions, the release is no longer a draft, the release assets are incomplete, any asset basename is duplicated, an asset escapes the download directory, signing fails, local verification fails, or the published updater cannot verify the public release.
 
-A published release is not update-eligible until this workflow succeeds. `medusa update --release` rejects an unsigned release rather than using GitHub metadata or source compilation as a fallback. The default `medusa update` main-branch path is separate and does not consult the release manifest.
+The recovery workflow follows the same draft-only rule. It is a separate reviewed authority path, not a mechanism for modifying a published semver release. If a published stable release is inconsistent or compromised, produce a new release instead of replacing its assets or signing authority in place.
+
+A stable release is not public or update-eligible until manifest signing succeeds. `medusa update --release` rejects an unsigned or inconsistent release rather than using GitHub metadata or source compilation as a fallback. The default `medusa update` main-branch path is separate and does not consult the stable release manifest.
 
 ### Windows platform signing
 
@@ -46,14 +48,14 @@ Linux package assets receive keyless Sigstore signatures and certificates throug
 
 ## Release procedure
 
-1. Push the exact version tag and allow the release build workflow to create the cross-platform artifacts, SBOM, checksums, and attestations.
-2. Review package smoke reports and build provenance.
-3. Run **Sign Draft Release** when platform-native signatures are required, approve the protected environment, and verify all platform outputs.
-4. Publish the stable release.
-5. Approve the automatically triggered **Sign Release Manifest** deployment.
-6. Verify that the release contains `medusa-release-manifest.json`, `medusa-release-manifest.sig.json`, and `SHA256SUMS` before announcing `medusa update --release` availability.
+1. Push the exact version tag and allow **Publish Release** to build the complete cross-platform CLI/desktop assets, SBOM, checksums, attestations, and draft GitHub release.
+2. Review package smoke reports and build provenance while the release is still draft.
+3. When platform-native signatures are required, run **Sign Draft Release**, approve `release-signing`, and verify its Windows/macOS/Linux outputs before approving the updater-authority signer. If an automatically prepared manifest raced ahead of platform signing, rerun the manifest signer after the final draft bytes are present; its independent byte comparison fails closed on stale input.
+4. Approve **Sign Release Manifest** in `release-signing-primary`. It revalidates the draft bytes, signs and uploads the final manifest authority, and publishes the draft only after those checks succeed.
+5. Require the automatically invoked **Verify Published Stable Release** matrix to pass on Linux, macOS, and Windows. Each job downloads the public CLI archive and runs the released `medusa update --check --release` without GitHub credentials.
+6. Announce `medusa update --release` availability only after the public verification matrix succeeds.
 
-A signing rerun may use `workflow_dispatch` with an existing stable tag. It regenerates the authority from the release's current CI artifacts and replaces only the three manifest-authority assets.
+Recovery signing is a reviewed draft-only fallback. It may sign and publish a still-draft release through `release-signing-recovery`; it must not be used to overwrite authority or binaries on an already published semver release.
 
 ## Key custody, rotation, and revocation
 

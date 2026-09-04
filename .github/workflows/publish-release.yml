@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing immutable release tag to recover
+        description: Exact release tag to build as a new draft
         required: true
         type: string
       release_sha:
@@ -117,17 +117,20 @@ jobs:
           --platform linux
           --manifest desktop-package-linux.json
       - name: Build Linux CLI
-        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Assemble Linux release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-recall cli-package/medusa-recall
           cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa --version
+          target/release/medusa-recall --help | grep -F 'medusa-recall'
           target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
           target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
@@ -180,17 +183,20 @@ jobs:
           --platform macos
           --manifest desktop-package-macos.json
       - name: Build macOS CLI
-        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Assemble macOS release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-recall cli-package/medusa-recall
           cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa --version
+          target/release/medusa-recall --help | grep -F 'medusa-recall'
           target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
           target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
@@ -243,17 +249,22 @@ jobs:
           --platform windows
           --manifest desktop-package-windows.json
       - name: Build Windows CLI
-        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Assemble Windows release assets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force release-assets, cli-package | Out-Null
           Copy-Item target/release/medusa.exe cli-package/medusa.exe
+          Copy-Item target/release/medusa-recall.exe cli-package/medusa-recall.exe
           Copy-Item target/release/medusa-github-operation.exe cli-package/medusa-github-operation.exe
           Copy-Item LICENSE cli-package/LICENSE
           Copy-Item docs/RELEASE.md cli-package/RELEASE.md
           Copy-Item docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          & target/release/medusa.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & target/release/medusa-recall.exe --help | Select-String 'medusa-recall'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & target/release/medusa-github-operation.exe --help | Select-String 'medusa-github-operation'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & target/release/medusa-github-operation.exe --help | Select-String 'interchangeable backend'
@@ -276,7 +287,7 @@ jobs:
           retention-days: 30
 
   publish-draft:
-    name: Attest and create release
+    name: Attest and create draft release
     needs: [validate, linux, macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -338,12 +349,11 @@ jobs:
           path: release-assets
           if-no-files-found: error
           retention-days: 90
-      - name: Create GitHub Release
+      - name: Create draft GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
-          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -353,4 +363,5 @@ jobs:
           gh release create "$RELEASE_TAG" release-assets/* \
             --verify-tag \
             --generate-notes \
-            --title "Medusa ${RELEASE_TAG#v}"
+            --title "Medusa ${RELEASE_TAG#v}" \
+            --draft

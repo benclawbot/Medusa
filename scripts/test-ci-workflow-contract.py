@@ -7,18 +7,65 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 def read_workflow(name: str) -> str:
-    return (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
-def test_refresh_release_trigger_is_live_and_same_repo() -> None:
-    workflow = read_workflow("refresh-cli-release-assets.yml")
-    assert 'workflows: ["Publish Release"]' in workflow
-    assert 'workflows: ["Publish Draft Release"]' not in workflow
-    gate = "github.event.workflow_run.head_repository.full_name == github.repository"
-    assert workflow.count(gate) >= 2
+def test_stable_release_is_complete_before_publication() -> None:
+    refresh = WORKFLOWS / "refresh-cli-release-assets.yml"
+    assert not refresh.exists(), "stable release assets must never be refreshed after publication"
+
+    publisher = read_workflow("publish-release.yml")
+    assert publisher.count("--bin medusa-recall") == 3
+    assert publisher.count("medusa-recall") >= 9
+    assert 'gh release create "$RELEASE_TAG" release-assets/*' in publisher
+    assert "--draft" in publisher
+    assert "--clobber" not in publisher
+
+    primary_name = "sign-release-manifest.yml"
+    recovery_name = "sign-release-manifest-recovery.yml"
+    verifier_path = "./.github/workflows/verify-published-release.yml"
+    for name in (primary_name, recovery_name):
+        signer = read_workflow(name)
+        assert "--json isDraft --jq '.isDraft'" in signer
+        assert "refusing to mutate published stable assets" in signer
+        assert "--clobber" in signer
+        assert 'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false' in signer
+        assert signer.index("gh release upload") < signer.index(
+            'gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false'
+        )
+        assert verifier_path in signer
+        assert signer.index('gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false') < signer.index(verifier_path)
+
+    platform_signer = read_workflow("sign-draft-release.yml")
+    assert "release $RELEASE_TAG must exist and remain a draft" in platform_signer
+    assert "--clobber" in platform_signer
+    assert platform_signer.index("is_draft=") < platform_signer.index("--clobber")
+
+    # No other workflow that follows the normal stable Publish Release path may
+    # overwrite release assets. Rolling-main publication is intentionally mutable
+    # and is not a semver stable release.
+    stable_followup_clobber_writers = []
+    for path in WORKFLOWS.glob("*.yml"):
+        text = path.read_text(encoding="utf-8")
+        if 'workflows: ["Publish Release"]' in text and "--clobber" in text:
+            stable_followup_clobber_writers.append(path.name)
+    assert stable_followup_clobber_writers == [primary_name], stable_followup_clobber_writers
+
+    verifier = read_workflow("verify-published-release.yml")
+    for archive in (
+        "medusa-cli-linux.tar.gz",
+        "medusa-cli-macos.tar.gz",
+        "medusa-cli-windows.zip",
+    ):
+        assert archive in verifier
+    assert "update --check --release" in verifier
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN" in verifier
+    assert "Remove-Item Env:GH_TOKEN" in verifier
+    assert "Remove-Item Env:GITHUB_TOKEN" in verifier
 
 
 def test_rolling_desktop_uses_tauri_production_build() -> None:
@@ -76,7 +123,7 @@ def test_openai_oauth_never_uses_latest() -> None:
 
 def main() -> int:
     tests = [
-        test_refresh_release_trigger_is_live_and_same_repo,
+        test_stable_release_is_complete_before_publication,
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,
         test_secret_live_provider_pr_gate_is_same_repo,
