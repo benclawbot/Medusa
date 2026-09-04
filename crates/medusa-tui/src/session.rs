@@ -36,10 +36,8 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         options.initial_prompt.clone().unwrap_or_default(),
         clipboard,
     )?;
-    let mut identity = UiIdentity::for_repo_with_build(
-        &options.repo,
-        options.build_label.as_deref(),
-    );
+    let mut identity =
+        UiIdentity::for_repo_with_build(&options.repo, options.build_label.as_deref());
     let mut runtime = runtime_for_options(&options).map_err(runtime_error)?;
     let mut terminal = TerminalGuard::enter()?;
     run_loop(
@@ -136,11 +134,12 @@ pub(super) fn run_loop(
         let now = Instant::now();
         if now >= next_animation {
             needs_draw |= app.tick();
-            next_animation = now + if app.is_running() {
-                Duration::from_millis(50)
-            } else {
-                Duration::from_millis(250)
-            };
+            next_animation = now
+                + if app.is_running() {
+                    Duration::from_millis(50)
+                } else {
+                    Duration::from_millis(250)
+                };
         }
         if now >= next_daemon_poll {
             (daemon_jobs, daemon_status) = daemon.poll(app);
@@ -209,11 +208,12 @@ pub(super) fn run_loop(
         let now = Instant::now();
         if now >= next_animation {
             needs_frame |= app.tick();
-            next_animation = now + if app.is_running() {
-                Duration::from_millis(50)
-            } else {
-                Duration::from_millis(250)
-            };
+            next_animation = now
+                + if app.is_running() {
+                    Duration::from_millis(50)
+                } else {
+                    Duration::from_millis(250)
+                };
         }
         if now >= next_daemon_poll {
             let _ = daemon.poll(app);
@@ -287,13 +287,17 @@ fn handle_permission_mode_shortcut(
         return Ok(true);
     }
     let store = PermissionStore::user().map_err(|error| io::Error::other(error.to_string()))?;
-    let current = store.load().map_err(|error| io::Error::other(error.to_string()))?;
+    let current = store
+        .load()
+        .map_err(|error| io::Error::other(error.to_string()))?;
     let position = PermissionMode::ALL
         .iter()
         .position(|mode| *mode == current)
         .unwrap_or_default();
     let next = PermissionMode::ALL[(position + 1) % PermissionMode::ALL.len()];
-    store.save(next).map_err(|error| io::Error::other(error.to_string()))?;
+    store
+        .save(next)
+        .map_err(|error| io::Error::other(error.to_string()))?;
     identity.set_permission(next);
     *runtime = RuntimeController::start(app.repository().to_path_buf());
     app.status = format!("permissions: {}", next.label());
@@ -525,14 +529,7 @@ fn is_continuation_intent(input: &str) -> bool {
         .to_ascii_lowercase();
     matches!(
         normalized.as_str(),
-        "go"
-            | "go on"
-            | "continue"
-            | "continue on"
-            | "proceed"
-            | "resume"
-            | "finish"
-            | "finish it"
+        "go" | "go on" | "continue" | "continue on" | "proceed" | "resume" | "finish" | "finish it"
     )
 }
 
@@ -839,21 +836,17 @@ mod tests {
 
     #[test]
     fn permission_shortcut_accepts_shift_tab_variants_only_on_press() {
-        assert!(is_permission_mode_shortcut(&crossterm::event::KeyEvent::new(
-            KeyCode::BackTab,
-            KeyModifiers::NONE,
-        )));
-        assert!(is_permission_mode_shortcut(&crossterm::event::KeyEvent::new(
-            KeyCode::Tab,
-            KeyModifiers::SHIFT,
-        )));
-        assert!(!is_permission_mode_shortcut(&crossterm::event::KeyEvent::new(
-            KeyCode::Tab,
-            KeyModifiers::NONE,
-        )));
+        assert!(is_permission_mode_shortcut(
+            &crossterm::event::KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE,)
+        ));
+        assert!(is_permission_mode_shortcut(
+            &crossterm::event::KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT,)
+        ));
+        assert!(!is_permission_mode_shortcut(
+            &crossterm::event::KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE,)
+        ));
 
-        let mut release =
-            crossterm::event::KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        let mut release = crossterm::event::KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
         release.kind = KeyEventKind::Release;
         assert!(!is_permission_mode_shortcut(&release));
     }
@@ -874,7 +867,8 @@ mod tests {
         };
         app.transcript.push(TranscriptEntry::User(draft.clone()));
         assert!(should_resume_latest(&app, &draft));
-        app.transcript.push(TranscriptEntry::Assistant("done".to_owned()));
+        app.transcript
+            .push(TranscriptEntry::Assistant("done".to_owned()));
         assert!(!should_resume_latest(&app, &draft));
     }
 

@@ -61,9 +61,11 @@ fn worked_for_separator_matches_codex_style_and_width() {
 
     assert!(line.text.starts_with("─ Worked for 1m 04s "));
     assert_eq!(line.text.chars().count(), 80);
-    assert!(line.text["─ Worked for 1m 04s ".len()..]
-        .chars()
-        .all(|character| character == '─'));
+    assert!(
+        line.text["─ Worked for 1m 04s ".len()..]
+            .chars()
+            .all(|character| character == '─')
+    );
     assert_eq!(line.foreground, Color::DarkGrey);
 }
 

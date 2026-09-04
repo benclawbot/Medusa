@@ -2638,13 +2638,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-goal"
-version = "1.0.7"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "medusa-improvement"
 version = "1.0.7"
 dependencies = [
@@ -2732,12 +2725,8 @@ dependencies = [
 name = "medusa-progress"
 version = "1.0.7"
 dependencies = [
- "hex",
  "medusa-core",
- "medusa-goal",
  "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]

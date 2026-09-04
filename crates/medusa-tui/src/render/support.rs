@@ -704,12 +704,7 @@ pub(super) fn system_lines(message: &str, width: u16) -> Vec<StyledLine> {
     rows.into_iter()
         .enumerate()
         .map(|(index, row)| {
-            StyledLine::with_marker(
-                if index == 0 { marker } else { "  " },
-                color,
-                row,
-                color,
-            )
+            StyledLine::with_marker(if index == 0 { marker } else { "  " }, color, row, color)
         })
         .collect()
 }

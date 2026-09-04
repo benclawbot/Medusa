@@ -276,8 +276,7 @@ fn classify_status_with_body(
 ) -> MedusaError {
     let excerpt = String::from_utf8_lossy(&body.bytes);
     let quota = status.is_client_error() && body_signals_quota_limit(&excerpt);
-    let retryable =
-        !quota && (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error());
+    let retryable = !quota && (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error());
     let category = if quota {
         ErrorCategory::Policy
     } else if retryable {
@@ -300,9 +299,8 @@ fn classify_status_with_body(
     } else {
         format!("provider returned HTTP {status}: {excerpt}{truncation}")
     };
-    let mut error =
-        MedusaError::new(ErrorCode::DependencyUnavailable, category, message)
-            .with_retryable(retryable);
+    let mut error = MedusaError::new(ErrorCode::DependencyUnavailable, category, message)
+        .with_retryable(retryable);
     if quota {
         error.context.insert(
             "provider_error_body".to_owned(),

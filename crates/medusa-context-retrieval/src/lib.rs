@@ -357,7 +357,12 @@ mod tests {
     fn memo_returns_cached_result_for_identical_query() {
         let mut ledger = ContextLedger::default();
         ledger
-            .append(item("goal", ContextKind::Goal, "finish retry controller", 1))
+            .append(item(
+                "goal",
+                ContextKind::Goal,
+                "finish retry controller",
+                1,
+            ))
             .unwrap();
         let query = RetrievalQuery {
             text: "retry controller".to_owned(),
