@@ -73,8 +73,7 @@ def validate(root: Path) -> None:
     multi_agent = read(root, "docs/MULTI_AGENT_EXECUTION.md")
     planning = read(root, "crates/medusa-runtime/src/coordination/production_orchestrator.rs")
     read_only_coordinator = read(root, "crates/medusa-runtime/src/coordination/multi_agent_coordinator.rs")
-    mutating_coordinator = read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs")
-    mutating_coordinator += "\n" + read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs")
+    mutating_coordinator = read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs")
     mutating_coordinator += "\n" + read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_support.rs")
     mutation_transaction = read(root, "crates/medusa-runtime/src/mutation_transaction_state.rs")
     parallel_mutation = read(root, "crates/medusa-runtime/src/parallel_mutation.rs")
@@ -161,7 +160,7 @@ def validate(root: Path) -> None:
     for needle in (
         "multi_agent_coordinator::run_preflight",
         "mutating_worker_coordinator::run_implementation",
-        "mutation_transaction::complete_after_parent_review",
+        "crate::parent_reviewer::complete",
         "production_orchestrator::requires_mutation",
         "TeamRole::Reviewer",
         "implementation_evidence",

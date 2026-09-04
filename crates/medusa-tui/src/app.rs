@@ -364,7 +364,8 @@ impl AppState {
                 }
                 let submitted = self.composer.draft.clone();
                 let submitted_text = submitted.text.trim();
-                let is_command = submitted.attachments.is_empty() && submitted_text.starts_with('/');
+                let is_command =
+                    submitted.attachments.is_empty() && submitted_text.starts_with('/');
                 if !self.credential_configured && !is_command {
                     self.model_modal = Some(ModelModal::new(
                         self.model_label.as_deref(),
@@ -508,6 +509,9 @@ impl AppState {
         self.status = "context compacted".to_owned();
     }
 
+    // Runtime settings are applied atomically from the persisted user configuration;
+    // keeping the existing call shape avoids splitting one coherent update across setters.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_runtime_settings(
         &mut self,
         model: String,
@@ -879,11 +883,7 @@ impl AppState {
 
     #[must_use]
     pub fn is_waiting_for_answer(&self) -> bool {
-        self.is_running()
-            && !matches!(
-                self.transcript.last(),
-                Some(TranscriptEntry::Assistant(_))
-            )
+        self.is_running() && !matches!(self.transcript.last(), Some(TranscriptEntry::Assistant(_)))
     }
 
     pub fn record_activity(&mut self, activity: TranscriptActivity) {

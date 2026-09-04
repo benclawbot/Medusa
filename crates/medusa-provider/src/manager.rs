@@ -1507,8 +1507,7 @@ mod tests {
     fn flapping_primary_is_routed_around_with_bounded_waste() {
         let (primary, primary_calls) = provider(Err(failure(ErrorCategory::Transient, true)));
         let (fallback, fallback_calls) = provider(Ok(success()));
-        let manager =
-            ProviderManager::new(vec![primary, fallback]).without_sleep();
+        let manager = ProviderManager::new(vec![primary, fallback]).without_sleep();
 
         for turn in 0..4 {
             let mut request = request();
