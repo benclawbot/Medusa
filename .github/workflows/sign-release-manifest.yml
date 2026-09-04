@@ -242,3 +242,11 @@ jobs:
           test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true"
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
           test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "false"
+
+  verify-public-release:
+    name: Verify published stable release
+    needs: [prepare, sign-primary]
+    uses: ./.github/workflows/verify-published-release.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}
+      release_sha: ${{ needs.prepare.outputs.sha }}
