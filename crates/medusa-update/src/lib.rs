@@ -13,6 +13,7 @@ mod install;
 pub mod manifest;
 mod model;
 mod release_id;
+mod rolling_signature;
 mod source;
 #[cfg(windows)]
 mod windows_install;
