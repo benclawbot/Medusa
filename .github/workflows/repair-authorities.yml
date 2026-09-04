@@ -43,6 +43,14 @@ jobs:
               groups[group] = [member for member in members if member != 'medusa-goal']
           baseline_path.write_text(json.dumps(baseline, indent=2) + '\n')
 
+          contributor_path = Path('docs/CONTRIBUTOR-ARCHITECTURE.md')
+          contributor = contributor_path.read_text()
+          old = '| Objective and goal state | `crates/medusa-goal`, `crates/medusa-world-model` |'
+          new = '| Objective and goal state | `crates/medusa-world-model` |'
+          if old not in contributor:
+              raise SystemExit('expected medusa-goal contributor architecture reference not found')
+          contributor_path.write_text(contributor.replace(old, new, 1))
+
           tui_lib = Path('crates/medusa-tui/src/lib.rs')
           text = tui_lib.read_text()
           old = '#[allow(clippy::manual_contains, clippy::too_many_arguments)]\nmod render;'
