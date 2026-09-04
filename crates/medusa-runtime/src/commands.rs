@@ -520,9 +520,10 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             let mode = if remainder.is_empty() {
                 None
             } else {
-                Some(Verbosity::parse(remainder).ok_or_else(|| {
-                    "/verbose expects off, new, all, or verbose".to_owned()
-                })?)
+                Some(
+                    Verbosity::parse(remainder)
+                        .ok_or_else(|| "/verbose expects off, new, all, or verbose".to_owned())?,
+                )
             };
             Ok(Some(SlashCommand::Verbose { mode }))
         }
