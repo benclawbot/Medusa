@@ -40,6 +40,11 @@ def test_stable_release_is_complete_before_publication() -> None:
         assert verifier_path in signer
         assert signer.index('gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false') < signer.index(verifier_path)
 
+    platform_signer = read_workflow("sign-draft-release.yml")
+    assert "release $RELEASE_TAG must exist and remain a draft" in platform_signer
+    assert "--clobber" in platform_signer
+    assert platform_signer.index("is_draft=") < platform_signer.index("--clobber")
+
     # No other workflow that follows the normal stable Publish Release path may
     # overwrite release assets. Rolling-main publication is intentionally mutable
     # and is not a semver stable release.
