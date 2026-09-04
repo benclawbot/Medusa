@@ -26,6 +26,13 @@ def test_rolling_desktop_uses_tauri_production_build() -> None:
     workflow = read_workflow("rolling-main-cli.yml")
     assert "npm run tauri:build -- --no-bundle" in workflow
     assert "cargo build --release --locked --manifest-path" not in workflow
+    assert "Smoke packaged Windows desktop origin" in workflow
+    assert "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS" in workflow
+    assert "localhost:5173" in workflow
+    assert "tauri\\.localhost" in workflow
+    assert workflow.index("Smoke packaged Windows desktop origin") < workflow.index(
+        "Package exact-revision desktop asset"
+    )
 
 
 def test_pr_base_ref_is_bound_through_environment() -> None:
