@@ -190,6 +190,10 @@ struct ProviderPlanUsageSnapshot {
     observed_at_unix: i64,
 }
 
+type ProviderPlanUsageCache = std::sync::Mutex<
+    Option<(std::time::Instant, Option<ProviderPlanUsageSnapshot>)>,
+>;
+
 impl ProviderPlanUsageSnapshot {
     fn reset_after_seconds(&self, now_unix: i64) -> Option<u64> {
         self.reset_at_unix
@@ -209,8 +213,7 @@ fn provider_plan_meter() -> Option<String> {
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
 
-    static CACHE: OnceLock<Mutex<Option<(Instant, Option<ProviderPlanUsageSnapshot>)>>> =
-        OnceLock::new();
+    static CACHE: OnceLock<ProviderPlanUsageCache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache.lock().ok()?;
     let refresh = cache
@@ -733,13 +736,13 @@ pub(super) fn render_frame(
     set_frame_line(
         &mut frame,
         bottom_row,
-        StyledLine::new(context_meter_line(app), Color::Grey),
+        StyledLine::new("─".repeat(usize::from(width)), Color::White),
     );
     bottom_row = bottom_row.saturating_add(1);
     set_frame_line(
         &mut frame,
         bottom_row,
-        StyledLine::new("─".repeat(usize::from(width)), Color::White),
+        StyledLine::new(context_meter_line(app), Color::Grey),
     );
     bottom_row = bottom_row.saturating_add(1);
     set_frame_line(
