@@ -209,8 +209,8 @@ fn provider_plan_meter() -> Option<String> {
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
 
-    static CACHE: OnceLock<Mutex<Option<(Instant, Option<ProviderPlanUsageSnapshot>)>>> =
-        OnceLock::new();
+    type CachedProviderPlanUsage = Option<(Instant, Option<ProviderPlanUsageSnapshot>)>;
+    static CACHE: OnceLock<Mutex<CachedProviderPlanUsage>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache.lock().ok()?;
     let refresh = cache

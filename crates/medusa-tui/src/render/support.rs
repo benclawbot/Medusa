@@ -627,9 +627,7 @@ impl StyledLine {
             stdout,
             SetAttribute(Attribute::Reset),
             ResetColor,
-            Print(
-                "\n"
-            )
+            Print("\n")
         )
     }
 

@@ -509,6 +509,9 @@ impl AppState {
         self.status = "context compacted".to_owned();
     }
 
+    // Runtime settings are applied atomically from the persisted user configuration;
+    // keeping the existing call shape avoids splitting one coherent update across setters.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_runtime_settings(
         &mut self,
         model: String,
