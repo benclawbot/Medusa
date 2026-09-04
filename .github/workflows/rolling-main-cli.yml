@@ -166,6 +166,46 @@ jobs:
       - name: Build packaged Medusa Desktop executable
         working-directory: apps/medusa-desktop
         run: npm run tauri:build -- --no-bundle
+      - name: Smoke packaged Windows desktop origin
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
+          $executable = (Resolve-Path 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe').Path
+          $process = Start-Process -FilePath $executable -PassThru
+          try {
+            $page = $null
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              if ($process.HasExited) {
+                throw "packaged desktop exited before WebView2 became ready (exit $($process.ExitCode))"
+              }
+              try {
+                $targets = @(Invoke-RestMethod -Uri 'http://127.0.0.1:9222/json/list' -TimeoutSec 1)
+                $page = $targets | Where-Object { $_.type -eq 'page' } | Select-Object -First 1
+              } catch {
+                $page = $null
+              }
+              if ($null -ne $page) { break }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($null -eq $page) {
+              throw 'packaged desktop never exposed a WebView2 page'
+            }
+            $url = [string]$page.url
+            Write-Host "Packaged desktop WebView URL: $url"
+            if ($url -match 'localhost:5173') {
+              throw "development Vite origin leaked into rolling desktop: $url"
+            }
+            if ($url -notmatch '^https?://tauri\.localhost(?:/|$)') {
+              throw "unexpected packaged Tauri origin: $url"
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+          }
       - name: Package exact-revision desktop asset
         run: >-
           python scripts/package-main-desktop-update.py
