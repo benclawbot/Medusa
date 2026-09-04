@@ -113,17 +113,17 @@ fn schedule_windows_health_checked_replace(
             .map_err(io_error)?;
 
         let expected_hash = sha256_file(&staged)?;
-        let script = helper::windows_health_checked_replace_script(
+        let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
             parent_pid,
             target,
-            &staged,
-            &backup,
-            &state,
-            &health,
-            &lock,
-            &expected_hash,
+            staged: &staged,
+            backup: &backup,
+            state: &state,
+            health: &health,
+            lock: &lock,
+            expected_hash: &expected_hash,
             restart,
-        );
+        });
         fs::write(&helper_path, script.as_bytes()).map_err(io_error)?;
 
         let child = Command::new("powershell")
