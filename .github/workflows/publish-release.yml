@@ -23,8 +23,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authoritative-validation:
+    name: Authoritative workspace validation
+    uses: ./.github/workflows/ci.yml
+
   validate:
     name: Validate release tag
+    needs: authoritative-validation
     runs-on: ubuntu-latest
     outputs:
       release-tag: ${{ steps.release.outputs.tag }}
