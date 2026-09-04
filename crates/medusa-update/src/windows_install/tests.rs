@@ -82,6 +82,7 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
     let state = root.join(".medusa-update-state");
     let health = root.join(".medusa-update-health");
     let lock = root.join(".medusa-update.lock");
+    let sequence = root.join("update-sequence");
     let helper_path = root.join("medusa-desktop.update.ps1");
 
     let comspec = PathBuf::from(std::env::var_os("ComSpec").expect("ComSpec"));
@@ -97,8 +98,8 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
             "echo healthy>%MEDUSA_UPDATE_HEALTH_FILE%".to_owned(),
         ],
         detached: true,
-        sequence_file: None,
-        rollout_sequence: None,
+        sequence_file: Some(sequence.clone()),
+        rollout_sequence: Some(42),
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
     let script = helper::windows_health_checked_replace_script(
@@ -125,6 +126,12 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
             .expect("read health")
             .contains("healthy")
     );
+    assert_eq!(
+        std::fs::read_to_string(&sequence)
+            .expect("read rollout sequence")
+            .trim(),
+        "42"
+    );
     assert_eq!(sha256_file(&target).expect("target hash"), expected_hash);
     assert!(!backup.exists());
     assert!(!lock.exists());
@@ -140,6 +147,7 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
     let state = root.join(".medusa-update-state");
     let health = root.join(".medusa-update-health");
     let lock = root.join(".medusa-update.lock");
+    let sequence = root.join("update-sequence");
     let helper_path = root.join("medusa-desktop.update.ps1");
 
     let comspec = PathBuf::from(std::env::var_os("ComSpec").expect("ComSpec"));
@@ -153,8 +161,8 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
     let restart = Restart {
         arguments: vec!["/C".to_owned(), "exit 7".to_owned()],
         detached: true,
-        sequence_file: None,
-        rollout_sequence: None,
+        sequence_file: Some(sequence.clone()),
+        rollout_sequence: Some(42),
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
     let script = helper::windows_health_checked_replace_script(
@@ -177,6 +185,7 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
         "rolled-back"
     );
     assert_eq!(sha256_file(&target).expect("restored hash"), original_hash);
+    assert!(!sequence.exists());
     assert!(!backup.exists());
     assert!(!lock.exists());
 }
