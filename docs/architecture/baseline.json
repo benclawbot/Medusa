@@ -33,7 +33,6 @@
       "medusa-openai-realtime": "preserve",
       "medusa-intelligence": "preserve",
       "medusa-world-model": "preserve",
-      "medusa-goal": "preserve",
       "medusa-progress": "preserve",
       "medusa-confidence": "preserve",
       "medusa-failure": "preserve",
@@ -94,7 +93,7 @@
       "integrations": ["medusa-capabilities", "medusa-extensions", "medusa-github"],
       "release": ["medusa-update"],
       "state-and-recovery": ["medusa-failure", "medusa-continuation", "medusa-wakeup", "medusa-markdown-memory", "medusa-memory-consolidation", "medusa-memory", "medusa-memory-writeback", "medusa-execution-replay", "medusa-runtime-supervisor", "medusa-execution-checkpoint", "medusa-time-travel", "medusa-recovery-coordinator", "medusa-session-continuity"],
-      "intelligence": ["medusa-intelligence", "medusa-world-model", "medusa-goal", "medusa-progress", "medusa-confidence", "medusa-escalation", "medusa-prompt-cache", "medusa-mcp-cache", "medusa-clearops", "medusa-improvement", "medusa-context", "medusa-context-retrieval", "medusa-turn-assembly"],
+      "intelligence": ["medusa-intelligence", "medusa-world-model", "medusa-progress", "medusa-confidence", "medusa-escalation", "medusa-prompt-cache", "medusa-mcp-cache", "medusa-clearops", "medusa-improvement", "medusa-context", "medusa-context-retrieval", "medusa-turn-assembly"],
       "evidence": ["medusa-evidence"]
     }
   },

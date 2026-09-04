@@ -23,7 +23,6 @@
     "medusa-external-provider": "provider",
     "medusa-failure": "recovery",
     "medusa-github": "integrations",
-    "medusa-goal": "intelligence",
     "medusa-hardening": "safety",
     "medusa-improvement": "intelligence",
     "medusa-intelligence": "intelligence",

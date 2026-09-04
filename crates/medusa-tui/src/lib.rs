@@ -5,6 +5,7 @@ pub mod draft_store;
 pub mod input;
 pub mod native_clipboard;
 pub mod runtime;
+pub mod setup;
 
 use std::{
     collections::BTreeMap,

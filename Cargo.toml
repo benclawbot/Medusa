@@ -12,7 +12,6 @@ members = [
   "crates/medusa-openai-realtime",
   "crates/medusa-intelligence",
   "crates/medusa-world-model",
-  "crates/medusa-goal",
   "crates/medusa-progress",
   "crates/medusa-confidence",
   "crates/medusa-failure",
