@@ -127,8 +127,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 let hidden = match app.verbosity {
                     Verbosity::Off => verbose_filterable(activity.kind),
                     Verbosity::New => {
-                        verbose_filterable(activity.kind)
-                            && Some(entry_index) != latest_filterable
+                        verbose_filterable(activity.kind) && Some(entry_index) != latest_filterable
                     }
                     Verbosity::All | Verbosity::Verbose => false,
                 };
@@ -731,12 +730,7 @@ pub(super) fn system_lines(message: &str, width: u16) -> Vec<StyledLine> {
     rows.into_iter()
         .enumerate()
         .map(|(index, row)| {
-            StyledLine::with_marker(
-                if index == 0 { marker } else { "  " },
-                color,
-                row,
-                color,
-            )
+            StyledLine::with_marker(if index == 0 { marker } else { "  " }, color, row, color)
         })
         .collect()
 }

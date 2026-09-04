@@ -423,7 +423,7 @@
       "owner": "agent runtime maintainers",
       "production_paths": [
         "crates/medusa-runtime/src/coordination/multi_agent_coordinator.rs",
-        "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs",
+        "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs",
         "crates/medusa-runtime/src/parallel_mutation.rs",
         "crates/medusa-runtime/src/parallel_mutation_batch.rs",
         "crates/medusa-runtime/src/workspace_worker_manager.rs",
