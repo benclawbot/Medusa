@@ -93,7 +93,11 @@ pub enum ExitReason {
 mod daemon_status;
 // Renderer helpers intentionally keep explicit style parameters, and renderer tests compare
 // exact row membership. Keep these allowances scoped to the private presentation module.
-#[allow(clippy::manual_contains, clippy::too_many_arguments)]
+#[allow(
+    clippy::manual_contains,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 mod render;
 mod session;
 
