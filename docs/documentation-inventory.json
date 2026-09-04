@@ -276,12 +276,12 @@
     {
       "path": "docs/RELEASE-SIGNING.md",
       "disposition": "current",
-      "sha256": "f69a2a7b44d479c7f1eabe8dc5d3fec7b30ae51c1ee163530a111c64f26b4e68"
+      "sha256": "162cdbe9b90e4317c73097600f2cf6718d1c1258d8d41d82526651896a1a7d69"
     },
     {
       "path": "docs/RELEASE.md",
       "disposition": "current",
-      "sha256": "6341cefe30ce1d7157dd4bef81575e8231d44c924ea65ef7ff404c10ee2d04d4"
+      "sha256": "bc4ef3378eb39381d58d84d3368b7d8e5759be0bd601f6377ff3cfefb8d92bf3"
     },
     {
       "path": "docs/SAFETY-RECOVERY-PROOF.md",
