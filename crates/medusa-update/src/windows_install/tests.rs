@@ -39,17 +39,17 @@ fn windows_helper_contract_restarts_exact_target_and_requires_health() {
         sequence_file: Some(PathBuf::from(r"C:\repo\.medusa\update-sequence")),
         rollout_sequence: Some(42),
     };
-    let script = helper::windows_health_checked_replace_script(
-        4242,
-        Path::new(r"C:\bin\medusa-desktop.exe"),
-        Path::new(r"C:\bin\medusa-desktop.update-new.exe"),
-        Path::new(r"C:\bin\medusa-desktop.previous.exe"),
-        Path::new(r"C:\bin\.medusa-update-state"),
-        Path::new(r"C:\bin\.medusa-update-health"),
-        Path::new(r"C:\bin\.medusa-update.lock"),
-        "abc123",
-        &restart,
-    );
+    let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
+        parent_pid: 4242,
+        target: Path::new(r"C:\bin\medusa-desktop.exe"),
+        staged: Path::new(r"C:\bin\medusa-desktop.update-new.exe"),
+        backup: Path::new(r"C:\bin\medusa-desktop.previous.exe"),
+        state: Path::new(r"C:\bin\.medusa-update-state"),
+        health: Path::new(r"C:\bin\.medusa-update-health"),
+        lock: Path::new(r"C:\bin\.medusa-update.lock"),
+        expected_hash: "abc123",
+        restart: &restart,
+    });
     let stop = script
         .find("Get-TargetProcesses | Stop-Process")
         .expect("stop exact target");
@@ -102,17 +102,17 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
         rollout_sequence: Some(42),
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
-    let script = helper::windows_health_checked_replace_script(
-        0,
-        &target,
-        &staged,
-        &backup,
-        &state,
-        &health,
-        &lock,
-        &expected_hash,
-        &restart,
-    );
+    let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
+        parent_pid: 0,
+        target: &target,
+        staged: &staged,
+        backup: &backup,
+        state: &state,
+        health: &health,
+        lock: &lock,
+        expected_hash: &expected_hash,
+        restart: &restart,
+    });
     std::fs::write(&helper_path, script).expect("write helper");
 
     let status = run_helper(&helper_path);
@@ -165,17 +165,17 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
         rollout_sequence: Some(42),
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
-    let script = helper::windows_health_checked_replace_script(
-        0,
-        &target,
-        &staged,
-        &backup,
-        &state,
-        &health,
-        &lock,
-        &expected_hash,
-        &restart,
-    );
+    let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
+        parent_pid: 0,
+        target: &target,
+        staged: &staged,
+        backup: &backup,
+        state: &state,
+        health: &health,
+        lock: &lock,
+        expected_hash: &expected_hash,
+        restart: &restart,
+    });
     std::fs::write(&helper_path, script).expect("write helper");
 
     let status = run_helper(&helper_path);
