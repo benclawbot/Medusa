@@ -21,6 +21,20 @@ def test_refresh_release_trigger_is_live_and_same_repo() -> None:
     assert workflow.count(gate) >= 2
 
 
+def test_rolling_desktop_uses_tauri_production_build() -> None:
+    # A raw Cargo build selects Tauri's devUrl and ships a desktop that requires Vite.
+    workflow = read_workflow("rolling-main-cli.yml")
+    assert "npm run tauri:build -- --no-bundle" in workflow
+    assert "cargo build --release --locked --manifest-path" not in workflow
+    assert "Smoke packaged Windows desktop origin" in workflow
+    assert "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS" in workflow
+    assert "localhost:5173" in workflow
+    assert "tauri\\.localhost" in workflow
+    assert workflow.index("Smoke packaged Windows desktop origin") < workflow.index(
+        "Package exact-revision desktop asset"
+    )
+
+
 def test_pr_base_ref_is_bound_through_environment() -> None:
     workflow = read_workflow("ci.yml")
     assert 'git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"' not in workflow
@@ -61,6 +75,7 @@ def test_openai_oauth_never_uses_latest() -> None:
 def main() -> int:
     tests = [
         test_refresh_release_trigger_is_live_and_same_repo,
+        test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,
         test_secret_live_provider_pr_gate_is_same_repo,
         test_tui_model_is_explicitly_parameterized,
