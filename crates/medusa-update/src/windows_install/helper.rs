@@ -2,17 +2,31 @@ use std::path::Path;
 
 use crate::install::{HEALTH_FILE_ENV, Restart};
 
-pub(super) fn windows_health_checked_replace_script(
-    parent_pid: u32,
-    target: &Path,
-    staged: &Path,
-    backup: &Path,
-    state: &Path,
-    health: &Path,
-    lock: &Path,
-    expected_hash: &str,
-    restart: &Restart,
-) -> String {
+#[derive(Clone, Copy)]
+pub(super) struct WindowsReplaceScript<'a> {
+    pub parent_pid: u32,
+    pub target: &'a Path,
+    pub staged: &'a Path,
+    pub backup: &'a Path,
+    pub state: &'a Path,
+    pub health: &'a Path,
+    pub lock: &'a Path,
+    pub expected_hash: &'a str,
+    pub restart: &'a Restart,
+}
+
+pub(super) fn windows_health_checked_replace_script(spec: WindowsReplaceScript<'_>) -> String {
+    let WindowsReplaceScript {
+        parent_pid,
+        target,
+        staged,
+        backup,
+        state,
+        health,
+        lock,
+        expected_hash,
+        restart,
+    } = spec;
     let arguments = windows_process_arguments(&restart.arguments);
     let sequence_file = restart
         .sequence_file
