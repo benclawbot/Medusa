@@ -27,6 +27,54 @@ impl Effort {
     }
 }
 
+/// Display verbosity for tool-progress activity, mirroring the Telegram
+/// `/verbose <off|new|all|verbose>` levels: `off` hides tool, progress,
+/// and verification rows; `new` keeps only the latest such row; `all`
+/// shows every row; `verbose` additionally expands row details.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verbosity {
+    Off,
+    New,
+    #[default]
+    All,
+    Verbose,
+}
+
+impl Verbosity {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::New => "new",
+            Self::All => "all",
+            Self::Verbose => "verbose",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "new" => Some(Self::New),
+            "all" => Some(Self::All),
+            "verbose" => Some(Self::Verbose),
+            _ => None,
+        }
+    }
+
+    /// Hermes-style cycle: off -> new -> all -> verbose -> off.
+    #[must_use]
+    pub const fn cycled(self) -> Self {
+        match self {
+            Self::Off => Self::New,
+            Self::New => Self::All,
+            Self::All => Self::Verbose,
+            Self::Verbose => Self::Off,
+        }
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct ModelConfiguration {
     pub provider: String,
@@ -69,6 +117,9 @@ pub enum SlashCommand {
     Model(ModelCommand),
     Effort {
         effort: Option<Effort>,
+    },
+    Verbose {
+        mode: Option<Verbosity>,
     },
     Skills,
     Skill {
@@ -245,6 +296,11 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         name: "effort",
         usage: "/effort [low|medium|high|auto]",
         description: "show or set the turn budget",
+    },
+    CommandSpec {
+        name: "verbose",
+        usage: "/verbose [off|new|all|verbose]",
+        description: "cycle or set tool-progress verbosity",
     },
     CommandSpec {
         name: "skills",
@@ -459,6 +515,16 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
                 })
             };
             Ok(Some(SlashCommand::Effort { effort }))
+        }
+        "verbose" => {
+            let mode = if remainder.is_empty() {
+                None
+            } else {
+                Some(Verbosity::parse(remainder).ok_or_else(|| {
+                    "/verbose expects off, new, all, or verbose".to_owned()
+                })?)
+            };
+            Ok(Some(SlashCommand::Verbose { mode }))
         }
         "skills" => {
             if remainder.is_empty() {
@@ -1051,6 +1117,34 @@ mod tests {
             "config"
         );
         assert!(!SlashCommand::Config(ConfigCommand::Show).runs_agent());
+    }
+
+    #[test]
+    fn verbosity_cycles_like_hermes_and_parses() {
+        assert_eq!(Verbosity::default(), Verbosity::All);
+        assert_eq!(Verbosity::Off.cycled(), Verbosity::New);
+        assert_eq!(Verbosity::New.cycled(), Verbosity::All);
+        assert_eq!(Verbosity::All.cycled(), Verbosity::Verbose);
+        assert_eq!(Verbosity::Verbose.cycled(), Verbosity::Off);
+        for (input, expected) in [
+            ("/verbose off", Verbosity::Off),
+            ("/verbose new", Verbosity::New),
+            ("/verbose all", Verbosity::All),
+            ("/verbose verbose", Verbosity::Verbose),
+        ] {
+            assert_eq!(
+                parse_slash_command(input),
+                Ok(Some(SlashCommand::Verbose {
+                    mode: Some(expected)
+                }))
+            );
+        }
+        assert_eq!(
+            parse_slash_command("/verbose"),
+            Ok(Some(SlashCommand::Verbose { mode: None }))
+        );
+        assert!(parse_slash_command("/verbose loud").is_err());
+        assert_eq!(Verbosity::parse("nope"), None);
     }
 
     #[test]

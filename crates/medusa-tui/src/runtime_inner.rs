@@ -86,6 +86,7 @@ pub enum RuntimeEvent {
     Settings {
         model: String,
         effort: String,
+        verbosity: String,
         plan_mode: bool,
         credential_configured: bool,
         context_window_tokens: u64,
@@ -207,6 +208,7 @@ impl DaemonRuntimeState {
         let initial_settings = RuntimeEvent::Settings {
             model: format!("{} / {}", config.model.provider, config.model.name),
             effort: format!("effort:{}", effort_label_for_turns(config.agent.max_turns)),
+            verbosity: medusa_runtime::commands::Verbosity::All.label().to_owned(),
             plan_mode: config.agent.mode == Mode::ReadOnly,
             credential_configured,
             context_window_tokens: config.model.context_window_tokens,
@@ -1020,6 +1022,10 @@ fn slash_command_input(command: &SlashCommand) -> String {
             Some(effort) => format!("/effort {}", effort.label()),
             None => "/effort".to_owned(),
         },
+        SlashCommand::Verbose { mode } => match mode {
+            Some(mode) => format!("/verbose {}", mode.label()),
+            None => "/verbose".to_owned(),
+        },
         SlashCommand::Skills => "/skills".to_owned(),
         SlashCommand::Skill { selector, task } => {
             option_command(&format!("/{selector}"), task.as_deref())
@@ -1068,11 +1074,13 @@ fn map_transient_event(
         FrontendTransientEvent::Settings {
             model,
             effort,
+            verbosity,
             plan_mode,
             credential_configured,
         } => RuntimeEvent::Settings {
             model,
             effort,
+            verbosity,
             plan_mode,
             credential_configured,
             context_window_tokens,
@@ -1497,6 +1505,7 @@ mod tests {
                 FrontendTransientEvent::Settings {
                     model: "MiniMax-M3".to_owned(),
                     effort: "high".to_owned(),
+                    verbosity: "new".to_owned(),
                     plan_mode: false,
                     credential_configured: true,
                 },

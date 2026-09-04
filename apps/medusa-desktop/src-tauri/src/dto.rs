@@ -119,6 +119,7 @@ pub enum DesktopRuntimeEvent {
     Settings {
         model: String,
         effort: String,
+        verbosity: String,
         plan_mode: bool,
         credential_configured: bool,
     },
@@ -302,12 +303,14 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
             RuntimeEvent::Settings {
                 model,
                 effort,
+                verbosity,
                 plan_mode,
                 credential_configured,
                 ..
             } => Self::Settings {
                 model,
                 effort,
+                verbosity,
                 plan_mode,
                 credential_configured,
             },
@@ -417,10 +420,12 @@ mod tests {
         let settings = serde_json::to_value(DesktopRuntimeEvent::Settings {
             model: "MiniMax-M2.5".to_owned(),
             effort: "effort:auto".to_owned(),
+            verbosity: "all".to_owned(),
             plan_mode: false,
             credential_configured: true,
         })
         .expect("serialize settings event");
+        assert_eq!(settings["verbosity"], "all");
         assert_eq!(settings["planMode"], false);
         assert_eq!(settings["credentialConfigured"], true);
         assert!(settings.get("plan_mode").is_none());

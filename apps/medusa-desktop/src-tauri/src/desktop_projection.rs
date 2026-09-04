@@ -48,11 +48,13 @@ fn map_transient_event(event: FrontendTransientEvent) -> DesktopRuntimeEvent {
         FrontendTransientEvent::Settings {
             model,
             effort,
+            verbosity,
             plan_mode,
             credential_configured,
         } => DesktopRuntimeEvent::Settings {
             model,
             effort,
+            verbosity,
             plan_mode,
             credential_configured,
         },
@@ -405,6 +407,7 @@ mod desktop_projection_tests {
             map_transient_event(FrontendTransientEvent::Settings {
                 model: "MiniMax-M3".to_owned(),
                 effort: "effort:high".to_owned(),
+                verbosity: "all".to_owned(),
                 plan_mode: false,
                 credential_configured: true,
             }),

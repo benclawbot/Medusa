@@ -102,3 +102,60 @@ fn conversation_urls_are_emitted_as_terminal_hyperlinks() {
     assert!(rendered.contains("\x1b]8;;https://example.com/docs\x1b\\"));
     assert!(rendered.ends_with("\x1b]8;;\x1b\\."));
 }
+
+#[test]
+fn verbosity_filters_tool_activity_rows() {
+    use crate::app::TranscriptActivityKind;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "verbosity-filter",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    for (index, title) in ["first tool call", "second tool call"].into_iter().enumerate() {
+        app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
+            id: Some(format!("tool-{index}")),
+            kind: TranscriptActivityKind::Progress,
+            title: title.to_owned(),
+            details: vec!["detail".to_owned()],
+        }));
+    }
+    app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
+        id: None,
+        kind: TranscriptActivityKind::Error,
+        title: "boom".to_owned(),
+        details: Vec::new(),
+    }));
+
+    let titles = |app: &AppState| {
+        transcript_lines(app, 80)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+    };
+
+    app.verbosity = Verbosity::All;
+    let all = titles(&app).join("
+");
+    assert!(all.contains("first tool call") && all.contains("second tool call"));
+
+    app.verbosity = Verbosity::Off;
+    let off = titles(&app).join("
+");
+    assert!(!off.contains("tool call"));
+    assert!(off.contains("boom"));
+
+    app.verbosity = Verbosity::New;
+    let new = titles(&app).join("
+");
+    assert!(!new.contains("first tool call"));
+    assert!(new.contains("second tool call"));
+
+    app.verbosity = Verbosity::Verbose;
+    let verbose = titles(&app).join("
+");
+    assert!(verbose.contains("detail"));
+}

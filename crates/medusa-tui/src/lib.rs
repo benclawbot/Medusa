@@ -557,6 +557,7 @@ mod tests {
         app.set_runtime_settings(
             "minimax / MiniMax-M3".to_owned(),
             "effort:high".to_owned(),
+            "all".to_owned(),
             false,
             true,
             1_000_000,

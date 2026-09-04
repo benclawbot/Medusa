@@ -237,6 +237,7 @@ export type RuntimeEvent =
       type: "settings";
       model: string;
       effort: string;
+      verbosity: string;
       planMode: boolean;
       credentialConfigured: boolean;
     }

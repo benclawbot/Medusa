@@ -695,6 +695,7 @@ pub(super) fn drain_runtime_events(
             RuntimeEvent::Settings {
                 model,
                 effort,
+                verbosity,
                 plan_mode,
                 credential_configured,
                 context_window_tokens,
@@ -703,6 +704,7 @@ pub(super) fn drain_runtime_events(
                 app.set_runtime_settings(
                     model,
                     effort,
+                    verbosity,
                     plan_mode,
                     credential_configured,
                     context_window_tokens,

@@ -14,7 +14,7 @@ use crate::{
         PromptDraft, attach_image_file, attachment_summary, remove_attachment,
     },
     commands::{
-        ModelCommand, SlashCommand, command_suggestions, complete_first_command,
+        ModelCommand, SlashCommand, Verbosity, command_suggestions, complete_first_command,
         parse_slash_command,
     },
     draft_store::DraftStore,
@@ -76,6 +76,7 @@ pub struct AppState {
     pub command_selection: usize,
     pub model_label: Option<String>,
     pub effort_label: Option<String>,
+    pub verbosity: Verbosity,
     pub plan_mode: bool,
     pub task_list_visible: bool,
     expanded_activity_details: BTreeSet<ActivityDetailKey>,
@@ -210,6 +211,7 @@ impl AppState {
             command_selection: 0,
             model_label: None,
             effort_label: None,
+            verbosity: Verbosity::default(),
             plan_mode: false,
             task_list_visible: true,
             expanded_activity_details: BTreeSet::new(),
@@ -510,6 +512,7 @@ impl AppState {
         &mut self,
         model: String,
         effort: String,
+        verbosity: String,
         plan_mode: bool,
         credential_configured: bool,
         context_window_tokens: u64,
@@ -517,6 +520,7 @@ impl AppState {
     ) {
         self.model_label = Some(model);
         self.effort_label = Some(effort);
+        self.verbosity = Verbosity::parse(&verbosity).unwrap_or_default();
         self.plan_mode = plan_mode;
         self.credential_configured = credential_configured;
         self.context_window_tokens = context_window_tokens;

@@ -2,7 +2,7 @@ use std::path::Path;
 
 pub use medusa_runtime::commands::{
     COMMAND_SPECS, CommandSpec, CommandSuggestion, ConfigCommand, Effort, LearningCommand,
-    ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand, TeamCommand,
+    ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand, TeamCommand, Verbosity,
 };
 
 #[path = "voice.rs"]

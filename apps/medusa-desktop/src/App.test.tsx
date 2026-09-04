@@ -590,6 +590,7 @@ it("shows a Codex-authenticated OAuth account as ready in Session details", asyn
       type: "settings",
       model: "gpt-5.6-luna",
       effort: "medium",
+      verbosity: "all",
       planMode: false,
       credentialConfigured: false,
     }])
@@ -784,4 +785,31 @@ it("shows a rendered result in the shared side panel when a turn reports a faile
   fireEvent.click(screen.getByRole("button", { name: "Session details" }));
   expect(screen.getByRole("complementary", { name: "Session details" })).toBeInTheDocument();
   expect(screen.queryByRole("complementary", { name: "Work" })).not.toBeInTheDocument();
+});
+
+it("hides tool-progress rows when verbosity is off and keeps the latest for new", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-verbose", repo: "" });
+  const activities = (titles: string[]) => titles.map((title, index) => ({
+    type: "activity" as const,
+    activity: { id: `tool-${index}`, kind: "tool" as const, title, details: [] },
+  }));
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([
+      {
+        type: "settings",
+        model: "m",
+        effort: "medium",
+        verbosity: "off",
+        planMode: false,
+        credentialConfigured: true,
+      },
+      ...activities(["first tool call", "second tool call"]),
+    ])
+    .mockResolvedValue([]);
+  render(<App />);
+  await screen.findByRole("textbox");
+  await waitFor(() => expect(pollRuntime).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /Work/ }));
+  expect(screen.queryByText("first tool call")).not.toBeInTheDocument();
+  expect(screen.queryByText("second tool call")).not.toBeInTheDocument();
 });

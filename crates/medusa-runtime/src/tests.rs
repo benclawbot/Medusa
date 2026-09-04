@@ -903,6 +903,48 @@ fn configuration_changes_queue_while_the_current_turn_finishes() {
     ));
 }
 
+#[test]
+fn verbose_command_sets_cycles_and_notifies() {
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let directory = tempdir().expect("temporary directory");
+    let mut state = RuntimeState::from_config(
+        directory.path().to_path_buf(),
+        medusa_config::Config::default(),
+    );
+    assert_eq!(state.verbosity, Verbosity::All);
+    let (events_tx, events_rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    crate::command_router::execute_slash_command(
+        &mut state,
+        SlashCommand::Verbose {
+            mode: Some(Verbosity::Off),
+        },
+        &events_tx,
+        &cancel,
+    )
+    .expect("set verbosity");
+    assert_eq!(state.verbosity, Verbosity::Off);
+    assert!(matches!(
+        events_rx.recv().expect("settings event"),
+        RuntimeEvent::Settings { verbosity, .. } if verbosity == "off"
+    ));
+    assert!(matches!(
+        events_rx.recv().expect("notice event"),
+        RuntimeEvent::Notice { title, .. } if title == "Verbosity"
+    ));
+
+    crate::command_router::execute_slash_command(
+        &mut state,
+        SlashCommand::Verbose { mode: None },
+        &events_tx,
+        &cancel,
+    )
+    .expect("cycle verbosity");
+    assert_eq!(state.verbosity, Verbosity::New);
+}
+
 fn durable_runtime_session(repo: &Path) -> medusa_agent::AgentSession {
     medusa_agent::AgentSession {
         id: SessionId::new(),

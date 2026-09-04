@@ -61,6 +61,7 @@ pub enum FrontendTransientEvent {
     Settings {
         model: String,
         effort: String,
+        verbosity: String,
         plan_mode: bool,
         credential_configured: bool,
     },
@@ -929,12 +930,14 @@ fn map_transient_event(
         RuntimeEvent::Settings {
             model,
             effort,
+            verbosity,
             plan_mode,
             credential_configured,
             ..
         } => Some(FrontendTransientEvent::Settings {
             model,
             effort,
+            verbosity,
             plan_mode,
             credential_configured,
         }),

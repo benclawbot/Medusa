@@ -465,6 +465,24 @@ pub(super) fn execute_slash_command_with_submission(
                 });
             }
         },
+        SlashCommand::Verbose { mode } => {
+            let next = mode.unwrap_or_else(|| state.verbosity.cycled());
+            state.verbosity = next;
+            let _ = events.send(state.settings_event());
+            let _ = events.send(RuntimeEvent::Notice {
+                title: "Verbosity".to_owned(),
+                details: vec![format!(
+                    "verbosity:{} — tool activity rows are {}.",
+                    next.label(),
+                    match next {
+                        Verbosity::Off => "hidden",
+                        Verbosity::New => "limited to the latest row",
+                        Verbosity::All => "all shown",
+                        Verbosity::Verbose => "all shown with details expanded",
+                    }
+                )],
+            });
+        }
         SlashCommand::Skills => {
             let skills = discover_skills(&state.repo);
             let _ = events.send(RuntimeEvent::Notice {

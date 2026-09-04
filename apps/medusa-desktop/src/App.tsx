@@ -103,9 +103,16 @@ interface UsageState {
   elapsed: number;
 }
 
+type Verbosity = "off" | "new" | "all" | "verbose";
+
+function parseVerbosity(value: unknown): Verbosity {
+  return value === "off" || value === "new" || value === "verbose" ? value : "all";
+}
+
 interface SettingsState {
   model: string;
   effort: string;
+  verbosity: Verbosity;
   planMode: boolean;
   credentialConfigured: boolean;
 }
@@ -258,6 +265,7 @@ export function App() {
   const [settings, setSettings] = useState<SettingsState>({
     model: "not connected",
     effort: "effort:auto",
+    verbosity: "all",
     planMode: false,
     credentialConfigured: false,
   });
@@ -548,6 +556,7 @@ export function App() {
         setSettings({
           model: event.model,
           effort: event.effort,
+          verbosity: parseVerbosity(event.verbosity),
           planMode: event.planMode,
           credentialConfigured: event.credentialConfigured,
         });
@@ -1192,6 +1201,25 @@ export function App() {
       break;
     }
   }
+  // /verbose display filter: tool-progress rows carry status "Working".
+  // "off" hides them, "new" keeps only the latest, "verbose" expands details.
+  const visibleWorkLog = (() => {
+    if (settings.verbosity === "all" || settings.verbosity === "verbose") return workLog;
+    let latestWorking = -1;
+    if (settings.verbosity === "new") {
+      for (let index = workLog.length - 1; index >= 0; index -= 1) {
+        const entry = workLog[index];
+        if (entry?.kind === "activity" && entry.status === "Working") {
+          latestWorking = index;
+          break;
+        }
+      }
+    }
+    return workLog.filter((entry, index) =>
+      entry.kind !== "activity" || entry.status !== "Working" || index === latestWorking,
+    );
+  })();
+  const verboseDetails = settings.verbosity === "verbose";
   const hasPartialResult = partialResult && Boolean(webArtifact);
 
   const beginSidePanelResize = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -1398,9 +1426,9 @@ export function App() {
                 <div className="work-log" aria-live="polite">
                   {workLog.length === 0 ? (
                     <p className="work-log-empty">Actions and your inputs will appear here while Medusa works.</p>
-                  ) : workLog.map((entry) => (
+                  ) : visibleWorkLog.map((entry) => (
                     entry.kind === "activity" ? (
-                      <details className={`work-log-row activity ${entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : ""}`} key={entry.id}>
+                      <details className={`work-log-row activity ${entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : ""}`} key={entry.id} open={verboseDetails || undefined}>
                         <summary>
                           <span className="work-log-icon">{entry.status === "Error" ? <OctagonX size={14} /> : entry.status === "Done" ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span>
                           <span className="work-log-text" title={entry.text}>{entry.text}</span>

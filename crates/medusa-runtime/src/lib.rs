@@ -47,6 +47,7 @@ use tracing::{error, info};
 use crate::{
     commands::{
         Effort, LearningCommand, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand,
+        Verbosity,
     },
     invariants::{
         RuntimeInvariantContext, RuntimeInvariantRegistry, RuntimeInvariantRegistryError,
@@ -179,6 +180,7 @@ pub enum RuntimeEvent {
     Settings {
         model: String,
         effort: String,
+        verbosity: String,
         plan_mode: bool,
         credential_configured: bool,
         context_window_tokens: u64,
@@ -572,7 +574,7 @@ impl RuntimeController {
         let mut submission = lock_submission(&self.submission);
         let can_queue_while_busy = matches!(
             &command,
-            SlashCommand::Config(_) | SlashCommand::Effort { .. }
+            SlashCommand::Config(_) | SlashCommand::Effort { .. } | SlashCommand::Verbose { .. }
         );
         if submission.busy && !can_queue_while_busy {
             return Err(RuntimeError::Busy);
@@ -1077,6 +1079,7 @@ struct RuntimeState {
     runtime_config_fingerprint: Option<String>,
     runtime_config_binding: Option<(u16, String, serde_json::Value)>,
     effort: Effort,
+    verbosity: Verbosity,
     plan_mode: bool,
     team_control: TeamControlPlane,
     codex_app_server: Option<openai_oauth::CodexAppServer>,
@@ -1115,6 +1118,7 @@ impl RuntimeState {
             repo,
             base_config: config.clone(),
             effort: effort_for_turns(config.agent.max_turns),
+            verbosity: Verbosity::default(),
             plan_mode: config.agent.mode == Mode::ReadOnly,
             config,
             session: None,
@@ -1153,6 +1157,7 @@ impl RuntimeState {
                 self.config.model.provider, self.config.model.name
             ),
             effort: format!("effort:{}", self.effort.label()),
+            verbosity: self.verbosity.label().to_owned(),
             plan_mode: self.plan_mode,
             credential_configured,
             context_window_tokens: self.config.model.context_window_tokens,

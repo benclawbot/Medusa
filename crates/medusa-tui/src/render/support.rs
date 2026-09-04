@@ -1,4 +1,5 @@
 use super::*;
+use crate::commands::Verbosity;
 
 pub(super) fn render_loading_screen(frame: &mut [StyledLine], width: u16, height: u16) {
     let logo = MEDUSA_LOADING_LOGO
@@ -64,9 +65,23 @@ fn activity_group_heading(group: ActivityGroup) -> StyledLine {
     }
 }
 
+/// Tool-progress rows affected by `/verbose`: tool, progress, and
+/// verification entries. Assistant, done, and error rows always render.
+fn verbose_filterable(kind: TranscriptActivityKind) -> bool {
+    matches!(
+        kind,
+        TranscriptActivityKind::Tool
+            | TranscriptActivityKind::Progress
+            | TranscriptActivityKind::Verification
+    )
+}
+
 pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     let mut previous_activity_group = None;
+    let latest_filterable = app.transcript.iter().rposition(|entry| {
+        matches!(entry, TranscriptEntry::Activity(activity) if verbose_filterable(activity.kind))
+    });
     for (entry_index, entry) in app.transcript.iter().enumerate() {
         match entry {
             TranscriptEntry::User(draft) => {
@@ -109,6 +124,17 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 ));
             }
             TranscriptEntry::Activity(activity) => {
+                let hidden = match app.verbosity {
+                    Verbosity::Off => verbose_filterable(activity.kind),
+                    Verbosity::New => {
+                        verbose_filterable(activity.kind)
+                            && Some(entry_index) != latest_filterable
+                    }
+                    Verbosity::All | Verbosity::Verbose => false,
+                };
+                if hidden {
+                    continue;
+                }
                 let group = activity_group(activity);
                 if let Some(group) = group {
                     if previous_activity_group != Some(group) {
@@ -120,7 +146,8 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 }
                 lines.extend(activity_lines(
                     activity,
-                    app.activity_details_expanded(entry_index, activity),
+                    app.verbosity == Verbosity::Verbose
+                        || app.activity_details_expanded(entry_index, activity),
                 ));
             }
             TranscriptEntry::System(message) => {
