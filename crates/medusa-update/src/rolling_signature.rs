@@ -57,7 +57,9 @@ pub(crate) fn verify(manifest_bytes: &[u8], signature_bytes: &[u8]) -> MedusaRes
     }
     let digest = hex::encode(Sha256::digest(manifest_bytes));
     if envelope.manifest_sha256 != digest {
-        return Err(invalid("rolling manifest digest does not match its signature envelope"));
+        return Err(invalid(
+            "rolling manifest digest does not match its signature envelope",
+        ));
     }
     let public_key = hex::decode(&key.public_key_hex)
         .map_err(|_| invalid("rolling signing key has invalid hex"))?;

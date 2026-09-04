@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use crate::{
     Architecture, AtomicInstaller, OperatingSystem, Platform, Restart, ScheduledUpdate,
-    copy_with_progress, verify_artifact,
+    copy_with_progress, rolling_signature, verify_artifact,
 };
 
 const GITHUB_API: &str = "https://api.github.com";
@@ -390,15 +390,28 @@ impl MainBranchUpdater {
                     elapsed: started.elapsed(),
                 });
             };
-            let manifest: RollingMainArtifact = self
+            let manifest_bytes = self
                 .asset_response_until_with_progress(
                     &manifest_name,
                     revision,
                     deadline,
                     &mut waiting,
                 )?
-                .json()
+                .bytes()
                 .map_err(asset_error)?;
+            let signature_name = format!("{manifest_name}.sig.json");
+            let signature_bytes = self
+                .asset_response_until_with_progress(
+                    &signature_name,
+                    revision,
+                    deadline,
+                    &mut waiting,
+                )?
+                .bytes()
+                .map_err(asset_error)?;
+            rolling_signature::verify(&manifest_bytes, &signature_bytes)?;
+            let manifest: RollingMainArtifact =
+                serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;
             validate_revision(&manifest.revision)?;
             if manifest.revision == revision {
                 manifest.validate(revision, asset_name)?;
@@ -416,7 +429,15 @@ impl MainBranchUpdater {
         let Some(response) = self.asset_response_once(&manifest_name, revision)? else {
             return Ok(false);
         };
-        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;
+        let manifest_bytes = response.bytes().map_err(asset_error)?;
+        let signature_name = format!("{manifest_name}.sig.json");
+        let Some(signature) = self.asset_response_once(&signature_name, revision)? else {
+            return Ok(false);
+        };
+        let signature_bytes = signature.bytes().map_err(asset_error)?;
+        rolling_signature::verify(&manifest_bytes, &signature_bytes)?;
+        let manifest: RollingMainArtifact =
+            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;
         validate_revision(&manifest.revision)?;
         match manifest.validate(revision, asset_name) {
             Ok(()) => Ok(true),
@@ -434,7 +455,15 @@ impl MainBranchUpdater {
         let Some(response) = self.asset_response_once(&manifest_name, revision)? else {
             return Err(not_published(revision));
         };
-        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;
+        let manifest_bytes = response.bytes().map_err(asset_error)?;
+        let signature_name = format!("{manifest_name}.sig.json");
+        let Some(signature) = self.asset_response_once(&signature_name, revision)? else {
+            return Err(not_published(revision));
+        };
+        let signature_bytes = signature.bytes().map_err(asset_error)?;
+        rolling_signature::verify(&manifest_bytes, &signature_bytes)?;
+        let manifest: RollingMainArtifact =
+            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;
         manifest.validate(revision, asset_name)?;
         Ok(manifest)
     }
