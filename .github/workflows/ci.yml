@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -86,6 +87,7 @@ jobs:
           if-no-files-found: error
       - name: Resolve changed Rust packages
         id: changed_rust
+        if: github.event_name == 'pull_request'
         shell: bash
         env:
           BASE_REF: ${{ github.base_ref }}
@@ -102,7 +104,7 @@ jobs:
           fi
       - name: Changed-package unit tests
         id: changed_package_tests
-        if: steps.changed_rust.outputs.cargo_args != ''
+        if: github.event_name == 'pull_request' && steps.changed_rust.outputs.cargo_args != ''
         shell: bash
         env:
           MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
