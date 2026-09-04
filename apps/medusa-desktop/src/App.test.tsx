@@ -229,6 +229,28 @@ it("keeps the empty chat quiet and starts the composer at one line", async () =>
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
 });
 
+it("offers starter prompts and a context bar on an empty chat", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+
+  expect(screen.getByRole("heading", { name: "What should Medusa do?" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Summarize repo state" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run tests and fix failures" })).toBeInTheDocument();
+  expect(screen.getByRole("status", { name: "Session usage" })).toBeInTheDocument();
+});
+
+it("hints at file references when the composer contains @", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "@crates/medusa-tui" } });
+
+  expect(screen.getByText(/Type a repo-relative path after @/)).toBeInTheDocument();
+});
+
 it("grows the composer only when the prompt spans additional lines", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);

@@ -118,6 +118,39 @@ pub struct ConsolidationResult {
     pub result_fingerprint: String,
 }
 
+/// Render consolidated memories highest-confidence-first, capped at
+/// `maximum_chars`. Memories beyond the cap are reported via the returned
+/// omitted-key list so prompt assembly can log what did not fit instead of
+/// silently dropping it. Keeps memory injection proportional per turn.
+#[must_use]
+pub fn render_memories_within_budget(
+    memories: &[ConsolidatedMemory],
+    maximum_chars: usize,
+) -> (String, Vec<String>) {
+    let mut ordered = memories.to_vec();
+    ordered.sort_by(|left, right| {
+        right
+            .confidence_basis_points
+            .cmp(&left.confidence_basis_points)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    let mut rendered = String::new();
+    let mut omitted = Vec::new();
+    for memory in ordered {
+        let line = format!(
+            "{} {} {} [{}]
+",
+            memory.subject, memory.predicate, memory.value, memory.key
+        );
+        if rendered.len() + line.len() > maximum_chars.max(1) {
+            omitted.push(memory.key.clone());
+            continue;
+        }
+        rendered.push_str(&line);
+    }
+    (rendered, omitted)
+}
+
 pub fn consolidate(
     observations: &[MemoryObservation],
     policy: ConsolidationPolicy,
@@ -299,6 +332,20 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.memories.len(), 1);
         assert_eq!(first.memories[0].support_ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn budget_rendering_caps_output_and_reports_omitted() {
+        let input = vec![observation("a", "bash", 9_000), observation("b", "bash", 8_000)];
+        let result = consolidate(&input, ConsolidationPolicy::default()).unwrap();
+        assert_eq!(result.memories.len(), 1);
+        let (full, none_omitted) =
+            render_memories_within_budget(&result.memories, usize::MAX / 2);
+        assert!(none_omitted.is_empty());
+        assert!(full.contains("bash"));
+        let (starved, omitted) = render_memories_within_budget(&result.memories, 1);
+        assert!(starved.is_empty());
+        assert_eq!(omitted.len(), 1);
     }
 
     #[test]

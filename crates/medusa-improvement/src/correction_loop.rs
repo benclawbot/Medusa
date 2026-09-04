@@ -253,8 +253,22 @@ impl CorrectionLoopStore {
             .episodes
             .sort_by(|left, right| left.id.cmp(&right.id));
         if self.document.episodes.len() > MAX_EPISODES {
-            let excess = self.document.episodes.len() - MAX_EPISODES;
-            self.document.episodes.drain(..excess);
+            // Stratified retention: production failures (Blocked state) are the
+            // tail the flywheel learns from, so evict successful episodes first
+            // and only fall back to oldest-overall when everything is blocked.
+            let mut excess = self.document.episodes.len() - MAX_EPISODES;
+            let mut index = 0;
+            while excess > 0 && index < self.document.episodes.len() {
+                if self.document.episodes[index].state != CorrectionEpisodeState::Blocked {
+                    self.document.episodes.remove(index);
+                    excess -= 1;
+                } else {
+                    index += 1;
+                }
+            }
+            if excess > 0 {
+                self.document.episodes.drain(..excess);
+            }
         }
         self.document.revision = self.document.revision.saturating_add(1);
         self.persist(&event_episode)
@@ -289,6 +303,24 @@ impl CorrectionLoopStore {
         events.write_all(b"\n")?;
         events.sync_data()?;
         Ok(())
+    }
+}
+
+/// Build the originating-failure replay scenario for an episode so every
+/// lesson ships with its own regression test derived from the failure that
+/// produced it.
+#[must_use]
+pub fn originating_scenario_for_episode(
+    episode_id: &str,
+    objective: &str,
+    expected_behavior: &str,
+) -> ReplayScenario {
+    ReplayScenario {
+        id: format!("replay-{episode_id}"),
+        kind: ReplayScenarioKind::OriginatingFailure,
+        input: objective.to_owned(),
+        expected_behavior: expected_behavior.to_owned(),
+        candidate_should_trigger: true,
     }
 }
 
@@ -792,6 +824,28 @@ use sha2::Digest;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn originating_scenario_marks_failure_replay() {
+        let scenario = originating_scenario_for_episode("ep-1", "migrate the API", "all tests pass");
+        assert_eq!(scenario.id, "replay-ep-1");
+        assert_eq!(scenario.kind, ReplayScenarioKind::OriginatingFailure);
+        assert!(scenario.candidate_should_trigger);
+    }
+
+    #[test]
+    fn tool_trace_observation_mints_task_signal() {
+        use crate::correction_signals::{LearningSignalKind, ToolTraceObservation};
+        let signal = ToolTraceObservation {
+            kind: LearningSignalKind::VerificationFailure,
+            task_id: Some("task-9".to_owned()),
+            observed_behavior: "verification failed on retry controller".to_owned(),
+            evidence_turn_ids: vec!["turn-3".to_owned()],
+        }
+        .to_signal("sig-1".to_owned());
+        assert_eq!(signal.kind, LearningSignalKind::VerificationFailure);
+        assert_eq!(signal.task_id.as_deref(), Some("task-9"));
+    }
 
     #[test]
     fn deterministic_runner_executes_artifact_content() {

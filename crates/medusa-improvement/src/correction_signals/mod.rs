@@ -30,6 +30,10 @@ pub enum LearningSignalKind {
     UnjustifiedClaim,
     WorkflowFailure,
     ReusableSuccess,
+    VerificationFailure,
+    RollbackOccurred,
+    ContainmentDenied,
+    HumanPlanOverride,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -76,6 +80,38 @@ pub struct LearningSignal {
 pub struct LearningSignalBatch {
     pub signals: Vec<LearningSignal>,
     pub blocked_turns: Vec<String>,
+}
+
+/// A tool-trace observation from the runtime: failed verification, rollback,
+/// containment denial, or human override. Carries the evidence needed to mint
+/// a `LearningSignal` without a chat correction.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ToolTraceObservation {
+    pub kind: LearningSignalKind,
+    pub task_id: Option<String>,
+    pub observed_behavior: String,
+    pub evidence_turn_ids: Vec<String>,
+}
+
+impl ToolTraceObservation {
+    #[must_use]
+    pub fn to_signal(&self, id: String) -> LearningSignal {
+        LearningSignal {
+            id,
+            kind: self.kind,
+            source_turns: self.evidence_turn_ids.clone(),
+            task_id: self.task_id.clone(),
+            observed_behavior: self.observed_behavior.clone(),
+            user_correction: None,
+            requested_outcome: None,
+            candidate_scope: CandidateScope::Task,
+            confidence_milli: 700,
+            ambiguity: Vec::new(),
+            evidence: Vec::new(),
+            redaction_status: RedactionStatus::NotRequired,
+            contradicted_by: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -270,6 +306,10 @@ fn classify(text: &str) -> Option<Classification> {
         LearningSignalKind::Dissatisfaction => 600,
         LearningSignalKind::RepeatedInstruction => 700,
         LearningSignalKind::ReusableSuccess => 700,
+        LearningSignalKind::VerificationFailure
+        | LearningSignalKind::RollbackOccurred
+        | LearningSignalKind::ContainmentDenied
+        | LearningSignalKind::HumanPlanOverride => 800,
     };
     let requested_outcome = requested_clause(text);
     let ambiguity = if scope == CandidateScope::Unresolved {

@@ -61,6 +61,34 @@ pub struct LessonInferenceBatch {
 pub struct LessonInferenceEngine;
 
 impl LessonInferenceEngine {
+    /// Drop candidates whose generalized rule already exists in `known_rules`
+    /// (normalized, case-insensitive). Prevents duplicate lessons from repeated
+    /// failures ever reaching review; merged evidence is the caller's job.
+    #[must_use]
+    pub fn dedupe_against_known(
+        batch: LessonInferenceBatch,
+        known_rules: &[String],
+    ) -> LessonInferenceBatch {
+        let known: Vec<String> = known_rules
+            .iter()
+            .map(|rule| rule.trim().to_lowercase())
+            .collect();
+        let mut candidates = Vec::new();
+        let mut ignored_signal_ids = batch.ignored_signal_ids;
+        for candidate in batch.candidates {
+            let normalized = candidate.generalized_rule.trim().to_lowercase();
+            if known.iter().any(|rule| rule == &normalized) {
+                ignored_signal_ids.extend(candidate.supporting_signal_ids.clone());
+            } else {
+                candidates.push(candidate);
+            }
+        }
+        LessonInferenceBatch {
+            candidates,
+            ignored_signal_ids,
+        }
+    }
+
     #[must_use]
     pub fn infer(&self, signals: &[LearningSignal]) -> LessonInferenceBatch {
         let mut grouped = BTreeMap::<String, LessonCandidate>::new();
@@ -307,6 +335,25 @@ fn push_unique(values: &mut Vec<String>, value: String) {
 mod tests {
     use super::*;
     use crate::correction_signals::{EvidenceReference, RedactionStatus};
+
+    #[test]
+    fn dedupe_drops_candidates_with_known_rules() {
+        let engine = LessonInferenceEngine;
+        let batch = engine.infer(&[signal(
+            "s1",
+            LearningSignalKind::ExplicitCorrection,
+            "always run cargo test before pushing",
+            CandidateScope::Task,
+        )]);
+        assert!(!batch.candidates.is_empty());
+        let known: Vec<String> = batch
+            .candidates
+            .iter()
+            .map(|candidate| candidate.generalized_rule.clone())
+            .collect();
+        let deduped = LessonInferenceEngine::dedupe_against_known(batch, &known);
+        assert!(deduped.candidates.is_empty());
+    }
 
     fn signal(
         id: &str,

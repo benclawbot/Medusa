@@ -109,6 +109,24 @@ pub(super) fn markdown_block_lines(
         );
     }
 
+    if in_code {
+        // Unclosed fence: the model is still streaming this block. Close the
+        // visual frame and mark it live so partial output reads as pending,
+        // Codex-style, instead of a broken box.
+        push_wrapped(
+            &mut rendered,
+            &mut first,
+            first_marker,
+            &continuation,
+            marker_color,
+            "└─ ··· streaming ▍",
+            Color::DarkGrey,
+            Some(Color::DarkGrey),
+            Attribute::Reset,
+            true,
+            content_width,
+        );
+    }
     if rendered.is_empty() {
         rendered.push(StyledLine::with_marker(
             first_marker,

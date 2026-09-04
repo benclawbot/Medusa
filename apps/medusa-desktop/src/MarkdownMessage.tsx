@@ -3,7 +3,7 @@ import React from "react";
 type MarkdownBlock =
   | { kind: "paragraph"; lines: string[] }
   | { kind: "heading"; level: number; text: string }
-  | { kind: "code"; language?: string; text: string }
+  | { kind: "code"; language?: string; text: string; open?: boolean }
   | { kind: "list"; ordered: boolean; items: string[] }
   | { kind: "quote"; lines: string[] }
   | { kind: "table"; headings: string[]; rows: string[][] }
@@ -48,8 +48,10 @@ function parseMarkdown(source: string): MarkdownBlock[] {
         code.push(lines[index] ?? "");
         index += 1;
       }
-      if (index < lines.length) index += 1;
-      blocks.push({ kind: "code", language: fence[1]?.trim() || undefined, text: code.join("\n") });
+      const closed = index < lines.length;
+      if (closed) index += 1;
+      blocks.push({ kind: "code", language: fence[1]?.trim() || undefined,
+      open: !closed, text: code.join("\n") });
       continue;
     }
 
@@ -161,7 +163,8 @@ function renderInline(value: string, keyPrefix: string): React.ReactNode[] {
   return children;
 }
 
-export const MarkdownMessage = React.memo(function MarkdownMessage({ text }: { text: string }) {
+export const MarkdownMessage = React.memo(function MarkdownMessage({ text, streaming }: { text: string; streaming?: boolean }) {
+  const live = streaming === true;
   const blocks = React.useMemo(
     () => parseMarkdown(typeof text === "string" ? text : String(text ?? "")),
     [text],
@@ -178,7 +181,7 @@ export const MarkdownMessage = React.memo(function MarkdownMessage({ text }: { t
           case "paragraph":
             return <p key={key}>{renderInline(block.lines.join("\n"), key)}</p>;
           case "code":
-            return <MarkdownCodeBlock key={key} text={block.text} language={block.language} />;
+            return <MarkdownCodeBlock key={key} text={block.text} language={block.language} streaming={live && index === blocks.length - 1 && block.open === true} />;
           case "list": {
             const List = block.ordered ? "ol" : "ul";
             return <List key={key}>{block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInline(item, `${key}-${itemIndex}`)}</li>)}</List>;
@@ -191,11 +194,12 @@ export const MarkdownMessage = React.memo(function MarkdownMessage({ text }: { t
             return <hr key={key} />;
         }
       })}
+      {live && <span className="streaming-caret" aria-hidden="true" />}
     </div>
   );
 });
 
-function MarkdownCodeBlock({ text, language }: { text: string; language?: string }) {
+function MarkdownCodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
   const [copied, setCopied] = React.useState(false);
   const copy = async () => {
     try {
@@ -207,7 +211,8 @@ function MarkdownCodeBlock({ text, language }: { text: string; language?: string
     }
   };
   return (
-    <pre className="markdown-code">
+    <pre className={`markdown-code${streaming ? " streaming" : ""}`}>
+      {streaming && <span className="code-live-badge">streaming</span>}
       <code>{text}</code>
       {language && <span className="markdown-code-language">{language}</span>}
       <button className="markdown-code-copy" type="button" onClick={() => void copy()} aria-label={copied ? "Code copied" : "Copy code"} title={copied ? "Code copied" : "Copy code"}>

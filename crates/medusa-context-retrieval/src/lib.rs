@@ -60,6 +60,65 @@ impl RetrievalResult {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ContextRetriever;
 
+/// Bounded memo cache for retrieval results, keyed by a fingerprint of the
+/// query plus the ledger contents. Repeated identical turns (retries,
+/// multi-agent fan-out over the same ledger) skip the full scan; the ledger
+/// fingerprint keeps stale hits impossible.
+#[derive(Clone, Debug, Default)]
+pub struct RetrievalMemo {
+    capacity: usize,
+    entries: std::collections::HashMap<String, RetrievalResult>,
+}
+
+impl RetrievalMemo {
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn retrieve_cached(
+        &mut self,
+        ledger: &ContextLedger,
+        query: &RetrievalQuery,
+    ) -> Result<RetrievalResult, &'static str> {
+        let key = memo_key(ledger, query);
+        if let Some(hit) = self.entries.get(&key) {
+            return Ok(hit.clone());
+        }
+        let result = ContextRetriever.retrieve(ledger, query)?;
+        if self.entries.len() >= self.capacity {
+            // Evict an arbitrary entry; insertion order tracking is not worth
+            // the bookkeeping for a small memo.
+            if let Some(first) = self.entries.keys().next().cloned() {
+                self.entries.remove(&first);
+            }
+        }
+        self.entries.insert(key, result.clone());
+        Ok(result)
+    }
+}
+
+fn memo_key(ledger: &ContextLedger, query: &RetrievalQuery) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(query.text.as_bytes());
+    for id in &query.required_ids {
+        hasher.update(id.as_bytes());
+    }
+    for kind in &query.preferred_kinds {
+        hasher.update(format!("{kind:?}").as_bytes());
+    }
+    hasher.update(query.maximum_items.to_le_bytes());
+    hasher.update(query.maximum_bytes.to_le_bytes());
+    for item in ledger.items() {
+        hasher.update(item.id.as_bytes());
+        hasher.update(item.sequence.to_le_bytes());
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 impl ContextRetriever {
     pub fn retrieve(
         &self,
@@ -292,6 +351,26 @@ mod tests {
         };
         let result = ContextRetriever.retrieve(&ledger, &query).unwrap();
         assert_eq!(result.ids(), vec!["goal", "todo"]);
+    }
+
+    #[test]
+    fn memo_returns_cached_result_for_identical_query() {
+        let mut ledger = ContextLedger::default();
+        ledger
+            .append(item("goal", ContextKind::Goal, "finish retry controller", 1))
+            .unwrap();
+        let query = RetrievalQuery {
+            text: "retry controller".to_owned(),
+            required_ids: BTreeSet::new(),
+            preferred_kinds: BTreeSet::new(),
+            maximum_items: 4,
+            maximum_bytes: 4096,
+        };
+        let mut memo = RetrievalMemo::new(8);
+        let first = memo.retrieve_cached(&ledger, &query).unwrap();
+        let second = memo.retrieve_cached(&ledger, &query).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.ids(), vec!["goal"]);
     }
 
     #[test]

@@ -237,11 +237,17 @@ pub(super) fn draw_frame(
 }
 
 pub(super) fn spinner_marker(frame: u8) -> &'static str {
-    match frame % 4 {
-        0 => ". ",
-        1 => "o ",
-        2 => "O ",
-        _ => "o ",
+    // 8-frame braille spinner: smoother than the old 4-frame dot pulse and
+    // legible at the same two-cell width.
+    match frame % 8 {
+        0 => "⠋ ",
+        1 => "⠙ ",
+        2 => "⠹ ",
+        3 => "⠸ ",
+        4 => "⠼ ",
+        5 => "⠴ ",
+        6 => "⠦ ",
+        _ => "⠇ ",
     }
 }
 

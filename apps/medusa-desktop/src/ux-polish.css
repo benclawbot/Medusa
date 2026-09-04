@@ -1,0 +1,89 @@
+/* Incremental Codex/ChatGPT parity polish: streaming caret, context bar,
+   transcript helpers, focus visibility, and reduced-motion compliance. */
+
+.streaming-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: medusa-caret-blink 0.9s steps(2, start) infinite;
+}
+
+@keyframes medusa-caret-blink {
+  50% { opacity: 0; }
+}
+
+.markdown-code.streaming {
+  outline: 1px dashed color-mix(in srgb, var(--medusa-blue, #2f7cf6) 55%, transparent);
+  outline-offset: 3px;
+}
+
+.code-live-badge {
+  float: right;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: 0.75rem;
+  opacity: 0.9;
+}
+
+.context-bar-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.25);
+  overflow: hidden;
+}
+
+.context-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--medusa-blue, #2f7cf6);
+  transition: width 200ms ease;
+}
+
+.transcript-empty {
+  max-width: 560px;
+  margin: 8vh auto;
+  text-align: center;
+}
+
+.transcript-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin: 14px 0;
+}
+
+.transcript-show-more {
+  display: block;
+  margin: 8px auto;
+}
+
+.mention-hint,
+.transcript-hint {
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-caret {
+    animation: none;
+  }
+  .context-bar-fill {
+    transition: none;
+  }
+}

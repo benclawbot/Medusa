@@ -21,6 +21,18 @@ describe("MarkdownMessage", () => {
     expect(screen.getByRole("button", { name: "Copy code" })).toBeInTheDocument();
   });
 
+  it("renders an unclosed fence as a live streaming code block", () => {
+    render(<MarkdownMessage text={"```python\nprint(1)\n"} streaming />);
+    expect(screen.getByText("streaming")).toBeInTheDocument();
+  });
+
+  it("shows a caret only while streaming", () => {
+    const { rerender } = render(<MarkdownMessage text="hello" streaming />);
+    expect(document.querySelector(".streaming-caret")).not.toBeNull();
+    rerender(<MarkdownMessage text="hello" />);
+    expect(document.querySelector(".streaming-caret")).toBeNull();
+  });
+
   it("does not turn unsafe markdown links into executable links", () => {
     render(<MarkdownMessage text="[unsafe](javascript:alert(1))" />);
 

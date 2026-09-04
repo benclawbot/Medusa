@@ -42,6 +42,7 @@ import { DesktopOnboarding } from "./DesktopOnboarding";
 import { requestDesktopTool, type DesktopTool } from "./desktop-tools";
 import { MarkdownMessage } from "./MarkdownMessage";
 import "./approval-card.css";
+import "./ux-polish.css";
 import {
   loadProviderCatalog,
   ensureBrowserOauth,
@@ -282,6 +283,7 @@ export function App() {
   const [previewImage, setPreviewImage] = useState<Extract<DesktopAttachment, { kind: "image" }>>();
   const [draggingImage, setDraggingImage] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [transcriptLimit, setTranscriptLimit] = useState(120);
   const [copiedMessageId, setCopiedMessageId] = useState<number>();
   const [pendingSubmit, setPendingSubmit] = useState(false);
   const [turn, setTurn] = useState(0);
@@ -1444,7 +1446,24 @@ export function App() {
         {activePanel === "chat" && (
           <>
             <div className="transcript" ref={transcriptRef}>
-              {messages.map((message) => (
+              {messages.length === 0 && !busy && (
+                <div className="transcript-empty">
+                  <h2>What should Medusa do?</h2>
+                  <p>Describe the task, attach files, or start from a suggestion.</p>
+                  <div className="transcript-starters">
+                    <button type="button" onClick={() => void sendText("Summarize the current repo state and suggest the highest-value next change.", [])}>Summarize repo state</button>
+                    <button type="button" onClick={() => void sendText("Run the test suite and fix any failures.", [])}>Run tests and fix failures</button>
+                    <button type="button" onClick={() => void sendText("Review the open diff for correctness and style.", [])}>Review open diff</button>
+                  </div>
+                  <p className="transcript-hint">Tip: type / for commands, @ to reference a file, Enter to send.</p>
+                </div>
+              )}
+              {messages.length > transcriptLimit && (
+                <button type="button" className="transcript-show-more" onClick={() => setTranscriptLimit((limit) => limit + 200)}>
+                  Show {messages.length - transcriptLimit} earlier messages
+                </button>
+              )}
+              {messages.slice(-transcriptLimit).map((message, messageIndex, visible) => (
                 <article className={`message ${message.role}`} key={message.id}>
                   {!!message.text.trim() && (
                     <button
@@ -1462,7 +1481,7 @@ export function App() {
                     <time dateTime={new Date(message.createdAt).toISOString()}>{formatTimestamp(message.createdAt)}</time>
                     {message.queued && <small>queued for next turn</small>}
                   </div>
-                  <div className="message-body"><MarkdownMessage text={message.text} /></div>
+                  <div className="message-body"><MarkdownMessage text={message.text} streaming={busy && message.role === "assistant" && messageIndex === visible.length - 1} /></div>
                   {!!message.attachments?.length && (
                     <div className="message-attachments">
                       {message.attachments.map((attachment, index) => (
@@ -1487,6 +1506,16 @@ export function App() {
               />
             </div>
 
+            <div className="context-bar" role="status" aria-label="Session usage">
+                <span className="context-bar-label">Context</span>
+                <span className="context-bar-track" aria-hidden="true">
+                  <span
+                    className="context-bar-fill"
+                    style={{ width: `${usage.total > 0 ? Math.min(100, Math.round((usage.cached / Math.max(1, usage.total)) * 100)) : 0}%` }}
+                  />
+                </span>
+                <span className="context-bar-stats">{usage.input.toLocaleString()} in · {usage.output.toLocaleString()} out · {usage.cached.toLocaleString()} cached</span>
+              </div>
             <footer className="composer-wrap">
               {!!error && (
                 <div className={`error-banner${hasPartialResult ? " partial" : ""}`} role={hasPartialResult ? "status" : "alert"}>
@@ -1538,6 +1567,9 @@ export function App() {
                   void addImages(Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/")));
                 }}
               >
+                {prompt.includes("@") && !slashSuggestions.length && (
+                  <div className="mention-hint" role="status">Type a repo-relative path after @ to reference a file, e.g. @crates/medusa-tui/src/app.rs</div>
+                )}
                 {!!slashSuggestions.length && (
                   <div className="slash-menu" role="listbox" aria-label="Slash commands">
                     {slashSuggestions.map((suggestion, index) => (

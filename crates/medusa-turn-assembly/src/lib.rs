@@ -105,6 +105,19 @@ pub struct TurnAssembly {
 }
 
 impl TurnAssemblyInput {
+    /// Drop tool schemas the current plan cannot reach. Call this with the
+    /// tool names referenced by the active plan DAG before `assemble` to keep
+    /// every-turn tool JSON proportional to the work at hand instead of the
+    /// whole registry. `None` (unknown reachability) keeps everything.
+    #[must_use]
+    pub fn retain_reachable_tools(mut self, reachable: Option<&[String]>) -> Self {
+        if let Some(names) = reachable {
+            self.tool_schemas
+                .retain(|tool| names.iter().any(|name| name == &tool.name));
+        }
+        self
+    }
+
     pub fn assemble(mut self) -> Result<TurnAssembly, &'static str> {
         self.budget.validate()?;
         if self.current_task.trim().is_empty() {
@@ -382,5 +395,44 @@ mod tests {
         let base64 = "QWxhZGRpbjpvcGVuIHNlc2FtZQ==";
         assert_eq!(estimate_tokens(hash), hash.len());
         assert_eq!(estimate_tokens(base64), base64.len());
+    }
+
+    #[test]
+    fn reachable_filter_prunes_unused_tool_schemas() {
+        fn input() -> TurnAssemblyInput {
+            TurnAssemblyInput {
+                stable_sections: vec![StableSection::new("sys", "system prompt").unwrap()],
+                tool_schemas: vec![
+                    ToolSchema::new("read", "{\"kind\":\"read\"}").unwrap(),
+                    ToolSchema::new("write", "{\"kind\":\"write\"}").unwrap(),
+                ],
+                retrieved_context: vec![context("goal", ContextKind::Goal, 1, "ship it")],
+                current_task: "do the work".to_owned(),
+                budget: TurnBudget {
+                    maximum_input_tokens: 10_000,
+                    reserved_output_tokens: 1_000,
+                },
+            }
+        }
+        let pruned = input()
+            .retain_reachable_tools(Some(&["read".to_owned()]))
+            .assemble()
+            .unwrap();
+        let names: Vec<&str> = pruned
+            .sections
+            .iter()
+            .map(|section| section.name.as_str())
+            .collect();
+        assert!(names.contains(&"tool:read"));
+        assert!(!names.contains(&"tool:write"));
+
+        let kept = input().retain_reachable_tools(None).assemble().unwrap();
+        let names: Vec<&str> = kept
+            .sections
+            .iter()
+            .map(|section| section.name.as_str())
+            .collect();
+        assert!(names.contains(&"tool:read"));
+        assert!(names.contains(&"tool:write"));
     }
 }
