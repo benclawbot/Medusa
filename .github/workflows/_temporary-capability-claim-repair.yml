@@ -1,0 +1,38 @@
+name: Temporary capability claim repair
+
+on:
+  push:
+    branches:
+      - fix/rolling-desktop-production-build-v2
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/rolling-desktop-production-build-v2
+      - name: Repair stale multi-agent capability path
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("docs/CAPABILITY-CLAIMS.json")
+          text = path.read_text(encoding="utf-8")
+          old = 'crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs'
+          new = 'crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs'
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one stale production path, found {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          python3 scripts/check-capability-evidence.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/CAPABILITY-CLAIMS.json
+          git commit -m "Repair multi-agent capability source path"
+          git push origin HEAD:fix/rolling-desktop-production-build-v2
