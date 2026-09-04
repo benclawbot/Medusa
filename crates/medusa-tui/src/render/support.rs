@@ -465,6 +465,16 @@ pub(super) fn composer_prompt_text(text: &str) -> String {
     text.replace('\n', " / ")
 }
 
+fn fit_to_row(value: &str, width: u16) -> String {
+    value
+        .split('\n')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(usize::from(width))
+        .collect()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StyledLine {
     pub(crate) marker: Option<(String, Color)>,
@@ -560,9 +570,9 @@ impl StyledLine {
         queue!(stdout, SetAttribute(self.attribute))?;
         let used;
         if let Some((marker, marker_color)) = &self.marker {
-            let marker = wrap_to_width(marker, width);
+            let marker = fit_to_row(marker, width);
             let remaining = width.saturating_sub(marker.chars().count() as u16);
-            let body = wrap_to_width(&self.text, remaining);
+            let body = fit_to_row(&self.text, remaining);
             used = marker.chars().count().saturating_add(body.chars().count());
             print_selected_text(
                 stdout,
@@ -586,7 +596,7 @@ impl StyledLine {
                 self.attribute,
             )?;
         } else {
-            let body = wrap_to_width(&self.text, width);
+            let body = fit_to_row(&self.text, width);
             used = body.chars().count();
             print_selected_text(
                 stdout,
@@ -619,8 +629,7 @@ impl StyledLine {
             SetAttribute(Attribute::Reset),
             ResetColor,
             Print(
-                "
-"
+                "\n"
             )
         )
     }

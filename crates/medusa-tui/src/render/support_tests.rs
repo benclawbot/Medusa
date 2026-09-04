@@ -104,6 +104,16 @@ fn conversation_urls_are_emitted_as_terminal_hyperlinks() {
 }
 
 #[test]
+fn fixed_frame_rows_never_wrap_into_extra_terminal_lines() {
+    let status = "session 23s · total 0 · input 0 · output 0 · cache-read 0 · cache-write 0 · cost — · — · — tok/s · confirmation [Full Access]";
+    let row = fit_to_row(status, 80);
+
+    assert_eq!(row.chars().count(), 80);
+    assert!(!row.contains('\n'));
+    assert_eq!(fit_to_row("status\nnext row", 80), "status");
+}
+
+#[test]
 fn verbosity_filters_tool_activity_rows() {
     use crate::app::TranscriptActivityKind;
 
@@ -138,24 +148,20 @@ fn verbosity_filters_tool_activity_rows() {
     };
 
     app.verbosity = Verbosity::All;
-    let all = titles(&app).join("
-");
+    let all = titles(&app).join("\n");
     assert!(all.contains("first tool call") && all.contains("second tool call"));
 
     app.verbosity = Verbosity::Off;
-    let off = titles(&app).join("
-");
+    let off = titles(&app).join("\n");
     assert!(!off.contains("tool call"));
     assert!(off.contains("boom"));
 
     app.verbosity = Verbosity::New;
-    let new = titles(&app).join("
-");
+    let new = titles(&app).join("\n");
     assert!(!new.contains("first tool call"));
     assert!(new.contains("second tool call"));
 
     app.verbosity = Verbosity::Verbose;
-    let verbose = titles(&app).join("
-");
+    let verbose = titles(&app).join("\n");
     assert!(verbose.contains("detail"));
 }
