@@ -22,6 +22,7 @@ def test_refresh_release_trigger_is_live_and_same_repo() -> None:
 
 
 def test_rolling_desktop_uses_tauri_production_build() -> None:
+    # A raw Cargo build selects Tauri's devUrl and ships a desktop that requires Vite.
     workflow = read_workflow("rolling-main-cli.yml")
     assert "npm run tauri:build -- --no-bundle" in workflow
     assert "cargo build --release --locked --manifest-path" not in workflow
