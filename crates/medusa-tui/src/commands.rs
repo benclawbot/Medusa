@@ -31,7 +31,9 @@ pub fn command_suggestions(input: &str, repo: &Path) -> Vec<CommandSuggestion> {
     let prefix = prefix.to_ascii_lowercase();
     if "settings".starts_with(&prefix)
         && suggestions.len() < 6
-        && !suggestions.iter().any(|suggestion| suggestion.name == "settings")
+        && !suggestions
+            .iter()
+            .any(|suggestion| suggestion.name == "settings")
     {
         suggestions.push(CommandSuggestion {
             name: "settings".to_owned(),

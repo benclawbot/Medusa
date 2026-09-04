@@ -415,12 +415,7 @@ impl ModelModal {
         has_existing_key: bool,
     ) -> Result<Self, String> {
         let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;
-        Self::new_settings_with_catalog(
-            model_label,
-            effort_label,
-            has_existing_key,
-            catalog,
-        )
+        Self::new_settings_with_catalog(model_label, effort_label, has_existing_key, catalog)
     }
 
     pub(super) fn new_settings_with_catalog(
@@ -762,14 +757,12 @@ impl ModelModal {
                 .iter()
                 .position(|value| value == &settings.profile.provider)
                 .unwrap_or(0),
-            SettingsPage::Model => provider_model_options(
-                &settings.profile.provider,
-                &settings.profile.model,
-                &[],
-            )
-            .iter()
-            .position(|value| value == &settings.profile.model)
-            .unwrap_or(0),
+            SettingsPage::Model => {
+                provider_model_options(&settings.profile.provider, &settings.profile.model, &[])
+                    .iter()
+                    .position(|value| value == &settings.profile.model)
+                    .unwrap_or(0)
+            }
             SettingsPage::Speed => ["fast", "balanced", "quality", "custom"]
                 .iter()
                 .position(|value| *value == settings.profile.speed)
@@ -935,11 +928,17 @@ impl ModelModal {
         }
     }
 
-    pub(super) fn settings_commit_current(&mut self, repository: &Path) -> Result<AppAction, String> {
+    pub(super) fn settings_commit_current(
+        &mut self,
+        repository: &Path,
+    ) -> Result<AppAction, String> {
         let Some(settings) = self.settings.as_mut() else {
             return Ok(AppAction::None);
         };
-        let current_revision = settings.catalog.revision().map_err(|error| error.to_string())?;
+        let current_revision = settings
+            .catalog
+            .revision()
+            .map_err(|error| error.to_string())?;
         if current_revision != settings.revision {
             return Err(format!(
                 "configuration changed since settings opened (expected revision {}, current revision {current_revision}); reopen /settings",
@@ -959,8 +958,8 @@ impl ModelModal {
                     settings.last_apply_timing = Some(change.apply_timing);
                 }
             }
-            settings.doctor = diagnose_config_catalog(&settings.catalog)
-                .map_err(|error| error.to_string())?;
+            settings.doctor =
+                diagnose_config_catalog(&settings.catalog).map_err(|error| error.to_string())?;
             settings.choice_selection.set_selected(
                 selected.min(settings.doctor.checks.len().saturating_sub(1)),
                 settings.doctor.checks.len(),
@@ -1143,18 +1142,16 @@ fn settings_choices(settings: &SettingsState) -> Vec<SettingsChoice> {
                 }
             })
             .collect(),
-        SettingsPage::Model => provider_model_options(
-            &settings.profile.provider,
-            &settings.profile.model,
-            &[],
-        )
-        .into_iter()
-        .map(|model| SettingsChoice {
-            label: model,
-            description: "model".to_owned(),
-            enabled: true,
-        })
-        .collect(),
+        SettingsPage::Model => {
+            provider_model_options(&settings.profile.provider, &settings.profile.model, &[])
+                .into_iter()
+                .map(|model| SettingsChoice {
+                    label: model,
+                    description: "model".to_owned(),
+                    enabled: true,
+                })
+                .collect()
+        }
         SettingsPage::Speed => ["fast", "balanced", "quality", "custom"]
             .into_iter()
             .map(|value| SettingsChoice {
@@ -1432,10 +1429,7 @@ mod settings_tests {
             AppAction::Redraw
         );
 
-        let change = catalog
-            .last_change()
-            .expect("last change")
-            .expect("change");
+        let change = catalog.last_change().expect("last change").expect("change");
         assert_eq!(change.origin, ConfigurationChangeOrigin::Tui);
         assert_eq!(change.apply_timing, ConfigurationApplyTiming::NextSession);
         let profile = catalog.snapshot().expect("snapshot").profile;
@@ -1455,7 +1449,11 @@ mod settings_tests {
 
     #[test]
     fn oauth_never_requires_or_emits_an_api_key() {
-        let mut modal = ModelModal::new(Some("openai-oauth / gpt-5.6-luna"), Some("effort:high"), true);
+        let mut modal = ModelModal::new(
+            Some("openai-oauth / gpt-5.6-luna"),
+            Some("effort:high"),
+            true,
+        );
         assert!(!modal.requires_api_key());
         modal.api_key = "should-never-leak".to_owned();
         assert!(modal.configuration().api_key.is_none());
@@ -1464,7 +1462,11 @@ mod settings_tests {
 
     #[test]
     fn reasoning_effort_options_are_derived_from_model_capabilities() {
-        let modal = ModelModal::new(Some("openai-oauth / gpt-5.6-luna"), Some("effort:high"), false);
+        let modal = ModelModal::new(
+            Some("openai-oauth / gpt-5.6-luna"),
+            Some("effort:high"),
+            false,
+        );
         assert_eq!(
             modal.effort_options(),
             vec![Effort::Low, Effort::Medium, Effort::High]

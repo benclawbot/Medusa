@@ -827,7 +827,8 @@ mod tests {
 
     #[test]
     fn originating_scenario_marks_failure_replay() {
-        let scenario = originating_scenario_for_episode("ep-1", "migrate the API", "all tests pass");
+        let scenario =
+            originating_scenario_for_episode("ep-1", "migrate the API", "all tests pass");
         assert_eq!(scenario.id, "replay-ep-1");
         assert_eq!(scenario.kind, ReplayScenarioKind::OriginatingFailure);
         assert!(scenario.candidate_should_trigger);

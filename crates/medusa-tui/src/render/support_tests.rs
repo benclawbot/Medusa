@@ -61,9 +61,11 @@ fn worked_for_separator_matches_codex_style_and_width() {
 
     assert!(line.text.starts_with("─ Worked for 1m 04s "));
     assert_eq!(line.text.chars().count(), 80);
-    assert!(line.text["─ Worked for 1m 04s ".len()..]
-        .chars()
-        .all(|character| character == '─'));
+    assert!(
+        line.text["─ Worked for 1m 04s ".len()..]
+            .chars()
+            .all(|character| character == '─')
+    );
     assert_eq!(line.foreground, Color::DarkGrey);
 }
 
@@ -115,20 +117,25 @@ fn verbosity_filters_tool_activity_rows() {
         Arc::new(UnsupportedClipboard),
     )
     .expect("app");
-    for (index, title) in ["first tool call", "second tool call"].into_iter().enumerate() {
-        app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
-            id: Some(format!("tool-{index}")),
-            kind: TranscriptActivityKind::Progress,
-            title: title.to_owned(),
-            details: vec!["detail".to_owned()],
-        }));
+    for (index, title) in ["first tool call", "second tool call"]
+        .into_iter()
+        .enumerate()
+    {
+        app.transcript
+            .push(TranscriptEntry::Activity(TranscriptActivity {
+                id: Some(format!("tool-{index}")),
+                kind: TranscriptActivityKind::Progress,
+                title: title.to_owned(),
+                details: vec!["detail".to_owned()],
+            }));
     }
-    app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
-        id: None,
-        kind: TranscriptActivityKind::Error,
-        title: "boom".to_owned(),
-        details: Vec::new(),
-    }));
+    app.transcript
+        .push(TranscriptEntry::Activity(TranscriptActivity {
+            id: None,
+            kind: TranscriptActivityKind::Error,
+            title: "boom".to_owned(),
+            details: Vec::new(),
+        }));
 
     let titles = |app: &AppState| {
         transcript_lines(app, 80)
@@ -138,24 +145,32 @@ fn verbosity_filters_tool_activity_rows() {
     };
 
     app.verbosity = Verbosity::All;
-    let all = titles(&app).join("
-");
+    let all = titles(&app).join(
+        "
+",
+    );
     assert!(all.contains("first tool call") && all.contains("second tool call"));
 
     app.verbosity = Verbosity::Off;
-    let off = titles(&app).join("
-");
+    let off = titles(&app).join(
+        "
+",
+    );
     assert!(!off.contains("tool call"));
     assert!(off.contains("boom"));
 
     app.verbosity = Verbosity::New;
-    let new = titles(&app).join("
-");
+    let new = titles(&app).join(
+        "
+",
+    );
     assert!(!new.contains("first tool call"));
     assert!(new.contains("second tool call"));
 
     app.verbosity = Verbosity::Verbose;
-    let verbose = titles(&app).join("
-");
+    let verbose = titles(&app).join(
+        "
+",
+    );
     assert!(verbose.contains("detail"));
 }

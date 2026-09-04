@@ -141,10 +141,8 @@ mod tests {
         )
         .expect("app");
         app.dismiss_welcome_for_event(&Event::Paste(String::new()));
-        let identity = UiIdentity::for_repo_with_build(
-            directory.path(),
-            Some("1.0.7.1 · main abcdef123456"),
-        );
+        let identity =
+            UiIdentity::for_repo_with_build(directory.path(), Some("1.0.7.1 · main abcdef123456"));
         let frame = render_frame(&identity, &app, 100, 24);
         assert!(
             frame
