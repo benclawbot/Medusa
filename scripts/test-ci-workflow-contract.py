@@ -35,6 +35,26 @@ def test_publishers_require_authoritative_workspace_validation() -> None:
     assert stable.index("authoritative-validation:") < stable.index("validate:")
 
 
+def test_rolling_publication_requires_protected_signatures() -> None:
+    signer = read_workflow("sign-rolling-artifacts.yml")
+    assert "environment: release-signing-primary" in signer
+    assert "MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" in signer
+    assert "actions/checkout" not in signer
+    assert "medusa-rolling-signature-v1" in signer
+    assert "openssl pkeyutl -sign -rawin" in signer
+
+    rolling = read_workflow("rolling-main-cli.yml")
+    assert "sign-cli:" in rolling
+    assert "sign-desktop:" in rolling
+    assert rolling.count("uses: ./.github/workflows/sign-rolling-artifacts.yml") == 2
+    assert "needs: sign-cli" in rolling
+    assert "needs: [sign-desktop, publish-cli]" in rolling
+    assert "rolling-main-cli-signed" in rolling
+    assert "rolling-main-desktop-signed" in rolling
+    assert rolling.index("sign-cli:") < rolling.index("publish-cli:")
+    assert rolling.index("sign-desktop:") < rolling.index("publish-desktop:")
+
+
 def test_stable_release_is_complete_before_publication() -> None:
     refresh = WORKFLOWS / "refresh-cli-release-assets.yml"
     assert not refresh.exists(), "stable release assets must never be refreshed after publication"
@@ -66,9 +86,6 @@ def test_stable_release_is_complete_before_publication() -> None:
     assert "--clobber" in platform_signer
     assert platform_signer.index("is_draft=") < platform_signer.index("--clobber")
 
-    # No other workflow that follows the normal stable Publish Release path may
-    # overwrite release assets. Rolling-main publication is intentionally mutable
-    # and is not a semver stable release.
     stable_followup_clobber_writers = []
     for path in WORKFLOWS.glob("*.yml"):
         text = path.read_text(encoding="utf-8")
@@ -90,7 +107,6 @@ def test_stable_release_is_complete_before_publication() -> None:
 
 
 def test_rolling_desktop_uses_tauri_production_build() -> None:
-    # A raw Cargo build selects Tauri's devUrl and ships a desktop that requires Vite.
     workflow = read_workflow("rolling-main-cli.yml")
     assert "npm run tauri:build -- --no-bundle" in workflow
     assert "cargo build --release --locked --manifest-path" not in workflow
@@ -145,6 +161,7 @@ def test_openai_oauth_never_uses_latest() -> None:
 def main() -> int:
     tests = [
         test_publishers_require_authoritative_workspace_validation,
+        test_rolling_publication_requires_protected_signatures,
         test_stable_release_is_complete_before_publication,
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,
