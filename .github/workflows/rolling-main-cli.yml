@@ -160,13 +160,12 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
-      - name: Build Medusa Desktop frontend
+      - name: Install Medusa Desktop dependencies
         working-directory: apps/medusa-desktop
-        run: npm ci && npm run build
-      - name: Build Medusa Desktop executable
-        run: >-
-          cargo build --release --locked --manifest-path
-          apps/medusa-desktop/src-tauri/Cargo.toml --bin medusa-desktop
+        run: npm ci
+      - name: Build packaged Medusa Desktop executable
+        working-directory: apps/medusa-desktop
+        run: npm run tauri:build -- --no-bundle
       - name: Package exact-revision desktop asset
         run: >-
           python scripts/package-main-desktop-update.py
