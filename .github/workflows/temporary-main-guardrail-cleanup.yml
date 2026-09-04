@@ -1,0 +1,57 @@
+name: Temporary main guardrail cleanup
+
+on:
+  push:
+    branches:
+      - fix/main-guardrail-cleanup-20260904
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+
+      - name: Repair stale capability evidence
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/CAPABILITY-CLAIMS.json")
+          text = path.read_text(encoding="utf-8")
+          old = "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs"
+          new = "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"expected exactly one stale capability path, found {count}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
+      - name: Format workspace
+        run: cargo fmt --all
+
+      - name: Validate formatting and capability evidence
+        shell: bash
+        run: |
+          cargo fmt --all -- --check
+          python3 scripts/check-capability-evidence.py
+
+      - name: Commit generated cleanup
+        shell: bash
+        run: |
+          rm .github/workflows/temporary-main-guardrail-cleanup.yml
+          git status --short
+          git config user.name "BenClawBot (AlphaOM3G1)"
+          git config user.email "benclawbot@gmail.com"
+          git add -A
+          git commit -m "fix: sync guardrails after simplification"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
