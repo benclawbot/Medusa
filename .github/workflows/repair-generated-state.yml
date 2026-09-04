@@ -1,21 +1,20 @@
 name: Repair generated state
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [fix/main-build-regressions-20260904]
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'fix/main-build-regressions-20260904'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repair branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: fix/main-build-regressions-20260904
           fetch-depth: 0
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
@@ -48,18 +47,14 @@ jobs:
           rm -f crates/medusa-tui/src/lib_root.rs
           rm -rf crates/medusa-goal
 
-          # Refresh both Cargo authorities after the manifest changes.
           cargo metadata --format-version 1 >/dev/null
           cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --format-version 1 >/dev/null
           cargo fmt --all
 
-          # This workflow is intentionally self-deleting; normal CI validates the pushed repair.
           rm -f .github/workflows/repair-generated-state.yml
 
       - name: Commit generated repair
         shell: bash
-        env:
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
@@ -67,4 +62,4 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m 'fix: repair simplification regressions and generated state'
-          git push origin "HEAD:${HEAD_BRANCH}"
+          git push origin HEAD:fix/main-build-regressions-20260904
