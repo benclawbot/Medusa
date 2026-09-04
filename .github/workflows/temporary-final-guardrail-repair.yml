@@ -28,14 +28,22 @@ jobs:
           git config user.email "benclawbot@gmail.com"
           if ! git merge origin/main --no-edit; then
             conflicts="$(git diff --name-only --diff-filter=U)"
-            expected=$'crates/medusa-tui/src/render/support.rs\ncrates/medusa-tui/src/render/support_tests.rs'
-            if [[ "$conflicts" != "$expected" ]]; then
-              echo "unexpected merge conflicts:" >&2
-              printf '%s\n' "$conflicts" >&2
+            if [[ -z "$conflicts" ]]; then
+              echo "merge failed without content conflicts" >&2
               exit 1
             fi
-            git checkout --theirs -- crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/render/support_tests.rs
-            git add crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/render/support_tests.rs
+            while IFS= read -r path; do
+              case "$path" in
+                crates/medusa-tui/src/render/support.rs|crates/medusa-tui/src/render/support_tests.rs)
+                  git checkout --theirs -- "$path"
+                  git add "$path"
+                  ;;
+                *)
+                  echo "unexpected merge conflict: $path" >&2
+                  exit 1
+                  ;;
+              esac
+            done <<< "$conflicts"
             git commit --no-edit
           fi
 
