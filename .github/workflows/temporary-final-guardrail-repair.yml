@@ -20,6 +20,23 @@ jobs:
         with:
           components: rustfmt,clippy
 
+      - name: Reconcile latest main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git merge origin/main --no-edit; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            expected=$'crates/medusa-tui/src/render/support.rs\ncrates/medusa-tui/src/render/support_tests.rs'
+            if [[ "$conflicts" != "$expected" ]]; then
+              echo "unexpected merge conflicts:" >&2
+              printf '%s\n' "$conflicts" >&2
+              exit 1
+            fi
+            git checkout --theirs -- crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/render/support_tests.rs
+            git add crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/render/support_tests.rs
+            git commit --no-edit
+          fi
+
       - name: Apply remaining deterministic repairs
         shell: bash
         run: |
@@ -35,6 +52,11 @@ jobs:
           new = '    mutating_coordinator = read(root, "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs")\n'
           if text.count(old) != 1:
               raise SystemExit("expected one stale mutating coordinator architecture input pair")
+          text = text.replace(old, new)
+          old = '        "mutation_transaction::complete_after_parent_review",\n'
+          new = '        "crate::parent_reviewer::complete",\n'
+          if text.count(old) != 1:
+              raise SystemExit("expected one stale parent review architecture assertion")
           architecture.write_text(text.replace(old, new), encoding="utf-8")
 
           app = Path("crates/medusa-tui/src/app.rs")
