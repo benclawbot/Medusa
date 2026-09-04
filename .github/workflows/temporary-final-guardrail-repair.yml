@@ -24,6 +24,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name "BenClawBot (AlphaOM3G1)"
+          git config user.email "benclawbot@gmail.com"
           if ! git merge origin/main --no-edit; then
             conflicts="$(git diff --name-only --diff-filter=U)"
             expected=$'crates/medusa-tui/src/render/support.rs\ncrates/medusa-tui/src/render/support_tests.rs'
@@ -107,8 +109,6 @@ jobs:
         shell: bash
         run: |
           rm .github/workflows/temporary-final-guardrail-repair.yml
-          git config user.name "BenClawBot (AlphaOM3G1)"
-          git config user.email "benclawbot@gmail.com"
           git add -A
           git status --short
           git commit -m "fix: clear remaining simplification guardrail failures"
