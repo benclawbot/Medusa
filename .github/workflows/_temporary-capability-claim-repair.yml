@@ -1,3 +1,4 @@
+# Second push intentionally triggers this branch-only repair workflow.
 name: Temporary capability claim repair
 
 on:
