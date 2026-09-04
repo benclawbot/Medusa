@@ -30,6 +30,8 @@ def test_rolling_desktop_uses_tauri_production_build() -> None:
     assert "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS" in workflow
     assert "localhost:5173" in workflow
     assert "tauri\\.localhost" in workflow
+    assert "$observedUrls = @()" in workflow
+    assert "never navigated to the Tauri production origin" in workflow
     assert workflow.index("Smoke packaged Windows desktop origin") < workflow.index(
         "Package exact-revision desktop asset"
     )
