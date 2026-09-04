@@ -6,6 +6,9 @@
 
 mod diagnostics;
 mod github;
+// Windows keeps this module compiled for the shared archive/recovery primitives while the
+// dedicated `windows_install` module owns replacement, health checking, locking, and rollback.
+#[cfg_attr(windows, allow(dead_code))]
 mod install;
 pub mod manifest;
 mod model;
