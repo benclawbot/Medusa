@@ -9,7 +9,11 @@ use std::time::Instant;
 const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-fn input_poll_timeout(now: Instant, next_animation: Instant, next_daemon_poll: Instant) -> Duration {
+fn input_poll_timeout(
+    now: Instant,
+    next_animation: Instant,
+    next_daemon_poll: Instant,
+) -> Duration {
     next_animation
         .min(next_daemon_poll)
         .saturating_duration_since(now)
@@ -156,7 +160,11 @@ pub(super) fn run_loop(
             draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
             needs_draw = false;
         }
-        if event::poll(input_poll_timeout(Instant::now(), next_animation, next_daemon_poll))? {
+        if event::poll(input_poll_timeout(
+            Instant::now(),
+            next_animation,
+            next_daemon_poll,
+        ))? {
             let terminal_event = event::read()?;
             needs_draw = true;
             app.dismiss_welcome_for_event(&terminal_event);
@@ -235,7 +243,11 @@ pub(super) fn run_loop(
             }
             needs_frame = false;
         }
-        if event::poll(input_poll_timeout(Instant::now(), next_animation, next_daemon_poll))? {
+        if event::poll(input_poll_timeout(
+            Instant::now(),
+            next_animation,
+            next_daemon_poll,
+        ))? {
             let terminal_event = event::read()?;
             needs_frame = true;
             app.dismiss_welcome_for_event(&terminal_event);
@@ -817,8 +829,16 @@ mod tests {
     #[test]
     fn input_poll_waits_until_the_next_scheduled_work() {
         let now = Instant::now();
-        let idle = input_poll_timeout(now, now + Duration::from_millis(250), now + Duration::from_millis(500));
-        let running = input_poll_timeout(now, now + Duration::from_millis(50), now + Duration::from_millis(250));
+        let idle = input_poll_timeout(
+            now,
+            now + Duration::from_millis(250),
+            now + Duration::from_millis(500),
+        );
+        let running = input_poll_timeout(
+            now,
+            now + Duration::from_millis(50),
+            now + Duration::from_millis(250),
+        );
         assert!(idle >= Duration::from_millis(200));
         assert!(running <= Duration::from_millis(50));
     }
