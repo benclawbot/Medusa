@@ -78,6 +78,12 @@ describe("Desktop onboarding state authority", () => {
     expect(initialOnboardingStep(partial, [provider])).toBe("model");
   });
 
+  it("requires permission review before verifying an otherwise complete first-run draft", () => {
+    const partial = config({ configured: false });
+    expect(configurationIsUsable(partial, [provider])).toBe(false);
+    expect(initialOnboardingStep(partial, [provider])).toBe("preferences");
+  });
+
   it("places recommended rich-registry models first", () => {
     expect(recommendedModels(provider)).toEqual(["gpt-5", "gpt-5-mini"]);
   });
