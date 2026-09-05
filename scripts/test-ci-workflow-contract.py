@@ -42,8 +42,8 @@ def test_rolling_main_requires_independent_signatures() -> None:
     assert rolling.count("environment: release-signing-primary") >= 2
     assert "MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" in rolling
     assert "medusa-release-signature-v1" in rolling
-    assert "rolling-main-cli-signatures-b954c630ddca91b4faa28ef6bc9aabc918017ab0" in rolling
-    assert "rolling-main-desktop-signatures-b954c630ddca91b4faa28ef6bc9aabc918017ab0" in rolling
+    assert "rolling-main-cli-signatures-${{ github.sha }}" in rolling
+    assert "rolling-main-desktop-signatures-${{ github.sha }}" in rolling
     assert "needs: [build-cli, sign-cli]" in rolling
     assert "needs: [build-desktop, sign-desktop, publish-cli]" in rolling
     assert "*.sig.json" in rolling
