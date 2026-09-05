@@ -31,7 +31,7 @@ medusa-runtime = { path = "../../../crates/medusa-runtime" }
 medusa-update = { path = "../../../crates/medusa-update" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 ulid = "1"
