@@ -24,6 +24,11 @@
       "sha256": "99621deb93a14741fc1aa46d6ecdd4314e7299564185f8c288594561e66226b4"
     },
     {
+      "path": "AGENTS.md",
+      "disposition": "current",
+      "sha256": "10d54aa9b60e1c728af90d88070a5158623a2e8a4c193d30e3a5fba77857a22d"
+    },
+    {
       "path": "CONTRIBUTING.md",
       "disposition": "current",
       "sha256": "e3fef9361518739cc02e43d21a931f94646932a175feef8480bdba92f28dcef4"
@@ -117,6 +122,16 @@
       "path": "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
       "disposition": "current",
       "sha256": "fd1d00a083de7f872973a6dafa4f1774dc371b0cf5a09a1f587290fc87764706"
+    },
+    {
+      "path": "docs/CODEX-RELIABILITY.md",
+      "disposition": "current",
+      "sha256": "4f0b1e24db62de3ad337e9f37e7a3900013d924d8113ebcb2f17a70fd5fa97e5"
+    },
+    {
+      "path": "docs/CODEX-TASK-TEMPLATE.md",
+      "disposition": "current",
+      "sha256": "6c71a39146838ed6500edf864793f94723b3b174d79e6172863e72c9773f2f40"
     },
     {
       "path": "docs/COMPATIBILITY.md",
