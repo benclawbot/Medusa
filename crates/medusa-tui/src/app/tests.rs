@@ -223,8 +223,12 @@ fn transcript_history_is_bounded_to_newest_entries() {
     }
 
     assert_eq!(app.transcript.len(), MAX_TRANSCRIPT_ENTRIES);
-    assert!(matches!(app.transcript.first(), Some(TranscriptEntry::System(message)) if message == "entry-1"));
-    assert!(matches!(app.transcript.last(), Some(TranscriptEntry::System(message)) if message == &format!("entry-{MAX_TRANSCRIPT_ENTRIES}")));
+    assert!(
+        matches!(app.transcript.first(), Some(TranscriptEntry::System(message)) if message == "entry-1")
+    );
+    assert!(
+        matches!(app.transcript.last(), Some(TranscriptEntry::System(message)) if message == &format!("entry-{MAX_TRANSCRIPT_ENTRIES}"))
+    );
 }
 
 #[test]
