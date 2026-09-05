@@ -2,9 +2,9 @@ pub(super) mod markdown;
 pub(super) mod support;
 
 use super::*;
-pub(crate) use support::*;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
+pub(crate) use support::*;
 
 #[cfg(unix)]
 pub(super) fn draw(

@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PermissionModeControl } from "./PermissionModeControl";
-import { loadPermissionModes } from "./permissionModes";
+import { loadPermissionModes, PERMISSION_MODE_CHANGED_EVENT } from "./permissionModes";
 
 vi.mock("./permissionModes", () => ({
+  PERMISSION_MODE_CHANGED_EVENT: "medusa:permission-mode-changed",
   loadPermissionModes: vi.fn(),
   setPermissionMode: vi.fn(),
 }));
@@ -55,4 +56,43 @@ it("shows the backend-selected permission mode once loaded", async () => {
   render(<PermissionModeControl />);
 
   await waitFor(() => expect(screen.getByRole("button", { name: "Ask for approval" })).toBeInTheDocument());
+});
+
+it("refreshes the displayed mode after another surface changes permissions", async () => {
+  vi.mocked(loadPermissionModes)
+    .mockResolvedValueOnce([
+      {
+        id: "ask-for-approval",
+        label: "Ask for approval",
+        description: "Ask before protected boundary actions.",
+        active: true,
+      },
+      {
+        id: "full-access",
+        label: "Full Access",
+        description: "Unrestricted access.",
+        active: false,
+      },
+    ])
+    .mockResolvedValueOnce([
+      {
+        id: "ask-for-approval",
+        label: "Ask for approval",
+        description: "Ask before protected boundary actions.",
+        active: false,
+      },
+      {
+        id: "full-access",
+        label: "Full Access",
+        description: "Unrestricted access.",
+        active: true,
+      },
+    ]);
+  render(<PermissionModeControl />);
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "Ask for approval" })).toBeInTheDocument());
+  window.dispatchEvent(new Event(PERMISSION_MODE_CHANGED_EVENT));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "Full Access" })).toBeInTheDocument());
+  expect(loadPermissionModes).toHaveBeenCalledTimes(2);
 });
