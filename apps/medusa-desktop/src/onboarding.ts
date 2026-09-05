@@ -43,7 +43,7 @@ export function initialOnboardingStep(
     return "authentication";
   }
   if (!configuration.model.trim()) return "model";
-  if (!configuration.configured) return "verify";
+  if (!configuration.configured) return "preferences";
   return "ready";
 }
 
