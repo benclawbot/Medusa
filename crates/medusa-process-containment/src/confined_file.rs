@@ -48,11 +48,7 @@ impl ConfinedDir {
                 root,
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
             )?;
-            if !root
-                .metadata()
-                .map_err(map_io_error)?
-                .is_dir()
-            {
+            if !root.metadata().map_err(map_io_error)?.is_dir() {
                 return Err(ConfinedReadError::Invalid);
             }
             Ok(Self { root })
@@ -93,11 +89,7 @@ impl ConfinedDir {
             };
             let next = open_unix_at(&current, name, flags)?;
             if is_last {
-                if !next
-                    .metadata()
-                    .map_err(map_io_error)?
-                    .is_file()
-                {
+                if !next.metadata().map_err(map_io_error)?.is_file() {
                     return Err(ConfinedReadError::Invalid);
                 }
                 return read_file(next);
@@ -172,7 +164,11 @@ fn open_unix_path(path: &Path, flags: libc::c_int) -> Result<File, ConfinedReadE
 }
 
 #[cfg(unix)]
-fn open_unix_at(parent: &File, name: &OsStr, flags: libc::c_int) -> Result<File, ConfinedReadError> {
+fn open_unix_at(
+    parent: &File,
+    name: &OsStr,
+    flags: libc::c_int,
+) -> Result<File, ConfinedReadError> {
     let value = os_str_cstring(name)?;
     // SAFETY: `parent` owns a live directory descriptor for the entire call, `value` is a single
     // validated relative component, and O_NOFOLLOW prevents the opened component from becoming a
