@@ -50,6 +50,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it("explains approval-gated permissions before first provider use", () => {
+  render(<DesktopOnboarding configuration={configuration} providers={[oauthProvider]} onApply={vi.fn()} />);
+
+  expect(screen.getByRole("note")).toHaveTextContent("Ask for approval");
+  expect(screen.getByRole("note")).toHaveTextContent("using the internet");
+  expect(screen.getByRole("note")).toHaveTextContent("different permission profile after setup");
+});
+
 it("uses browser OAuth then refreshes authenticated models", async () => {
   vi.mocked(startBrowserOauth).mockResolvedValue(undefined);
   vi.mocked(loadProviderCatalog).mockResolvedValue([oauthProvider]);
