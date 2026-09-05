@@ -94,6 +94,12 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
           </div>
         </div>
 
+        <p role="note">
+          New installs start in <strong>Ask for approval</strong>: Medusa can work inside your workspace,
+          but asks before crossing protected boundaries such as using the internet or changing files
+          outside it. You can deliberately choose a different permission profile after setup.
+        </p>
+
         {step === "provider" && (
           <>
             <h2>Choose a provider</h2>
