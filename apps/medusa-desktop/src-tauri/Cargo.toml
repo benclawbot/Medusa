@@ -29,7 +29,6 @@ medusa-provider = { path = "../../../crates/medusa-provider" }
 medusa-review-model = { path = "../../../crates/medusa-review-model" }
 medusa-runtime = { path = "../../../crates/medusa-runtime" }
 medusa-update = { path = "../../../crates/medusa-update" }
-percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
