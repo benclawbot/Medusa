@@ -1,6 +1,7 @@
 import { Archive, BookOpen, CheckCircle2, Database, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listRuntimeMemories, type DesktopMemory } from "./runtime";
+import { toUserError } from "./errorPresentation";
 
 interface MemoryBrowserProps {
   repo: string;
@@ -23,7 +24,7 @@ export function MemoryBrowser({ repo }: MemoryBrowserProps) {
       setItems(memories);
       setSelectedId((current) => memories.some((item) => item.id === current) ? current : memories[0]?.id);
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setLoading(false);
     }

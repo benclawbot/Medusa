@@ -13,11 +13,13 @@ import { useCallback, useEffect, useState } from "react";
 import {
   listRuntimeSessions,
   readRuntimeSession,
+  REPO_CHANGED_EVENT,
   requestRuntimeResume,
   type SessionDetail,
   type SessionSummary,
 } from "./runtime";
 import { useDockShell } from "./useDockShell";
+import { toUserError } from "./errorPresentation";
 import "./session-dock.css";
 
 function currentRepo(): string {
@@ -59,7 +61,11 @@ export function SessionDock() {
     };
     sync();
     window.addEventListener("focus", sync);
-    return () => window.removeEventListener("focus", sync);
+    window.addEventListener(REPO_CHANGED_EVENT, sync);
+    return () => {
+      window.removeEventListener("focus", sync);
+      window.removeEventListener(REPO_CHANGED_EVENT, sync);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -77,7 +83,7 @@ export function SessionDock() {
     try {
       setSessions(await listRuntimeSessions(repo));
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setLoading(false);
     }
@@ -89,7 +95,7 @@ export function SessionDock() {
     try {
       setSelected(await readRuntimeSession(repo, sessionId));
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setDetailLoading(false);
     }
@@ -98,7 +104,6 @@ export function SessionDock() {
   const resumeSession = useCallback(() => {
     if (!selected) return;
     requestRuntimeResume(selected.summary.id);
-    window.location.reload();
   }, [selected]);
 
   useEffect(() => {

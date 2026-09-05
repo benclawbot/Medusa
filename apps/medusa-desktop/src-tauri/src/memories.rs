@@ -6,6 +6,8 @@ use std::{
 use medusa_memory::{MemoryDocument, Scope, Status, Validation};
 use serde::Serialize;
 
+const MAX_DESKTOP_MEMORIES: usize = 5_000;
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopMemory {
@@ -52,6 +54,7 @@ pub fn runtime_list_memories(
             .cmp(&left.updated_at)
             .then_with(|| left.title.cmp(&right.title))
     });
+    entries.truncate(MAX_DESKTOP_MEMORIES);
     Ok(entries)
 }
 

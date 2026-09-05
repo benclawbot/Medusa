@@ -142,6 +142,8 @@ struct CanonicalPresentation {
     run_active: bool,
 }
 
+const MAX_PENDING_RUNTIME_EVENTS: usize = 5_000;
+
 impl CanonicalPresentation {
     fn new() -> Self {
         Self {
@@ -155,10 +157,18 @@ impl CanonicalPresentation {
         self.run_active = false;
     }
 
+    fn push_event(&mut self, event: RuntimeEvent) {
+        if self.pending.len() >= MAX_PENDING_RUNTIME_EVENTS {
+            self.pending.pop_front();
+        }
+        self.pending.push_back(event);
+    }
+
     fn push(&mut self, envelopes: Vec<FrontendEventEnvelope>) {
         for envelope in envelopes {
-            self.pending
-                .extend(map_frontend_event(envelope, &mut self.run_active));
+            for event in map_frontend_event(envelope, &mut self.run_active) {
+                self.push_event(event);
+            }
         }
     }
 
@@ -168,7 +178,7 @@ impl CanonicalPresentation {
         context_window_tokens: u64,
         auto_compact_percent: u8,
     ) {
-        self.pending.push_back(map_transient_event(
+        self.push_event(map_transient_event(
             event,
             context_window_tokens,
             auto_compact_percent,
@@ -1496,6 +1506,27 @@ mod tests {
         let events = map_frontend_event(envelope(FrontendEvent::TurnFinished), &mut run_active);
         assert!(matches!(events.front(), Some(RuntimeEvent::TurnFinished)));
         assert!(!run_active);
+    }
+
+    #[test]
+    fn canonical_presentation_bounds_pending_events_to_newest_items() {
+        let mut presentation = CanonicalPresentation::new();
+        for index in 0..=MAX_PENDING_RUNTIME_EVENTS {
+            presentation.push_event(RuntimeEvent::Notice {
+                title: format!("event-{index}"),
+                details: Vec::new(),
+            });
+        }
+
+        assert_eq!(presentation.pending.len(), MAX_PENDING_RUNTIME_EVENTS);
+        assert!(matches!(
+            presentation.pending.front(),
+            Some(RuntimeEvent::Notice { title, .. }) if title == "event-1"
+        ));
+        assert!(matches!(
+            presentation.pending.back(),
+            Some(RuntimeEvent::Notice { title, .. }) if title == &format!("event-{MAX_PENDING_RUNTIME_EVENTS}")
+        ));
     }
 
     #[test]

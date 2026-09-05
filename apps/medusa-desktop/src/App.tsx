@@ -36,12 +36,15 @@ import {
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import packageMetadata from "../package.json";
 import { ApprovalCard } from "./ApprovalCard";
 import { appendBounded } from "./boundedHistory";
 import { RecoveryDock } from "./RecoveryDock";
 import { DesktopOnboarding } from "./DesktopOnboarding";
 import { requestDesktopTool, type DesktopTool } from "./desktop-tools";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { useDialogFocus } from "./useDialogFocus";
+import { toUserError } from "./errorPresentation";
 import "./approval-card.css";
 import "./ux-polish.css";
 import {
@@ -60,6 +63,8 @@ import {
   findWebArtifact,
   loadSharedConfiguration,
   pollRuntime,
+  publishRepoChanged,
+  RUNTIME_RESUME_EVENT,
   runRuntimeCommand,
   startRuntime,
   submitRuntime,
@@ -314,6 +319,10 @@ export function App() {
   const transportErrorVisible = useRef(false);
   const pollBusy = useRef(false);
   const submitInFlight = useRef(false);
+  const resumeInFlight = useRef(false);
+  const runtimeTransitionInFlight = useRef(false);
+  const providerRequestId = useRef(0);
+  const authenticationRequestId = useRef(0);
   const wakePoll = useRef<(() => void) | undefined>();
   const busyRef = useRef(busy);
   busyRef.current = busy;
@@ -321,17 +330,12 @@ export function App() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const composerSelectorRef = useRef<HTMLDivElement>(null);
+  const previewDialogRef = useRef<HTMLDivElement>(null);
+  const closeComposerSelector = useCallback(() => setComposerSelectorOpen(false), []);
+  const closePreviewImage = useCallback(() => setPreviewImage(undefined), []);
 
-  useEffect(() => {
-    if (!composerSelectorOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!composerSelectorRef.current?.contains(event.target as Node)) {
-        setComposerSelectorOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [composerSelectorOpen]);
+  useDialogFocus(composerSelectorOpen, composerSelectorRef, closeComposerSelector);
+  useDialogFocus(Boolean(previewImage), previewDialogRef, closePreviewImage);
 
   const resizeComposer = useCallback(() => {
     const composer = composerRef.current;
@@ -440,7 +444,7 @@ export function App() {
         setCopiedMessageId((current) => current === message.id ? undefined : current);
       }, 1600);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(toUserError(cause));
     }
   }, []);
 
@@ -564,7 +568,7 @@ export function App() {
         });
         break;
       case "configurationChanged":
-        void refreshConfiguration().catch((cause) => setError(String(cause)));
+        void refreshConfiguration().catch((cause) => setError(toUserError(cause)));
         break;
       case "notice":
         {
@@ -641,7 +645,12 @@ export function App() {
     let active = true;
     let timer: number | undefined;
     const schedule = (delay: number) => {
-      if (active) timer = window.setTimeout(() => void poll(), delay);
+      if (!active) return;
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        void poll();
+      }, delay);
     };
     const poll = async () => {
       if (!active) return;
@@ -670,7 +679,7 @@ export function App() {
           // below and the next poll normally resumes from the durable cursor. Keep
           // transient socket noise out of the transcript unless it persists.
           if (transportFailureCount.current < 3) return;
-          const message = String(cause);
+          const message = toUserError(cause);
           setError(message);
           transportErrorVisible.current = true;
           if (lastTransportError.current !== message) {
@@ -718,7 +727,7 @@ export function App() {
           setSlashSelection(0);
         })
         .catch((cause) => {
-          if (active) setError(String(cause));
+          if (active) setError(toUserError(cause));
         });
     }, 75);
     return () => {
@@ -747,7 +756,7 @@ export function App() {
         started = await startRuntime(previous || undefined);
       } catch (cause) {
         if (!previous) throw cause;
-        window.localStorage.removeItem("medusa.desktop.repo");
+        publishRepoChanged("");
         started = await startRuntime();
       }
       if (disposed) {
@@ -783,7 +792,7 @@ export function App() {
         }
       })
       .catch((cause) => {
-        if (!disposed) setError(String(cause));
+        if (!disposed) setError(toUserError(cause));
       });
     return () => {
       disposed = true;
@@ -794,9 +803,56 @@ export function App() {
     if (runtimeId) void closeRuntime(runtimeId);
   }, [runtimeId]);
 
+  const resumeSession = useCallback(async (sessionId: string) => {
+    if (resumeInFlight.current || runtimeTransitionInFlight.current) return;
+    if (!repo) {
+      setError("Open a project before resuming a saved session.");
+      return;
+    }
+    resumeInFlight.current = true;
+    runtimeTransitionInFlight.current = true;
+    setError(undefined);
+    try {
+      const started = await startRuntime(repo);
+      await configureStartedRuntime(started, {
+        provider,
+        model,
+        effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
+      });
+      setRuntimeId(started.runtimeId);
+      setRepo(started.repo);
+      setMessages([]);
+      setActivities([]);
+      setWorkLog([]);
+      setPlan([]);
+      setQuestions([]);
+      setLastRequest(undefined);
+      setWebArtifact(undefined);
+      setPartialResult(false);
+      setSidePanelView("work");
+    } catch (cause) {
+      setError(toUserError(cause));
+    } finally {
+      resumeInFlight.current = false;
+      runtimeTransitionInFlight.current = false;
+    }
+  }, [effort, model, provider, repo, sharedConfiguration?.revision]);
+
+  useEffect(() => {
+    const onResumeRequest = (event: Event) => {
+      const sessionId = (event as CustomEvent<string>).detail;
+      if (sessionId) void resumeSession(sessionId);
+    };
+    window.addEventListener(RUNTIME_RESUME_EVENT, onResumeRequest);
+    return () => window.removeEventListener(RUNTIME_RESUME_EVENT, onResumeRequest);
+  }, [resumeSession]);
+
   const openProject = async () => {
+    if (runtimeTransitionInFlight.current) return;
     const selected = await open({ directory: true, multiple: false, title: "Open a Medusa project" });
     if (typeof selected !== "string") return;
+    runtimeTransitionInFlight.current = true;
     let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
     try {
       started = await startRuntime(selected);
@@ -813,7 +869,7 @@ export function App() {
       setPartialResult(false);
       setSidePanelView("work");
       setError(undefined);
-      window.localStorage.setItem("medusa.desktop.repo", started.repo);
+      publishRepoChanged(started.repo);
       await configureStartedRuntime(started, {
         provider,
         model,
@@ -823,11 +879,15 @@ export function App() {
       await refreshConfiguration();
     } catch (cause) {
       if (started) setRuntimeId(undefined);
-      setError(String(cause));
+      setError(toUserError(cause));
+    } finally {
+      runtimeTransitionInFlight.current = false;
     }
   };
 
   const openGeneralChat = async () => {
+    if (runtimeTransitionInFlight.current) return;
+    runtimeTransitionInFlight.current = true;
     let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
     try {
       started = await startRuntime();
@@ -844,7 +904,7 @@ export function App() {
       setPartialResult(false);
       setSidePanelView("work");
       setError(undefined);
-      window.localStorage.removeItem("medusa.desktop.repo");
+      publishRepoChanged("");
       await configureStartedRuntime(started, {
         provider,
         model,
@@ -854,7 +914,9 @@ export function App() {
       await refreshConfiguration();
     } catch (cause) {
       if (started) setRuntimeId(undefined);
-      setError(String(cause));
+      setError(toUserError(cause));
+    } finally {
+      runtimeTransitionInFlight.current = false;
     }
   };
 
@@ -875,7 +937,7 @@ export function App() {
       setAttachments((current) => [...current, ...next]);
       setError(undefined);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(toUserError(cause));
     }
   };
 
@@ -1000,7 +1062,7 @@ export function App() {
         setBusy(false);
         setPendingSubmit(false);
       }
-      const message = String(cause);
+      const message = toUserError(cause);
       setError(message);
       if (submitsTurn) {
         appendAssistantMessage(`Medusa could not start the request:\n\n${message}`);
@@ -1050,12 +1112,14 @@ export function App() {
       setError(undefined);
     } catch (cause) {
       await closeRuntime(started.runtimeId).catch(() => undefined);
-      setError(String(cause));
+      setError(toUserError(cause));
       throw cause;
     }
   };
 
   const selectProvider = async (value: string) => {
+    const requestId = ++providerRequestId.current;
+    authenticationRequestId.current += 1;
     const nextProvider = providerCatalog.find((entry) => entry.profileProvider === value);
     setProvider(value);
     setApiKey("");
@@ -1070,26 +1134,30 @@ export function App() {
         await ensureBrowserOauth(value);
       }
       const refreshed = await loadProviderCatalog(true, value);
+      if (requestId !== providerRequestId.current) return;
       setProviderCatalog(refreshed);
       const refreshedProvider = refreshed.find((entry) => entry.profileProvider === value);
       if (refreshedProvider) {
         setModel(refreshedProvider.modelOptions[0] ?? (refreshedProvider.browserOauth ? "" : refreshedProvider.defaultModel));
       }
     } catch (cause) {
-      setError(String(cause));
+      if (requestId === providerRequestId.current) setError(toUserError(cause));
     } finally {
-      setLoadingModels(false);
+      if (requestId === providerRequestId.current) setLoadingModels(false);
     }
   };
 
   const authenticateSelectedProvider = async () => {
     if (!provider) return;
+    const providerAtStart = provider;
+    const requestId = ++authenticationRequestId.current;
     setAuthenticating(true);
     setError(undefined);
     try {
-      await startBrowserOauth(provider);
-      setOauthAuthenticatedProvider(provider);
-      const refreshed = await loadProviderCatalog(true, provider);
+      await startBrowserOauth(providerAtStart);
+      const refreshed = await loadProviderCatalog(true, providerAtStart);
+      if (requestId !== authenticationRequestId.current || provider !== providerAtStart) return;
+      setOauthAuthenticatedProvider(providerAtStart);
       setProviderCatalog(refreshed);
       const refreshedProvider = refreshed.find((entry) => entry.profileProvider === provider);
       if (refreshedProvider) {
@@ -1098,9 +1166,11 @@ export function App() {
           : refreshedProvider.modelOptions[0] ?? (refreshedProvider.browserOauth ? "" : refreshedProvider.defaultModel));
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (requestId === authenticationRequestId.current && provider === providerAtStart) {
+        setError(toUserError(cause));
+      }
     } finally {
-      setAuthenticating(false);
+      if (requestId === authenticationRequestId.current) setAuthenticating(false);
     }
   };
 
@@ -1121,7 +1191,7 @@ export function App() {
       setApiKey("");
       setError(undefined);
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     }
   };
 
@@ -1135,7 +1205,7 @@ export function App() {
       await cancelRuntime(runtimeId);
     } catch (cause) {
       setBusy(true);
-      setError(String(cause));
+      setError(toUserError(cause));
     }
   };
 
@@ -1144,7 +1214,7 @@ export function App() {
     try {
       await runRuntimeCommand(runtimeId, "/new");
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     }
   }, [runtimeId]);
 
@@ -1279,7 +1349,7 @@ export function App() {
         <div className="brand-row">
           <span className="brand-mark"><Bot size={17} /></span>
           <div className="rail-label"><h1>Medusa</h1><small>Desktop</small></div>
-          <span className="version rail-label">v1.0</span>
+          <span className="version rail-label">v{packageMetadata.version}</span>
         </div>
         <button className="new-session" onClick={newSession} disabled={!runtimeId} aria-keyshortcuts={macPlatform ? "Meta+N" : "Control+N"} title="New session">
           <span><Plus size={16} /><span className="rail-label">New session</span></span><kbd className="rail-label">{newSessionShortcut}</kbd>
@@ -1426,7 +1496,7 @@ export function App() {
                     <PanelRightClose size={17} />
                   </button>
                 </div>
-                <div className="work-log" aria-live="polite">
+                <div className="work-log" aria-label="Activity log">
                   {workLog.length === 0 ? (
                     <p className="work-log-empty">Actions and your inputs will appear here while Medusa works.</p>
                   ) : visibleWorkLog.map((entry) => (
@@ -1511,7 +1581,7 @@ export function App() {
                   )}
                 </article>
               ))}
-              <div className="timeline-anchor" aria-live="polite" />
+              <div className="timeline-anchor" aria-hidden="true" />
               <ApprovalCard
                 prompts={questions}
                 plan={plan}
@@ -1631,7 +1701,8 @@ export function App() {
                         <ChevronDown size={15} aria-hidden="true" />
                       </button>
                       {composerSelectorOpen && (
-                        <div className="composer-selector-popover" role="dialog" aria-label="Provider, model, and effort">
+                        <div className="composer-selector-popover" role="dialog" aria-modal="true" aria-labelledby="composer-selector-title">
+                          <h2 id="composer-selector-title" className="visually-hidden">Provider, model, and effort</h2>
                           <label className="composer-selector-row">
                             <span>Provider</span>
                             <select
@@ -1720,10 +1791,10 @@ export function App() {
 
     </main>
       {previewImage && (
-        <div className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Preview ${previewImage.name}`} onClick={() => setPreviewImage(undefined)}>
-          <div className="image-preview-content" onClick={(event) => event.stopPropagation()}>
-            <div><strong>{previewImage.name}</strong><small>{previewImage.width}×{previewImage.height} · {formatBytes(previewImage.sizeBytes)}</small></div>
-            <button onClick={() => setPreviewImage(undefined)} aria-label="Close image preview"><X size={18} /></button>
+        <div className="image-preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-image-title" onClick={closePreviewImage}>
+          <div ref={previewDialogRef} className="image-preview-content" tabIndex={-1} onClick={(event) => event.stopPropagation()}>
+            <div><strong id="preview-image-title">{previewImage.name}</strong><small>{previewImage.width}×{previewImage.height} · {formatBytes(previewImage.sizeBytes)}</small></div>
+            <button onClick={closePreviewImage} aria-label="Close image preview"><X size={18} /></button>
             <img src={previewImage.dataUrl} alt={previewImage.name} />
           </div>
         </div>

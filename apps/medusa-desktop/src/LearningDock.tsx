@@ -11,6 +11,8 @@ import {
   type LearningReviewSnapshot,
 } from "./learningApi";
 import { useDockShell } from "./useDockShell";
+import { REPO_CHANGED_EVENT } from "./runtime";
+import { toUserError } from "./errorPresentation";
 import "./learning-dock.css";
 
 function actions(item: LearningReviewItem) {
@@ -29,7 +31,7 @@ export function LearningDock() {
   const [data, setData] = useState<LearningReviewSnapshot>();
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
-  const repo = window.localStorage.getItem("medusa.desktop.repo") ?? "";
+  const [repo, setRepo] = useState(() => window.localStorage.getItem("medusa.desktop.repo") ?? "");
   const { open, setOpen, close, error, setError, dialogRef } = useDockShell<HTMLDivElement>("learning");
 
   const reload = async () => {
@@ -39,7 +41,7 @@ export function LearningDock() {
       setData(await loadLearningReview(repo));
       setError(undefined);
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setBusy(false);
     }
@@ -48,6 +50,17 @@ export function LearningDock() {
   useEffect(() => {
     if (open) void reload();
   }, [open, repo]);
+
+  useEffect(() => {
+    const sync = () => setRepo(window.localStorage.getItem("medusa.desktop.repo") ?? "");
+    sync();
+    window.addEventListener(REPO_CHANGED_EVENT, sync);
+    window.addEventListener("focus", sync);
+    return () => {
+      window.removeEventListener(REPO_CHANGED_EVENT, sync);
+      window.removeEventListener("focus", sync);
+    };
+  }, []);
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -67,7 +80,7 @@ export function LearningDock() {
       setData(await transitionLearning(repo, item.id, action, data.revision));
       setError(undefined);
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
       await reload();
     } finally {
       setBusy(false);
@@ -82,7 +95,7 @@ export function LearningDock() {
       setData(await saveLearningPrivacy(repo, privacy, data.revision));
       setError(undefined);
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
       await reload();
     } finally {
       setBusy(false);
@@ -98,7 +111,7 @@ export function LearningDock() {
       await navigator.clipboard.writeText(JSON.stringify(exportValue, null, 2));
       setError("Audit export copied to clipboard after redaction checks.");
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setBusy(false);
     }

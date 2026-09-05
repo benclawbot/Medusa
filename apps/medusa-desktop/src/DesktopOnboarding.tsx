@@ -6,6 +6,7 @@ import {
 } from "./providerCatalog";
 import type { Effort, SharedConfiguration } from "./runtime";
 import { initialOnboardingStep, recommendedModels } from "./onboarding";
+import { toUserError } from "./errorPresentation";
 
 interface Props {
   configuration: SharedConfiguration;
@@ -30,6 +31,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   const [authenticating, setAuthenticating] = useState(false);
   const [oauthConnected, setOauthConnected] = useState(configuration.credentialConfigured);
   const [authError, setAuthError] = useState<string>();
+  const [verifyError, setVerifyError] = useState<string>();
   const models = recommendedModels(selectedProvider);
   const credentialless = selectedProvider?.authMethods.every((method) => method === "none") ?? false;
   const oauth = selectedProvider?.browserOauth ?? false;
@@ -66,7 +68,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
       setOauthConnected(true);
       setStep("model");
     } catch (cause) {
-      setAuthError(cause instanceof Error ? cause.message : String(cause));
+      setAuthError(toUserError(cause));
     } finally {
       setAuthenticating(false);
     }
@@ -74,10 +76,13 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
 
   const verify = async () => {
     setSaving(true);
+    setVerifyError(undefined);
     try {
       await onApply({ provider, model, effort, apiKey: apiKey.trim() || undefined, baseUrl: selectedProvider?.customValues ? baseUrl.trim() || undefined : undefined });
       setApiKey("");
       setStep("ready");
+    } catch (cause) {
+      setVerifyError(toUserError(cause));
     } finally {
       setSaving(false);
     }
@@ -180,7 +185,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
             <h2>Verify and start</h2>
             <p>{selectedProvider?.displayName} · {model} · {effort} effort</p>
             <small>Medusa will test the selected provider route and model before marking the session ready.</small>
-            {!!error && <div className="error-banner" role="alert">{error}</div>}
+            {!!(error ?? verifyError) && <div className="error-banner" role="alert">{error ?? verifyError}</div>}
             <div>
               <button className="secondary-action" disabled={saving} onClick={() => setStep("preferences")}>Back</button>
               <button className="primary-action" disabled={saving || !provider || !model} onClick={() => void verify()}>{saving ? "Verifying…" : "Verify configuration"}</button>

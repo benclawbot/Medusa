@@ -39,4 +39,14 @@ describe("MarkdownMessage", () => {
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(screen.getByText("unsafe")).toBeInTheDocument();
   });
+
+  it("allows keyboard activation for safe links", () => {
+    render(<MarkdownMessage text="[source](https://example.com)" />);
+    const link = screen.getByRole("link", { name: "source" });
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 });
+
+    link.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
 });

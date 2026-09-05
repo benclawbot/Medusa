@@ -19,7 +19,9 @@ import {
   type ReviewProvenance,
   type ReviewWorkspace,
 } from "./reviewApi";
+import { REPO_CHANGED_EVENT } from "./runtime";
 import { useDockShell } from "./useDockShell";
+import { toUserError } from "./errorPresentation";
 import {
   canPresentVerifiedCompletion,
   evidenceFreshness,
@@ -260,7 +262,7 @@ export function DiffDock() {
           : next.snapshot.files[0]?.path ?? "",
       );
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setLoading(false);
     }
@@ -268,6 +270,16 @@ export function DiffDock() {
 
   useEffect(() => {
     if (open) void refresh();
+  }, [open, refresh]);
+
+  useEffect(() => {
+    const sync = () => {
+      const next = window.localStorage.getItem("medusa.desktop.repo") ?? "";
+      setRepo(next);
+      if (open) void refresh();
+    };
+    window.addEventListener(REPO_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(REPO_CHANGED_EVENT, sync);
   }, [open, refresh]);
 
   const visible = useMemo(
@@ -319,7 +331,7 @@ export function DiffDock() {
         });
         setReview(next);
       } catch (cause) {
-        setError(String(cause));
+        setError(toUserError(cause));
       } finally {
         setLoading(false);
       }
@@ -341,7 +353,7 @@ export function DiffDock() {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     }
   }, [repo]);
 

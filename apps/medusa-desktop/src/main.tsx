@@ -25,6 +25,7 @@ import "./neutral-light.css";
 import "./mobile-navigation.css";
 import "./desktop-tools.css";
 import "./permission-mode.css";
+import { toUserError } from "./errorPresentation";
 
 interface ErrorBoundaryState {
   error?: Error;
@@ -39,7 +40,7 @@ class DesktopErrorBoundary extends React.Component<React.PropsWithChildren, Erro
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error("Medusa Desktop renderer failed", error, info.componentStack);
+    console.error("Medusa Desktop renderer failed", toUserError(error), info.componentStack);
   }
 
   render() {
@@ -49,7 +50,7 @@ class DesktopErrorBoundary extends React.Component<React.PropsWithChildren, Erro
         <section role="alert" style={{ maxWidth: 720 }}>
           <h1>Medusa Desktop needs attention</h1>
           <p>The renderer stopped while processing the request. The background runtime is still available for retry or restart.</p>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{this.state.error.message}</pre>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{toUserError(this.state.error)}</pre>
         </section>
       </main>
     );

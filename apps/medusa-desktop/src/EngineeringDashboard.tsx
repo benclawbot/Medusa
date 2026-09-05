@@ -12,6 +12,8 @@ import {
   type EngineeringDashboardData,
 } from "./engineeringApi";
 import { useDockShell } from "./useDockShell";
+import { toUserError } from "./errorPresentation";
+import { REPO_CHANGED_EVENT } from "./runtime";
 import "./engineering-dashboard.css";
 
 const pct = (value: number) => `${value.toFixed(1)}%`;
@@ -51,7 +53,7 @@ function Dashboard({ repo }: { repo: string }) {
     if (!repo) return;
     setBusy(true);
     try { setData(await loadEngineeringDashboard(repo, days)); setError(undefined); }
-    catch (cause) { setError(String(cause)); }
+    catch (cause) { setError(toUserError(cause)); }
     finally { setBusy(false); }
   };
   useEffect(() => { void reload(); }, [repo, days]);
@@ -64,7 +66,17 @@ function Dashboard({ repo }: { repo: string }) {
 }
 
 export function EngineeringDashboardLauncher() {
-  const repo = window.localStorage.getItem("medusa.desktop.repo") ?? "";
+  const [repo, setRepo] = useState(() => window.localStorage.getItem("medusa.desktop.repo") ?? "");
   const { open, setOpen, close, dialogRef } = useDockShell<HTMLDivElement>("engineering");
+  useEffect(() => {
+    const sync = () => setRepo(window.localStorage.getItem("medusa.desktop.repo") ?? "");
+    sync();
+    window.addEventListener(REPO_CHANGED_EVENT, sync);
+    window.addEventListener("focus", sync);
+    return () => {
+      window.removeEventListener(REPO_CHANGED_EVENT, sync);
+      window.removeEventListener("focus", sync);
+    };
+  }, []);
   return <>{open && <div className="engineering-overlay"><div ref={dialogRef} className="engineering-shell" role="dialog" aria-modal="true" aria-label="Engineering dashboard" tabIndex={-1}><button className="engineering-close" onClick={close} aria-label="Close engineering dashboard"><X size={18}/></button><Dashboard repo={repo}/></div></div>}</>;
 }

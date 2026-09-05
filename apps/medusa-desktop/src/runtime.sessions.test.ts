@@ -3,6 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   readRuntimeSession,
   requestRuntimeResume,
+  publishRepoChanged,
+  REPO_CHANGED_EVENT,
+  RUNTIME_RESUME_EVENT,
   startRuntime,
 } from "./runtime";
 
@@ -34,6 +37,31 @@ it("keeps pending resume state until a repository is available", async () => {
 
   expect(invoke).toHaveBeenCalledWith("runtime_start", {});
   expect(window.localStorage.getItem("medusa.desktop.resumeSession")).toBe("session-456");
+});
+
+it("notifies the active desktop when a session resume is requested", () => {
+  const listener = vi.fn();
+  window.addEventListener(RUNTIME_RESUME_EVENT, listener);
+
+  requestRuntimeResume("session-789");
+
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect((listener.mock.calls[0][0] as CustomEvent<string>).detail).toBe("session-789");
+  window.removeEventListener(RUNTIME_RESUME_EVENT, listener);
+});
+
+it("publishes repository changes and keeps the shared repository pointer current", () => {
+  const listener = vi.fn();
+  window.addEventListener(REPO_CHANGED_EVENT, listener);
+
+  publishRepoChanged("  C:/work/medusa  ");
+  expect(window.localStorage.getItem("medusa.desktop.repo")).toBe("C:/work/medusa");
+  expect((listener.mock.calls[0][0] as CustomEvent<string>).detail).toBe("C:/work/medusa");
+
+  publishRepoChanged("");
+  expect(window.localStorage.getItem("medusa.desktop.repo")).toBeNull();
+  expect((listener.mock.calls[1][0] as CustomEvent<string>).detail).toBe("");
+  window.removeEventListener(REPO_CHANGED_EVENT, listener);
 });
 
 it("reads a durable session transcript through the Tauri command", async () => {

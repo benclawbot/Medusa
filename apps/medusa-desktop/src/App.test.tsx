@@ -11,6 +11,7 @@ import {
   findWebArtifact,
   loadSharedConfiguration,
   pollRuntime,
+  requestRuntimeResume,
   runRuntimeCommand,
   startRuntime,
   submitRuntime,
@@ -166,6 +167,20 @@ it("starts a general chat without requiring a project", async () => {
   expect(screen.getByRole("heading", { name: "General chat" })).toBeInTheDocument();
   expect(screen.getByRole("textbox")).toBeEnabled();
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
+});
+
+it("resumes a saved session in place without reloading the window", async () => {
+  vi.mocked(startRuntime)
+    .mockResolvedValueOnce({ runtimeId: "runtime-general", repo: "/repo" })
+    .mockResolvedValueOnce({ runtimeId: "runtime-resumed", repo: "/repo" });
+  render(<App />);
+
+  await waitFor(() => expect(startRuntime).toHaveBeenCalledWith(undefined));
+  requestRuntimeResume("session-123");
+
+  await waitFor(() => expect(startRuntime).toHaveBeenCalledWith("/repo"));
+  await waitFor(() => expect(closeRuntime).toHaveBeenCalledWith("runtime-general"));
+  expect(screen.getByRole("heading", { name: "repo" })).toBeInTheDocument();
 });
 
 it("starts the desktop before OAuth preflight completes", async () => {

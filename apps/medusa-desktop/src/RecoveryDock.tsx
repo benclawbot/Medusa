@@ -9,6 +9,7 @@ import {
   subscribeTimeline,
   type RecoveryOperation,
 } from "./runtime";
+import { toUserError } from "./errorPresentation";
 
 /**
  * Recovery is shown alongside the work log. The user needs a short explanation
@@ -45,7 +46,7 @@ export function RecoveryDock() {
       }
       dismissRecovery();
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setBusy(false);
     }

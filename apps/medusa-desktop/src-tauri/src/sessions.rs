@@ -7,6 +7,9 @@ use std::{
 use serde::Serialize;
 use serde_json::Value;
 
+const MAX_DESKTOP_SESSIONS: usize = 2_000;
+const MAX_DESKTOP_SESSION_MESSAGES: usize = 2_000;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionSummary {
@@ -19,7 +22,7 @@ pub struct DesktopSessionSummary {
     pub turn: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopSessionMessage {
     pub role: String,
@@ -46,6 +49,7 @@ pub fn runtime_list_sessions(repo: String) -> Result<Vec<DesktopSessionSummary>,
             .cmp(&left.updated_at)
             .then_with(|| left.id.cmp(&right.id))
     });
+    sessions.truncate(MAX_DESKTOP_SESSIONS);
     Ok(sessions)
 }
 
@@ -64,7 +68,12 @@ pub fn runtime_read_session(
         .into_iter()
         .flatten()
         .filter_map(message_from_value)
-        .collect();
+        .collect::<Vec<_>>();
+    let messages = if messages.len() > MAX_DESKTOP_SESSION_MESSAGES {
+        messages[messages.len() - MAX_DESKTOP_SESSION_MESSAGES..].to_vec()
+    } else {
+        messages
+    };
     Ok(DesktopSessionDetail { summary, messages })
 }
 

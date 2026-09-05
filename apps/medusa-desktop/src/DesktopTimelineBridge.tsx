@@ -49,7 +49,8 @@ function useTodoTarget(): HTMLElement | null {
   const [target, setTarget] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    let frame = 0;
+    let timer: number | undefined;
+    let attempts = 0;
     const resolve = () => {
       const composer = document.querySelector<HTMLElement>(".composer-wrap");
       const card = composer?.querySelector<HTMLElement>(".composer-card");
@@ -63,11 +64,14 @@ function useTodoTarget(): HTMLElement | null {
         setTarget(mount);
         return;
       }
-      frame = window.requestAnimationFrame(resolve);
+      attempts += 1;
+      if (attempts < 40) timer = window.setTimeout(resolve, 100);
     };
 
     resolve();
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
 
   return target;

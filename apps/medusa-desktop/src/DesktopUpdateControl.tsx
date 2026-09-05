@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { toUserError } from "./errorPresentation";
 
 interface DesktopUpdateStatus {
   currentVersion: string;
@@ -38,7 +39,7 @@ export function DesktopUpdateControl() {
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    let frame: number | undefined;
+    let timer: number | undefined;
     const findTarget = () => {
       if (typeof document !== "undefined") {
         const next = document.querySelector(".settings-form");
@@ -47,18 +48,16 @@ export function DesktopUpdateControl() {
     };
     findTarget();
     const observer = new MutationObserver(() => {
-      if (frame !== undefined) return;
-      if (typeof window === "undefined") return;
-      frame = window.requestAnimationFrame(() => {
-        frame = undefined;
-        if (typeof window === "undefined") return;
+      if (timer !== undefined || typeof window === "undefined") return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
         findTarget();
-      });
+      }, 100);
     });
     observer.observe(document.body, { childList: true, subtree: true });
     return () => {
       observer.disconnect();
-      if (frame !== undefined && typeof window !== "undefined") window.cancelAnimationFrame(frame);
+      if (timer !== undefined && typeof window !== "undefined") window.clearTimeout(timer);
     };
   }, []);
 
@@ -97,7 +96,7 @@ export function DesktopUpdateControl() {
     try {
       setStatus(await invoke<DesktopUpdateStatus>("desktop_update_status"));
     } catch (cause) {
-      setError(String(cause));
+      setError(toUserError(cause));
     } finally {
       setChecking(false);
     }
@@ -120,7 +119,7 @@ export function DesktopUpdateControl() {
     } catch (cause) {
       setUpdating(false);
       setProgress(undefined);
-      setError(String(cause));
+      setError(toUserError(cause));
     }
   };
 

@@ -356,11 +356,11 @@ impl RuntimeEntry {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct RuntimeRegistry {
-    next_id: AtomicU64,
-    entries: Mutex<BTreeMap<String, Arc<Mutex<RuntimeEntry>>>>,
-    shutdown_supervisors: Mutex<BTreeMap<String, DaemonSupervisor>>,
+    next_id: Arc<AtomicU64>,
+    entries: Arc<Mutex<BTreeMap<String, Arc<Mutex<RuntimeEntry>>>>>,
+    shutdown_supervisors: Arc<Mutex<BTreeMap<String, DaemonSupervisor>>>,
 }
 
 impl RuntimeRegistry {
@@ -501,39 +501,44 @@ pub fn runtime_close(
 }
 
 #[tauri::command]
-pub fn runtime_submit(
+pub async fn runtime_submit(
     runtime_id: String,
     draft: DesktopPromptDraft,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<DesktopSubmitDisposition, String> {
-    registry.with_entry(&runtime_id, |entry| {
-        entry.ensure_daemon()?;
-        entry.web_artifact_baseline = web_artifact_snapshot(&entry.repo);
-        let (text, attachment_ids) = entry.stage_draft(draft)?;
-        let command = if entry.session_id.is_none() {
-            FrontendCommand::CreateSession {
-                repository_profile: "desktop".to_owned(),
-                objective: (!text.trim().is_empty()).then_some(text),
-                attachment_ids,
-            }
-        } else {
-            FrontendCommand::Submit {
-                text,
-                attachment_ids,
-            }
-        };
-        let acknowledgement = entry.dispatch(command)?;
-        let FrontendControlResult::SubmissionAccepted { session_id, queued } = acknowledgement.result
-        else {
-            return Err("daemon returned an unexpected submission result".to_owned());
-        };
-        entry.session_id = Some(session_id);
-        Ok(if queued {
-            DesktopSubmitDisposition::Queued
-        } else {
-            DesktopSubmitDisposition::Started
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        registry.with_entry(&runtime_id, |entry| {
+            entry.ensure_daemon()?;
+            entry.web_artifact_baseline = web_artifact_snapshot(&entry.repo);
+            let (text, attachment_ids) = entry.stage_draft(draft)?;
+            let command = if entry.session_id.is_none() {
+                FrontendCommand::CreateSession {
+                    repository_profile: "desktop".to_owned(),
+                    objective: (!text.trim().is_empty()).then_some(text),
+                    attachment_ids,
+                }
+            } else {
+                FrontendCommand::Submit {
+                    text,
+                    attachment_ids,
+                }
+            };
+            let acknowledgement = entry.dispatch(command)?;
+            let FrontendControlResult::SubmissionAccepted { session_id, queued } = acknowledgement.result
+            else {
+                return Err("daemon returned an unexpected submission result".to_owned());
+            };
+            entry.session_id = Some(session_id);
+            Ok(if queued {
+                DesktopSubmitDisposition::Queued
+            } else {
+                DesktopSubmitDisposition::Started
+            })
         })
     })
+    .await
+    .map_err(|error| format!("desktop submission worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -610,31 +615,36 @@ pub fn runtime_cancel(
 }
 
 #[tauri::command]
-pub fn runtime_poll(
+pub async fn runtime_poll(
     runtime_id: String,
     max_events: Option<usize>,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<Vec<DesktopRuntimeEvent>, String> {
-    registry.with_entry(&runtime_id, |entry| {
-        let mut events = Vec::new();
-        let limit = max_events.unwrap_or(200).clamp(1, 500);
-        if let Some(event) = entry.daemon_event() {
-            if matches!(entry.daemon.last_state, Some(DaemonLifecycleState::Recovered)) {
-                if let Some(session_id) = entry.session_id.clone() {
-                    entry.resume(session_id)?;
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        registry.with_entry(&runtime_id, |entry| {
+            let mut events = Vec::new();
+            let limit = max_events.unwrap_or(200).clamp(1, 500);
+            if let Some(event) = entry.daemon_event() {
+                if matches!(entry.daemon.last_state, Some(DaemonLifecycleState::Recovered)) {
+                    if let Some(session_id) = entry.session_id.clone() {
+                        entry.resume(session_id)?;
+                    }
+                }
+                events.push(event);
+            }
+            entry.poll_daemon()?;
+            while events.len() < limit {
+                match entry.presentation.try_event() {
+                    Some(event) => events.push(event),
+                    None => break,
                 }
             }
-            events.push(event);
-        }
-        entry.poll_daemon()?;
-        while events.len() < limit {
-            match entry.presentation.try_event() {
-                Some(event) => events.push(event),
-                None => break,
-            }
-        }
-        Ok(events)
+            Ok(events)
+        })
     })
+    .await
+    .map_err(|error| format!("desktop poll worker failed: {error}"))?
 }
 
 #[tauri::command]

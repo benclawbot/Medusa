@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MemoryBrowser } from "./MemoryBrowser";
 import { useDockShell } from "./useDockShell";
+import { REPO_CHANGED_EVENT } from "./runtime";
 
 export function MemoryDock() {
   const [repo, setRepo] = useState(() => window.localStorage.getItem("medusa.desktop.repo") ?? "");
@@ -12,8 +13,10 @@ export function MemoryDock() {
     const sync = () => setRepo(window.localStorage.getItem("medusa.desktop.repo") ?? "");
     sync();
     window.addEventListener("focus", sync);
+    window.addEventListener(REPO_CHANGED_EVENT, sync);
     return () => {
       window.removeEventListener("focus", sync);
+      window.removeEventListener(REPO_CHANGED_EVENT, sync);
     };
   }, [open]);
 

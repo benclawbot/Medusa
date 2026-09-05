@@ -459,8 +459,19 @@ export async function startRuntime(repo?: string): Promise<RuntimeStartResponse>
   return response;
 }
 
+export const RUNTIME_RESUME_EVENT = "medusa-runtime-resume";
+export const REPO_CHANGED_EVENT = "medusa-repo-changed";
+
 export function requestRuntimeResume(sessionId: string): void {
   window.localStorage.setItem(pendingResumeKey, sessionId);
+  window.dispatchEvent(new CustomEvent<string>(RUNTIME_RESUME_EVENT, { detail: sessionId }));
+}
+
+export function publishRepoChanged(repo: string): void {
+  const normalized = repo.trim();
+  if (normalized) window.localStorage.setItem("medusa.desktop.repo", normalized);
+  else window.localStorage.removeItem("medusa.desktop.repo");
+  window.dispatchEvent(new CustomEvent<string>(REPO_CHANGED_EVENT, { detail: normalized }));
 }
 
 export async function listRuntimeSessions(repo: string): Promise<SessionSummary[]> {

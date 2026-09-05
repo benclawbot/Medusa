@@ -122,3 +122,29 @@ it("stages a custom endpoint only on the advanced custom route", async () => {
     baseUrl: "https://gateway.example/v1",
   })));
 });
+
+it("keeps verification errors visible and retryable", async () => {
+  const customProvider: ProviderCatalogEntry = {
+    id: "custom",
+    displayName: "Custom route",
+    description: "Custom route",
+    connection: "custom",
+    profileProvider: "custom",
+    authMethods: ["api-key"],
+    defaultAuth: "api-key",
+    defaultModel: "custom-model",
+    modelOptions: ["custom-model"],
+    browserOauth: false,
+    discoverModels: false,
+    customValues: false,
+    currentCustom: false,
+  };
+  const customConfiguration = { ...configuration, provider: "custom", connection: "custom", configured: false, credentialConfigured: true };
+  const onApply = vi.fn().mockRejectedValue(new Error("daemon unavailable"));
+  render(<DesktopOnboarding configuration={customConfiguration} providers={[customProvider]} onApply={onApply} />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("daemon unavailable");
+  expect(screen.getByRole("button", { name: "Verify configuration" })).toBeEnabled();
+});

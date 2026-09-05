@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { toUserError } from "./errorPresentation";
 
 interface PermissionModeOption {
   id: string;
@@ -31,11 +32,21 @@ export function PermissionModeControl() {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let timer: number | undefined;
     const refreshHost = () => setHost(findComposerHost());
     refreshHost();
-    const observer = new MutationObserver(refreshHost);
+    const observer = new MutationObserver(() => {
+      if (timer !== undefined) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        refreshHost();
+      }, 100);
+    });
     observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -45,7 +56,7 @@ export function PermissionModeControl() {
         if (!cancelled) setModes(items);
       })
       .catch((reason) => {
-        if (!cancelled) setError(String(reason));
+        if (!cancelled) setError(toUserError(reason));
       });
     return () => {
       cancelled = true;
@@ -83,7 +94,7 @@ export function PermissionModeControl() {
       setModes((current) => current.map((mode) => ({ ...mode, active: mode.id === selected.id })));
       setOpen(false);
     } catch (reason) {
-      setError(String(reason));
+      setError(toUserError(reason));
     } finally {
       setBusy(false);
     }
