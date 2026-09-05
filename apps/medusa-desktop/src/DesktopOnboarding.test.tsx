@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { DesktopOnboarding } from "./DesktopOnboarding";
-import { setPermissionMode } from "./permissionModes";
+import { loadPermissionModes, setPermissionMode } from "./permissionModes";
 import {
   loadProviderCatalog,
   startBrowserOauth,
@@ -19,6 +19,14 @@ vi.mock("./providerCatalog", async (importOriginal) => {
 });
 
 vi.mock("./permissionModes", () => ({
+  loadPermissionModes: vi.fn().mockResolvedValue([
+    {
+      id: "ask-for-approval",
+      label: "Ask for approval",
+      description: "Ask before protected boundary actions.",
+      active: true,
+    },
+  ]),
   setPermissionMode: vi.fn().mockResolvedValue({
     id: "ask-for-approval",
     label: "Ask for approval",
@@ -43,6 +51,20 @@ const oauthProvider: ProviderCatalogEntry = {
   currentCustom: false,
 };
 
+const localProvider: ProviderCatalogEntry = {
+  ...oauthProvider,
+  id: "local",
+  displayName: "Local",
+  connection: "local",
+  profileProvider: "local",
+  authMethods: ["none"],
+  defaultAuth: "none",
+  defaultModel: "local-model",
+  modelOptions: ["local-model"],
+  browserOauth: false,
+  discoverModels: false,
+};
+
 const configuration: SharedConfiguration = {
   revision: 0,
   activeProfile: "default",
@@ -53,6 +75,15 @@ const configuration: SharedConfiguration = {
   auth: "none",
   configured: false,
   credentialConfigured: false,
+};
+
+const localConfiguration: SharedConfiguration = {
+  ...configuration,
+  connection: "local",
+  provider: "local",
+  model: "local-model",
+  auth: "none",
+  credentialConfigured: true,
 };
 
 afterEach(() => {
@@ -94,38 +125,110 @@ it("does not treat an OAuth route as authenticated merely because it has no API 
 });
 
 it("defaults first-run permissions to Ask for approval and saves the reviewed choice", async () => {
-  const customProvider: ProviderCatalogEntry = {
-    ...oauthProvider,
-    id: "local",
-    displayName: "Local",
-    connection: "local",
-    profileProvider: "local",
-    authMethods: ["none"],
-    defaultAuth: "none",
-    defaultModel: "local-model",
-    modelOptions: ["local-model"],
-    browserOauth: false,
-    discoverModels: false,
-  };
-  const configured = {
-    ...configuration,
-    connection: "local",
-    provider: "local",
-    model: "local-model",
-    auth: "none",
-    credentialConfigured: true,
-  };
   const onApply = vi.fn().mockResolvedValue(undefined);
-  render(<DesktopOnboarding configuration={configured} providers={[customProvider]} onApply={onApply} />);
+  render(<DesktopOnboarding configuration={localConfiguration} providers={[localProvider]} onApply={onApply} />);
 
   expect(screen.getByRole("heading", { name: "Preferences and permissions" })).toBeInTheDocument();
-  expect(screen.getByLabelText("Model permissions")).toHaveValue("ask-for-approval");
+  await waitFor(() => expect(screen.getByLabelText("Model permissions")).toHaveValue("ask-for-approval"));
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
   expect(screen.getByText(/Permissions:/)).toHaveTextContent("Ask for approval");
   fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
 
   await waitFor(() => expect(setPermissionMode).toHaveBeenCalledWith("ask-for-approval"));
   expect(onApply).toHaveBeenCalled();
+});
+
+it("preserves an existing persisted permission when onboarding is re-entered", async () => {
+  vi.mocked(loadPermissionModes).mockResolvedValue([
+    {
+      id: "read-only",
+      label: "Read Only",
+      description: "Read workspace files; ask before edits or internet access.",
+      active: true,
+    },
+  ]);
+  const onApply = vi.fn().mockResolvedValue(undefined);
+  render(<DesktopOnboarding configuration={localConfiguration} providers={[localProvider]} onApply={onApply} />);
+
+  await waitFor(() => expect(screen.getByLabelText("Model permissions")).toHaveValue("read-only"));
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  expect(screen.getByText(/Permissions:/)).toHaveTextContent("Read Only");
+  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
+
+  await waitFor(() => expect(setPermissionMode).toHaveBeenCalledWith("read-only"));
+  expect(setPermissionMode).not.toHaveBeenCalledWith("ask-for-approval");
+  expect(onApply).toHaveBeenCalled();
+});
+
+it("revalidates an untouched permission before saving so an external change wins", async () => {
+  vi.mocked(loadPermissionModes)
+    .mockResolvedValueOnce([
+      {
+        id: "full-access",
+        label: "Full Access",
+        description: "Unrestricted access.",
+        active: true,
+      },
+    ])
+    .mockResolvedValueOnce([
+      {
+        id: "read-only",
+        label: "Read Only",
+        description: "Read workspace files; ask before edits or internet access.",
+        active: true,
+      },
+    ]);
+  const onApply = vi.fn().mockResolvedValue(undefined);
+  render(<DesktopOnboarding configuration={localConfiguration} providers={[localProvider]} onApply={onApply} />);
+
+  await waitFor(() => expect(screen.getByLabelText("Model permissions")).toHaveValue("full-access"));
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  expect(screen.getByText(/Permissions:/)).toHaveTextContent("Full Access");
+  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
+
+  await waitFor(() => expect(setPermissionMode).toHaveBeenCalledWith("read-only"));
+  expect(setPermissionMode).not.toHaveBeenCalledWith("full-access");
+  expect(loadPermissionModes).toHaveBeenCalledTimes(2);
+  expect(onApply).toHaveBeenCalled();
+});
+
+it("honors an explicit onboarding permission change without replacing it during revalidation", async () => {
+  vi.mocked(loadPermissionModes).mockResolvedValueOnce([
+    {
+      id: "read-only",
+      label: "Read Only",
+      description: "Read workspace files; ask before edits or internet access.",
+      active: true,
+    },
+  ]);
+  const onApply = vi.fn().mockResolvedValue(undefined);
+  render(<DesktopOnboarding configuration={localConfiguration} providers={[localProvider]} onApply={onApply} />);
+
+  const permissionSelect = await screen.findByLabelText("Model permissions");
+  expect(permissionSelect).toHaveValue("read-only");
+  fireEvent.change(permissionSelect, { target: { value: "full-access" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
+
+  await waitFor(() => expect(setPermissionMode).toHaveBeenCalledWith("full-access"));
+  expect(loadPermissionModes).toHaveBeenCalledTimes(1);
+  expect(onApply).toHaveBeenCalled();
+});
+
+it("surfaces permission persistence failures without applying provider configuration", async () => {
+  vi.mocked(setPermissionMode).mockRejectedValueOnce(new Error("permission store unavailable"));
+  const onApply = vi.fn().mockResolvedValue(undefined);
+  render(<DesktopOnboarding configuration={localConfiguration} providers={[localProvider]} onApply={onApply} />);
+
+  await waitFor(() => expect(screen.getByLabelText("Model permissions")).toHaveValue("ask-for-approval"));
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Could not save model permissions: permission store unavailable",
+  );
+  expect(onApply).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Verify configuration" })).toBeEnabled();
 });
 
 it("stages a custom endpoint only on the advanced custom route", async () => {
@@ -158,6 +261,7 @@ it("stages a custom endpoint only on the advanced custom route", async () => {
   render(<DesktopOnboarding configuration={customConfiguration} providers={[customProvider]} onApply={onApply} />);
   fireEvent.change(screen.getByLabelText("Model"), { target: { value: "custom-model" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(screen.getByLabelText("Model permissions")).toHaveValue("ask-for-approval"));
   fireEvent.change(screen.getByLabelText("Base URL"), { target: { value: "https://gateway.example/v1" } });
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
   fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
@@ -188,6 +292,7 @@ it("keeps verification errors visible and retryable", async () => {
   const onApply = vi.fn().mockRejectedValue(new Error("daemon unavailable"));
   render(<DesktopOnboarding configuration={customConfiguration} providers={[customProvider]} onApply={onApply} />);
 
+  await waitFor(() => expect(screen.getByLabelText("Model permissions")).toHaveValue("ask-for-approval"));
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
   fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
 

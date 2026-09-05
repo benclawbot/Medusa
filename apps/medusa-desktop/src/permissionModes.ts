@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export const PERMISSION_MODE_CHANGED_EVENT = "medusa:permission-mode-changed";
+
 export interface PermissionModeOption {
   id: string;
   label: string;
@@ -12,5 +14,7 @@ export async function loadPermissionModes(): Promise<PermissionModeOption[]> {
 }
 
 export async function setPermissionMode(mode: string): Promise<PermissionModeOption> {
-  return invoke<PermissionModeOption>("desktop_set_permission_mode", { mode });
+  const selected = await invoke<PermissionModeOption>("desktop_set_permission_mode", { mode });
+  window.dispatchEvent(new Event(PERMISSION_MODE_CHANGED_EVENT));
+  return selected;
 }

@@ -1,10 +1,10 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   loadProviderCatalog,
   startBrowserOauth,
   type ProviderCatalogEntry,
 } from "./providerCatalog";
-import { setPermissionMode } from "./permissionModes";
+import { loadPermissionModes, setPermissionMode } from "./permissionModes";
 import type { Effort, SharedConfiguration } from "./runtime";
 import { initialOnboardingStep, recommendedModels } from "./onboarding";
 import { toUserError } from "./errorPresentation";
@@ -48,8 +48,11 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   );
   const [model, setModel] = useState(configuration.model || selectedProvider?.defaultModel || "");
   const [effort, setEffort] = useState<Effort>(configuration.effort);
-  const [permissionMode, setPermissionModeSelection] = useState("ask-for-approval");
-  const selectedPermission = permissionOptions.find((option) => option.id === permissionMode) ?? permissionOptions[0];
+  const [permissionMode, setPermissionModeSelection] = useState("");
+  const [permissionModeDirty, setPermissionModeDirty] = useState(false);
+  const [permissionError, setPermissionError] = useState<string>();
+  const selectedPermission = permissionOptions.find((option) => option.id === permissionMode);
+  const permissionsReady = Boolean(selectedPermission);
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(configuration.baseUrl ?? selectedProvider?.baseUrl ?? "");
   const [step, setStep] = useState(() => initialOnboardingStep(configuration, providers));
@@ -64,6 +67,33 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   const credentialReady = oauth
     ? oauthConnected
     : credentialless || configuration.credentialConfigured;
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadPermissionModes()
+      .then((items) => {
+        if (cancelled) return;
+        const active = items.find((item) => item.active);
+        if (!active || !permissionOptions.some((option) => option.id === active.id)) {
+          setPermissionModeSelection("");
+          setPermissionModeDirty(false);
+          setPermissionError("Could not load model permissions: no supported active permission mode is available.");
+          return;
+        }
+        setPermissionModeSelection(active.id);
+        setPermissionModeDirty(false);
+        setPermissionError(undefined);
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setPermissionModeSelection("");
+        setPermissionModeDirty(false);
+        setPermissionError(`Could not load model permissions: ${toUserError(cause)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const chooseProvider = (value: string) => {
     const next = catalog.find((entry) => entry.profileProvider === value);
@@ -101,10 +131,36 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   };
 
   const verify = async () => {
+    if (!selectedPermission) {
+      setPermissionError("Could not save model permissions: no permission mode is selected.");
+      return;
+    }
     setSaving(true);
+    setPermissionError(undefined);
     setVerifyError(undefined);
     try {
-      await setPermissionMode(permissionMode);
+      let permissionModeToSave = permissionMode;
+      if (!permissionModeDirty) {
+        try {
+          const items = await loadPermissionModes();
+          const active = items.find((item) => item.active);
+          if (!active || !permissionOptions.some((option) => option.id === active.id)) {
+            setPermissionError("Could not revalidate model permissions: no supported active permission mode is available.");
+            return;
+          }
+          permissionModeToSave = active.id;
+          setPermissionModeSelection(active.id);
+        } catch (cause) {
+          setPermissionError(`Could not revalidate model permissions: ${toUserError(cause)}`);
+          return;
+        }
+      }
+      try {
+        await setPermissionMode(permissionModeToSave);
+      } catch (cause) {
+        setPermissionError(`Could not save model permissions: ${toUserError(cause)}`);
+        return;
+      }
       await onApply({ provider, model, effort, apiKey: apiKey.trim() || undefined, baseUrl: selectedProvider?.customValues ? baseUrl.trim() || undefined : undefined });
       setApiKey("");
       setStep("ready");
@@ -198,14 +254,24 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
             <label>Model permissions
               <select
                 value={permissionMode}
-                onChange={(event) => setPermissionModeSelection(event.target.value)}
+                disabled={!permissionsReady}
+                onChange={(event) => {
+                  setPermissionError(undefined);
+                  setPermissionModeDirty(true);
+                  setPermissionModeSelection(event.target.value);
+                }}
               >
+                {!permissionsReady && (
+                  <option value="">{permissionError ? "Permissions unavailable" : "Loading permissions…"}</option>
+                )}
                 {permissionOptions.map((option) => (
                   <option key={option.id} value={option.id}>{option.label}</option>
                 ))}
               </select>
             </label>
-            <p>{selectedPermission.description}</p>
+            {selectedPermission && <p>{selectedPermission.description}</p>}
+            {!permissionError && !permissionsReady && <p role="status">Loading the current permission mode…</p>}
+            {!!permissionError && <div className="error-banner" role="alert">{permissionError}</div>}
             {permissionMode === "full-access" && (
               <p role="alert">Full Access removes routine approval prompts and allows unrestricted file and internet access.</p>
             )}
@@ -216,7 +282,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
             )}
             <div>
               <button className="secondary-action" onClick={() => setStep("model")}>Back</button>
-              <button className="primary-action" onClick={() => setStep("verify")}>Review</button>
+              <button className="primary-action" disabled={!permissionsReady} onClick={() => setStep("verify")}>Review</button>
             </div>
           </>
         )}
@@ -225,12 +291,12 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
           <>
             <h2>Verify and start</h2>
             <p>{selectedProvider?.displayName} · {model} · {effort} effort</p>
-            <p>Permissions: <strong>{selectedPermission.label}</strong></p>
+            <p>Permissions: <strong>{selectedPermission?.label ?? "Loading permissions…"}</strong></p>
             <small>Medusa will save this permission choice and test the selected provider route and model before marking the session ready.</small>
-            {!!(error ?? verifyError) && <div className="error-banner" role="alert">{error ?? verifyError}</div>}
+            {!!(error ?? permissionError ?? verifyError) && <div className="error-banner" role="alert">{error ?? permissionError ?? verifyError}</div>}
             <div>
               <button className="secondary-action" disabled={saving} onClick={() => setStep("preferences")}>Back</button>
-              <button className="primary-action" disabled={saving || !provider || !model} onClick={() => void verify()}>{saving ? "Verifying…" : "Verify configuration"}</button>
+              <button className="primary-action" disabled={saving || !provider || !model || !permissionsReady} onClick={() => void verify()}>{saving ? "Verifying…" : "Verify configuration"}</button>
             </div>
           </>
         )}

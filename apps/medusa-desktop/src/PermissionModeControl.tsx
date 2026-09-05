@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { toUserError } from "./errorPresentation";
 import {
   loadPermissionModes,
+  PERMISSION_MODE_CHANGED_EVENT,
   setPermissionMode,
   type PermissionModeOption,
 } from "./permissionModes";
@@ -40,15 +41,26 @@ export function PermissionModeControl() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadPermissionModes()
-      .then((items) => {
-        if (!cancelled) setModes(items);
-      })
-      .catch((reason) => {
-        if (!cancelled) setError(toUserError(reason));
-      });
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      setModes([]);
+      setError(undefined);
+      void loadPermissionModes()
+        .then((items) => {
+          if (!cancelled && request === generation) setModes(items);
+        })
+        .catch((reason) => {
+          if (!cancelled && request === generation) setError(toUserError(reason));
+        });
+    };
+    const handlePermissionModeChanged = () => refresh();
+
+    refresh();
+    window.addEventListener(PERMISSION_MODE_CHANGED_EVENT, handlePermissionModeChanged);
     return () => {
       cancelled = true;
+      window.removeEventListener(PERMISSION_MODE_CHANGED_EVENT, handlePermissionModeChanged);
     };
   }, []);
 
@@ -75,8 +87,7 @@ export function PermissionModeControl() {
     setBusy(true);
     setError(undefined);
     try {
-      const selected = await setPermissionMode(id);
-      setModes((current) => current.map((mode) => ({ ...mode, active: mode.id === selected.id })));
+      await setPermissionMode(id);
       setOpen(false);
     } catch (reason) {
       setError(toUserError(reason));
