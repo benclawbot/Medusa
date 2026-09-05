@@ -139,7 +139,7 @@ it("defaults first-run permissions to Ask for approval and saves the reviewed ch
 });
 
 it("preserves an existing persisted permission when onboarding is re-entered", async () => {
-  vi.mocked(loadPermissionModes).mockResolvedValueOnce([
+  vi.mocked(loadPermissionModes).mockResolvedValue([
     {
       id: "read-only",
       label: "Read Only",
