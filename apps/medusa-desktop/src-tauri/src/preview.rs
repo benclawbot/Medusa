@@ -28,10 +28,11 @@ impl PreviewRegistry {
         *self
             .active
             .lock()
-            .map_err(|_| "desktop preview registry is poisoned".to_owned())? = Some(AuthorizedPreview {
-            runtime_id: runtime_id.to_owned(),
-            root,
-        });
+            .map_err(|_| "desktop preview registry is poisoned".to_owned())? =
+            Some(AuthorizedPreview {
+                runtime_id: runtime_id.to_owned(),
+                root,
+            });
         Ok(())
     }
 
@@ -83,8 +84,8 @@ pub fn runtime_close(
     result
 }
 
-/// Backend for the custom `asset` scheme registered by Medusa. The built-in Tauri asset protocol
-/// is disabled, so every renderer request reaches this authorization boundary.
+/// Backend for Medusa's registered `asset` scheme. Registration happens before Tauri installs its
+/// optional built-in handler, so every renderer request reaches this authorization boundary.
 pub fn handle_protocol_request(
     _app: &AppHandle,
     webview_label: &str,
@@ -359,7 +360,11 @@ fn content_type(path: &str) -> &'static str {
     }
 }
 
-fn response(status: http::StatusCode, content_type: &str, body: Vec<u8>) -> http::Response<Vec<u8>> {
+fn response(
+    status: http::StatusCode,
+    content_type: &str,
+    body: Vec<u8>,
+) -> http::Response<Vec<u8>> {
     http::Response::builder()
         .status(status)
         .header(http::header::CONTENT_TYPE, content_type)
@@ -384,8 +389,11 @@ mod tests {
             .join("output");
         fs::create_dir_all(root.join("assets")).expect("create preview tree");
         let index = root.join("index.html");
-        fs::write(&index, b"<link rel=\"stylesheet\" href=\"assets/site.css\">")
-            .expect("write index");
+        fs::write(
+            &index,
+            b"<link rel=\"stylesheet\" href=\"assets/site.css\">",
+        )
+        .expect("write index");
         fs::write(root.join("assets/site.css"), b"body {}").expect("write css");
         (directory, root, index)
     }
@@ -401,7 +409,7 @@ mod tests {
 
     #[test]
     fn nested_and_root_relative_preview_resources_use_the_authorized_tree() {
-        let (_directory, root, index) = preview_tree();
+        let (_directory, _root, index) = preview_tree();
         let authorized = authorize_artifact_tree(&index).expect("authorize");
         assert_eq!(
             read_preview_file(&authorized, Path::new("assets/site.css")).expect("read"),
