@@ -29,6 +29,7 @@ pub use live_session::{
     LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionReplayView,
     LiveSessionSummary,
 };
+pub use medusa_process_containment::{ConfinedDir, ConfinedReadError};
 pub use observability::initialize_observability;
 pub use paths::DaemonPaths;
 pub use protocol::{
