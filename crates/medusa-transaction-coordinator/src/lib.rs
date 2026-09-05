@@ -335,7 +335,9 @@ mod tests {
 
     fn drive(coordinator: &mut TransactionCoordinator, id: &str, phases: &[TransactionPhase]) {
         for next in phases {
-            coordinator.transition(id, next.clone()).expect("transition");
+            coordinator
+                .transition(id, next.clone())
+                .expect("transition");
         }
     }
 
@@ -394,10 +396,7 @@ mod tests {
                 )
                 .expect("vote");
         }
-        assert_eq!(
-            coordinator.decide(&id).expect("decide"),
-            Decision::Commit
-        );
+        assert_eq!(coordinator.decide(&id).expect("decide"), Decision::Commit);
     }
 
     #[test]
@@ -452,10 +451,7 @@ mod tests {
         drive(
             &mut coordinator,
             &id,
-            &[
-                TransactionPhase::Resolving,
-                TransactionPhase::Preparing,
-            ],
+            &[TransactionPhase::Resolving, TransactionPhase::Preparing],
         );
         assert!(matches!(
             coordinator.vote(
@@ -518,11 +514,7 @@ mod tests {
             .attach_evidence(&id, Some(fp(3)), None, Some(fp(4)))
             .expect("attach");
         coordinator.verify(&id).expect("verify");
-        let record = coordinator
-            .records
-            .get_mut(&id)
-            .expect("record")
-            .clone();
+        let record = coordinator.records.get_mut(&id).expect("record").clone();
         coordinator.records.get_mut(&id).expect("record").sequence = record.sequence + 1;
         assert_eq!(
             coordinator.verify(&id),

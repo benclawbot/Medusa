@@ -2767,7 +2767,9 @@ fn run_prompt(
                                 &draft.text,
                             )?
                         };
-                        cached_turn_context = Some(format!("{skill_context}\n\n{trajectory_context}\n\n{repository_context}"));
+                        cached_turn_context = Some(format!(
+                            "{skill_context}\n\n{trajectory_context}\n\n{repository_context}"
+                        ));
                     }
                     let turn_context = cached_turn_context.as_deref().ok_or_else(|| {
                         RuntimeError::agent("runtime turn context disappeared before execution")

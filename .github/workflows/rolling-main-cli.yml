@@ -14,14 +14,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  authoritative-validation:
+    name: Authoritative workspace validation
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
   build-cli:
     name: Build rolling CLI (${{ matrix.os }})
     if: github.ref == 'refs/heads/main'
+    needs: authoritative-validation
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
+    environment: release-signing
     timeout-minutes: 90
     permissions:
       contents: read
@@ -36,6 +43,28 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
       - name: Build Medusa CLI
         run: cargo build --release --locked --bin medusa
+      - name: Authenticode-sign rolling Windows CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw 'Windows signing certificate secrets are required'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $secure = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure | Out-Null
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a target/release/medusa.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signtool.FullName verify /pa /all /v target/release/medusa.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package exact-revision rolling CLI asset
         run: >-
           python scripts/package-main-update.py
@@ -49,10 +78,65 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  sign-cli:
+    name: Sign rolling CLI authority
+    if: github.ref == 'refs/heads/main'
+    needs: build-cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-signing-primary
+    permissions:
+      contents: read
+    env:
+      MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM: ${{ secrets.MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: rolling-main-cli-*
+          path: release-assets
+          merge-multiple: true
+      - name: Sign exact-revision CLI manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM"
+          private_key="$RUNNER_TEMP/medusa-rolling-ed25519.pem"
+          public_key="$RUNNER_TEMP/medusa-rolling-ed25519-public.pem"
+          raw_signature="$RUNNER_TEMP/medusa-rolling-signature.bin"
+          trap 'rm -f "$private_key" "$public_key" "$raw_signature"' EXIT
+          umask 077
+          printf '%s\n' "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" > "$private_key"
+          cat > "$public_key" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MCowBQYDK2VwAyEAIy/f/QW1grgmC2i/DHKwR/2ubq53UvWgehWoWAtW3+k=
+          -----END PUBLIC KEY-----
+          PEM
+          for manifest in release-assets/*.json; do
+            [[ "$manifest" == *.sig.json ]] && continue
+            openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$manifest" -out "$raw_signature"
+            openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -in "$manifest" -sigfile "$raw_signature"
+            manifest_sha=$(sha256sum "$manifest" | awk '{print $1}')
+            signature_hex=$(xxd -p -c 256 "$raw_signature")
+            jq -cn \
+              --arg schema medusa-release-signature-v1 \
+              --arg key_id medusa-release-2026-08-primary \
+              --arg algorithm Ed25519 \
+              --arg manifest_sha256 "$manifest_sha" \
+              --arg signature "$signature_hex" \
+              '{schema:$schema,key_id:$key_id,algorithm:$algorithm,manifest_sha256:$manifest_sha256,signature:$signature}' \
+              > "$manifest.sig.json"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rolling-main-cli-signatures-${{ github.sha }}
+          path: release-assets/*.sig.json
+          if-no-files-found: error
+          retention-days: 7
+
   publish-cli:
     name: Publish rolling CLI early
     if: github.ref == 'refs/heads/main'
-    needs: build-cli
+    needs: [build-cli, sign-cli]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -69,6 +153,10 @@ jobs:
           pattern: rolling-main-cli-*
           path: release-assets
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: rolling-main-cli-signatures-${{ github.sha }}
+          path: release-assets
       - name: Verify complete exact-revision CLI bundle
         shell: bash
         env:
@@ -128,6 +216,9 @@ jobs:
           for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do
             gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
           done
+          for signature in release-assets/*.tar.gz.json.sig.json release-assets/*.zip.json.sig.json; do
+            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber
+          done
           if [[ "$(gh release view main-latest --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
             gh release edit main-latest --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
           fi
@@ -135,11 +226,13 @@ jobs:
   build-desktop:
     name: Build rolling desktop (${{ matrix.os }})
     if: github.ref == 'refs/heads/main'
+    needs: authoritative-validation
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
+    environment: release-signing
     timeout-minutes: 90
     permissions:
       contents: read
@@ -160,13 +253,89 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
-      - name: Build Medusa Desktop frontend
+      - name: Install Medusa Desktop dependencies
         working-directory: apps/medusa-desktop
-        run: npm ci && npm run build
-      - name: Build Medusa Desktop executable
-        run: >-
-          cargo build --release --locked --manifest-path
-          apps/medusa-desktop/src-tauri/Cargo.toml --bin medusa-desktop
+        run: npm ci
+      - name: Build packaged Medusa Desktop executable
+        working-directory: apps/medusa-desktop
+        run: npm run tauri:build -- --no-bundle
+      - name: Authenticode-sign rolling Windows desktop executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw 'Windows signing certificate secrets are required'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $secure = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure | Out-Null
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          $target = 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe'
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a $target
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signtool.FullName verify /pa /all /v $target
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke packaged Windows desktop origin
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9222'
+          $executable = (Resolve-Path 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe').Path
+          $process = Start-Process -FilePath $executable -PassThru
+          try {
+            $packagedUrl = $null
+            $observedUrls = @()
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              if ($process.HasExited) {
+                throw "packaged desktop exited before WebView2 became ready (exit $($process.ExitCode))"
+              }
+              try {
+                $targets = @(Invoke-RestMethod -Uri 'http://127.0.0.1:9222/json/list' -TimeoutSec 1)
+                $pageUrls = @(
+                  $targets |
+                    Where-Object { $_.type -eq 'page' } |
+                    ForEach-Object { [string]$_.url }
+                )
+                if ($pageUrls.Count -gt 0) {
+                  $observedUrls = @($observedUrls + $pageUrls | Select-Object -Unique)
+                }
+                $developmentUrl = $pageUrls |
+                  Where-Object { $_ -match 'localhost:5173' } |
+                  Select-Object -First 1
+                if ($null -ne $developmentUrl) {
+                  throw "development Vite origin leaked into rolling desktop: $developmentUrl"
+                }
+                $packagedUrl = $pageUrls |
+                  Where-Object { $_ -match '^https?://tauri\.localhost(?:/|$)' } |
+                  Select-Object -First 1
+              } catch {
+                if ($_.Exception.Message -like 'development Vite origin leaked*') {
+                  throw
+                }
+                $packagedUrl = $null
+              }
+              if ($null -ne $packagedUrl) { break }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($null -eq $packagedUrl) {
+              $observed = if ($observedUrls.Count -gt 0) { $observedUrls -join ', ' } else { '<none>' }
+              throw "packaged desktop never navigated to the Tauri production origin; observed: $observed"
+            }
+            Write-Host "Packaged desktop WebView URL: $packagedUrl"
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+          }
       - name: Package exact-revision desktop asset
         run: >-
           python scripts/package-main-desktop-update.py
@@ -180,10 +349,65 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  sign-desktop:
+    name: Sign rolling desktop authority
+    if: github.ref == 'refs/heads/main'
+    needs: build-desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-signing-primary
+    permissions:
+      contents: read
+    env:
+      MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM: ${{ secrets.MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: rolling-main-desktop-*
+          path: release-assets
+          merge-multiple: true
+      - name: Sign exact-revision desktop manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM"
+          private_key="$RUNNER_TEMP/medusa-rolling-ed25519.pem"
+          public_key="$RUNNER_TEMP/medusa-rolling-ed25519-public.pem"
+          raw_signature="$RUNNER_TEMP/medusa-rolling-signature.bin"
+          trap 'rm -f "$private_key" "$public_key" "$raw_signature"' EXIT
+          umask 077
+          printf '%s\n' "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" > "$private_key"
+          cat > "$public_key" <<'PEM'
+          -----BEGIN PUBLIC KEY-----
+          MCowBQYDK2VwAyEAIy/f/QW1grgmC2i/DHKwR/2ubq53UvWgehWoWAtW3+k=
+          -----END PUBLIC KEY-----
+          PEM
+          for manifest in release-assets/*.json; do
+            [[ "$manifest" == *.sig.json ]] && continue
+            openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$manifest" -out "$raw_signature"
+            openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -in "$manifest" -sigfile "$raw_signature"
+            manifest_sha=$(sha256sum "$manifest" | awk '{print $1}')
+            signature_hex=$(xxd -p -c 256 "$raw_signature")
+            jq -cn \
+              --arg schema medusa-release-signature-v1 \
+              --arg key_id medusa-release-2026-08-primary \
+              --arg algorithm Ed25519 \
+              --arg manifest_sha256 "$manifest_sha" \
+              --arg signature "$signature_hex" \
+              '{schema:$schema,key_id:$key_id,algorithm:$algorithm,manifest_sha256:$manifest_sha256,signature:$signature}' \
+              > "$manifest.sig.json"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rolling-main-desktop-signatures-${{ github.sha }}
+          path: release-assets/*.sig.json
+          if-no-files-found: error
+          retention-days: 7
+
   publish-desktop:
     name: Append rolling desktop assets
     if: github.ref == 'refs/heads/main'
-    needs: [build-desktop, publish-cli]
+    needs: [build-desktop, sign-desktop, publish-cli]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -200,6 +424,10 @@ jobs:
           pattern: rolling-main-desktop-*
           path: release-assets
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: rolling-main-desktop-signatures-${{ github.sha }}
+          path: release-assets
       - name: Verify complete exact-revision desktop bundle
         shell: bash
         env:
@@ -247,4 +475,7 @@ jobs:
           done
           for manifest in release-assets/medusa-desktop-main-*.json; do
             gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+          for signature in release-assets/medusa-desktop-main-*.json.sig.json; do
+            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber
           done

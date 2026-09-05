@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { DesktopOnboarding } from "./DesktopOnboarding";
+import { setPermissionMode } from "./permissionModes";
 import {
   loadProviderCatalog,
   startBrowserOauth,
@@ -16,6 +17,15 @@ vi.mock("./providerCatalog", async (importOriginal) => {
     startBrowserOauth: vi.fn(),
   };
 });
+
+vi.mock("./permissionModes", () => ({
+  setPermissionMode: vi.fn().mockResolvedValue({
+    id: "ask-for-approval",
+    label: "Ask for approval",
+    description: "Ask before protected boundary actions.",
+    active: true,
+  }),
+}));
 
 const oauthProvider: ProviderCatalogEntry = {
   id: "openai-oauth",
@@ -83,6 +93,41 @@ it("does not treat an OAuth route as authenticated merely because it has no API 
   expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
 });
 
+it("defaults first-run permissions to Ask for approval and saves the reviewed choice", async () => {
+  const customProvider: ProviderCatalogEntry = {
+    ...oauthProvider,
+    id: "local",
+    displayName: "Local",
+    connection: "local",
+    profileProvider: "local",
+    authMethods: ["none"],
+    defaultAuth: "none",
+    defaultModel: "local-model",
+    modelOptions: ["local-model"],
+    browserOauth: false,
+    discoverModels: false,
+  };
+  const configured = {
+    ...configuration,
+    connection: "local",
+    provider: "local",
+    model: "local-model",
+    auth: "none",
+    credentialConfigured: true,
+  };
+  const onApply = vi.fn().mockResolvedValue(undefined);
+  render(<DesktopOnboarding configuration={configured} providers={[customProvider]} onApply={onApply} />);
+
+  expect(screen.getByRole("heading", { name: "Preferences and permissions" })).toBeInTheDocument();
+  expect(screen.getByLabelText("Model permissions")).toHaveValue("ask-for-approval");
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  expect(screen.getByText(/Permissions:/)).toHaveTextContent("Ask for approval");
+  fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
+
+  await waitFor(() => expect(setPermissionMode).toHaveBeenCalledWith("ask-for-approval"));
+  expect(onApply).toHaveBeenCalled();
+});
+
 it("stages a custom endpoint only on the advanced custom route", async () => {
   const customProvider: ProviderCatalogEntry = {
     id: "anthropic-compatible",
@@ -143,6 +188,7 @@ it("keeps verification errors visible and retryable", async () => {
   const onApply = vi.fn().mockRejectedValue(new Error("daemon unavailable"));
   render(<DesktopOnboarding configuration={customConfiguration} providers={[customProvider]} onApply={onApply} />);
 
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
   fireEvent.click(screen.getByRole("button", { name: "Verify configuration" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent("daemon unavailable");

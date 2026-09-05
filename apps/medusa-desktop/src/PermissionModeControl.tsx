@@ -1,23 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toUserError } from "./errorPresentation";
-
-interface PermissionModeOption {
-  id: string;
-  label: string;
-  description: string;
-  active: boolean;
-}
-
-async function loadPermissionModes(): Promise<PermissionModeOption[]> {
-  return invoke<PermissionModeOption[]>("desktop_permission_modes");
-}
-
-async function setPermissionMode(mode: string): Promise<PermissionModeOption> {
-  return invoke<PermissionModeOption>("desktop_set_permission_mode", { mode });
-}
+import {
+  loadPermissionModes,
+  setPermissionMode,
+  type PermissionModeOption,
+} from "./permissionModes";
 
 function findComposerHost(): HTMLElement | null {
   return document.querySelector<HTMLElement>(".composer-tools");
@@ -72,18 +61,14 @@ export function PermissionModeControl() {
     return () => document.removeEventListener("pointerdown", close);
   }, [open]);
 
-  const active = useMemo(
-    () => modes.find((mode) => mode.active) ?? {
-      id: "full-access",
-      label: "Full Access",
-      description: "Unrestricted access to the internet and files on this computer.",
-      active: true,
-    },
-    [modes],
-  );
+  const active = useMemo(() => modes.find((mode) => mode.active), [modes]);
+  const display = active ?? {
+    label: error ? "Permissions unavailable" : "Loading permissions…",
+    description: error ? "The current permission mode could not be loaded." : "Loading the current permission mode.",
+  };
 
   const choose = async (id: string) => {
-    if (busy || id === active.id) {
+    if (busy || id === active?.id) {
       setOpen(false);
       return;
     }
@@ -105,15 +90,15 @@ export function PermissionModeControl() {
   return createPortal(
     <div className="permission-mode-control" ref={rootRef}>
       <button
-        className={`permission-mode-trigger${active.id === "full-access" ? " full-access" : ""}`}
+        className={`permission-mode-trigger${active?.id === "full-access" ? " full-access" : ""}`}
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`${active.label}: ${active.description}`}
+        title={`${display.label}: ${display.description}`}
         onClick={() => setOpen((value) => !value)}
       >
-        {active.id === "full-access" ? <ShieldAlert size={16} /> : <ShieldCheck size={16} />}
-        <span>{active.label}</span>
+        {active?.id === "full-access" ? <ShieldAlert size={16} /> : <ShieldCheck size={16} />}
+        <span>{display.label}</span>
       </button>
       {open && (
         <div className="permission-mode-menu" role="menu" aria-label="Model permissions">
@@ -135,6 +120,7 @@ export function PermissionModeControl() {
               </span>
             </button>
           ))}
+          {!error && modes.length === 0 && <div role="status">Loading permission modes…</div>}
           {error && <div className="permission-mode-error" role="alert">{error}</div>}
         </div>
       )}

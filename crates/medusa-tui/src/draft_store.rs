@@ -459,7 +459,10 @@ mod tests {
         store.flush().expect("flush latest draft");
 
         let reopened = DraftStore::for_repo(repository.path());
-        assert_eq!(reopened.load("current").expect("load persisted draft"), None);
+        assert_eq!(
+            reopened.load("current").expect("load persisted draft"),
+            None
+        );
         assert!(!repository.path().join(".medusa/drafts/current").exists());
     }
 

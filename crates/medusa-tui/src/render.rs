@@ -332,7 +332,10 @@ impl UiIdentity {
             effort: effort_label(config.agent.max_turns).to_owned(),
             permission: PermissionStore::user()
                 .and_then(|store| store.load())
-                .map_or_else(|_| PermissionMode::FullAccess.label().to_owned(), |mode| mode.label().to_owned()),
+                .map_or_else(
+                    |_| PermissionMode::FullAccess.label().to_owned(),
+                    |mode| mode.label().to_owned(),
+                ),
             build: build.map(str::to_owned),
         }
     }
@@ -433,9 +436,22 @@ fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
             let is_selected = index == selected;
             lines.push(StyledLine::with_marker(
                 if is_selected { "› " } else { "  " },
-                if is_selected { Color::Magenta } else { Color::DarkGrey },
-                format!("[{}] {} · {}", check.status.label(), check.name, check.detail),
-                if is_selected { Color::White } else { Color::Grey },
+                if is_selected {
+                    Color::Magenta
+                } else {
+                    Color::DarkGrey
+                },
+                format!(
+                    "[{}] {} · {}",
+                    check.status.label(),
+                    check.name,
+                    check.detail
+                ),
+                if is_selected {
+                    Color::White
+                } else {
+                    Color::Grey
+                },
             ));
             if is_selected {
                 if let Some(remediation) = check.remediation {
@@ -665,7 +681,10 @@ pub(super) fn render_frame(
         } else if let Some(model_modal) = model_modal
             && model_modal.is_settings()
         {
-            match model_modal.settings_page().unwrap_or(app::SettingsPage::Root) {
+            match model_modal
+                .settings_page()
+                .unwrap_or(app::SettingsPage::Root)
+            {
                 app::SettingsPage::Root => "up/down choose - enter open - esc close",
                 app::SettingsPage::BaseUrl => "type endpoint - enter apply - esc back",
                 app::SettingsPage::Status => "enter/esc back",

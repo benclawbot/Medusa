@@ -24,6 +24,11 @@
       "sha256": "99621deb93a14741fc1aa46d6ecdd4314e7299564185f8c288594561e66226b4"
     },
     {
+      "path": "AGENTS.md",
+      "disposition": "current",
+      "sha256": "10d54aa9b60e1c728af90d88070a5158623a2e8a4c193d30e3a5fba77857a22d"
+    },
+    {
       "path": "CONTRIBUTING.md",
       "disposition": "current",
       "sha256": "e3fef9361518739cc02e43d21a931f94646932a175feef8480bdba92f28dcef4"
@@ -119,6 +124,16 @@
       "sha256": "fd1d00a083de7f872973a6dafa4f1774dc371b0cf5a09a1f587290fc87764706"
     },
     {
+      "path": "docs/CODEX-RELIABILITY.md",
+      "disposition": "current",
+      "sha256": "4f0b1e24db62de3ad337e9f37e7a3900013d924d8113ebcb2f17a70fd5fa97e5"
+    },
+    {
+      "path": "docs/CODEX-TASK-TEMPLATE.md",
+      "disposition": "current",
+      "sha256": "6c71a39146838ed6500edf864793f94723b3b174d79e6172863e72c9773f2f40"
+    },
+    {
       "path": "docs/COMPATIBILITY.md",
       "disposition": "current",
       "sha256": "e41f08dc30d1851fa17b27bfef72a6349e343257e5ba2b5b81bdcb68ab3a0616"
@@ -131,7 +146,7 @@
     {
       "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "de1d1b979b252f2a51404646c7040e66bc3185377da004e314acc11ab5b78438"
+      "sha256": "92eeef71257967f9fba538fac430a9890d0675fddc5eadb28d3863be0b81293a"
     },
     {
       "path": "docs/CONTRIBUTOR-WORKFLOWS.md",
@@ -276,12 +291,12 @@
     {
       "path": "docs/RELEASE-SIGNING.md",
       "disposition": "current",
-      "sha256": "f69a2a7b44d479c7f1eabe8dc5d3fec7b30ae51c1ee163530a111c64f26b4e68"
+      "sha256": "162cdbe9b90e4317c73097600f2cf6718d1c1258d8d41d82526651896a1a7d69"
     },
     {
       "path": "docs/RELEASE.md",
       "disposition": "current",
-      "sha256": "6341cefe30ce1d7157dd4bef81575e8231d44c924ea65ef7ff404c10ee2d04d4"
+      "sha256": "bc4ef3378eb39381d58d84d3368b7d8e5759be0bd601f6377ff3cfefb8d92bf3"
     },
     {
       "path": "docs/SAFETY-RECOVERY-PROOF.md",

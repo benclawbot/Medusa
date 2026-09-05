@@ -5,12 +5,16 @@ on:
     paths:
       - ".github/**"
       - "scripts/release-workflow-policy.py"
+      - "scripts/stable-release-publication-policy.py"
+      - "scripts/verify-stable-release-authority.py"
   push:
     branches:
       - main
     paths:
       - ".github/**"
       - "scripts/release-workflow-policy.py"
+      - "scripts/stable-release-publication-policy.py"
+      - "scripts/verify-stable-release-authority.py"
   workflow_dispatch:
 
 permissions:
@@ -27,6 +31,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Validate policy fixtures
-        run: python3 scripts/release-workflow-policy.py self-test
+        run: |
+          python3 scripts/release-workflow-policy.py self-test
+          python3 scripts/stable-release-publication-policy.py self-test
+          python3 -m py_compile scripts/verify-stable-release-authority.py
       - name: Enforce immutable release workflow policy
-        run: python3 scripts/release-workflow-policy.py check --root .
+        run: |
+          python3 scripts/release-workflow-policy.py check --root .
+          python3 scripts/stable-release-publication-policy.py check --root .

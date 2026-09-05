@@ -158,8 +158,7 @@ impl AppState {
                         }
                         KeyCode::Enter => return self.commit_settings_selection(),
                         KeyCode::Char(character)
-                            if key.modifiers.is_empty()
-                                || key.modifiers == KeyModifiers::SHIFT =>
+                            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                         {
                             if let Some(modal) = self.model_modal.as_mut() {
                                 modal.settings_push_search(character);
@@ -260,7 +259,8 @@ impl AppState {
                     return Ok(action);
                 }
                 if !matches!(page, SettingsPage::Review | SettingsPage::Profile) {
-                    self.status = "settings · changes staged; open Review changes to apply".to_owned();
+                    self.status =
+                        "settings · changes staged; open Review changes to apply".to_owned();
                     return Ok(action);
                 }
                 let timing = self

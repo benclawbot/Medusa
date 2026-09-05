@@ -43,6 +43,7 @@ MARKER_REFERENCE = re.compile(
 PRIMARY_SIGNING_SECRET = "MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM"
 RECOVERY_SIGNING_SECRET = "MEDUSA_RELEASE_RECOVERY_ED25519_PRIVATE_KEY_PEM"
 PRIMARY_SIGNING_WORKFLOW = "sign-release-manifest.yml"
+PRIMARY_SIGNING_WORKFLOWS = frozenset({PRIMARY_SIGNING_WORKFLOW, "rolling-main-cli.yml"})
 RECOVERY_SIGNING_WORKFLOW = "sign-release-manifest-recovery.yml"
 PRIMARY_SIGNING_ENVIRONMENT = "release-signing-primary"
 RECOVERY_SIGNING_ENVIRONMENT = "release-signing-recovery"
@@ -93,8 +94,8 @@ def signing_violations(path: Path, text: str) -> list[str]:
 
     if has_primary and has_recovery:
         violations.append("primary and recovery signing authorities must use separate workflows")
-    if has_primary and path.name != PRIMARY_SIGNING_WORKFLOW:
-        violations.append("primary release signing key appears outside the primary signing workflow")
+    if has_primary and path.name not in PRIMARY_SIGNING_WORKFLOWS:
+        violations.append("primary release signing key appears outside approved primary signing workflows")
     if has_recovery and path.name != RECOVERY_SIGNING_WORKFLOW:
         violations.append("recovery release signing key appears outside the recovery signing workflow")
 

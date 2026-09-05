@@ -336,11 +336,13 @@ mod tests {
 
     #[test]
     fn budget_rendering_caps_output_and_reports_omitted() {
-        let input = vec![observation("a", "bash", 9_000), observation("b", "bash", 8_000)];
+        let input = vec![
+            observation("a", "bash", 9_000),
+            observation("b", "bash", 8_000),
+        ];
         let result = consolidate(&input, ConsolidationPolicy::default()).unwrap();
         assert_eq!(result.memories.len(), 1);
-        let (full, none_omitted) =
-            render_memories_within_budget(&result.memories, usize::MAX / 2);
+        let (full, none_omitted) = render_memories_within_budget(&result.memories, usize::MAX / 2);
         assert!(none_omitted.is_empty());
         assert!(full.contains("bash"));
         let (starved, omitted) = render_memories_within_budget(&result.memories, 1);

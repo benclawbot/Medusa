@@ -57,8 +57,7 @@ pub(crate) fn ensure_openai_oauth_connected() -> Result<Vec<String>, String> {
 fn credentials_ready(config: &Config) -> bool {
     // `auth=none` is an explicit route contract, not a missing credential.
     config.model.auth == "none"
-        || credential_environment(&config.model.provider)
-            .is_some_and(|name| env::var(name).is_ok())
+        || credential_environment(&config.model.provider).is_some_and(|name| env::var(name).is_ok())
 }
 
 #[derive(Debug)]
@@ -987,7 +986,11 @@ fn slash_command_input(command: &SlashCommand) -> String {
                 "/learning evaluate {id} {} {} {}",
                 if *validation_passed { "pass" } else { "fail" },
                 if *regression_passed { "pass" } else { "fail" },
-                if *effectiveness_passed { "pass" } else { "fail" }
+                if *effectiveness_passed {
+                    "pass"
+                } else {
+                    "fail"
+                }
             ),
             LearningCommand::Approve { id } => format!("/learning approve {id}"),
             LearningCommand::Reject { id } => format!("/learning reject {id}"),

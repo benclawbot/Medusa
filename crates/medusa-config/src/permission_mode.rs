@@ -17,9 +17,9 @@ const FILE_NAME: &str = "permissions.toml";
 #[serde(rename_all = "kebab-case")]
 pub enum PermissionMode {
     /// Unrestricted filesystem and internet access without routine approval prompts.
-    #[default]
     FullAccess,
     /// Workspace access with explicit user review for protected boundary actions.
+    #[default]
     AskForApproval,
     /// Workspace access with automatic review of routine permission requests.
     ApproveForMe,
@@ -188,11 +188,11 @@ impl PermissionStore {
         &self.path
     }
 
-    /// Missing state resolves to Full Access by design. Once changed, the value remains durable
-    /// across new sessions and application restarts until explicitly changed again.
+    /// Missing state is a first-run state and resolves to the least-privilege interactive mode.
+    /// Persisted selections, including Full Access from existing users, remain unchanged.
     pub fn load(&self) -> MedusaResult<PermissionMode> {
         if !self.path.exists() {
-            return Ok(PermissionMode::FullAccess);
+            return Ok(PermissionMode::AskForApproval);
         }
         let text = fs::read_to_string(&self.path)
             .map_err(|error| store_error(format!("read {}: {error}", self.path.display())))?;
@@ -277,11 +277,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_store_defaults_to_full_access() {
+    fn missing_store_defaults_to_ask_for_approval() {
         let directory = tempfile::tempdir().expect("tempdir");
         let store = PermissionStore::at(directory.path().join(FILE_NAME));
-        assert_eq!(store.load().expect("load"), PermissionMode::FullAccess);
-        assert_eq!(store.load().expect("load").execution_mode(), Mode::Yolo);
+        assert_eq!(store.load().expect("load"), PermissionMode::AskForApproval);
+        assert_eq!(store.load().expect("load").execution_mode(), Mode::Review);
     }
 
     #[test]
@@ -298,12 +298,25 @@ mod tests {
     }
 
     #[test]
+    fn persisted_full_access_survives_default_migration() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join(FILE_NAME);
+        PermissionStore::at(&path)
+            .save(PermissionMode::FullAccess)
+            .expect("save");
+        assert_eq!(
+            PermissionStore::at(path).load().expect("reload"),
+            PermissionMode::FullAccess
+        );
+    }
+
+    #[test]
     fn labels_and_order_match_codex_style_menu() {
         assert_eq!(PermissionMode::ALL[0].label(), "Ask for approval");
         assert_eq!(PermissionMode::ALL[1].label(), "Approve for me");
         assert_eq!(PermissionMode::ALL[2].label(), "Full Access");
         assert_eq!(PermissionMode::ALL[3].label(), "Read Only");
-        assert_eq!(PermissionMode::default(), PermissionMode::FullAccess);
+        assert_eq!(PermissionMode::default(), PermissionMode::AskForApproval);
     }
 
     #[test]

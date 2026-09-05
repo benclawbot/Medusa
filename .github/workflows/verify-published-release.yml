@@ -1,0 +1,88 @@
+name: Verify Published Stable Release
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Published stable release tag to verify
+        required: true
+        type: string
+      release_sha:
+        description: Exact release commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  public-updater-smoke:
+    name: Public updater smoke (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            archive: medusa-cli-linux.tar.gz
+          - os: macos-latest
+            platform: macos
+            archive: medusa-cli-macos.tar.gz
+          - os: windows-2022
+            platform: windows
+            archive: medusa-cli-windows.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Validate published release binding
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "false"
+          tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')
+          test "$tag_sha" = "$RELEASE_SHA"
+      - name: Download published CLI archive
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          mkdir -p released-cli
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$ARCHIVE" \
+            --dir released-cli
+      - name: Exercise released updater against public GitHub API on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          mkdir -p released-cli/unpacked
+          tar -xzf "released-cli/$ARCHIVE" -C released-cli/unpacked
+          test -x released-cli/unpacked/medusa || chmod +x released-cli/unpacked/medusa
+          released-cli/unpacked/medusa --version
+          env -u GH_TOKEN -u GITHUB_TOKEN released-cli/unpacked/medusa update --check --release
+      - name: Exercise released updater against public GitHub API on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive -LiteralPath "released-cli/$env:ARCHIVE" -DestinationPath released-cli/unpacked
+          $binary = Resolve-Path 'released-cli/unpacked/medusa.exe'
+          & $binary --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
+          Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+          & $binary update --check --release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

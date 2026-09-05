@@ -127,8 +127,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 let hidden = match app.verbosity {
                     Verbosity::Off => verbose_filterable(activity.kind),
                     Verbosity::New => {
-                        verbose_filterable(activity.kind)
-                            && Some(entry_index) != latest_filterable
+                        verbose_filterable(activity.kind) && Some(entry_index) != latest_filterable
                     }
                     Verbosity::All | Verbosity::Verbose => false,
                 };
@@ -465,6 +464,16 @@ pub(super) fn composer_prompt_text(text: &str) -> String {
     text.replace('\n', " / ")
 }
 
+fn fit_to_row(value: &str, width: u16) -> String {
+    value
+        .split('\n')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(usize::from(width))
+        .collect()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StyledLine {
     pub(crate) marker: Option<(String, Color)>,
@@ -560,9 +569,9 @@ impl StyledLine {
         queue!(stdout, SetAttribute(self.attribute))?;
         let used;
         if let Some((marker, marker_color)) = &self.marker {
-            let marker = wrap_to_width(marker, width);
+            let marker = fit_to_row(marker, width);
             let remaining = width.saturating_sub(marker.chars().count() as u16);
-            let body = wrap_to_width(&self.text, remaining);
+            let body = fit_to_row(&self.text, remaining);
             used = marker.chars().count().saturating_add(body.chars().count());
             print_selected_text(
                 stdout,
@@ -586,7 +595,7 @@ impl StyledLine {
                 self.attribute,
             )?;
         } else {
-            let body = wrap_to_width(&self.text, width);
+            let body = fit_to_row(&self.text, width);
             used = body.chars().count();
             print_selected_text(
                 stdout,
@@ -618,10 +627,7 @@ impl StyledLine {
             stdout,
             SetAttribute(Attribute::Reset),
             ResetColor,
-            Print(
-                "
-"
-            )
+            Print("\n")
         )
     }
 
@@ -731,12 +737,7 @@ pub(super) fn system_lines(message: &str, width: u16) -> Vec<StyledLine> {
     rows.into_iter()
         .enumerate()
         .map(|(index, row)| {
-            StyledLine::with_marker(
-                if index == 0 { marker } else { "  " },
-                color,
-                row,
-                color,
-            )
+            StyledLine::with_marker(if index == 0 { marker } else { "  " }, color, row, color)
         })
         .collect()
 }

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing immutable release tag to recover
+        description: Exact release tag to build as a new draft
         required: true
         type: string
       release_sha:
@@ -23,8 +23,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authoritative-validation:
+    name: Authoritative workspace validation
+    uses: ./.github/workflows/ci.yml
+
   validate:
     name: Validate release tag
+    needs: authoritative-validation
     runs-on: ubuntu-latest
     outputs:
       release-tag: ${{ steps.release.outputs.tag }}
@@ -117,17 +122,20 @@ jobs:
           --platform linux
           --manifest desktop-package-linux.json
       - name: Build Linux CLI
-        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Assemble Linux release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-recall cli-package/medusa-recall
           cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa --version
+          target/release/medusa-recall --help | grep -F 'medusa-recall'
           target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
           target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
@@ -180,17 +188,20 @@ jobs:
           --platform macos
           --manifest desktop-package-macos.json
       - name: Build macOS CLI
-        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Assemble macOS release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-recall cli-package/medusa-recall
           cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa --version
+          target/release/medusa-recall --help | grep -F 'medusa-recall'
           target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
           target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
@@ -213,9 +224,10 @@ jobs:
           retention-days: 30
 
   windows:
-    name: Build Windows release assets
+    name: Build and Authenticode-sign Windows release assets
     needs: validate
     runs-on: windows-2022
+    environment: release-signing
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -233,27 +245,78 @@ jobs:
       - name: Install desktop dependencies
         working-directory: apps/medusa-desktop
         run: npm ci
-      - name: Build Windows desktop bundle
+      - name: Build Windows desktop executable without bundling
         working-directory: apps/medusa-desktop
-        run: npm run tauri:build -- --bundles nsis
+        run: npm run tauri:build -- --no-bundle
+      - name: Build Windows CLI
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
+      - name: Authenticode-sign Windows product executables
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw 'Windows signing certificate secrets are required'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $secure = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure | Out-Null
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          $targets = @(
+            'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe',
+            'target/release/medusa.exe',
+            'target/release/medusa-recall.exe',
+            'target/release/medusa-github-operation.exe'
+          )
+          foreach ($target in $targets) {
+            if (-not (Test-Path $target)) { throw "missing Windows signing target: $target" }
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a $target
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $signtool.FullName verify /pa /all /v $target
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Bundle signed Windows desktop executable
+        working-directory: apps/medusa-desktop
+        run: npm run tauri -- bundle --bundles nsis
+      - name: Authenticode-sign and verify Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          $installers = @(Get-ChildItem apps/medusa-desktop/src-tauri/target/release/bundle -Recurse -File -Filter *.exe)
+          if ($installers.Count -ne 1) { throw "expected exactly one NSIS installer, found $($installers.Count)" }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a $installers[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signtool.FullName verify /pa /all /v $installers[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate Windows desktop bundle
         run: >-
           python scripts/desktop-package-smoke.py
           --root apps/medusa-desktop/src-tauri/target/release/bundle
           --platform windows
           --manifest desktop-package-windows.json
-      - name: Build Windows CLI
-        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
       - name: Assemble Windows release assets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force release-assets, cli-package | Out-Null
           Copy-Item target/release/medusa.exe cli-package/medusa.exe
+          Copy-Item target/release/medusa-recall.exe cli-package/medusa-recall.exe
           Copy-Item target/release/medusa-github-operation.exe cli-package/medusa-github-operation.exe
           Copy-Item LICENSE cli-package/LICENSE
           Copy-Item docs/RELEASE.md cli-package/RELEASE.md
           Copy-Item docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          & target/release/medusa.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & target/release/medusa-recall.exe --help | Select-String 'medusa-recall'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & target/release/medusa-github-operation.exe --help | Select-String 'medusa-github-operation'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & target/release/medusa-github-operation.exe --help | Select-String 'interchangeable backend'
@@ -276,7 +339,7 @@ jobs:
           retention-days: 30
 
   publish-draft:
-    name: Attest and create release
+    name: Attest and create draft release
     needs: [validate, linux, macos, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -338,12 +401,11 @@ jobs:
           path: release-assets
           if-no-files-found: error
           retention-days: 90
-      - name: Create GitHub Release
+      - name: Create draft GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
-          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -353,4 +415,5 @@ jobs:
           gh release create "$RELEASE_TAG" release-assets/* \
             --verify-tag \
             --generate-notes \
-            --title "Medusa ${RELEASE_TAG#v}"
+            --title "Medusa ${RELEASE_TAG#v}" \
+            --draft

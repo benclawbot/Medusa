@@ -4,6 +4,7 @@ import {
   startBrowserOauth,
   type ProviderCatalogEntry,
 } from "./providerCatalog";
+import { setPermissionMode } from "./permissionModes";
 import type { Effort, SharedConfiguration } from "./runtime";
 import { initialOnboardingStep, recommendedModels } from "./onboarding";
 import { toUserError } from "./errorPresentation";
@@ -15,6 +16,29 @@ interface Props {
   onApply: (next: { provider: string; model: string; effort: Effort; apiKey?: string; baseUrl?: string }) => Promise<void>;
 }
 
+const permissionOptions = [
+  {
+    id: "ask-for-approval",
+    label: "Ask for approval",
+    description: "Workspace access; ask before protected boundary actions such as outside-workspace changes or internet use.",
+  },
+  {
+    id: "approve-for-me",
+    label: "Approve for me",
+    description: "Workspace access; automatically review routine requests and ask only for potentially unsafe actions.",
+  },
+  {
+    id: "read-only",
+    label: "Read Only",
+    description: "Read workspace files; ask before edits or internet access.",
+  },
+  {
+    id: "full-access",
+    label: "Full Access",
+    description: "Unrestricted file and internet access without routine approval prompts.",
+  },
+] as const;
+
 export function DesktopOnboarding({ configuration, providers, error, onApply }: Props) {
   const [catalog, setCatalog] = useState(providers);
   const [provider, setProvider] = useState(configuration.provider);
@@ -24,6 +48,8 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   );
   const [model, setModel] = useState(configuration.model || selectedProvider?.defaultModel || "");
   const [effort, setEffort] = useState<Effort>(configuration.effort);
+  const [permissionMode, setPermissionModeSelection] = useState("ask-for-approval");
+  const selectedPermission = permissionOptions.find((option) => option.id === permissionMode) ?? permissionOptions[0];
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(configuration.baseUrl ?? selectedProvider?.baseUrl ?? "");
   const [step, setStep] = useState(() => initialOnboardingStep(configuration, providers));
@@ -78,6 +104,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
     setSaving(true);
     setVerifyError(undefined);
     try {
+      await setPermissionMode(permissionMode);
       await onApply({ provider, model, effort, apiKey: apiKey.trim() || undefined, baseUrl: selectedProvider?.customValues ? baseUrl.trim() || undefined : undefined });
       setApiKey("");
       setStep("ready");
@@ -94,7 +121,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
         <div className="panel-title">
           <div>
             <h1>Set up Medusa</h1>
-            <p>Connect an account, choose a model, and verify the shared profile before your first chat.</p>
+            <p>Connect an account, choose a model, review permissions, and verify the shared profile before your first chat.</p>
             <small>Shared profile: {configuration.activeProfile}</small>
           </div>
         </div>
@@ -162,12 +189,26 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
 
         {step === "preferences" && (
           <>
-            <h2>Preferences</h2>
+            <h2>Preferences and permissions</h2>
             <label>Reasoning effort
               <select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}>
                 <option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
               </select>
             </label>
+            <label>Model permissions
+              <select
+                value={permissionMode}
+                onChange={(event) => setPermissionModeSelection(event.target.value)}
+              >
+                {permissionOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <p>{selectedPermission.description}</p>
+            {permissionMode === "full-access" && (
+              <p role="alert">Full Access removes routine approval prompts and allows unrestricted file and internet access.</p>
+            )}
             {selectedProvider?.customValues && (
               <label>Base URL
                 <input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" />
@@ -184,7 +225,8 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
           <>
             <h2>Verify and start</h2>
             <p>{selectedProvider?.displayName} · {model} · {effort} effort</p>
-            <small>Medusa will test the selected provider route and model before marking the session ready.</small>
+            <p>Permissions: <strong>{selectedPermission.label}</strong></p>
+            <small>Medusa will save this permission choice and test the selected provider route and model before marking the session ready.</small>
             {!!(error ?? verifyError) && <div className="error-banner" role="alert">{error ?? verifyError}</div>}
             <div>
               <button className="secondary-action" disabled={saving} onClick={() => setStep("preferences")}>Back</button>
