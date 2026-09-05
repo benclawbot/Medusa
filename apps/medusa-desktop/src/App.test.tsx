@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { DESKTOP_TOOL_EVENT, type DesktopTool } from "./desktop-tools";
@@ -425,6 +425,23 @@ it("switches to the stop button while Enter submission is still in flight", asyn
   expect(composer).toHaveValue("");
   resolveSubmit("started");
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+});
+
+it("ignores duplicate submit events while the first request is in flight", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  let resolveSubmit: (value: "started" | "queued") => void = () => undefined;
+  vi.mocked(submitRuntime).mockReturnValue(new Promise((resolve) => { resolveSubmit = resolve; }));
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  await act(async () => {
+    fireEvent.change(composer, { target: { value: "Hello twice" } });
+    fireEvent.keyDown(composer, { key: "Enter", shiftKey: false });
+    fireEvent.keyDown(composer, { key: "Enter", shiftKey: false });
+  });
+
+  expect(submitRuntime).toHaveBeenCalledTimes(1);
+  resolveSubmit("started");
 });
 
 it("uses a stop square while working and re-enables send for steering input", async () => {

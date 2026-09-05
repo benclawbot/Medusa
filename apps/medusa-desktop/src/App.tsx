@@ -37,6 +37,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ApprovalCard } from "./ApprovalCard";
+import { appendBounded } from "./boundedHistory";
 import { RecoveryDock } from "./RecoveryDock";
 import { DesktopOnboarding } from "./DesktopOnboarding";
 import { requestDesktopTool, type DesktopTool } from "./desktop-tools";
@@ -126,6 +127,9 @@ let workEntryCounter = 0;
 const nextWorkEntryId = () => `work-${++workEntryCounter}`;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_COMPOSER_HEIGHT = 160;
+const MAX_MESSAGE_HISTORY = 2000;
+const MAX_WORK_LOG_ENTRIES = 1000;
+const MAX_ACTIVITY_ENTRIES = 1000;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const EFFORT_ORDER: Effort[] = ["auto", "low", "medium", "high"];
 const timestampFormatter = new Intl.DateTimeFormat(undefined, {
@@ -309,6 +313,7 @@ export function App() {
   const transportFailureCount = useRef(0);
   const transportErrorVisible = useRef(false);
   const pollBusy = useRef(false);
+  const submitInFlight = useRef(false);
   const wakePoll = useRef<(() => void) | undefined>();
   const busyRef = useRef(busy);
   busyRef.current = busy;
@@ -352,14 +357,11 @@ export function App() {
   const appendWorkLog = useCallback((entry: Omit<WorkLogEntry, "id" | "timestamp"> & { timestamp?: number }) => {
     const id = nextWorkEntryId();
     const timestamp = entry.timestamp ?? Date.now();
-    setWorkLog((current) => [
-      ...current,
-      {
+    setWorkLog((current) => appendBounded(current, {
         ...entry,
         id,
         timestamp,
-      },
-    ]);
+      }, MAX_WORK_LOG_ENTRIES));
   }, []);
 
   const flushAssistantStream = useCallback(() => {
@@ -376,7 +378,7 @@ export function App() {
     setMessages((current) => {
       const index = current.findIndex((message) => message.id === stream.id);
       if (index < 0) {
-        return [...current, { id: stream.id, role: "assistant", text, createdAt: stream.createdAt }];
+        return appendBounded(current, { id: stream.id, role: "assistant", text, createdAt: stream.createdAt }, MAX_MESSAGE_HISTORY);
       }
       const next = [...current];
       next[index] = { ...next[index], text };
@@ -403,7 +405,7 @@ export function App() {
       text,
       createdAt: Date.now(),
     };
-    setMessages((current) => [...current, message]);
+    setMessages((current) => appendBounded(current, message, MAX_MESSAGE_HISTORY));
   }, [flushAssistantStream]);
 
   const appendAssistantDelta = useCallback((value: string) => {
@@ -495,9 +497,9 @@ export function App() {
       case "activity": {
         const activity = { ...event.activity, details: event.activity.details ?? [] };
         setActivities((current) => {
-          if (!activity.id) return [...current, activity];
+          if (!activity.id) return appendBounded(current, activity, MAX_ACTIVITY_ENTRIES);
           const index = current.findIndex((item) => item.id === activity.id);
-          if (index < 0) return [...current, activity];
+          if (index < 0) return appendBounded(current, activity, MAX_ACTIVITY_ENTRIES);
           const next = [...current];
           next[index] = activity;
           return next;
@@ -525,7 +527,7 @@ export function App() {
             status,
             timestamp,
           };
-          if (index < 0) return [...current, entry];
+          if (index < 0) return appendBounded(current, entry, MAX_WORK_LOG_ENTRIES);
           const next = [...current];
           next[index] = entry;
           return next;
@@ -936,6 +938,8 @@ export function App() {
     }
     const clean = text.trim();
     const submitsTurn = !(clean.startsWith("/") && suppliedAttachments.length === 0);
+    if (submitsTurn && submitInFlight.current) return;
+    if (submitsTurn) submitInFlight.current = true;
     setError(undefined);
     setQuestions([]);
     // A new user turn supersedes any persisted stop notice from an older run.
@@ -962,16 +966,13 @@ export function App() {
       status: "Sent",
     });
     const userMessageId = nextMessageId();
-    setMessages((current) => [
-      ...current,
-      {
+    setMessages((current) => appendBounded(current, {
         id: userMessageId,
         role: "user",
         text: text || "Attached context",
         createdAt: Date.now(),
         attachments: suppliedAttachments,
-      },
-    ]);
+      }, MAX_MESSAGE_HISTORY));
     if (submitsTurn) {
       setLastRequest({ text, attachments: suppliedAttachments });
     }
@@ -990,13 +991,10 @@ export function App() {
           attachments: suppliedAttachments,
           revision: Date.now(),
         });
-        setMessages((current) => [
-          ...current.map((message) => message.id === userMessageId
+        setMessages((current) => current.map((message) => message.id === userMessageId
             ? { ...message, queued: disposition === "queued" }
-            : message),
-        ]);
+            : message));
       }
-      if (submitsTurn) setPendingSubmit(false);
     } catch (cause) {
       if (submitsTurn) {
         setBusy(false);
@@ -1006,6 +1004,11 @@ export function App() {
       setError(message);
       if (submitsTurn) {
         appendAssistantMessage(`Medusa could not start the request:\n\n${message}`);
+      }
+    } finally {
+      if (submitsTurn) {
+        submitInFlight.current = false;
+        setPendingSubmit(false);
       }
     }
   };
