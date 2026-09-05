@@ -21,6 +21,7 @@ use std::process::Stdio;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_protocol::frontend::FrontendCommand;
 #[cfg(test)]
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use medusa_tool_policy::validate_shell_command;
@@ -51,6 +52,7 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const FRONTEND_REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(600);
+const FRONTEND_CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECTION_WORKERS: usize = 8;
 const CONNECTION_QUEUE_CAPACITY: usize = 128;
 const MAX_BLOCKING_FRONTEND_CONNECTIONS: usize = CONNECTION_WORKERS / 2;
@@ -89,6 +91,28 @@ mod request_timeout_tests {
 
         assert_eq!(request_io_timeout(&request), Duration::from_secs(600));
         assert_eq!(request_io_timeout(&Request::Ping), REQUEST_IO_TIMEOUT);
+    }
+
+    #[test]
+    fn frontend_poll_requests_use_a_short_control_plane_timeout() {
+        let request = Request::Frontend {
+            envelope: FrontendCommandEnvelope {
+                protocol_version: FRONTEND_PROTOCOL_VERSION,
+                command_id: "poll-timeout-test".to_owned(),
+                idempotency_key: "poll-timeout-test".to_owned(),
+                frontend: FrontendKind::Desktop,
+                client_id: "poll-timeout-client".to_owned(),
+                session_id: Some("session".to_owned()),
+                turn_id: None,
+                timestamp: OffsetDateTime::now_utc(),
+                command: FrontendCommand::Poll {
+                    after_cursor: 0,
+                    acknowledge_cursor: None,
+                },
+            },
+        };
+
+        assert_eq!(request_io_timeout(&request), Duration::from_secs(10));
     }
 }
 
@@ -655,10 +679,22 @@ fn request_uses_frontend_serialization(request: &Request) -> bool {
 }
 
 fn request_io_timeout(request: &Request) -> Duration {
-    if request_uses_frontend_serialization(request) {
-        FRONTEND_REQUEST_IO_TIMEOUT
-    } else {
-        REQUEST_IO_TIMEOUT
+    match request {
+        Request::Frontend { envelope }
+            if matches!(
+                &envelope.command,
+                FrontendCommand::ListSessions
+                    | FrontendCommand::Attach { .. }
+                    | FrontendCommand::Detach
+                    | FrontendCommand::Replay { .. }
+                    | FrontendCommand::PollTransient
+                    | FrontendCommand::Poll { .. }
+                    | FrontendCommand::ShowSessionActions
+                    | FrontendCommand::ShowStatus
+                    | FrontendCommand::AcknowledgeCursor { .. }
+            ) => FRONTEND_CONTROL_IO_TIMEOUT,
+        _ if request_uses_frontend_serialization(request) => FRONTEND_REQUEST_IO_TIMEOUT,
+        _ => REQUEST_IO_TIMEOUT,
     }
 }
 
