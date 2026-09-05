@@ -59,8 +59,8 @@ impl PreviewRegistry {
 /// Find the newest runtime-produced index and atomically make only its containing tree readable
 /// through Medusa's custom `asset` protocol. The original physical path is retained in the DTO so
 /// the existing `convertFileSrc` frontend adapter can remain a pure URL conversion.
-#[tauri::command]
-pub fn runtime_find_web_artifact(
+#[tauri::command(rename = "runtime_find_web_artifact")]
+pub fn preview_runtime_find_web_artifact(
     runtime_id: String,
     runtimes: State<'_, RuntimeRegistry>,
     previews: State<'_, PreviewRegistry>,
@@ -73,8 +73,8 @@ pub fn runtime_find_web_artifact(
 }
 
 /// Close the runtime and revoke its preview authority in the same registered IPC command.
-#[tauri::command]
-pub fn runtime_close(
+#[tauri::command(rename = "runtime_close")]
+pub fn preview_runtime_close(
     runtime_id: String,
     runtimes: State<'_, RuntimeRegistry>,
     previews: State<'_, PreviewRegistry>,
@@ -378,7 +378,7 @@ fn response(
 mod tests {
     use super::*;
 
-    fn preview_tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    fn preview_tree() -> (crate::test_tempfile::TempDir, PathBuf, PathBuf) {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = directory
             .path()
