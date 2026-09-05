@@ -24,6 +24,12 @@
         "reason": "Calls the Windows composable-sandbox, process, pipe, environment, library-loader, and Job Object APIs while owning every returned handle and allocation."
       },
       {
+        "path": "crates/medusa-process-containment/src/confined_file.rs",
+        "module": "confined_file",
+        "classification": "unsafe-ffi",
+        "reason": "Uses descriptor-relative Unix open/openat calls with O_NOFOLLOW so preview reads are bound to one opened directory capability and the same final file handle is validated and read; Windows uses safe standard-library handle options to pin ancestors and reject reparse points."
+      },
+      {
         "path": "crates/medusa-process-containment/src/process_identity.rs",
         "module": "process_identity",
         "classification": "unsafe-ffi",
