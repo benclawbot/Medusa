@@ -1,0 +1,144 @@
+name: Temporary patch signed rolling authority
+
+on:
+  push:
+    branches:
+      - fix/signed-rolling-main-authority
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/signed-rolling-main-authority
+      - name: Patch rolling trust implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # Add detached-signature verification without changing stable manifest semantics.
+          manifest_path = Path('crates/medusa-update/src/manifest.rs')
+          text = manifest_path.read_text(encoding='utf-8')
+          anchor = '''    pub fn verify(\n        &self,\n        manifest_bytes: &[u8],\n        signature_bytes: &[u8],\n    ) -> Result<VerifiedManifest, ManifestError> {\n'''
+          if 'pub fn verify_detached(' not in text:
+              method = '''    /// Verifies a detached Ed25519 signature envelope over arbitrary Medusa authority bytes.\n    ///\n    /// Callers remain responsible for validating their own signed schema after this\n    /// cryptographic check. Stable release manifests continue to use `verify`, which\n    /// additionally enforces release and rollout policy.\n    pub fn verify_detached(\n        &self,\n        authority_bytes: &[u8],\n        signature_bytes: &[u8],\n    ) -> Result<String, ManifestError> {\n        const MAX_AUTHORITY_BYTES: usize = 1024 * 1024;\n        const MAX_SIGNATURE_BYTES: usize = 16 * 1024;\n        if authority_bytes.is_empty() || authority_bytes.len() > MAX_AUTHORITY_BYTES {\n            return Err(ManifestError::Size("authority"));\n        }\n        if signature_bytes.is_empty() || signature_bytes.len() > MAX_SIGNATURE_BYTES {\n            return Err(ManifestError::Size("signature"));\n        }\n        let envelope: ManifestSignature = serde_json::from_slice(signature_bytes)\n            .map_err(|error| ManifestError::Json(error.to_string()))?;\n        if envelope.schema != SIGNATURE_SCHEMA || envelope.algorithm != "Ed25519" {\n            return Err(ManifestError::SignatureEnvelope);\n        }\n        let key = self\n            .keys\n            .iter()\n            .find(|key| key.key_id == envelope.key_id)\n            .ok_or_else(|| ManifestError::UnknownKey(envelope.key_id.clone()))?;\n        if key.status == KeyStatus::Revoked {\n            return Err(ManifestError::RevokedKey(key.key_id.clone()));\n        }\n        let digest = hex::encode(Sha256::digest(authority_bytes));\n        if envelope.manifest_sha256 != digest {\n            return Err(ManifestError::ManifestDigest);\n        }\n        let signature =\n            hex::decode(&envelope.signature).map_err(|_| ManifestError::SignatureEnvelope)?;\n        if signature.len() != 64 {\n            return Err(ManifestError::SignatureEnvelope);\n        }\n        UnparsedPublicKey::new(&ED25519, key.public_key)\n            .verify(authority_bytes, &signature)\n            .map_err(|_| ManifestError::InvalidSignature)?;\n        Ok(key.key_id.clone())\n    }\n\n'''
+              if anchor not in text:
+                  raise SystemExit('manifest verify anchor changed')
+              text = text.replace(anchor, method + anchor, 1)
+              manifest_path.write_text(text, encoding='utf-8', newline='\n')
+
+          source_path = Path('crates/medusa-update/src/source.rs')
+          text = source_path.read_text(encoding='utf-8')
+          old_import = '''use crate::{\n    Architecture, AtomicInstaller, OperatingSystem, Platform, Restart, ScheduledUpdate,\n    copy_with_progress, verify_artifact,\n};'''
+          new_import = '''use crate::{\n    Architecture, AtomicInstaller, OperatingSystem, Platform, Restart, ScheduledUpdate, TrustStore,\n    copy_with_progress, verify_artifact,\n};'''
+          if old_import in text:
+              text = text.replace(old_import, new_import, 1)
+          elif new_import not in text:
+              raise SystemExit('source import anchor changed')
+
+          old_fetch = '''            let manifest: RollingMainArtifact = self\n                .asset_response_until_with_progress(\n                    &manifest_name,\n                    revision,\n                    deadline,\n                    &mut waiting,\n                )?\n                .json()\n                .map_err(asset_error)?;'''
+          new_fetch = '''            let manifest_bytes = self\n                .asset_response_until_with_progress(\n                    &manifest_name,\n                    revision,\n                    deadline,\n                    &mut waiting,\n                )?\n                .bytes()\n                .map_err(asset_error)?;\n            self.verify_rolling_manifest_signature(\n                &manifest_name,\n                revision,\n                &manifest_bytes,\n                Some((deadline, &mut waiting)),\n            )?;\n            let manifest: RollingMainArtifact =\n                serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;'''
+          if old_fetch in text:
+              text = text.replace(old_fetch, new_fetch, 1)
+          elif new_fetch not in text:
+              raise SystemExit('rolling wait manifest anchor changed')
+
+          old_available = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Ok(false);\n        };\n        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;\n        validate_revision(&manifest.revision)?;'''
+          new_available = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Ok(false);\n        };\n        let manifest_bytes = response.bytes().map_err(asset_error)?;\n        if self.requires_rolling_signature() {\n            let signature_name = format!("{manifest_name}.sig.json");\n            let Some(signature) = self.asset_response_once(&signature_name, revision)? else {\n                return Ok(false);\n            };\n            let signature_bytes = signature.bytes().map_err(asset_error)?;\n            verify_rolling_signature(&manifest_bytes, &signature_bytes)?;\n        }\n        let manifest: RollingMainArtifact =\n            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;\n        validate_revision(&manifest.revision)?;'''
+          if old_available in text:
+              text = text.replace(old_available, new_available, 1)
+          elif new_available not in text:
+              raise SystemExit('rolling availability anchor changed')
+
+          old_once = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Err(not_published(revision));\n        };\n        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;\n        manifest.validate(revision, asset_name)?;\n        Ok(manifest)\n    }\n\n    fn asset_response('''
+          new_once = '''        let Some(response) = self.asset_response_once(&manifest_name, revision)? else {\n            return Err(not_published(revision));\n        };\n        let manifest_bytes = response.bytes().map_err(asset_error)?;\n        self.verify_rolling_manifest_signature(&manifest_name, revision, &manifest_bytes, None)?;\n        let manifest: RollingMainArtifact =\n            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;\n        manifest.validate(revision, asset_name)?;\n        Ok(manifest)\n    }\n\n    fn requires_rolling_signature(&self) -> bool {\n        self.asset_base == ROLLING_ASSET_BASE\n    }\n\n    fn verify_rolling_manifest_signature(\n        &self,\n        manifest_name: &str,\n        revision: &str,\n        manifest_bytes: &[u8],\n        waiting: Option<(Instant, &mut dyn FnMut())>,\n    ) -> MedusaResult<()> {\n        if !self.requires_rolling_signature() {\n            return Ok(());\n        }\n        let signature_name = format!("{manifest_name}.sig.json");\n        let signature = if let Some((deadline, waiting)) = waiting {\n            self.asset_response_until_with_progress(\n                &signature_name,\n                revision,\n                deadline,\n                waiting,\n            )?\n        } else {\n            self.asset_response_once(&signature_name, revision)?\n                .ok_or_else(|| not_published(revision))?\n        };\n        let signature_bytes = signature.bytes().map_err(asset_error)?;\n        verify_rolling_signature(manifest_bytes, &signature_bytes)\n    }\n\n    fn asset_response('''
+          if old_once in text:
+              text = text.replace(old_once, new_once, 1)
+          elif new_once not in text:
+              raise SystemExit('rolling once anchor changed')
+
+          helper_anchor = '''fn rolling_release_tag(revision: &str) -> MedusaResult<String> {'''
+          if 'fn verify_rolling_signature(' not in text:
+              helper = '''fn verify_rolling_signature(manifest_bytes: &[u8], signature_bytes: &[u8]) -> MedusaResult<()> {\n    TrustStore::production()\n        .verify_detached(manifest_bytes, signature_bytes)\n        .map(|_| ())\n        .map_err(|error| {\n            MedusaError::new(\n                ErrorCode::InvalidConfiguration,\n                ErrorCategory::Validation,\n                format!("rolling main authority signature is invalid: {error}"),\n            )\n        })\n}\n\n'''
+              if helper_anchor not in text:
+                  raise SystemExit('rolling helper anchor changed')
+              text = text.replace(helper_anchor, helper + helper_anchor, 1)
+
+          source_path.write_text(text, encoding='utf-8', newline='\n')
+
+          contract = Path('scripts/test-ci-workflow-contract.py')
+          text = contract.read_text(encoding='utf-8')
+          marker = 'def test_stable_release_is_complete_before_publication() -> None:\n'
+          if 'def test_rolling_main_requires_independent_signatures()' not in text:
+              test = '''def test_rolling_main_requires_independent_signatures() -> None:\n    rolling = read_workflow("rolling-main-cli.yml")\n    assert "sign-cli:" in rolling\n    assert "sign-desktop:" in rolling\n    assert rolling.count("environment: release-signing-primary") >= 2\n    assert "MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" in rolling\n    assert "medusa-release-signature-v1" in rolling\n    assert "rolling-main-cli-signatures-${{ github.sha }}" in rolling\n    assert "rolling-main-desktop-signatures-${{ github.sha }}" in rolling\n    assert "needs: [build-cli, sign-cli]" in rolling\n    assert "needs: [build-desktop, sign-desktop, publish-cli]" in rolling\n    assert "*.sig.json" in rolling\n\n    source = (ROOT / "crates/medusa-update/src/source.rs").read_text(encoding="utf-8")\n    assert "TrustStore::production()" in source\n    assert "verify_detached(manifest_bytes, signature_bytes)" in source\n    assert "format!(\\"{manifest_name}.sig.json\\")" in source\n    assert "self.asset_base == ROLLING_ASSET_BASE" in source\n\n\n'''
+              if marker not in text:
+                  raise SystemExit('contract insertion anchor changed')
+              text = text.replace(marker, test + marker, 1)
+              list_anchor = '''    tests = [\n        test_publishers_require_authoritative_workspace_validation,\n'''
+              replacement = '''    tests = [\n        test_publishers_require_authoritative_workspace_validation,\n        test_rolling_main_requires_independent_signatures,\n'''
+              if list_anchor not in text:
+                  raise SystemExit('contract test list anchor changed')
+              text = text.replace(list_anchor, replacement, 1)
+              contract.write_text(text, encoding='utf-8', newline='\n')
+
+          # Produce the workflow update as an artifact. GitHub job tokens may not push workflow edits.
+          workflow = Path('.github/workflows/rolling-main-cli.yml')
+          text = workflow.read_text(encoding='utf-8')
+          dollar = '$'
+          sign_cli = '''\n  sign-cli:\n    name: Sign rolling CLI authority\n    if: github.ref == 'refs/heads/main'\n    needs: build-cli\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    environment: release-signing-primary\n    permissions:\n      contents: read\n    env:\n      MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM: @@{{ secrets.MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM }}\n    steps:\n      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          pattern: rolling-main-cli-*\n          path: release-assets\n          merge-multiple: true\n      - name: Sign exact-revision CLI manifests\n        shell: bash\n        run: |\n          set -euo pipefail\n          test -n "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM"\n          private_key="$RUNNER_TEMP/medusa-rolling-ed25519.pem"\n          public_key="$RUNNER_TEMP/medusa-rolling-ed25519-public.pem"\n          raw_signature="$RUNNER_TEMP/medusa-rolling-signature.bin"\n          trap 'rm -f "$private_key" "$public_key" "$raw_signature"' EXIT\n          umask 077\n          printf '%s\\n' "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" > "$private_key"\n          cat > "$public_key" <<'PEM'\n          -----BEGIN PUBLIC KEY-----\n          MCowBQYDK2VwAyEAIy/f/QW1grgmC2i/DHKwR/2ubq53UvWgehWoWAtW3+k=\n          -----END PUBLIC KEY-----\n          PEM\n          for manifest in release-assets/*.json; do\n            [[ "$manifest" == *.sig.json ]] && continue\n            openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$manifest" -out "$raw_signature"\n            openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -in "$manifest" -sigfile "$raw_signature"\n            manifest_sha=$(sha256sum "$manifest" | awk '{print $1}')\n            signature_hex=$(xxd -p -c 256 "$raw_signature")\n            jq -cn \\\n              --arg schema medusa-release-signature-v1 \\\n              --arg key_id medusa-release-2026-08-primary \\\n              --arg algorithm Ed25519 \\\n              --arg manifest_sha256 "$manifest_sha" \\\n              --arg signature "$signature_hex" \\\n              '{schema:$schema,key_id:$key_id,algorithm:$algorithm,manifest_sha256:$manifest_sha256,signature:$signature}' \\\n              > "$manifest.sig.json"\n          done\n      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        with:\n          name: rolling-main-cli-signatures-@@{{ github.sha }}\n          path: release-assets/*.sig.json\n          if-no-files-found: error\n          retention-days: 7\n'''.replace('@@', dollar)
+          if '\n  sign-cli:\n' not in text:
+              text = text.replace('\n  publish-cli:\n', sign_cli + '\n  publish-cli:\n', 1)
+          text = text.replace('    needs: build-cli\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    permissions:\n      contents: write\n', '    needs: [build-cli, sign-cli]\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    permissions:\n      contents: write\n', 1)
+          cli_download = '''      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          pattern: rolling-main-cli-*\n          path: release-assets\n          merge-multiple: true\n'''
+          signed_cli_download = cli_download + '''      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: rolling-main-cli-signatures-@@{{ github.sha }}\n          path: release-assets\n'''.replace('@@', dollar)
+          publish_pos = text.index('\n  publish-cli:\n')
+          suffix = text[publish_pos:]
+          if 'name: rolling-main-cli-signatures-' not in suffix.split('\n  build-desktop:\n', 1)[0]:
+              before = text[:publish_pos]
+              suffix = suffix.replace(cli_download, signed_cli_download, 1)
+              text = before + suffix
+          old_alias = '''          for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do\n            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber\n          done\n'''
+          new_alias = old_alias + '''          for signature in release-assets/*.tar.gz.json.sig.json release-assets/*.zip.json.sig.json; do\n            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber\n          done\n'''
+          if old_alias in text and 'for signature in release-assets/*.tar.gz.json.sig.json' not in text:
+              text = text.replace(old_alias, new_alias, 1)
+
+          sign_desktop = '''\n  sign-desktop:\n    name: Sign rolling desktop authority\n    if: github.ref == 'refs/heads/main'\n    needs: build-desktop\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    environment: release-signing-primary\n    permissions:\n      contents: read\n    env:\n      MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM: @@{{ secrets.MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM }}\n    steps:\n      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          pattern: rolling-main-desktop-*\n          path: release-assets\n          merge-multiple: true\n      - name: Sign exact-revision desktop manifests\n        shell: bash\n        run: |\n          set -euo pipefail\n          test -n "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM"\n          private_key="$RUNNER_TEMP/medusa-rolling-ed25519.pem"\n          public_key="$RUNNER_TEMP/medusa-rolling-ed25519-public.pem"\n          raw_signature="$RUNNER_TEMP/medusa-rolling-signature.bin"\n          trap 'rm -f "$private_key" "$public_key" "$raw_signature"' EXIT\n          umask 077\n          printf '%s\\n' "$MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" > "$private_key"\n          cat > "$public_key" <<'PEM'\n          -----BEGIN PUBLIC KEY-----\n          MCowBQYDK2VwAyEAIy/f/QW1grgmC2i/DHKwR/2ubq53UvWgehWoWAtW3+k=\n          -----END PUBLIC KEY-----\n          PEM\n          for manifest in release-assets/*.json; do\n            [[ "$manifest" == *.sig.json ]] && continue\n            openssl pkeyutl -sign -rawin -inkey "$private_key" -in "$manifest" -out "$raw_signature"\n            openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -in "$manifest" -sigfile "$raw_signature"\n            manifest_sha=$(sha256sum "$manifest" | awk '{print $1}')\n            signature_hex=$(xxd -p -c 256 "$raw_signature")\n            jq -cn \\\n              --arg schema medusa-release-signature-v1 \\\n              --arg key_id medusa-release-2026-08-primary \\\n              --arg algorithm Ed25519 \\\n              --arg manifest_sha256 "$manifest_sha" \\\n              --arg signature "$signature_hex" \\\n              '{schema:$schema,key_id:$key_id,algorithm:$algorithm,manifest_sha256:$manifest_sha256,signature:$signature}' \\\n              > "$manifest.sig.json"\n          done\n      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        with:\n          name: rolling-main-desktop-signatures-@@{{ github.sha }}\n          path: release-assets/*.sig.json\n          if-no-files-found: error\n          retention-days: 7\n'''.replace('@@', dollar)
+          if '\n  sign-desktop:\n' not in text:
+              text = text.replace('\n  publish-desktop:\n', sign_desktop + '\n  publish-desktop:\n', 1)
+          text = text.replace('    needs: [build-desktop, publish-cli]\n', '    needs: [build-desktop, sign-desktop, publish-cli]\n', 1)
+          desktop_download = '''      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          pattern: rolling-main-desktop-*\n          path: release-assets\n          merge-multiple: true\n'''
+          signed_desktop_download = desktop_download + '''      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: rolling-main-desktop-signatures-@@{{ github.sha }}\n          path: release-assets\n'''.replace('@@', dollar)
+          desktop_pos = text.index('\n  publish-desktop:\n')
+          prefix, suffix = text[:desktop_pos], text[desktop_pos:]
+          if 'name: rolling-main-desktop-signatures-' not in suffix:
+              suffix = suffix.replace(desktop_download, signed_desktop_download, 1)
+              text = prefix + suffix
+          old_desktop_alias = '''          for manifest in release-assets/medusa-desktop-main-*.json; do\n            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber\n          done\n'''
+          new_desktop_alias = old_desktop_alias + '''          for signature in release-assets/medusa-desktop-main-*.json.sig.json; do\n            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber\n          done\n'''
+          if old_desktop_alias in text and 'for signature in release-assets/medusa-desktop-main-*.json.sig.json' not in text:
+              text = text.replace(old_desktop_alias, new_desktop_alias, 1)
+
+          Path('/tmp/rolling-main-cli.yml').write_text(text, encoding='utf-8', newline='\n')
+          PY
+
+          cargo fmt --all
+          python3 scripts/test-ci-workflow-contract.py || true
+          git add crates/medusa-update/src/manifest.rs crates/medusa-update/src/source.rs scripts/test-ci-workflow-contract.py
+          if ! git diff --cached --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "Verify signed rolling main manifests"
+            git push origin HEAD:fix/signed-rolling-main-authority
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: patched-rolling-workflow
+          path: /tmp/rolling-main-cli.yml
+          if-no-files-found: error
+          retention-days: 1
