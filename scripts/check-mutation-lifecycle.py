@@ -6,7 +6,7 @@ import sys
 
 root = Path(__file__).resolve().parents[1]
 runtime = (root / "crates/medusa-runtime/src/lib.rs").read_text(encoding="utf-8")
-coordinator = (root / "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs").read_text(encoding="utf-8")
+coordinator = (root / "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs").read_text(encoding="utf-8")
 facade = (root / "crates/medusa-runtime/src/mutation_transaction.rs").read_text(encoding="utf-8")
 transaction_path = root / "crates/medusa-runtime/src/mutation_transaction_state.rs"
 transaction = transaction_path.read_text(encoding="utf-8")
