@@ -14,6 +14,27 @@ def read_workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
+def test_publishers_require_authoritative_workspace_validation() -> None:
+    ci = read_workflow("ci.yml")
+    assert "workflow_call:" in ci
+    assert "Full workspace target lint" in ci
+    assert "Full workspace tests" in ci
+    assert "Dependency policy" in ci
+
+    rolling = read_workflow("rolling-main-cli.yml")
+    assert "authoritative-validation:" in rolling
+    assert "uses: ./.github/workflows/ci.yml" in rolling
+    assert rolling.count("needs: authoritative-validation") == 2
+    assert rolling.index("authoritative-validation:") < rolling.index("build-cli:")
+    assert rolling.index("authoritative-validation:") < rolling.index("build-desktop:")
+
+    stable = read_workflow("publish-release.yml")
+    assert "authoritative-validation:" in stable
+    assert "uses: ./.github/workflows/ci.yml" in stable
+    assert "needs: authoritative-validation" in stable
+    assert stable.index("authoritative-validation:") < stable.index("validate:")
+
+
 def test_stable_release_is_complete_before_publication() -> None:
     refresh = WORKFLOWS / "refresh-cli-release-assets.yml"
     assert not refresh.exists(), "stable release assets must never be refreshed after publication"
@@ -123,6 +144,7 @@ def test_openai_oauth_never_uses_latest() -> None:
 
 def main() -> int:
     tests = [
+        test_publishers_require_authoritative_workspace_validation,
         test_stable_release_is_complete_before_publication,
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,

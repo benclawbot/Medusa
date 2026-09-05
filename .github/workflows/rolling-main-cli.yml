@@ -14,9 +14,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  authoritative-validation:
+    name: Authoritative workspace validation
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
   build-cli:
     name: Build rolling CLI (${{ matrix.os }})
     if: github.ref == 'refs/heads/main'
+    needs: authoritative-validation
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +141,7 @@ jobs:
   build-desktop:
     name: Build rolling desktop (${{ matrix.os }})
     if: github.ref == 'refs/heads/main'
+    needs: authoritative-validation
     strategy:
       fail-fast: false
       matrix:
