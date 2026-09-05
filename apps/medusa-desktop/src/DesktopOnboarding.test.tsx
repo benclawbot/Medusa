@@ -139,14 +139,23 @@ it("defaults first-run permissions to Ask for approval and saves the reviewed ch
 });
 
 it("preserves an existing persisted permission when onboarding is re-entered", async () => {
-  vi.mocked(loadPermissionModes).mockResolvedValue([
-    {
-      id: "read-only",
-      label: "Read Only",
-      description: "Read workspace files; ask before edits or internet access.",
-      active: true,
-    },
-  ]);
+  vi.mocked(loadPermissionModes)
+    .mockResolvedValueOnce([
+      {
+        id: "read-only",
+        label: "Read Only",
+        description: "Read workspace files; ask before edits or internet access.",
+        active: true,
+      },
+    ])
+    .mockResolvedValueOnce([
+      {
+        id: "read-only",
+        label: "Read Only",
+        description: "Read workspace files; ask before edits or internet access.",
+        active: true,
+      },
+    ]);
   const onApply = vi.fn().mockResolvedValue(undefined);
   render(<DesktopOnboarding configuration={localConfiguration} providers={[localProvider]} onApply={onApply} />);
 
