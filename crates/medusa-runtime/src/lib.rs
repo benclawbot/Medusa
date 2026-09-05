@@ -894,20 +894,29 @@ fn worker_loop_with_discovery<F>(
     // Warm the OAuth app-server before the first user turn. Connecting and
     // authenticating lazily made an otherwise trivial prompt pay the full cold
     // startup cost (often tens of seconds).
-    if state.config.model.provider == medusa_config::openai_oauth::PROVIDER {
-        match openai_oauth::CodexAppServer::connect().and_then(|mut server| {
-            server.ensure_authenticated()?;
-            Ok(server)
-        }) {
-            Ok(server) => state.codex_app_server = Some(server),
-            Err(error) => {
-                let _ = events.send(RuntimeEvent::Notice {
-                    title: "ChatGPT app-server warmup deferred".to_owned(),
-                    details: vec![error],
+    let oauth_warmup = if state.config.model.provider == medusa_config::openai_oauth::PROVIDER {
+        let (warmup_tx, warmup_rx) = mpsc::channel();
+        if let Err(error) = thread::Builder::new()
+            .name("medusa-oauth-warmup".to_owned())
+            .spawn(move || {
+                let result = openai_oauth::CodexAppServer::connect().and_then(|mut server| {
+                    server.ensure_authenticated()?;
+                    Ok(server)
                 });
-            }
+                let _ = warmup_tx.send(result);
+            })
+        {
+            let _ = events.send(RuntimeEvent::Notice {
+                title: "ChatGPT app-server warmup deferred".to_owned(),
+                details: vec![format!("failed to start warmup: {error}")],
+            });
+            None
+        } else {
+            Some(warmup_rx)
         }
-    }
+    } else {
+        None
+    };
     for recovery_event in recovery::startup_events(&state.repo) {
         let _ = events.send(recovery_event);
     }
@@ -925,6 +934,20 @@ fn worker_loop_with_discovery<F>(
         });
     }
     while let Ok(command) = commands.recv() {
+        if state.codex_app_server.is_none()
+            && let Some(warmup_rx) = oauth_warmup.as_ref()
+            && let Ok(result) = warmup_rx.try_recv()
+        {
+            match result {
+                Ok(server) => state.codex_app_server = Some(server),
+                Err(error) => {
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "ChatGPT app-server warmup deferred".to_owned(),
+                        details: vec![error],
+                    });
+                }
+            }
+        }
         match command {
             RuntimeCommand::Submit { draft, accepted } => {
                 let _ = events.send(RuntimeEvent::Started);
