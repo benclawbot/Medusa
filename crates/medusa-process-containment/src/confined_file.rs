@@ -36,7 +36,7 @@ pub enum ConfinedReadError {
 
 #[derive(Debug)]
 pub struct ConfinedDir {
-    root: File,
+    _root: File,
     #[cfg(windows)]
     root_path: PathBuf,
 }
@@ -52,13 +52,16 @@ impl ConfinedDir {
             if !root.metadata().map_err(map_io_error)?.is_dir() {
                 return Err(ConfinedReadError::Invalid);
             }
-            Ok(Self { root })
+            Ok(Self { _root: root })
         }
         #[cfg(windows)]
         {
             let root_path = root.to_path_buf();
             let root = open_windows_path(&root_path, true)?;
-            Ok(Self { root, root_path })
+            Ok(Self {
+                _root: root,
+                root_path,
+            })
         }
     }
 
@@ -76,7 +79,7 @@ impl ConfinedDir {
 
     #[cfg(unix)]
     fn read_unix(&self, relative: &Path) -> Result<Vec<u8>, ConfinedReadError> {
-        let mut current = self.root.try_clone().map_err(map_io_error)?;
+        let mut current = self._root.try_clone().map_err(map_io_error)?;
         let mut components = relative.components().peekable();
         while let Some(component) = components.next() {
             let Component::Normal(name) = component else {
@@ -102,14 +105,12 @@ impl ConfinedDir {
 
     #[cfg(windows)]
     fn read_windows(&self, relative: &Path) -> Result<Vec<u8>, ConfinedReadError> {
-        // Reading the field is intentional: keeping this handle alive without FILE_SHARE_DELETE
-        // pins the authorized root for the lifetime of the capability while path components are
-        // opened through the canonical root path below.
-        let _root_pin = &self.root;
-        // The root handle is kept open without FILE_SHARE_DELETE for the lifetime of this
-        // capability. Each intermediate directory is opened the same way and retained until the
-        // final file has been opened, so no validated ancestor can be renamed or swapped while
-        // path resolution proceeds. FILE_FLAG_OPEN_REPARSE_POINT ensures each opened component is
+        // `_root` is intentionally retained even though path traversal below uses root_path:
+        // keeping the handle alive without FILE_SHARE_DELETE pins the authorized root for the
+        // lifetime of this capability.
+        // Each intermediate directory is opened the same way and retained until the final file
+        // has been opened, so no validated ancestor can be renamed or swapped while path
+        // resolution proceeds. FILE_FLAG_OPEN_REPARSE_POINT ensures each opened component is
         // inspected rather than followed.
         let mut pinned_directories = Vec::new();
         let mut current_path = self.root_path.clone();
