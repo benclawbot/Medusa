@@ -118,7 +118,6 @@ it("defaults first-run permissions to Ask for approval and saves the reviewed ch
   const onApply = vi.fn().mockResolvedValue(undefined);
   render(<DesktopOnboarding configuration={configured} providers={[customProvider]} onApply={onApply} />);
 
-  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByRole("heading", { name: "Preferences and permissions" })).toBeInTheDocument();
   expect(screen.getByLabelText("Model permissions")).toHaveValue("ask-for-approval");
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
