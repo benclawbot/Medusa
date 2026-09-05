@@ -101,6 +101,10 @@ impl ConfinedDir {
 
     #[cfg(windows)]
     fn read_windows(&self, relative: &Path) -> Result<Vec<u8>, ConfinedReadError> {
+        // Reading the field is intentional: keeping this handle alive without FILE_SHARE_DELETE
+        // pins the authorized root for the lifetime of the capability while path components are
+        // opened through the canonical root path below.
+        let _root_pin = &self.root;
         // The root handle is kept open without FILE_SHARE_DELETE for the lifetime of this
         // capability. Each intermediate directory is opened the same way and retained until the
         // final file has been opened, so no validated ancestor can be renamed or swapped while
