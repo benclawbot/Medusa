@@ -7,6 +7,7 @@ use std::{
 #[cfg(unix)]
 use std::{
     ffi::{CString, OsStr},
+    mem::MaybeUninit,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::ffi::OsStrExt,
@@ -178,7 +179,40 @@ fn open_unix_at(
     // validated relative component, and O_NOFOLLOW prevents the opened component from becoming a
     // symlink traversal. The returned descriptor is immediately transferred into `File` ownership.
     let fd = unsafe { libc::openat(parent.as_raw_fd(), value.as_ptr(), flags) };
-    owned_unix_file(fd)
+    if fd < 0 {
+        let error = io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(code) if code == libc::ELOOP => Err(ConfinedReadError::Symlink),
+            Some(code) if code == libc::ENOENT => Err(ConfinedReadError::Missing),
+            Some(code) if code == libc::ENOTDIR => {
+                let mut metadata = MaybeUninit::<libc::stat>::uninit();
+                // SAFETY: `parent` owns a live directory descriptor, `value` is a live
+                // NUL-terminated single path component, and `metadata` points to valid writable
+                // storage. AT_SYMLINK_NOFOLLOW inspects the component itself rather than following
+                // it, preserving the descriptor-relative confinement boundary.
+                let result = unsafe {
+                    libc::fstatat(
+                        parent.as_raw_fd(),
+                        value.as_ptr(),
+                        metadata.as_mut_ptr(),
+                        libc::AT_SYMLINK_NOFOLLOW,
+                    )
+                };
+                if result == 0 {
+                    // SAFETY: fstatat returned success and initialized the whole stat structure.
+                    let metadata = unsafe { metadata.assume_init() };
+                    if metadata.st_mode & libc::S_IFMT == libc::S_IFLNK {
+                        return Err(ConfinedReadError::Symlink);
+                    }
+                }
+                Err(ConfinedReadError::Invalid)
+            }
+            _ => Err(ConfinedReadError::Io),
+        };
+    }
+    // SAFETY: `fd` was just returned successfully by openat, is uniquely owned here, and must be
+    // closed exactly once. `File` assumes that ownership and closes it on drop.
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 #[cfg(unix)]
@@ -192,8 +226,8 @@ fn owned_unix_file(fd: libc::c_int) -> Result<File, ConfinedReadError> {
             _ => Err(ConfinedReadError::Io),
         };
     }
-    // SAFETY: `fd` was just returned successfully by open/openat, is uniquely owned here, and must
-    // be closed exactly once. `File` assumes that ownership and closes it on drop.
+    // SAFETY: `fd` was just returned successfully by open, is uniquely owned here, and must be
+    // closed exactly once. `File` assumes that ownership and closes it on drop.
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
@@ -259,9 +293,9 @@ mod tests {
         std::fs::rename(root.join("assets"), root.join("assets-old")).expect("rename");
         symlink(&outside, root.join("assets")).expect("symlink");
 
-        assert!(matches!(
+        assert_eq!(
             confined.read(Path::new("assets/site.css")),
-            Err(ConfinedReadError::Invalid) | Err(ConfinedReadError::Symlink)
-        ));
+            Err(ConfinedReadError::Symlink)
+        );
     }
 }
