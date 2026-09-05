@@ -3,6 +3,8 @@ pub(super) mod support;
 
 use super::*;
 pub(crate) use support::*;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 #[cfg(unix)]
 pub(super) fn draw(
@@ -198,6 +200,13 @@ impl ProviderPlanUsageSnapshot {
     }
 }
 
+struct ProviderPlanUsageCacheEntry {
+    observed_at: Instant,
+    usage: Option<ProviderPlanUsageSnapshot>,
+}
+
+type ProviderPlanUsageCache = Mutex<Option<ProviderPlanUsageCacheEntry>>;
+
 fn read_provider_plan_usage() -> Option<ProviderPlanUsageSnapshot> {
     let catalog = medusa_config::ProviderProfileCatalog::user().ok()?;
     let path = catalog.root().join("provider-plan-usage.json");
@@ -206,20 +215,19 @@ fn read_provider_plan_usage() -> Option<ProviderPlanUsageSnapshot> {
 }
 
 fn provider_plan_meter() -> Option<String> {
-    use std::sync::{Mutex, OnceLock};
-    use std::time::Instant;
-
-    static CACHE: OnceLock<Mutex<Option<(Instant, Option<ProviderPlanUsageSnapshot>)>>> =
-        OnceLock::new();
+    static CACHE: OnceLock<ProviderPlanUsageCache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache.lock().ok()?;
     let refresh = cache
         .as_ref()
-        .is_none_or(|(observed, _)| observed.elapsed() >= Duration::from_secs(1));
+        .is_none_or(|entry| entry.observed_at.elapsed() >= Duration::from_secs(1));
     if refresh {
-        *cache = Some((Instant::now(), read_provider_plan_usage()));
+        *cache = Some(ProviderPlanUsageCacheEntry {
+            observed_at: Instant::now(),
+            usage: read_provider_plan_usage(),
+        });
     }
-    let usage = cache.as_ref()?.1.as_ref()?;
+    let usage = cache.as_ref()?.usage.as_ref()?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let window_seconds = i64::try_from(usage.window_seconds).unwrap_or(i64::MAX);
     let fresh_until = usage

@@ -97,6 +97,18 @@ pub struct AppState {
     clipboard: Arc<dyn ClipboardService>,
 }
 
+pub const MAX_TRANSCRIPT_ENTRIES: usize = 2_000;
+
+pub struct RuntimeSettings {
+    pub model: String,
+    pub effort: String,
+    pub verbosity: String,
+    pub plan_mode: bool,
+    pub credential_configured: bool,
+    pub context_window_tokens: u64,
+    pub auto_compact_percent: u8,
+}
+
 impl AppState {
     #[must_use]
     pub(crate) fn repository(&self) -> &Path {
@@ -372,7 +384,7 @@ impl AppState {
                         self.credential_configured,
                     ));
                     self.status = "model configuration required before sending".to_owned();
-                    self.transcript.push(TranscriptEntry::System(
+                    self.push_transcript(TranscriptEntry::System(
                         "Configure a model/provider before sending this message. Your draft has been kept."
                             .to_owned(),
                     ));
@@ -398,7 +410,7 @@ impl AppState {
                             self.status = "settings".to_owned();
                         }
                         Err(error) => {
-                            self.transcript.push(TranscriptEntry::System(format!(
+                            self.push_transcript(TranscriptEntry::System(format!(
                                 "error: could not open settings: {error}"
                             )));
                             self.status = "settings unavailable".to_owned();
@@ -426,7 +438,7 @@ impl AppState {
                                 _ => None,
                             };
                             if let Some(task) = agent_task {
-                                self.transcript.push(TranscriptEntry::User(PromptDraft {
+                                self.push_transcript(TranscriptEntry::User(PromptDraft {
                                     text: task.clone(),
                                     ..PromptDraft::default()
                                 }));
@@ -444,8 +456,7 @@ impl AppState {
                         }
                     }
                 }
-                self.transcript
-                    .push(TranscriptEntry::User(submitted.clone()));
+                self.push_transcript(TranscriptEntry::User(submitted.clone()));
                 self.set_scrollback_offset(0);
                 self.plan = None;
                 self.status = "prompt submitted".to_owned();
@@ -508,23 +519,14 @@ impl AppState {
         self.status = "context compacted".to_owned();
     }
 
-    pub fn set_runtime_settings(
-        &mut self,
-        model: String,
-        effort: String,
-        verbosity: String,
-        plan_mode: bool,
-        credential_configured: bool,
-        context_window_tokens: u64,
-        auto_compact_percent: u8,
-    ) {
-        self.model_label = Some(model);
-        self.effort_label = Some(effort);
-        self.verbosity = Verbosity::parse(&verbosity).unwrap_or_default();
-        self.plan_mode = plan_mode;
-        self.credential_configured = credential_configured;
-        self.context_window_tokens = context_window_tokens;
-        self.auto_compact_percent = auto_compact_percent;
+    pub fn set_runtime_settings(&mut self, settings: RuntimeSettings) {
+        self.model_label = Some(settings.model);
+        self.effort_label = Some(settings.effort);
+        self.verbosity = Verbosity::parse(&settings.verbosity).unwrap_or_default();
+        self.plan_mode = settings.plan_mode;
+        self.credential_configured = settings.credential_configured;
+        self.context_window_tokens = settings.context_window_tokens;
+        self.auto_compact_percent = settings.auto_compact_percent;
     }
 
     pub fn set_plan(&mut self, plan: TranscriptPlan) {
@@ -586,7 +588,7 @@ impl AppState {
             }
             return;
         }
-        self.transcript.push(TranscriptEntry::Assistant(text));
+        self.push_transcript(TranscriptEntry::Assistant(text));
     }
 
     pub fn restore_rejected_submission(&mut self, draft: PromptDraft) -> io::Result<()> {
@@ -726,7 +728,7 @@ impl AppState {
             .map(|started_at| started_at.elapsed().as_secs());
         self.assistant_stream_active = false;
         if let Some(elapsed_seconds) = elapsed_seconds {
-            self.transcript.push(TranscriptEntry::System(format!(
+            self.push_transcript(TranscriptEntry::System(format!(
                 "{TURN_FINISHED_MARKER_PREFIX}{elapsed_seconds}"
             )));
         }
@@ -902,7 +904,15 @@ impl AppState {
             *existing = activity;
             return;
         }
-        self.transcript.push(TranscriptEntry::Activity(activity));
+        self.push_transcript(TranscriptEntry::Activity(activity));
+    }
+
+    pub fn push_transcript(&mut self, entry: TranscriptEntry) {
+        if self.transcript.len() >= MAX_TRANSCRIPT_ENTRIES {
+            let excess = self.transcript.len() - MAX_TRANSCRIPT_ENTRIES + 1;
+            self.transcript.drain(..excess);
+        }
+        self.transcript.push(entry);
     }
 
     fn persist_draft(&self) -> io::Result<()> {

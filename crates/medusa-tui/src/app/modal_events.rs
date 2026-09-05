@@ -419,7 +419,7 @@ impl AppState {
             return Ok(AppAction::Redraw);
         };
         self.question_modal = None;
-        self.transcript.push(TranscriptEntry::User(PromptDraft {
+        self.push_transcript(TranscriptEntry::User(PromptDraft {
             text: answer.clone(),
             ..PromptDraft::default()
         }));

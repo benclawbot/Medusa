@@ -208,6 +208,26 @@ fn starting_a_new_turn_removes_the_stale_terminal_failure_marker() {
 }
 
 #[test]
+fn transcript_history_is_bounded_to_newest_entries() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "bounded-history",
+        "",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+
+    for index in 0..=MAX_TRANSCRIPT_ENTRIES {
+        app.push_transcript(TranscriptEntry::System(format!("entry-{index}")));
+    }
+
+    assert_eq!(app.transcript.len(), MAX_TRANSCRIPT_ENTRIES);
+    assert!(matches!(app.transcript.first(), Some(TranscriptEntry::System(message)) if message == "entry-1"));
+    assert!(matches!(app.transcript.last(), Some(TranscriptEntry::System(message)) if message == &format!("entry-{MAX_TRANSCRIPT_ENTRIES}")));
+}
+
+#[test]
 fn model_form_requires_explicit_apply_and_updates_session_key_with_capability_effort() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(

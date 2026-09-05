@@ -7,8 +7,13 @@ use crate::{
 use std::time::Instant;
 
 const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
-const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+fn input_poll_timeout(now: Instant, next_animation: Instant, next_daemon_poll: Instant) -> Duration {
+    next_animation
+        .min(next_daemon_poll)
+        .saturating_duration_since(now)
+}
 
 pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -152,7 +157,7 @@ pub(super) fn run_loop(
             draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
             needs_draw = false;
         }
-        if event::poll(INPUT_POLL_INTERVAL)? {
+        if event::poll(input_poll_timeout(Instant::now(), next_animation, next_daemon_poll))? {
             let terminal_event = event::read()?;
             needs_draw = true;
             app.dismiss_welcome_for_event(&terminal_event);
@@ -230,7 +235,7 @@ pub(super) fn run_loop(
             }
             needs_frame = false;
         }
-        if event::poll(INPUT_POLL_INTERVAL)? {
+        if event::poll(input_poll_timeout(Instant::now(), next_animation, next_daemon_poll))? {
             let terminal_event = event::read()?;
             needs_frame = true;
             app.dismiss_welcome_for_event(&terminal_event);
@@ -416,7 +421,7 @@ fn handle_action(
                     }
                     Err(error) => {
                         app.restore_rejected_submission(draft)?;
-                        app.transcript.push(TranscriptEntry::System(format!(
+                        app.push_transcript(TranscriptEntry::System(format!(
                             "error: could not resume latest task: {}",
                             user_visible_runtime_error(&error.to_string())
                         )));
@@ -438,7 +443,7 @@ fn handle_action(
                 }
                 Err(error) => {
                     app.restore_rejected_submission(draft)?;
-                    app.transcript.push(TranscriptEntry::System(format!(
+                    app.push_transcript(TranscriptEntry::System(format!(
                         "error: {}",
                         user_visible_runtime_error(&error.to_string())
                     )));
@@ -457,7 +462,7 @@ fn handle_action(
                     app.status = "continuing with your answer".to_owned();
                 }
                 Err(error) => {
-                    app.transcript.push(TranscriptEntry::System(format!(
+                    app.push_transcript(TranscriptEntry::System(format!(
                         "error: {}",
                         user_visible_runtime_error(&error.to_string())
                     )));
@@ -472,7 +477,7 @@ fn handle_action(
                     app.status = "command running".to_owned();
                 }
                 Err(error) => {
-                    app.transcript.push(TranscriptEntry::System(format!(
+                    app.push_transcript(TranscriptEntry::System(format!(
                         "error: {}",
                         user_visible_runtime_error(&error.to_string())
                     )));
@@ -487,7 +492,7 @@ fn handle_action(
                     app.status = "updating model configuration".to_owned();
                 }
                 Err(error) => {
-                    app.transcript.push(TranscriptEntry::System(format!(
+                    app.push_transcript(TranscriptEntry::System(format!(
                         "error: {}",
                         user_visible_runtime_error(&error.to_string())
                     )));
@@ -701,7 +706,7 @@ pub(super) fn drain_runtime_events(
                 context_window_tokens,
                 auto_compact_percent,
             } => {
-                app.set_runtime_settings(
+                app.set_runtime_settings(RuntimeSettings {
                     model,
                     effort,
                     verbosity,
@@ -709,7 +714,7 @@ pub(super) fn drain_runtime_events(
                     credential_configured,
                     context_window_tokens,
                     auto_compact_percent,
-                );
+                });
             }
             RuntimeEvent::Notice { title, details } => {
                 if is_internal_notice(&title) {
@@ -811,6 +816,15 @@ pub(super) fn ctrl_l_redraw(event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_poll_waits_until_the_next_scheduled_work() {
+        let now = Instant::now();
+        let idle = input_poll_timeout(now, now + Duration::from_millis(250), now + Duration::from_millis(500));
+        let running = input_poll_timeout(now, now + Duration::from_millis(50), now + Duration::from_millis(250));
+        assert!(idle >= Duration::from_millis(200));
+        assert!(running <= Duration::from_millis(50));
+    }
 
     #[test]
     fn continuation_intents_are_exact_and_conservative() {

@@ -64,7 +64,7 @@ impl DaemonMonitor {
         };
 
         if self.should_record(kind) {
-            app.transcript.push(TranscriptEntry::System(transition));
+            app.push_transcript(TranscriptEntry::System(transition));
         }
         snapshot
     }

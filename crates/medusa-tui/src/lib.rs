@@ -18,8 +18,8 @@ use std::{
 use std::thread;
 
 use app::{
-    AppAction, AppError, AppState, TerminalPosition, TextSelection, TranscriptActivity,
-    TranscriptActivityKind, TranscriptEntry,
+    AppAction, AppError, AppState, RuntimeSettings, TerminalPosition, TextSelection,
+    TranscriptActivity, TranscriptActivityKind, TranscriptEntry,
 };
 use clipboard::{ClipboardService, PromptAttachment, PromptDraft, UnsupportedClipboard};
 use commands::command_suggestions;
@@ -555,15 +555,15 @@ mod tests {
             Arc::new(UnsupportedClipboard),
         )
         .expect("app");
-        app.set_runtime_settings(
-            "minimax / MiniMax-M3".to_owned(),
-            "effort:high".to_owned(),
-            "all".to_owned(),
-            false,
-            true,
-            1_000_000,
-            40,
-        );
+        app.set_runtime_settings(RuntimeSettings {
+            model: "minimax / MiniMax-M3".to_owned(),
+            effort: "effort:high".to_owned(),
+            verbosity: "all".to_owned(),
+            plan_mode: false,
+            credential_configured: true,
+            context_window_tokens: 1_000_000,
+            auto_compact_percent: 40,
+        });
         app.record_usage(50_000, 1_000, 350_000, 0, 1_000);
         app.dismiss_welcome_for_event(&Event::Paste(String::new()));
 
