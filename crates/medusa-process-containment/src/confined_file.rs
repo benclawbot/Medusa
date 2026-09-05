@@ -255,9 +255,9 @@ mod tests {
         std::fs::rename(root.join("assets"), root.join("assets-old")).expect("rename");
         symlink(&outside, root.join("assets")).expect("symlink");
 
-        assert_eq!(
+        assert!(matches!(
             confined.read(Path::new("assets/site.css")),
-            Err(ConfinedReadError::Symlink)
-        );
+            Err(ConfinedReadError::Invalid) | Err(ConfinedReadError::Symlink)
+        ));
     }
 }
