@@ -6,7 +6,7 @@ import sys
 
 root = Path(__file__).resolve().parents[1]
 runtime = (root / "crates/medusa-runtime/src/lib.rs").read_text(encoding="utf-8")
-coordinator = (root / "crates/medusa-runtime/src/coordination/mutating_worker_coordinator.rs").read_text(encoding="utf-8")
+coordinator = (root / "crates/medusa-runtime/src/coordination/mutating_worker_coordinator_inner.rs").read_text(encoding="utf-8")
 facade = (root / "crates/medusa-runtime/src/mutation_transaction.rs").read_text(encoding="utf-8")
 transaction_path = root / "crates/medusa-runtime/src/mutation_transaction_state.rs"
 transaction = transaction_path.read_text(encoding="utf-8")
@@ -17,8 +17,8 @@ errors: list[str] = []
 if "integrate_prepared(" in coordinator or ".integrate_successful(" in coordinator:
     errors.append("mutating coordinator still integrates before parent review")
 
-provider = runtime.find("LazyConfiguredProviderManager::from_config")
-completion = runtime.find("complete_after_parent_review", provider)
+provider = runtime.find("let review_provider = LazyConfiguredProviderManager::from_config")
+completion = runtime.find("crate::parent_reviewer::complete(", provider)
 if provider < 0 or completion < provider:
     errors.append("dedicated transaction review is not connected to runtime completion")
 if "let result = if implementation_evidence.is_some()" not in runtime:
@@ -41,8 +41,8 @@ if "mutation_transaction_legacy" in facade or "mod legacy" in facade:
     errors.append("transaction facade still exposes a legacy compatibility module")
 if "AgentSession" in transaction or "record_parent_review" in transaction or "latest_assistant_text" in transaction:
     errors.append("durable transaction state still contains conversational review authority")
-if "crate::parent_reviewer::complete(path, repo, provider, config, cancel, events)" not in facade:
-    errors.append("transaction facade does not delegate to the dedicated reviewer")
+if "pub(crate) use crate::parent_reviewer::ParentReviewAuthorization;" not in facade:
+    errors.append("transaction facade does not expose the dedicated reviewer authorization type")
 
 ordered = [
     "record_review_decision(",

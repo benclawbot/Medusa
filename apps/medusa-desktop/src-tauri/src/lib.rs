@@ -22,6 +22,7 @@ mod memories;
 mod model_registry;
 mod mutations;
 mod permissions;
+mod preview;
 mod provider_auth;
 mod pull_requests;
 mod review;
@@ -68,13 +69,14 @@ use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
 };
 use permissions::{desktop_permission_mode, desktop_permission_modes, desktop_set_permission_mode};
+use preview::{PreviewRegistry, preview_runtime_close, preview_runtime_find_web_artifact};
 use provider_auth::{desktop_browser_oauth, desktop_ensure_browser_oauth};
 use pull_requests::runtime_create_draft_pull_request;
 use review::{runtime_apply_review_action, runtime_export_review_audit, runtime_read_review};
 use runtime::{
-    RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
-    runtime_configure_model, runtime_find_web_artifact, runtime_open_web_artifact, runtime_poll,
-    runtime_recovery_action, runtime_resume, runtime_start, runtime_submit,
+    RuntimeRegistry, runtime_cancel, runtime_command, runtime_command_suggestions,
+    runtime_configure_model, runtime_open_web_artifact, runtime_poll, runtime_recovery_action,
+    runtime_resume, runtime_start, runtime_submit,
 };
 use sessions::{runtime_list_sessions, runtime_read_session};
 use tauri::Manager;
@@ -92,6 +94,16 @@ pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(RuntimeRegistry::default())
+        .manage(PreviewRegistry::default())
+        .register_uri_scheme_protocol("asset", |ctx, request| {
+            let previews = ctx.app_handle().state::<PreviewRegistry>();
+            preview::handle_protocol_request(
+                ctx.app_handle(),
+                ctx.webview_label(),
+                request.uri().path(),
+                previews,
+            )
+        })
         .invoke_handler(tauri::generate_handler![
             desktop_shared_configuration,
             desktop_provider_catalog,
@@ -103,13 +115,13 @@ pub fn run() -> tauri::Result<()> {
             desktop_ensure_browser_oauth,
             runtime_start,
             runtime_resume,
-            runtime_close,
+            preview_runtime_close,
             runtime_submit,
             runtime_command,
             runtime_command_suggestions,
             runtime_cancel,
             runtime_poll,
-            runtime_find_web_artifact,
+            preview_runtime_find_web_artifact,
             runtime_open_web_artifact,
             runtime_configure_model,
             runtime_recovery_action,

@@ -9,6 +9,7 @@ on:
       - 'crates/medusa-update/**'
       - 'crates/medusa-cli/**'
       - 'apps/medusa-desktop/src-tauri/src/desktop_update.rs'
+      - 'apps/medusa-desktop/src-tauri/tauri.conf.json'
       - '.github/workflows/rolling-main-cli.yml'
       - 'scripts/package-main-update.py'
       - 'scripts/package-main-desktop-update.py'
