@@ -598,9 +598,10 @@ mod tests {
         assert_eq!(frame[1].text, MEDUSA_LOGO[0]);
         assert_eq!(frame[2].text, MEDUSA_LOGO[1]);
         assert_eq!(frame[3].text, MEDUSA_LOGO[2]);
-        assert!(!frame[20].text.contains("Read Only"));
         assert_eq!(frame[18].text, "─".repeat(120));
-        assert_eq!(frame[21].text, "─".repeat(120));
+        assert_eq!(frame[20].text, "─".repeat(120));
+        assert!(frame[21].text.starts_with("context ["));
+        assert!(!frame[21].text.contains("Read Only"));
         assert!(frame[23].text.contains("session 0s"));
         assert!(frame[23].text.contains("confirmation [Read Only]"));
     }
