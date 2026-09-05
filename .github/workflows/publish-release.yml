@@ -224,9 +224,10 @@ jobs:
           retention-days: 30
 
   windows:
-    name: Build Windows release assets
+    name: Build and Authenticode-sign Windows release assets
     needs: validate
     runs-on: windows-2022
+    environment: release-signing
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -244,17 +245,63 @@ jobs:
       - name: Install desktop dependencies
         working-directory: apps/medusa-desktop
         run: npm ci
-      - name: Build Windows desktop bundle
+      - name: Build Windows desktop executable without bundling
         working-directory: apps/medusa-desktop
-        run: npm run tauri:build -- --bundles nsis
+        run: npm run tauri:build -- --no-bundle
+      - name: Build Windows CLI
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
+      - name: Authenticode-sign Windows product executables
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
+            throw 'Windows signing certificate secrets are required'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $secure = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure | Out-Null
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          $targets = @(
+            'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe',
+            'target/release/medusa.exe',
+            'target/release/medusa-recall.exe',
+            'target/release/medusa-github-operation.exe'
+          )
+          foreach ($target in $targets) {
+            if (-not (Test-Path $target)) { throw "missing Windows signing target: $target" }
+            & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a $target
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $signtool.FullName verify /pa /all /v $target
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Bundle signed Windows desktop executable
+        working-directory: apps/medusa-desktop
+        run: npm run tauri -- bundle --bundles nsis
+      - name: Authenticode-sign and verify Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          $installers = @(Get-ChildItem apps/medusa-desktop/src-tauri/target/release/bundle -Recurse -File -Filter *.exe)
+          if ($installers.Count -ne 1) { throw "expected exactly one NSIS installer, found $($installers.Count)" }
+          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a $installers[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $signtool.FullName verify /pa /all /v $installers[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate Windows desktop bundle
         run: >-
           python scripts/desktop-package-smoke.py
           --root apps/medusa-desktop/src-tauri/target/release/bundle
           --platform windows
           --manifest desktop-package-windows.json
-      - name: Build Windows CLI
-        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Assemble Windows release assets
         shell: pwsh
         run: |
