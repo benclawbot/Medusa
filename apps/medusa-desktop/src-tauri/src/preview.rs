@@ -1,9 +1,10 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
+use medusa_daemon::{ConfinedDir, ConfinedReadError as PreviewReadError};
 use tauri::{AppHandle, State, http};
 
 use crate::{
@@ -15,6 +16,7 @@ use crate::{
 struct AuthorizedPreview {
     runtime_id: String,
     root: PathBuf,
+    directory: Arc<ConfinedDir>,
 }
 
 #[derive(Default)]
@@ -25,6 +27,8 @@ pub struct PreviewRegistry {
 impl PreviewRegistry {
     fn authorize(&self, runtime_id: &str, artifact: &DesktopWebArtifact) -> Result<(), String> {
         let root = authorize_artifact_tree(Path::new(&artifact.path))?;
+        let directory = ConfinedDir::open(&root)
+            .map_err(|error| format!("cannot open confined preview root: {error:?}"))?;
         *self
             .active
             .lock()
@@ -32,6 +36,7 @@ impl PreviewRegistry {
             Some(AuthorizedPreview {
                 runtime_id: runtime_id.to_owned(),
                 root,
+                directory: Arc::new(directory),
             });
         Ok(())
     }
@@ -46,13 +51,13 @@ impl PreviewRegistry {
         }
     }
 
-    fn root(&self) -> Result<Option<PathBuf>, String> {
+    fn access(&self) -> Result<Option<(PathBuf, Arc<ConfinedDir>)>, String> {
         Ok(self
             .active
             .lock()
             .map_err(|_| "desktop preview registry is poisoned".to_owned())?
             .as_ref()
-            .map(|preview| preview.root.clone()))
+            .map(|preview| (preview.root.clone(), Arc::clone(&preview.directory))))
     }
 }
 
@@ -100,8 +105,8 @@ pub fn handle_protocol_request(
         );
     }
 
-    let root = match previews.root() {
-        Ok(Some(root)) => root,
+    let (root, directory) = match previews.access() {
+        Ok(Some(access)) => access,
         Ok(None) => {
             return response(
                 http::StatusCode::NOT_FOUND,
@@ -141,9 +146,9 @@ pub fn handle_protocol_request(
     };
 
     let read = if absolute_request {
-        read_absolute_preview_file(&root, &requested)
+        read_absolute_preview_file(&root, &directory, &requested)
     } else {
-        read_preview_file(&root, &requested)
+        read_preview_file(&directory, &requested)
     };
     match read {
         Ok(bytes) => response(
@@ -244,22 +249,21 @@ fn reject_symlinks_below(root: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PreviewReadError {
-    Invalid,
-    Symlink,
-    Missing,
-    Io,
-}
-
-fn read_absolute_preview_file(root: &Path, requested: &Path) -> Result<Vec<u8>, PreviewReadError> {
+fn read_absolute_preview_file(
+    root: &Path,
+    directory: &ConfinedDir,
+    requested: &Path,
+) -> Result<Vec<u8>, PreviewReadError> {
     let relative = requested
         .strip_prefix(root)
         .map_err(|_| PreviewReadError::Invalid)?;
-    read_preview_file(root, relative)
+    read_preview_file(directory, relative)
 }
 
-fn read_preview_file(root: &Path, relative: &Path) -> Result<Vec<u8>, PreviewReadError> {
+fn read_preview_file(
+    directory: &ConfinedDir,
+    relative: &Path,
+) -> Result<Vec<u8>, PreviewReadError> {
     if relative.as_os_str().is_empty()
         || relative
             .components()
@@ -267,39 +271,7 @@ fn read_preview_file(root: &Path, relative: &Path) -> Result<Vec<u8>, PreviewRea
     {
         return Err(PreviewReadError::Invalid);
     }
-
-    let mut candidate = root.to_path_buf();
-    for component in relative.components() {
-        candidate.push(component.as_os_str());
-        let metadata = match fs::symlink_metadata(&candidate) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(PreviewReadError::Missing);
-            }
-            Err(_) => return Err(PreviewReadError::Io),
-        };
-        if metadata.file_type().is_symlink() {
-            return Err(PreviewReadError::Symlink);
-        }
-    }
-
-    let canonical = fs::canonicalize(&candidate).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            PreviewReadError::Missing
-        } else {
-            PreviewReadError::Io
-        }
-    })?;
-    if !canonical.starts_with(root) || !canonical.is_file() {
-        return Err(PreviewReadError::Invalid);
-    }
-    fs::read(canonical).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            PreviewReadError::Missing
-        } else {
-            PreviewReadError::Io
-        }
-    })
+    directory.read(relative)
 }
 
 fn percent_decode_path(input: &str) -> Result<String, ()> {
@@ -398,6 +370,12 @@ mod tests {
         (directory, root, index)
     }
 
+    fn authorized_reader(index: &Path) -> (PathBuf, ConfinedDir) {
+        let root = authorize_artifact_tree(index).expect("authorize");
+        let directory = ConfinedDir::open(&root).expect("confined root");
+        (root, directory)
+    }
+
     #[test]
     fn authorization_is_limited_to_the_selected_execution_index_tree() {
         let (_directory, root, index) = preview_tree();
@@ -410,9 +388,9 @@ mod tests {
     #[test]
     fn nested_and_root_relative_preview_resources_use_the_authorized_tree() {
         let (_directory, _root, index) = preview_tree();
-        let authorized = authorize_artifact_tree(&index).expect("authorize");
+        let (_authorized, directory) = authorized_reader(&index);
         assert_eq!(
-            read_preview_file(&authorized, Path::new("assets/site.css")).expect("read"),
+            read_preview_file(&directory, Path::new("assets/site.css")).expect("read"),
             b"body {}"
         );
     }
@@ -420,12 +398,12 @@ mod tests {
     #[test]
     fn encoded_absolute_index_is_confined_to_authorized_root() {
         let (_directory, _root, index) = preview_tree();
-        let authorized = authorize_artifact_tree(&index).expect("authorize");
-        assert!(read_absolute_preview_file(&authorized, &index).is_ok());
+        let (authorized, directory) = authorized_reader(&index);
+        assert!(read_absolute_preview_file(&authorized, &directory, &index).is_ok());
         let outside = authorized.parent().expect("parent").join("secret.txt");
         fs::write(&outside, b"secret").expect("outside");
         assert_eq!(
-            read_absolute_preview_file(&authorized, &outside),
+            read_absolute_preview_file(&authorized, &directory, &outside),
             Err(PreviewReadError::Invalid)
         );
     }
@@ -433,13 +411,13 @@ mod tests {
     #[test]
     fn traversal_and_absolute_relative_paths_are_rejected() {
         let (_directory, _root, index) = preview_tree();
-        let authorized = authorize_artifact_tree(&index).expect("authorize");
+        let (_authorized, directory) = authorized_reader(&index);
         assert_eq!(
-            read_preview_file(&authorized, Path::new("../secret.txt")),
+            read_preview_file(&directory, Path::new("../secret.txt")),
             Err(PreviewReadError::Invalid)
         );
         assert_eq!(
-            read_preview_file(&authorized, Path::new("/etc/passwd")),
+            read_preview_file(&directory, Path::new("/etc/passwd")),
             Err(PreviewReadError::Invalid)
         );
     }
@@ -460,11 +438,29 @@ mod tests {
         let (directory, _root, index) = preview_tree();
         let outside = directory.path().join("outside.css");
         fs::write(&outside, b"secret").expect("write outside");
-        let authorized = authorize_artifact_tree(&index).expect("authorize");
+        let (authorized, confined) = authorized_reader(&index);
         let link = authorized.join("assets/linked.css");
         symlink(&outside, &link).expect("symlink");
         assert_eq!(
-            read_preview_file(&authorized, Path::new("assets/linked.css")),
+            read_preview_file(&confined, Path::new("assets/linked.css")),
+            Err(PreviewReadError::Symlink)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swapped_intermediate_directory_cannot_escape_authorized_root() {
+        use std::os::unix::fs::symlink;
+
+        let (directory, _root, index) = preview_tree();
+        let outside = directory.path().join("outside");
+        fs::create_dir_all(&outside).expect("outside dir");
+        fs::write(outside.join("site.css"), b"secret").expect("outside css");
+        let (authorized, confined) = authorized_reader(&index);
+        fs::rename(authorized.join("assets"), authorized.join("assets-old")).expect("rename");
+        symlink(&outside, authorized.join("assets")).expect("swap symlink");
+        assert_eq!(
+            read_preview_file(&confined, Path::new("assets/site.css")),
             Err(PreviewReadError::Symlink)
         );
     }
