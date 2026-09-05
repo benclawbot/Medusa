@@ -55,6 +55,37 @@ def test_rolling_main_requires_independent_signatures() -> None:
     assert "self.asset_base == ROLLING_ASSET_BASE" in source
 
 
+def test_windows_distribution_requires_authenticode() -> None:
+    stable = read_workflow("publish-release.yml")
+    assert "Build and Authenticode-sign Windows release assets" in stable
+    assert "environment: release-signing" in stable
+    assert "WINDOWS_SIGNING_CERTIFICATE_BASE64" in stable
+    assert "WINDOWS_SIGNING_CERTIFICATE_PASSWORD" in stable
+    assert "npm run tauri:build -- --no-bundle" in stable
+    assert "npm run tauri -- bundle --bundles nsis" in stable
+    assert "https://timestamp.digicert.com" in stable
+    assert stable.count("signtool.FullName verify /pa /all /v") >= 2
+    assert stable.index("Authenticode-sign Windows product executables") < stable.index(
+        "Bundle signed Windows desktop executable"
+    )
+    assert stable.index("Authenticode-sign Windows product executables") < stable.index(
+        "Compress-Archive -Path cli-package/*"
+    )
+
+    rolling = read_workflow("rolling-main-cli.yml")
+    assert rolling.count("environment: release-signing") >= 2
+    assert "Authenticode-sign rolling Windows CLI" in rolling
+    assert "Authenticode-sign rolling Windows desktop executable" in rolling
+    assert rolling.count("WINDOWS_SIGNING_CERTIFICATE_BASE64") >= 2
+    assert rolling.count("https://timestamp.digicert.com") >= 2
+    assert rolling.index("Authenticode-sign rolling Windows CLI") < rolling.index(
+        "Package exact-revision rolling CLI asset"
+    )
+    assert rolling.index("Authenticode-sign rolling Windows desktop executable") < rolling.index(
+        "Package exact-revision desktop asset"
+    )
+
+
 def test_stable_release_is_complete_before_publication() -> None:
     refresh = WORKFLOWS / "refresh-cli-release-assets.yml"
     assert not refresh.exists(), "stable release assets must never be refreshed after publication"
@@ -166,6 +197,7 @@ def main() -> int:
     tests = [
         test_publishers_require_authoritative_workspace_validation,
         test_rolling_main_requires_independent_signatures,
+        test_windows_distribution_requires_authenticode,
         test_stable_release_is_complete_before_publication,
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,
