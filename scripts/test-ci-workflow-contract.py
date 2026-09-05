@@ -35,6 +35,26 @@ def test_publishers_require_authoritative_workspace_validation() -> None:
     assert stable.index("authoritative-validation:") < stable.index("validate:")
 
 
+def test_rolling_main_requires_independent_signatures() -> None:
+    rolling = read_workflow("rolling-main-cli.yml")
+    assert "sign-cli:" in rolling
+    assert "sign-desktop:" in rolling
+    assert rolling.count("environment: release-signing-primary") >= 2
+    assert "MEDUSA_RELEASE_PRIMARY_ED25519_PRIVATE_KEY_PEM" in rolling
+    assert "medusa-release-signature-v1" in rolling
+    assert "rolling-main-cli-signatures-b954c630ddca91b4faa28ef6bc9aabc918017ab0" in rolling
+    assert "rolling-main-desktop-signatures-b954c630ddca91b4faa28ef6bc9aabc918017ab0" in rolling
+    assert "needs: [build-cli, sign-cli]" in rolling
+    assert "needs: [build-desktop, sign-desktop, publish-cli]" in rolling
+    assert "*.sig.json" in rolling
+
+    source = (ROOT / "crates/medusa-update/src/source.rs").read_text(encoding="utf-8")
+    assert "TrustStore::production()" in source
+    assert "verify_detached(manifest_bytes, signature_bytes)" in source
+    assert "format!(\"{manifest_name}.sig.json\")" in source
+    assert "self.asset_base == ROLLING_ASSET_BASE" in source
+
+
 def test_stable_release_is_complete_before_publication() -> None:
     refresh = WORKFLOWS / "refresh-cli-release-assets.yml"
     assert not refresh.exists(), "stable release assets must never be refreshed after publication"
@@ -145,6 +165,7 @@ def test_openai_oauth_never_uses_latest() -> None:
 def main() -> int:
     tests = [
         test_publishers_require_authoritative_workspace_validation,
+        test_rolling_main_requires_independent_signatures,
         test_stable_release_is_complete_before_publication,
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,

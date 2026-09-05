@@ -385,6 +385,52 @@ impl TrustStore {
         Ok(Self { keys })
     }
 
+    /// Verifies a detached Ed25519 signature envelope over arbitrary Medusa authority bytes.
+    ///
+    /// Callers remain responsible for validating their own signed schema after this
+    /// cryptographic check. Stable release manifests continue to use `verify`, which
+    /// additionally enforces release and rollout policy.
+    pub fn verify_detached(
+        &self,
+        authority_bytes: &[u8],
+        signature_bytes: &[u8],
+    ) -> Result<String, ManifestError> {
+        const MAX_AUTHORITY_BYTES: usize = 1024 * 1024;
+        const MAX_SIGNATURE_BYTES: usize = 16 * 1024;
+        if authority_bytes.is_empty() || authority_bytes.len() > MAX_AUTHORITY_BYTES {
+            return Err(ManifestError::Size("authority"));
+        }
+        if signature_bytes.is_empty() || signature_bytes.len() > MAX_SIGNATURE_BYTES {
+            return Err(ManifestError::Size("signature"));
+        }
+        let envelope: ManifestSignature = serde_json::from_slice(signature_bytes)
+            .map_err(|error| ManifestError::Json(error.to_string()))?;
+        if envelope.schema != SIGNATURE_SCHEMA || envelope.algorithm != "Ed25519" {
+            return Err(ManifestError::SignatureEnvelope);
+        }
+        let key = self
+            .keys
+            .iter()
+            .find(|key| key.key_id == envelope.key_id)
+            .ok_or_else(|| ManifestError::UnknownKey(envelope.key_id.clone()))?;
+        if key.status == KeyStatus::Revoked {
+            return Err(ManifestError::RevokedKey(key.key_id.clone()));
+        }
+        let digest = hex::encode(Sha256::digest(authority_bytes));
+        if envelope.manifest_sha256 != digest {
+            return Err(ManifestError::ManifestDigest);
+        }
+        let signature =
+            hex::decode(&envelope.signature).map_err(|_| ManifestError::SignatureEnvelope)?;
+        if signature.len() != 64 {
+            return Err(ManifestError::SignatureEnvelope);
+        }
+        UnparsedPublicKey::new(&ED25519, key.public_key)
+            .verify(authority_bytes, &signature)
+            .map_err(|_| ManifestError::InvalidSignature)?;
+        Ok(key.key_id.clone())
+    }
+
     pub fn verify(
         &self,
         manifest_bytes: &[u8],

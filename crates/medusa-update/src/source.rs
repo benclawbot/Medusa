@@ -17,7 +17,7 @@ use reqwest::{
 use serde::Deserialize;
 
 use crate::{
-    Architecture, AtomicInstaller, OperatingSystem, Platform, Restart, ScheduledUpdate,
+    Architecture, AtomicInstaller, OperatingSystem, Platform, Restart, ScheduledUpdate, TrustStore,
     copy_with_progress, verify_artifact,
 };
 
@@ -390,15 +390,23 @@ impl MainBranchUpdater {
                     elapsed: started.elapsed(),
                 });
             };
-            let manifest: RollingMainArtifact = self
+            let manifest_bytes = self
                 .asset_response_until_with_progress(
                     &manifest_name,
                     revision,
                     deadline,
                     &mut waiting,
                 )?
-                .json()
+                .bytes()
                 .map_err(asset_error)?;
+            self.verify_rolling_manifest_signature(
+                &manifest_name,
+                revision,
+                &manifest_bytes,
+                Some((deadline, &mut waiting)),
+            )?;
+            let manifest: RollingMainArtifact =
+                serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;
             validate_revision(&manifest.revision)?;
             if manifest.revision == revision {
                 manifest.validate(revision, asset_name)?;
@@ -416,7 +424,17 @@ impl MainBranchUpdater {
         let Some(response) = self.asset_response_once(&manifest_name, revision)? else {
             return Ok(false);
         };
-        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;
+        let manifest_bytes = response.bytes().map_err(asset_error)?;
+        if self.requires_rolling_signature() {
+            let signature_name = format!("{manifest_name}.sig.json");
+            let Some(signature) = self.asset_response_once(&signature_name, revision)? else {
+                return Ok(false);
+            };
+            let signature_bytes = signature.bytes().map_err(asset_error)?;
+            verify_rolling_signature(&manifest_bytes, &signature_bytes)?;
+        }
+        let manifest: RollingMainArtifact =
+            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;
         validate_revision(&manifest.revision)?;
         match manifest.validate(revision, asset_name) {
             Ok(()) => Ok(true),
@@ -434,9 +452,37 @@ impl MainBranchUpdater {
         let Some(response) = self.asset_response_once(&manifest_name, revision)? else {
             return Err(not_published(revision));
         };
-        let manifest: RollingMainArtifact = response.json().map_err(asset_error)?;
+        let manifest_bytes = response.bytes().map_err(asset_error)?;
+        self.verify_rolling_manifest_signature(&manifest_name, revision, &manifest_bytes, None)?;
+        let manifest: RollingMainArtifact =
+            serde_json::from_slice(&manifest_bytes).map_err(asset_error)?;
         manifest.validate(revision, asset_name)?;
         Ok(manifest)
+    }
+
+    fn requires_rolling_signature(&self) -> bool {
+        self.asset_base == ROLLING_ASSET_BASE
+    }
+
+    fn verify_rolling_manifest_signature(
+        &self,
+        manifest_name: &str,
+        revision: &str,
+        manifest_bytes: &[u8],
+        waiting: Option<(Instant, &mut dyn FnMut())>,
+    ) -> MedusaResult<()> {
+        if !self.requires_rolling_signature() {
+            return Ok(());
+        }
+        let signature_name = format!("{manifest_name}.sig.json");
+        let signature = if let Some((deadline, waiting)) = waiting {
+            self.asset_response_until_with_progress(&signature_name, revision, deadline, waiting)?
+        } else {
+            self.asset_response_once(&signature_name, revision)?
+                .ok_or_else(|| not_published(revision))?
+        };
+        let signature_bytes = signature.bytes().map_err(asset_error)?;
+        verify_rolling_signature(manifest_bytes, &signature_bytes)
     }
 
     fn asset_response(
@@ -526,6 +572,19 @@ impl MainBranchUpdater {
         }
         response.error_for_status().map(Some).map_err(asset_error)
     }
+}
+
+fn verify_rolling_signature(manifest_bytes: &[u8], signature_bytes: &[u8]) -> MedusaResult<()> {
+    TrustStore::production()
+        .verify_detached(manifest_bytes, signature_bytes)
+        .map(|_| ())
+        .map_err(|error| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                format!("rolling main authority signature is invalid: {error}"),
+            )
+        })
 }
 
 fn rolling_release_tag(revision: &str) -> MedusaResult<String> {
