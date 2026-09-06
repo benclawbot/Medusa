@@ -7,26 +7,56 @@ export * from "./runtimeLegacy";
 const RUNTIME_WAKE_EVENT = "medusa-runtime-wakeup";
 const FALLBACK_POLL_MS = 1500;
 
-interface WakeState {
+interface WakeCounters {
+  nativeWakeups: number;
+  localSkips: number;
+  drains: number;
+  fallbackDrains: number;
+  drainedEvents: number;
+  drainFailures: number;
+  wakeupInstallFailures: number;
+}
+
+interface WakeState extends WakeCounters {
   pending: boolean;
   lastPollAt: number;
   starting?: Promise<void>;
   unlisten?: UnlistenFn;
 }
 
+export interface RuntimeWakeupMetrics extends WakeCounters {
+  runtimeId: string;
+  pending: boolean;
+  wakeupInstalled: boolean;
+}
+
 const wakeStates = new Map<string, WakeState>();
+
+function emptyCounters(): WakeCounters {
+  return {
+    nativeWakeups: 0,
+    localSkips: 0,
+    drains: 0,
+    fallbackDrains: 0,
+    drainedEvents: 0,
+    drainFailures: 0,
+    wakeupInstallFailures: 0,
+  };
+}
 
 function wakeState(runtimeId: string): WakeState {
   let state = wakeStates.get(runtimeId);
   if (!state) {
-    state = { pending: true, lastPollAt: 0 };
+    state = { pending: true, lastPollAt: 0, ...emptyCounters() };
     wakeStates.set(runtimeId, state);
   }
   return state;
 }
 
-function markRuntimeWake(runtimeId: string): void {
-  wakeState(runtimeId).pending = true;
+function markRuntimeWake(runtimeId: string, native = false): void {
+  const state = wakeState(runtimeId);
+  state.pending = true;
+  if (native) state.nativeWakeups += 1;
 }
 
 async function ensureRuntimeWakeups(runtimeId: string): Promise<void> {
@@ -36,12 +66,13 @@ async function ensureRuntimeWakeups(runtimeId: string): Promise<void> {
 
   state.starting = (async () => {
     const unlisten = await listen<string>(RUNTIME_WAKE_EVENT, (event) => {
-      if (event.payload === runtimeId) markRuntimeWake(runtimeId);
+      if (event.payload === runtimeId) markRuntimeWake(runtimeId, true);
     });
     try {
       await invoke("runtime_begin_wakeups", { runtimeId });
       state.unlisten = unlisten;
     } catch (error) {
+      state.wakeupInstallFailures += 1;
       unlisten();
       throw error;
     }
@@ -126,21 +157,49 @@ export async function pollRuntime(runtimeId: string): Promise<legacy.RuntimeEven
   void ensureRuntimeWakeups(runtimeId).catch(() => undefined);
   const now = Date.now();
   if (!state.pending && now - state.lastPollAt < FALLBACK_POLL_MS) {
+    state.localSkips += 1;
     return [];
   }
 
+  const fallbackDrain = !state.pending;
   state.pending = false;
   state.lastPollAt = now;
+  state.drains += 1;
+  if (fallbackDrain) state.fallbackDrains += 1;
   try {
     const events = await legacy.pollRuntime(runtimeId);
+    state.drainedEvents += events.length;
     if (events.length > 0) state.pending = true;
     return events;
   } catch (error) {
+    state.drainFailures += 1;
     // A failed drain may still have unread durable replay. Keep the next call eligible instead of
     // suppressing it until the fallback deadline.
     state.pending = true;
     throw error;
   }
+}
+
+/**
+ * Read-only counters for profiling polling behavior. Values are scoped to the runtime lifetime and
+ * disappear when `closeRuntime` disposes that runtime; no transcript, prompt, or provider data is
+ * retained here.
+ */
+export function getRuntimeWakeupMetrics(runtimeId: string): RuntimeWakeupMetrics | undefined {
+  const state = wakeStates.get(runtimeId);
+  if (!state) return undefined;
+  return {
+    runtimeId,
+    pending: state.pending,
+    wakeupInstalled: Boolean(state.unlisten),
+    nativeWakeups: state.nativeWakeups,
+    localSkips: state.localSkips,
+    drains: state.drains,
+    fallbackDrains: state.fallbackDrains,
+    drainedEvents: state.drainedEvents,
+    drainFailures: state.drainFailures,
+    wakeupInstallFailures: state.wakeupInstallFailures,
+  };
 }
 
 export const runtimeWakeupPolicy = {
