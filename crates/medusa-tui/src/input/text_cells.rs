@@ -91,7 +91,7 @@ pub(crate) fn byte_at_cell_column(text: &str, target_column: usize) -> usize {
 
 pub(crate) fn display_width(text: &str) -> usize {
     let mut widest = 0;
-    let mut column = 0;
+    let mut column: usize = 0;
     let mut byte = 0;
     while byte < text.len() {
         let next = next_grapheme_boundary(text, byte);
