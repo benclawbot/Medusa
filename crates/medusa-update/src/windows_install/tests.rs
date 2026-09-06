@@ -38,6 +38,7 @@ fn windows_helper_contract_restarts_exact_target_and_requires_health() {
         detached: true,
         sequence_file: Some(PathBuf::from(r"C:\repo\.medusa\update-sequence")),
         rollout_sequence: Some(42),
+        target_revision: None,
     };
     let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
         parent_pid: 4242,
@@ -46,6 +47,9 @@ fn windows_helper_contract_restarts_exact_target_and_requires_health() {
         backup: Path::new(r"C:\bin\medusa-desktop.previous.exe"),
         state: Path::new(r"C:\bin\.medusa-update-state"),
         health: Path::new(r"C:\bin\.medusa-update-health"),
+        outcome: Path::new(r"C:\bin\.medusa-update-outcome.json"),
+        health_nonce: "0123456789abcdef0123456789abcdef",
+        target_revision: None,
         lock: Path::new(r"C:\bin\.medusa-update.lock"),
         expected_hash: "abc123",
         restart: &restart,
@@ -64,6 +68,10 @@ fn windows_helper_contract_restarts_exact_target_and_requires_health() {
     assert!(replace < restart_index);
     assert!(restart_index < health);
     assert!(script.contains("MEDUSA_UPDATE_HEALTH_FILE"));
+    assert!(script.contains("MEDUSA_UPDATE_HEALTH_NONCE"));
+    assert!(script.contains("$start.FileName = $target"));
+    assert!(script.contains("$start.Arguments = $restartArguments"));
+    assert!(script.contains("$start.WorkingDirectory"));
     assert!(script.contains("rolled-back"));
     assert!(script.contains("C:\\repo with spaces"));
     assert!(script.contains("update-sequence"));
@@ -81,13 +89,13 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
     let backup = root.join("medusa-desktop.previous.exe");
     let state = root.join(".medusa-update-state");
     let health = root.join(".medusa-update-health");
+    let outcome = root.join(".medusa-update-outcome.json");
     let lock = root.join(".medusa-update.lock");
     let sequence = root.join("update-sequence");
     let helper_path = root.join("medusa-desktop.update.ps1");
 
     let comspec = PathBuf::from(std::env::var_os("ComSpec").expect("ComSpec"));
-    let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
-    let original = system_root.join("System32").join("where.exe");
+    let original = comspec.clone();
     std::fs::copy(&original, &target).expect("seed previous target");
     std::fs::copy(&comspec, &staged).expect("stage replacement");
     write_ready_lock(&lock);
@@ -95,11 +103,12 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
     let restart = Restart {
         arguments: vec![
             "/C".to_owned(),
-            "echo healthy>%MEDUSA_UPDATE_HEALTH_FILE%".to_owned(),
+            "powershell -NoProfile -Command Set-Content -LiteralPath $env:MEDUSA_UPDATE_HEALTH_FILE -Value '{\"schema\":1,\"nonce\":\"0123456789abcdef0123456789abcdef\",\"stage\":\"startup-ready\"}'".to_owned(),
         ],
         detached: true,
         sequence_file: Some(sequence.clone()),
         rollout_sequence: Some(42),
+        target_revision: None,
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
     let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
@@ -109,6 +118,9 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
         backup: &backup,
         state: &state,
         health: &health,
+        outcome: &outcome,
+        health_nonce: "0123456789abcdef0123456789abcdef",
+        target_revision: None,
         lock: &lock,
         expected_hash: &expected_hash,
         restart: &restart,
@@ -124,7 +136,7 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
     assert!(
         std::fs::read_to_string(&health)
             .expect("read health")
-            .contains("healthy")
+            .contains("0123456789abcdef0123456789abcdef")
     );
     assert_eq!(
         std::fs::read_to_string(&sequence)
@@ -135,6 +147,8 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
     assert_eq!(sha256_file(&target).expect("target hash"), expected_hash);
     assert!(!backup.exists());
     assert!(!lock.exists());
+    let outcome_text = std::fs::read_to_string(&outcome).expect("read outcome");
+    assert!(outcome_text.contains("\"stage\":\"healthy\""));
 }
 
 #[test]
@@ -146,13 +160,13 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
     let backup = root.join("medusa-desktop.previous.exe");
     let state = root.join(".medusa-update-state");
     let health = root.join(".medusa-update-health");
+    let outcome = root.join(".medusa-update-outcome.json");
     let lock = root.join(".medusa-update.lock");
     let sequence = root.join("update-sequence");
     let helper_path = root.join("medusa-desktop.update.ps1");
 
     let comspec = PathBuf::from(std::env::var_os("ComSpec").expect("ComSpec"));
-    let system_root = PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"));
-    let original = system_root.join("System32").join("where.exe");
+    let original = comspec.clone();
     std::fs::copy(&original, &target).expect("seed previous target");
     let original_hash = sha256_file(&target).expect("original hash");
     std::fs::copy(&comspec, &staged).expect("stage replacement");
@@ -163,6 +177,7 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
         detached: true,
         sequence_file: Some(sequence.clone()),
         rollout_sequence: Some(42),
+        target_revision: None,
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
     let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
@@ -172,6 +187,9 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
         backup: &backup,
         state: &state,
         health: &health,
+        outcome: &outcome,
+        health_nonce: "0123456789abcdef0123456789abcdef",
+        target_revision: None,
         lock: &lock,
         expected_hash: &expected_hash,
         restart: &restart,
@@ -188,6 +206,8 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
     assert!(!sequence.exists());
     assert!(!backup.exists());
     assert!(!lock.exists());
+    let outcome_text = std::fs::read_to_string(&outcome).expect("read outcome");
+    assert!(outcome_text.contains("\"stage\":\"rolled-back\""));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::install::{HEALTH_FILE_ENV, Restart};
+use crate::install::{HEALTH_FILE_ENV, HEALTH_NONCE_ENV, Restart};
 
 #[derive(Clone, Copy)]
 pub(super) struct WindowsReplaceScript<'a> {
@@ -10,6 +10,9 @@ pub(super) struct WindowsReplaceScript<'a> {
     pub backup: &'a Path,
     pub state: &'a Path,
     pub health: &'a Path,
+    pub outcome: &'a Path,
+    pub health_nonce: &'a str,
+    pub target_revision: Option<&'a str>,
     pub lock: &'a Path,
     pub expected_hash: &'a str,
     pub restart: &'a Restart,
@@ -23,6 +26,9 @@ pub(super) fn windows_health_checked_replace_script(spec: WindowsReplaceScript<'
         backup,
         state,
         health,
+        outcome,
+        health_nonce,
+        target_revision,
         lock,
         expected_hash,
         restart,
@@ -45,6 +51,9 @@ $staged = {staged}
 $backup = {backup}
 $state = {state}
 $health = {health}
+$outcome = {outcome}
+$healthNonce = {health_nonce}
+$targetRevision = {target_revision}
 $lock = {lock}
 $expectedHash = {expected_hash}
 $restartArguments = {arguments}
@@ -56,10 +65,14 @@ function Start-Medusa([bool]$WithHealth) {{
   $start.FileName = $target
   $start.Arguments = $restartArguments
   $start.UseShellExecute = $false
+  $start.WorkingDirectory = [System.IO.Path]::GetDirectoryName($target)
+  $start.CreateNoWindow = {create_no_window}
   if ($WithHealth) {{
     $start.EnvironmentVariables[{health_env}] = $health
+    $start.EnvironmentVariables[{health_nonce_env}] = $healthNonce
   }} else {{
     [void]$start.EnvironmentVariables.Remove({health_env})
+    [void]$start.EnvironmentVariables.Remove({health_nonce_env})
   }}
   [System.Diagnostics.Process]::Start($start)
 }}
@@ -76,11 +89,28 @@ function Restore-Previous([string]$Reason, $Child) {{
     Move-Item -LiteralPath $backup -Destination $target -Force
   }}
   Set-Content -LiteralPath $state -Value 'rolled-back' -Encoding ascii
+  Write-Outcome 'rolled-back' $Reason 'restored'
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
   try {{ Start-Medusa $false | Out-Null }} catch {{}}
   Write-Error "Medusa update failed: $Reason"
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
   exit 1
+}}
+
+function Write-Outcome([string]$Stage, [string]$Reason, [string]$RollbackResult) {{
+  $record = @{{
+    schema = 1
+    targetRevision = if ($targetRevision -eq '') {{ $null }} else {{ $targetRevision }}
+    previousRevision = $null
+    stage = $Stage
+    reason = $Reason
+    startedUnixSeconds = 0
+    finishedUnixSeconds = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    rollbackResult = $RollbackResult
+  }} | ConvertTo-Json -Compress
+  $temporary = "$outcome.tmp.$PID"
+  Set-Content -LiteralPath $temporary -Value $record -Encoding utf8
+  Move-Item -LiteralPath $temporary -Destination $outcome -Force
 }}
 
 $helperReady = $false
@@ -180,12 +210,13 @@ try {{
 for ($i = 0; $i -lt 600; $i++) {{
   if (Test-Path -LiteralPath $health) {{
     $healthText = Get-Content -LiteralPath $health -Raw -ErrorAction SilentlyContinue
-    if (-not [string]::IsNullOrWhiteSpace($healthText)) {{
+    if ($healthText -match ('"nonce"\s*:\s*"' + [regex]::Escape($healthNonce) + '"')) {{
       if ($sequenceFile) {{
         Set-Content -LiteralPath "$sequenceFile.tmp" -Value $sequenceValue -Encoding ascii
         Move-Item -LiteralPath "$sequenceFile.tmp" -Destination $sequenceFile -Force
       }}
       Set-Content -LiteralPath $state -Value 'healthy' -Encoding ascii
+      Write-Outcome 'healthy' 'replacement acknowledged startup health' 'not-required'
       Remove-Item $backup,$lock -Force -ErrorAction SilentlyContinue
       Write-Host 'Updating Medusa [████████████████████████████████] 100% · Complete'
       Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
@@ -205,12 +236,17 @@ Restore-Previous 'replacement did not acknowledge startup health before timeout'
         backup = powershell_quote_path(backup),
         state = powershell_quote_path(state),
         health = powershell_quote_path(health),
+        outcome = powershell_quote_path(outcome),
+        health_nonce = powershell_quote(health_nonce),
+        target_revision = powershell_quote(target_revision.unwrap_or_default()),
         lock = powershell_quote_path(lock),
+        create_no_window = if restart.detached { "$true" } else { "$false" },
         expected_hash = powershell_quote(expected_hash),
         arguments = powershell_quote(&arguments),
         sequence_file = sequence_file,
         sequence_value = sequence_value,
         health_env = powershell_quote(HEALTH_FILE_ENV),
+        health_nonce_env = powershell_quote(HEALTH_NONCE_ENV),
     )
 }
 

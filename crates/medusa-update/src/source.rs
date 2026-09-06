@@ -213,6 +213,7 @@ impl MainBranchUpdater {
             detached: cfg!(windows),
             sequence_file: None,
             rollout_sequence: None,
+            target_revision: Some(revision.clone()),
         };
         installer.schedule_replace(&candidate, &restart, parent_pid)
     }
@@ -285,6 +286,7 @@ impl MainBranchUpdater {
             detached: cfg!(windows),
             sequence_file: None,
             rollout_sequence: None,
+            target_revision: Some(revision.clone()),
         };
         let scheduled = installer.schedule_replace(&candidate, &restart, parent_pid)?;
         progress(MainBuildProgress {
@@ -354,8 +356,12 @@ impl MainBranchUpdater {
         )?;
         verify_artifact(&artifact, manifest.bytes, &manifest.sha256)?;
 
+        let restart = Restart {
+            target_revision: Some(revision),
+            ..restart.clone()
+        };
         AtomicInstaller::new(executable.to_path_buf())
-            .schedule_replace(&artifact, restart, parent_pid)
+            .schedule_replace(&artifact, &restart, parent_pid)
     }
 
     fn verified_revision(&self) -> MedusaResult<String> {

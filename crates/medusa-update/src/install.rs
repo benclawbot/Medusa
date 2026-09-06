@@ -4,6 +4,7 @@ use std::{
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(windows)]
@@ -16,6 +17,8 @@ use medusa_process_containment::process_start_marker;
 use crate::model::invalid;
 
 pub const HEALTH_FILE_ENV: &str = "MEDUSA_UPDATE_HEALTH_FILE";
+pub const HEALTH_NONCE_ENV: &str = "MEDUSA_UPDATE_HEALTH_NONCE";
+pub const UPDATE_OUTCOME_FILE: &str = ".medusa-update-outcome.json";
 const HEALTH_CHECK_ATTEMPTS: usize = 600;
 const UPDATE_LOCK_SCHEMA: &str = "2";
 
@@ -56,6 +59,8 @@ pub struct Restart {
     /// Commit this rollout sequence only after the replacement acknowledges startup.
     pub sequence_file: Option<PathBuf>,
     pub rollout_sequence: Option<u64>,
+    /// Immutable source identity for the replacement, when known.
+    pub target_revision: Option<String>,
 }
 
 /// Paths retained by the detached replacement helper.
@@ -65,18 +70,92 @@ pub struct ScheduledUpdate {
     pub backup: PathBuf,
     pub state: PathBuf,
     pub health: PathBuf,
+    pub outcome: PathBuf,
+    pub health_nonce: String,
+}
+
+/// Redacted durable result of the last attempted replacement.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateOutcome {
+    pub schema: u8,
+    pub target_revision: Option<String>,
+    pub previous_revision: Option<String>,
+    pub stage: String,
+    pub reason: String,
+    pub started_unix_seconds: i64,
+    pub finished_unix_seconds: i64,
+    pub rollback_result: String,
+}
+
+pub fn read_update_outcome(directory: &Path) -> MedusaResult<Option<UpdateOutcome>> {
+    let path = directory.join(UPDATE_OUTCOME_FILE);
+    match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| invalid(format!("invalid update outcome: {error}"))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(error)),
+    }
 }
 
 /// Acknowledges that a newly started binary completed its startup path.
 pub fn acknowledge_update_health() -> MedusaResult<bool> {
-    let Some(path) = env::var_os(HEALTH_FILE_ENV).map(PathBuf::from) else {
+    acknowledge_update_health_values(
+        env::var_os(HEALTH_FILE_ENV).map(PathBuf::from),
+        env::var_os(HEALTH_NONCE_ENV).map(|value| value.to_string_lossy().into_owned()),
+    )
+}
+
+fn acknowledge_update_health_values(
+    path: Option<PathBuf>,
+    nonce: Option<String>,
+) -> MedusaResult<bool> {
+    let Some(path) = path else {
         return Ok(false);
     };
+    if let Some(nonce) = nonce.as_deref()
+        && (nonce.is_empty()
+            || nonce.len() > 128
+            || nonce.bytes().any(|byte| !byte.is_ascii_hexdigit()))
+    {
+        return Err(invalid("update health nonce is malformed"));
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    storage::atomic_write(&path, b"healthy\n")?;
+    let Some(nonce) = nonce else {
+        // Older helpers only require a non-empty marker. Keep an in-flight
+        // update created by an older binary compatible with this binary.
+        storage::atomic_write(&path, b"healthy\n")?;
+        return Ok(true);
+    };
+    let payload = serde_json::json!({
+        "schema": 1,
+        "nonce": nonce,
+        "stage": "startup-ready",
+        "recordedUnixSeconds": unix_timestamp(),
+    });
+    let bytes = serde_json::to_vec(&payload).map_err(|error| invalid(error.to_string()))?;
+    storage::atomic_write(&path, &bytes)?;
     Ok(true)
+}
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().try_into().unwrap_or(i64::MAX))
+        .unwrap_or_default()
+}
+
+pub(crate) fn new_health_nonce(_target: &Path, _parent_pid: u32) -> MedusaResult<String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        io_error(io::Error::other(format!(
+            "failed to generate update nonce: {error}"
+        )))
+    })?;
+    Ok(hex::encode(bytes))
 }
 
 /// Extracts exactly one confined Medusa executable and schedules an atomic swap.
@@ -124,6 +203,16 @@ impl AtomicInstaller {
         restart: &Restart,
         parent_pid: u32,
     ) -> MedusaResult<ScheduledUpdate> {
+        self.schedule_replace_with_revision(candidate, restart, parent_pid, None)
+    }
+
+    pub fn schedule_replace_with_revision(
+        &self,
+        candidate: &Path,
+        restart: &Restart,
+        parent_pid: u32,
+        target_revision: Option<&str>,
+    ) -> MedusaResult<ScheduledUpdate> {
         validate_candidate(candidate)?;
         if restart.sequence_file.is_some() != restart.rollout_sequence.is_some() {
             return Err(invalid(
@@ -144,7 +233,13 @@ impl AtomicInstaller {
         let backup = backup_path(&self.target);
         let state = directory.join(".medusa-update-state");
         let health = directory.join(".medusa-update-health");
+        let outcome = directory.join(UPDATE_OUTCOME_FILE);
         let helper = helper_path(&self.target);
+        let nonce = new_health_nonce(&self.target, parent_pid)?;
+        let target_revision = target_revision.or(restart.target_revision.as_deref());
+        if let Some(revision) = target_revision {
+            validate_target_revision(revision)?;
+        }
         let mut helper_process = None;
         let result = (|| -> MedusaResult<()> {
             self.recover_interrupted()?;
@@ -164,6 +259,9 @@ impl AtomicInstaller {
                     &staged,
                     &state,
                     &health,
+                    &outcome,
+                    &nonce,
+                    target_revision,
                     &lock,
                     restart,
                 )
@@ -175,6 +273,9 @@ impl AtomicInstaller {
                     &staged,
                     &state,
                     &health,
+                    &outcome,
+                    &nonce,
+                    target_revision,
                     &lock,
                     restart,
                 )
@@ -208,6 +309,8 @@ impl AtomicInstaller {
             backup,
             state,
             health,
+            outcome,
+            health_nonce: nonce,
         })
     }
 
@@ -355,6 +458,9 @@ fn unix_replace_script(
     candidate: &Path,
     state: &Path,
     health: &Path,
+    outcome: &Path,
+    health_nonce: &str,
+    target_revision: Option<&str>,
     lock: &Path,
     restart: &Restart,
 ) -> String {
@@ -382,20 +488,35 @@ target={target}
 candidate={candidate}
 state={state}
 health={health}
+outcome={outcome}
+health_nonce={health_nonce}
+target_revision={target_revision}
 lock={lock}
 sequence_file={sequence_file}
 sequence_value={sequence_value}
 child=''
+write_outcome() {{
+  stage=$1
+  reason=$2
+  rollback_result=$3
+  finished=$(date +%s)
+  tmp="$outcome.tmp.$$"
+  printf '{{"schema":1,"targetRevision":%s,"previousRevision":null,"stage":"%s","reason":"%s","startedUnixSeconds":%s,"finishedUnixSeconds":%s,"rollbackResult":"%s"}}\n' \
+    "$target_revision" "$stage" "$reason" "$started" "$finished" "$rollback_result" > "$tmp" &&
+    mv -f "$tmp" "$outcome"
+}}
 rollback() {{
   if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; fi
   rm -f "$target"
   if [ -e "$backup" ]; then mv "$backup" "$target"; fi
   printf 'rolled-back\n' > "$state"
+  write_outcome 'rolled-back' 'replacement failed' 'restored'
   rm -f "$lock"
   "$target" {arguments} >/dev/null 2>&1 &
   rm -f "$0"
   exit 1
 }}
+started=$(date +%s)
 while kill -0 "$parent" 2>/dev/null; do sleep 1; done
 rm -f "$health" "$backup"
 printf 'swapping\n' > "$state"
@@ -403,20 +524,28 @@ if [ -e "$target" ]; then mv "$target" "$backup"; fi
 if ! mv "$candidate" "$target"; then
   if [ -e "$backup" ]; then mv "$backup" "$target"; fi
   printf 'swap-failed\n' > "$state"
+  write_outcome 'swap-failed' 'replacement failed while moving candidate' 'restored'
   rm -f "$lock"
+  if [ -x "$target" ]; then "$target" {arguments} >/dev/null 2>&1 & fi
+  rm -f "$0"
   exit 1
 fi
 chmod 755 "$target" || rollback
-MEDUSA_UPDATE_HEALTH_FILE="$health" "$target" {arguments} &
+cd "$(dirname "$target")"
+MEDUSA_UPDATE_HEALTH_FILE="$health" MEDUSA_UPDATE_HEALTH_NONCE="$health_nonce" "$target" {arguments} &
 child=$!
 i=0
 while [ "$i" -lt {health_check_attempts} ]; do
   if [ -s "$health" ]; then
+    if ! grep -Fq '"nonce":"'"$health_nonce"'"' "$health"; then
+      i=$((i + 1)); sleep 0.1; continue
+    fi
     if [ -n "$sequence_file" ]; then
       printf '%s\n' "$sequence_value" > "$sequence_file.tmp" || rollback
       mv "$sequence_file.tmp" "$sequence_file" || rollback
     fi
     printf 'healthy\n' > "$state"
+    write_outcome 'healthy' 'replacement acknowledged startup health' 'not-required'
     rm -f "$backup" "$lock" "$0"
     exit 0
   fi
@@ -431,6 +560,13 @@ rollback
         candidate = shell_quote_path(candidate),
         state = shell_quote_path(state),
         health = shell_quote_path(health),
+        outcome = shell_quote_path(outcome),
+        health_nonce = shell_quote(health_nonce),
+        target_revision = shell_quote(
+            &target_revision
+                .map(|revision| format!("\"{revision}\""))
+                .unwrap_or_else(|| "null".to_owned()),
+        ),
         lock = shell_quote_path(lock),
         health_check_attempts = HEALTH_CHECK_ATTEMPTS,
     )
@@ -445,6 +581,9 @@ fn windows_replace_script(
     candidate: &Path,
     state: &Path,
     health: &Path,
+    outcome: &Path,
+    health_nonce: &str,
+    target_revision: Option<&str>,
     lock: &Path,
     restart: &Restart,
 ) -> String {
@@ -465,6 +604,9 @@ $target = {target}
 $candidate = {candidate}
 $state = {state}
 $health = {health}
+$outcome = {outcome}
+$healthNonce = {health_nonce}
+$targetRevision = {target_revision}
 $lock = {lock}
 $sequenceFile = {sequence_file}
 $sequenceValue = {sequence_value}
@@ -570,6 +712,9 @@ try {{
         candidate = powershell_quote_path(candidate),
         state = powershell_quote_path(state),
         health = powershell_quote_path(health),
+        outcome = powershell_quote_path(outcome),
+        health_nonce = powershell_quote(health_nonce),
+        target_revision = powershell_quote(target_revision.unwrap_or_default()),
         lock = powershell_quote_path(lock),
     )
 }
@@ -741,6 +886,16 @@ fn io_error(error: impl std::fmt::Display) -> MedusaError {
     )
 }
 
+fn validate_target_revision(revision: &str) -> MedusaResult<()> {
+    if revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(invalid(
+            "update target revision must be a full 40-character Git commit SHA",
+        ))
+    }
+}
+
 fn zip_error(error: impl std::fmt::Display) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
@@ -838,6 +993,7 @@ mod tests {
             detached: false,
             sequence_file: Some(PathBuf::from("sequence file")),
             rollout_sequence: Some(42),
+            target_revision: None,
         };
         let unix = unix_replace_script(
             42,
@@ -846,6 +1002,9 @@ mod tests {
             Path::new("/tmp/new"),
             Path::new("/tmp/state"),
             Path::new("/tmp/health"),
+            Path::new("/tmp/outcome"),
+            "0123456789abcdef0123456789abcdef",
+            None,
             Path::new("/tmp/lock"),
             &restart,
         );
@@ -862,6 +1021,9 @@ mod tests {
             Path::new(r"C:\bin\new.exe"),
             Path::new(r"C:\bin\state"),
             Path::new(r"C:\bin\health"),
+            Path::new(r"C:\bin\outcome"),
+            "0123456789abcdef0123456789abcdef",
+            None,
             Path::new(r"C:\bin\lock"),
             &restart,
         );
@@ -875,6 +1037,56 @@ mod tests {
         assert!(windows.contains("42"));
         assert!(!windows.contains("Start-UpdatedProcess"));
         assert!(!windows.contains("-NoNewWindow"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn health_acknowledgement_is_nonce_bound_and_keeps_legacy_helpers_compatible() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let health = directory.path().join("health.json");
+        let nonce = "0123456789abcdef0123456789abcdef".to_owned();
+        assert!(
+            acknowledge_update_health_values(Some(health.clone()), Some(nonce.clone()))
+                .expect("nonce health acknowledgement")
+        );
+        let payload: serde_json::Value =
+            serde_json::from_slice(&fs::read(&health).expect("health payload"))
+                .expect("valid health payload");
+        assert_eq!(payload["nonce"], nonce);
+        assert_eq!(payload["stage"], "startup-ready");
+
+        assert!(
+            acknowledge_update_health_values(Some(health.clone()), None)
+                .expect("legacy health acknowledgement")
+        );
+        assert_eq!(
+            fs::read_to_string(&health).expect("legacy health marker"),
+            "healthy\n"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn malformed_health_nonce_is_rejected_before_writing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let health = directory.path().join("health.json");
+        assert!(
+            acknowledge_update_health_values(
+                Some(health.clone()),
+                Some("not-a-hex-nonce".to_owned())
+            )
+            .is_err()
+        );
+        assert!(!health.exists());
+    }
+
+    #[test]
+    fn generated_health_nonces_are_unpredictable_and_well_formed() {
+        let first = new_health_nonce(Path::new("medusa"), 42).expect("first nonce");
+        let second = new_health_nonce(Path::new("medusa"), 42).expect("second nonce");
+        assert_eq!(first.len(), 32);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
     }
 
     #[test]

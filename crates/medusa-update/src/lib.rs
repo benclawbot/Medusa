@@ -26,8 +26,8 @@ pub use github::{GithubReleaseClient, ReleaseClient};
 #[cfg(not(windows))]
 pub use install::AtomicInstaller;
 pub use install::{
-    HEALTH_FILE_ENV, InstallKind, InstallLocation, Restart, ScheduledUpdate,
-    acknowledge_update_health,
+    HEALTH_FILE_ENV, HEALTH_NONCE_ENV, InstallKind, InstallLocation, Restart, ScheduledUpdate,
+    UPDATE_OUTCOME_FILE, UpdateOutcome, acknowledge_update_health, read_update_outcome,
 };
 pub use manifest::{
     Architecture, ArtifactKind, BuildSource, DEFAULT_KEY_ID, KeyStatus, MANIFEST_NAME,
