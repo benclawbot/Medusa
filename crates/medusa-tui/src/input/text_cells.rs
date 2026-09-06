@@ -89,6 +89,35 @@ pub(crate) fn byte_at_cell_column(text: &str, target_column: usize) -> usize {
     byte
 }
 
+pub(crate) fn byte_range_for_cell_range(
+    text: &str,
+    start_column: usize,
+    end_column: usize,
+) -> Option<(usize, usize)> {
+    if start_column >= end_column {
+        return None;
+    }
+    let mut byte = 0;
+    let mut column = 0;
+    let mut first_byte = None;
+    let mut last_byte = None;
+    while byte < text.len() {
+        let next = next_grapheme_boundary(text, byte);
+        let cells = grapheme_cell_width(&text[byte..next], column);
+        let cell_end = column.saturating_add(cells);
+        if cell_end > start_column && column < end_column {
+            first_byte.get_or_insert(byte);
+            last_byte = Some(next);
+        }
+        if column >= end_column {
+            break;
+        }
+        column = cell_end;
+        byte = next;
+    }
+    first_byte.zip(last_byte)
+}
+
 pub(crate) fn display_width(text: &str) -> usize {
     let mut widest = 0;
     let mut column: usize = 0;
@@ -365,6 +394,23 @@ mod tests {
         assert_eq!(byte_at_cell_column(text, 1), after_a);
         assert_eq!(byte_at_cell_column(text, 2), after_a);
         assert_eq!(byte_at_cell_column(text, 3), after_cjk);
+    }
+
+    #[test]
+    fn selection_cell_ranges_expand_to_whole_graphemes() {
+        let text = "a界e\u{301}👩‍💻b";
+        let cjk = byte_range_for_cell_range(text, 2, 3).expect("second CJK cell");
+        assert_eq!(&text[cjk.0..cjk.1], "界");
+
+        let combining_start = cell_column(text, "a界".len());
+        let combining = byte_range_for_cell_range(text, combining_start, combining_start + 1)
+            .expect("combining grapheme");
+        assert_eq!(&text[combining.0..combining.1], "e\u{301}");
+
+        let emoji_start = cell_column(text, "a界e\u{301}".len());
+        let emoji = byte_range_for_cell_range(text, emoji_start + 1, emoji_start + 2)
+            .expect("second emoji cell");
+        assert_eq!(&text[emoji.0..emoji.1], "👩‍💻");
     }
 
     #[test]
