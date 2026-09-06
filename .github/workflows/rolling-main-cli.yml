@@ -28,7 +28,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
-    environment: release-signing
     timeout-minutes: 90
     permissions:
       contents: read
@@ -43,28 +42,6 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
       - name: Build Medusa CLI
         run: cargo build --release --locked --bin medusa
-      - name: Authenticode-sign rolling Windows CLI
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
-            throw 'Windows signing certificate secrets are required'
-          }
-          $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
-          $secure = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
-          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure | Out-Null
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $signtool) { throw 'signtool.exe not found' }
-          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a target/release/medusa.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $signtool.FullName verify /pa /all /v target/release/medusa.exe
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package exact-revision rolling CLI asset
         run: >-
           python scripts/package-main-update.py
@@ -188,10 +165,8 @@ jobs:
               --title "Medusa rolling main $GITHUB_SHA" \
               --notes "Immutable prebuilt CLI transport for main commit $GITHUB_SHA. Desktop assets are appended after their slower builds complete; stable releases remain separately signed."
           fi
-
           gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
           gh release edit "$release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
-
       - name: Refresh the legacy rolling CLI alias
         shell: bash
         env:
@@ -206,10 +181,6 @@ jobs:
               --title "Medusa rolling main (legacy alias)" \
               --notes "Compatibility alias for clients older than the immutable main-<sha> updater protocol."
           fi
-
-          # The new updater never reads this mutable alias. Older clients still
-          # validate each manifest revision and digest; upload archives first so
-          # a legacy client can never accept a new manifest without its bytes.
           for archive in release-assets/*.tar.gz release-assets/*.zip; do
             gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY" --clobber
           done
@@ -232,7 +203,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-2022]
     runs-on: ${{ matrix.os }}
-    environment: release-signing
     timeout-minutes: 90
     permissions:
       contents: read
@@ -259,29 +229,6 @@ jobs:
       - name: Build packaged Medusa Desktop executable
         working-directory: apps/medusa-desktop
         run: npm run tauri:build -- --no-bundle
-      - name: Authenticode-sign rolling Windows desktop executable
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
-            throw 'Windows signing certificate secrets are required'
-          }
-          $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
-          $secure = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
-          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure | Out-Null
-          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $signtool) { throw 'signtool.exe not found' }
-          $target = 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe'
-          & $signtool.FullName sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /a $target
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $signtool.FullName verify /pa /all /v $target
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Smoke packaged Windows desktop origin
         if: runner.os == 'Windows'
         shell: pwsh
@@ -452,12 +399,7 @@ jobs:
             echo "CLI release $release_tag is still a draft" >&2
             exit 1
           fi
-
-          # The CLI release is already visible. Desktop assets are appended
-          # under distinct names, so a client can only observe a complete
-          # desktop manifest after its matching bytes have been uploaded.
           gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
-
       - name: Refresh the legacy rolling desktop alias
         shell: bash
         env:
