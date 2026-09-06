@@ -14,27 +14,16 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
-import { DesktopSlotsProvider, useDesktopSlots } from "./DesktopSlots";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
-
-function UpdateControlHarness() {
-  const { updateRef } = useDesktopSlots();
-  return (
-    <>
-      <div className="settings-form"><div ref={updateRef} data-medusa-updates /></div>
-      <DesktopUpdateControl />
-    </>
-  );
-}
 
 describe("DesktopUpdateControl", () => {
   beforeEach(() => {
     mocks.invoke.mockReset();
     mocks.progressListener = undefined;
-    document.body.innerHTML = "";
+    document.body.innerHTML = '<div class="settings-form"></div>';
   });
 
-  it("renders installer progress events into the explicit settings slot", async () => {
+  it("renders installer progress events instead of exposing a terminal build", async () => {
     mocks.invoke.mockResolvedValueOnce({
       currentVersion: "1.0.1",
       latestMainSha: "0123456789abcdef0123456789abcdef01234567",
@@ -44,9 +33,8 @@ describe("DesktopUpdateControl", () => {
     });
     mocks.invoke.mockResolvedValueOnce(undefined);
 
-    render(<DesktopSlotsProvider><UpdateControlHarness /></DesktopSlotsProvider>);
+    render(<DesktopUpdateControl />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Check main" })).toBeEnabled());
-    expect(document.querySelector("[data-medusa-updates] [aria-label='Desktop updates']")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Check main" }));
     await waitFor(() => expect(screen.getByText(/Checked main:/)).toBeInTheDocument());
 
