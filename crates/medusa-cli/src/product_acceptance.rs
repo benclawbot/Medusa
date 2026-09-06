@@ -55,6 +55,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let output_dir = parse_output_dir()?;
     fs::create_dir_all(&output_dir)?;
     let target_dir = env::var_os("CARGO_TARGET_DIR")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target"));
     fs::create_dir_all(&target_dir)?;
@@ -241,7 +242,7 @@ fn execute_scenario(
     let started = Instant::now();
     let output = Command::new(cargo_program())
         .args(&args)
-        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("CARGO_TARGET_DIR", target_dir)
         .env("MEDUSA_PRODUCT_ACCEPTANCE", "1")
         .output()?;
     let duration = started.elapsed();
