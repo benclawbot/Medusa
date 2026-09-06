@@ -78,7 +78,10 @@ use runtime::{
     runtime_configure_model, runtime_open_web_artifact, runtime_poll, runtime_recovery_action,
     runtime_resume, runtime_start, runtime_submit,
 };
-use sessions::{runtime_list_sessions, runtime_read_session};
+use sessions::{
+    runtime_list_sessions, runtime_list_sessions_page, runtime_read_session,
+    runtime_read_session_page,
+};
 use tauri::Manager;
 use worktree::runtime_read_worktree;
 
@@ -129,7 +132,9 @@ pub fn run() -> tauri::Result<()> {
             runtime_apply_review_action,
             runtime_export_review_audit,
             runtime_list_sessions,
+            runtime_list_sessions_page,
             runtime_read_session,
+            runtime_read_session_page,
             runtime_read_diff,
             runtime_read_worktree,
             runtime_create_branch,
