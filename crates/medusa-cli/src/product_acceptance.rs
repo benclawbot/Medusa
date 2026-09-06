@@ -10,6 +10,7 @@ struct Scenario {
     id: &'static str,
     guarantee: &'static str,
     package: &'static str,
+    test_target: Option<&'static str>,
     filter: Option<&'static str>,
     required_marker: Option<&'static str>,
 }
@@ -117,6 +118,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             id: "production-orchestration",
             guarantee: "The production orchestration layer passes its authoritative integration suite.",
             package: "medusa-runtime",
+            test_target: None,
             filter: None,
             required_marker: None,
         },
@@ -124,6 +126,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             id: "headless-entrypoint",
             guarantee: "The shipped CLI retains the supported headless run entrypoint.",
             package: "medusa-cli",
+            test_target: Some("medusa"),
             filter: Some("headless_run_remains_available"),
             required_marker: Some("headless_run_remains_available"),
         },
@@ -131,6 +134,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             id: "checkpoint-restore",
             guarantee: "Execution checkpoints can be persisted and restored deterministically.",
             package: "medusa-execution-checkpoint",
+            test_target: None,
             filter: None,
             required_marker: None,
         },
@@ -138,6 +142,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             id: "verification-rollback",
             guarantee: "Repository changes can be rolled back after failed or rejected integration.",
             package: "medusa-workers",
+            test_target: None,
             filter: None,
             required_marker: None,
         },
@@ -145,6 +150,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             id: "escalation",
             guarantee: "Unresolved or policy-sensitive execution states route through bounded escalation.",
             package: "medusa-escalation",
+            test_target: None,
             filter: None,
             required_marker: None,
         },
@@ -152,6 +158,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             id: "corrupted-state-recovery",
             guarantee: "Recovery coordination handles invalid or incomplete durable state without unsafe continuation.",
             package: "medusa-recovery-coordinator",
+            test_target: None,
             filter: None,
             required_marker: None,
         },
@@ -159,6 +166,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             id: "upgrade-rollback-evidence",
             guarantee: "Install, upgrade, and rollback state transitions remain byte-exact and auditable.",
             package: "medusa-hardening",
+            test_target: None,
             filter: Some("clean_install_upgrade_and_rollback_are_byte_exact"),
             required_marker: Some("clean_install_upgrade_and_rollback_are_byte_exact"),
         },
@@ -170,6 +178,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
                 id: "containment-fail-closed",
                 guarantee: "Windows containment fails closed when a requested program cannot be resolved or the platform backend is unavailable.",
                 package: "medusa-process-containment",
+                test_target: None,
                 filter: Some("unresolvable_programs_fail_closed"),
                 required_marker: Some("unresolvable_programs_fail_closed"),
             });
@@ -177,6 +186,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
                 id: "interruption-replay",
                 guarantee: "Interrupted execution can be replayed from durable evidence on Windows.",
                 package: "medusa-execution-replay",
+                test_target: None,
                 filter: None,
                 required_marker: None,
             });
@@ -186,6 +196,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
                 id: "filesystem-network-process-boundary",
                 guarantee: "The production Linux sandbox starts successfully, allows repository-bounded writes, denies external writes and network access, and uses the real Bubblewrap backend.",
                 package: "medusa-agent",
+                test_target: None,
                 filter: Some(
                     "linux_product_boundary_exercises_allowed_write_external_denial_and_network_denial",
                 ),
@@ -197,6 +208,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
                 id: "interruption-resume",
                 guarantee: "An interrupted repository repair resumes through durable runtime state with exact evidence.",
                 package: "medusa-agent",
+                test_target: None,
                 filter: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
                 required_marker: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
             });
@@ -206,6 +218,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
                 id: "policy-boundary",
                 guarantee: "The shipped macOS runtime enforces hard shell-command denials while no native process-containment backend is advertised.",
                 package: "medusa-agent",
+                test_target: None,
                 filter: Some("dangerous_shell_commands_are_denied"),
                 required_marker: Some("dangerous_shell_commands_are_denied"),
             });
@@ -213,6 +226,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
                 id: "interruption-resume",
                 guarantee: "An interrupted repository repair resumes through durable runtime state with exact evidence.",
                 package: "medusa-agent",
+                test_target: None,
                 filter: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
                 required_marker: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
             });
@@ -233,6 +247,10 @@ fn execute_scenario(
         scenario.package.to_string(),
         "--locked".to_string(),
     ];
+    if let Some(test_target) = scenario.test_target {
+        args.push("--bin".to_string());
+        args.push(test_target.to_string());
+    }
     if let Some(filter) = scenario.filter {
         args.push(filter.to_string());
     }
