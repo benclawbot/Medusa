@@ -22,6 +22,12 @@ struct ScenarioMetrics {
 }
 
 #[derive(Debug, Serialize)]
+struct AcceptanceMetrics {
+    false_completion_rate: f64,
+    manual_interventions: usize,
+}
+
+#[derive(Debug, Serialize)]
 struct ScenarioResult {
     id: String,
     guarantee: String,
@@ -42,6 +48,7 @@ struct AcceptanceSummary {
     passed: usize,
     failed: usize,
     total: usize,
+    metrics: AcceptanceMetrics,
     scenarios: Vec<ScenarioResult>,
 }
 
@@ -73,6 +80,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|result| result.status == "passed")
         .count();
     let failed = results.len().saturating_sub(passed);
+    let false_completes = results
+        .iter()
+        .map(|result| result.metrics.false_completes)
+        .sum::<usize>();
+    let false_completion_rate = if results.is_empty() {
+        0.0
+    } else {
+        false_completes as f64 / results.len() as f64
+    };
     let summary = AcceptanceSummary {
         schema_version: 1,
         generated_unix_seconds: SystemTime::now()
@@ -83,6 +99,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         passed,
         failed,
         total: results.len(),
+        metrics: AcceptanceMetrics {
+            false_completion_rate,
+            // This deterministic contract has no human-in-the-loop steps. Scenario
+            // failures are represented by status and false-completion evidence.
+            manual_interventions: 0,
+        },
         scenarios: results,
     };
     let summary_path = output_dir.join("summary.json");
