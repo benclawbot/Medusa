@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useDesktopSlots } from "./DesktopSlots";
 import { toUserError } from "./errorPresentation";
 
 interface DesktopUpdateStatus {
@@ -31,35 +32,12 @@ function progressPercent(progress: DesktopUpdateProgress): number {
 }
 
 export function DesktopUpdateControl() {
-  const [target, setTarget] = useState<Element | null>(null);
+  const { updateTarget: target } = useDesktopSlots();
   const [status, setStatus] = useState<DesktopUpdateStatus>();
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [progress, setProgress] = useState<DesktopUpdateProgress>();
   const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    let timer: number | undefined;
-    const findTarget = () => {
-      if (typeof document !== "undefined") {
-        const next = document.querySelector(".settings-form");
-        setTarget((current) => current === next ? current : next);
-      }
-    };
-    findTarget();
-    const observer = new MutationObserver(() => {
-      if (timer !== undefined || typeof window === "undefined") return;
-      timer = window.setTimeout(() => {
-        timer = undefined;
-        findTarget();
-      }, 100);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => {
-      observer.disconnect();
-      if (timer !== undefined && typeof window !== "undefined") window.clearTimeout(timer);
-    };
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -142,7 +120,7 @@ export function DesktopUpdateControl() {
       {status && (
         <div className="desktop-update-status">
           <span><CheckCircle2 size={14} /> Installed v{status.currentVersion}</span>
-     <span>Checked main: <code>{status.latestMainSha ? status.latestMainSha.slice(0, 8) : "unavailable"}</code></span>
+          <span>Checked main: <code>{status.latestMainSha ? status.latestMainSha.slice(0, 8) : "unavailable"}</code></span>
         </div>
       )}
 
