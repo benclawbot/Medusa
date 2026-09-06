@@ -38,8 +38,19 @@ class MainUpdateBundleTests(unittest.TestCase):
                 "schema": CHECKER.SCHEMA,
                 "sha256": CHECKER.file_digest(archive),
             }
-            (root / f"{name}.json").write_text(
+            manifest_path = root / f"{name}.json"
+            manifest_path.write_text(
                 json.dumps(manifest, sort_keys=True), encoding="utf-8"
+            )
+            signature = {
+                "schema": CHECKER.SIGNATURE_SCHEMA,
+                "key_id": CHECKER.SIGNATURE_KEY_ID,
+                "algorithm": CHECKER.SIGNATURE_ALGORITHM,
+                "manifest_sha256": CHECKER.file_digest(manifest_path),
+                "signature": "ab" * 64,
+            }
+            (root / f"{name}.json.sig.json").write_text(
+                json.dumps(signature, sort_keys=True), encoding="utf-8"
             )
 
     def test_complete_bundle_is_accepted(self) -> None:
@@ -65,6 +76,7 @@ class MainUpdateBundleTests(unittest.TestCase):
             missing = next(iter(CHECKER.EXPECTED_ARTIFACTS.values()))
             (root / missing).unlink()
             (root / f"{missing}.json").unlink()
+            (root / f"{missing}.json.sig.json").unlink()
             with self.assertRaisesRegex(ValueError, "exactly"):
                 CHECKER.verify_bundle(root, REVISION)
 
@@ -78,6 +90,51 @@ class MainUpdateBundleTests(unittest.TestCase):
             manifest["sha256"] = "0" * 64
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                CHECKER.verify_bundle(root, REVISION)
+
+    def test_missing_signature_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_bundle(root)
+            name = next(iter(CHECKER.EXPECTED_ARTIFACTS.values()))
+            (root / f"{name}.json.sig.json").unlink()
+            with self.assertRaisesRegex(ValueError, "missing"):
+                CHECKER.verify_bundle(root, REVISION)
+
+    def test_signature_manifest_digest_mismatch_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_bundle(root)
+            name = next(iter(CHECKER.EXPECTED_ARTIFACTS.values()))
+            signature_path = root / f"{name}.json.sig.json"
+            signature = json.loads(signature_path.read_text(encoding="utf-8"))
+            signature["manifest_sha256"] = "0" * 64
+            signature_path.write_text(json.dumps(signature), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "signature manifest digest mismatch"):
+                CHECKER.verify_bundle(root, REVISION)
+
+    def test_signature_metadata_is_rejected_when_not_primary_ed25519(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_bundle(root)
+            name = next(iter(CHECKER.EXPECTED_ARTIFACTS.values()))
+            signature_path = root / f"{name}.json.sig.json"
+            signature = json.loads(signature_path.read_text(encoding="utf-8"))
+            signature["key_id"] = "unexpected-key"
+            signature_path.write_text(json.dumps(signature), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "key id mismatch"):
+                CHECKER.verify_bundle(root, REVISION)
+
+    def test_signature_bytes_must_be_exact_ed25519_length(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_bundle(root)
+            name = next(iter(CHECKER.EXPECTED_ARTIFACTS.values()))
+            signature_path = root / f"{name}.json.sig.json"
+            signature = json.loads(signature_path.read_text(encoding="utf-8"))
+            signature["signature"] = "ab" * 63
+            signature_path.write_text(json.dumps(signature), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "signature bytes are invalid"):
                 CHECKER.verify_bundle(root, REVISION)
 
     def test_cli_bundle_can_be_verified_before_desktop_builds_finish(self) -> None:
