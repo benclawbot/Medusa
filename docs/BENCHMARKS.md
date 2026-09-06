@@ -30,7 +30,7 @@ The command executes the product acceptance contract twice by default and writes
 - `target/reliability-benchmark/reliability-benchmark.md`;
 - the original per-run acceptance summaries and logs.
 
-The CI benchmark job compiles the product acceptance runner and workspace test targets before starting the per-run timeout. The 450-second acceptance bound measures the authoritative test execution and recovery contract rather than a cold test-harness build; it provides evidence-based headroom over the 372-second production-orchestration timing observed on the supported Windows runner while remaining bounded within the 30-minute job budget.
+The CI benchmark job compiles the product acceptance runner and workspace test targets before starting the per-run timeout. The 600-second acceptance bound measures the authoritative test execution and recovery contract rather than a cold test-harness build; it provides evidence-based headroom over the 412,397-ms production-orchestration timing observed on the supported Linux runner while remaining bounded within the 30-minute job budget. Two runs can consume at most 20 minutes, leaving time for setup, warm-up, and reporting.
 
 The report records the exact commit, run count, scenario results, time to verified completion, and threshold failures. A test process exiting successfully is not sufficient: the underlying acceptance scenario must emit its required evidence marker and be recorded as `passed`.
 

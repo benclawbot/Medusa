@@ -36,6 +36,7 @@ def summary(status: str = "passed") -> dict:
 
 def main() -> int:
     suite = json.loads(Path("benchmarks/reliability-suite.json").read_text(encoding="utf-8"))
+    assert MODULE.DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS == 600
     report = MODULE.score(suite, [summary(), summary()])
     assert report["passed"]
     assert report["metrics"]["verified_completion_rate"] == 1.0
