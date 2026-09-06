@@ -34,6 +34,7 @@ struct PromptHistory {
     entries: Vec<PromptDraft>,
     position: Option<usize>,
     saved_draft: Option<PromptDraft>,
+    search_query: Option<String>,
 }
 
 thread_local! {
@@ -83,6 +84,13 @@ impl ComposerState {
             }
             (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
                 Ok(ComposerAction::Interrupt)
+            }
+            (KeyCode::Char('r'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                Ok(if self.history_search_previous() {
+                    ComposerAction::Changed
+                } else {
+                    ComposerAction::None
+                })
             }
             (KeyCode::Up, _) if self.slash_completion_navigation_active() => {
                 Ok(ComposerAction::CommandPrevious)
@@ -211,6 +219,7 @@ impl ComposerState {
     fn history_previous(&mut self) -> bool {
         let selected = PROMPT_HISTORY.with(|history| {
             let mut history = history.borrow_mut();
+            history.search_query = None;
             if history.entries.is_empty() {
                 return None;
             }
@@ -230,6 +239,7 @@ impl ComposerState {
     fn history_next(&mut self) -> bool {
         let selected = PROMPT_HISTORY.with(|history| {
             let mut history = history.borrow_mut();
+            history.search_query = None;
             let position = history.position?;
             if position + 1 < history.entries.len() {
                 let next = position + 1;
@@ -239,6 +249,28 @@ impl ComposerState {
                 history.position = None;
                 history.saved_draft.take()
             }
+        });
+        selected.is_some_and(|draft| self.replace_from_history(draft))
+    }
+
+    fn history_search_previous(&mut self) -> bool {
+        let selected = PROMPT_HISTORY.with(|history| {
+            let mut history = history.borrow_mut();
+            if history.entries.is_empty() {
+                return None;
+            }
+            if history.search_query.is_none() {
+                history.saved_draft = Some(self.draft.clone());
+                history.search_query = Some(self.draft.text.clone());
+                history.position = None;
+            }
+            let query = history.search_query.as_deref().unwrap_or_default();
+            let end = history.position.unwrap_or(history.entries.len());
+            let position = (0..end)
+                .rev()
+                .find(|&index| query.is_empty() || history.entries[index].text.contains(query))?;
+            history.position = Some(position);
+            history.entries.get(position).cloned()
         });
         selected.is_some_and(|draft| self.replace_from_history(draft))
     }
@@ -257,6 +289,7 @@ fn record_history(draft: &PromptDraft) {
         let mut history = history.borrow_mut();
         history.position = None;
         history.saved_draft = None;
+        history.search_query = None;
         if history.entries.last() == Some(draft) {
             return;
         }
@@ -273,6 +306,7 @@ fn reset_history_navigation() {
         let mut history = history.borrow_mut();
         history.position = None;
         history.saved_draft = None;
+        history.search_query = None;
     });
 }
 
@@ -701,6 +735,54 @@ mod tests {
             ComposerAction::Changed
         );
         assert_eq!(composer.draft.text, "draft\nline");
+    }
+
+    #[test]
+    fn control_r_searches_bounded_history_by_original_draft() {
+        clear_history();
+        for text in ["build frontend", "review docs", "build backend", "ship release"] {
+            let mut composer = ComposerState::new(text);
+            assert_eq!(
+                composer.handle_event(key(KeyCode::Enter)).expect("record prompt"),
+                ComposerAction::Submit
+            );
+        }
+
+        let mut composer = ComposerState::new("build");
+        assert_eq!(
+            composer
+                .handle_event(modified_key(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                .expect("search newest match"),
+            ComposerAction::Changed
+        );
+        assert_eq!(composer.draft.text, "build backend");
+        assert_eq!(
+            composer
+                .handle_event(modified_key(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                .expect("search older match"),
+            ComposerAction::Changed
+        );
+        assert_eq!(composer.draft.text, "build frontend");
+        assert_eq!(
+            composer
+                .handle_event(modified_key(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                .expect("no older match"),
+            ComposerAction::None
+        );
+        assert_eq!(composer.draft.text, "build frontend");
+    }
+
+    #[test]
+    fn control_r_is_a_noop_for_empty_history() {
+        clear_history();
+        let mut composer = ComposerState::new("needle");
+        assert_eq!(
+            composer
+                .handle_event(modified_key(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                .expect("empty search"),
+            ComposerAction::None
+        );
+        assert_eq!(composer.draft.text, "needle");
     }
 
     #[test]
