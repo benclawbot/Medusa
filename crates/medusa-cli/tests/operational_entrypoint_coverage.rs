@@ -89,13 +89,19 @@ mod unix {
             assert_eq!(scenario["metrics"]["safety_regressions"], 0);
             let log = PathBuf::from(scenario["log"].as_str().expect("scenario log"));
             assert!(log.is_file(), "missing scenario log: {}", log.display());
+            let log_contents = fs::read_to_string(&log).expect("scenario log contents");
             assert!(
-                fs::read_to_string(&log)
-                    .expect("scenario log contents")
-                    .contains("fake cargo output"),
+                log_contents.contains("fake cargo output"),
                 "scenario log omitted child output: {}",
                 log.display()
             );
+            if scenario["id"] == "headless-entrypoint" {
+                assert!(
+                    log_contents.contains("--bin medusa"),
+                    "headless acceptance did not select the medusa binary: {}",
+                    log.display()
+                );
+            }
         }
     }
 
