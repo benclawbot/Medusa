@@ -809,6 +809,16 @@
       "sha256": "ebe66e42ac4ccb5fbfb21390f9c6a91ada848286bfa59c5c706c383a41ecefdc"
     },
     {
+      "path": "specs/2026-09-06-integration-ledger.md",
+      "disposition": "current",
+      "sha256": "3c95e610675a233ba038a1ce3d27a08771207879822cbe9317048861bb21cd01"
+    },
+    {
+      "path": "specs/2026-09-06-product-quality-and-updater.md",
+      "disposition": "current",
+      "sha256": "66c8c38a47b7452f983ae03d84f1f111df9259d30466a7e15d74075e0559438a"
+    },
+    {
       "path": "tools/local-bridge/README.md",
       "disposition": "current",
       "sha256": "cae9f53d389f7386051061050053aae37ae7595909fcd5f206298d2be371da63"
