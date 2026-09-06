@@ -16,6 +16,7 @@ const DEFAULT_SESSION_PAGE_SIZE: usize = 50;
 const DEFAULT_MESSAGE_PAGE_SIZE: usize = 100;
 const MAX_PAGE_SIZE: usize = 200;
 const MAX_CACHED_SESSION_FILES: usize = 512;
+const MAX_CACHED_SESSION_ROOTS: usize = 64;
 const SESSION_CURSOR_SEPARATOR: char = '\u{1f}';
 
 #[derive(Clone, Debug, Serialize)]
@@ -337,6 +338,14 @@ fn collect_sessions_indexed(
             index.entries.remove(&path);
         }
     }
+    drop(index_guard);
+    if let Ok(mut indexes) = summary_indexes().lock() {
+        while indexes.len() > MAX_CACHED_SESSION_ROOTS {
+            if let Some(root) = indexes.keys().next().cloned() {
+                indexes.remove(&root);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -356,7 +365,9 @@ fn message_index(path: &Path, session_id: &str) -> Result<MessageIndex, String> 
         .lock()
         .map_err(|_| "desktop message index lock is poisoned".to_owned())?
         .get(path)
-        .filter(|cached| cached.fingerprint == fingerprint)
+        .filter(|cached| {
+            cached.fingerprint == fingerprint && cached.summary.id.as_str() == session_id
+        })
         .cloned()
     {
         return Ok(cached);
