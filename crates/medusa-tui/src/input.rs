@@ -136,9 +136,7 @@ impl ComposerState {
 
     fn move_vertical(&mut self, direction: isize) -> ComposerAction {
         let text = &self.draft.text;
-        let line_start = text[..self.cursor]
-            .rfind('\n')
-            .map_or(0, |index| index + 1);
+        let line_start = text[..self.cursor].rfind('\n').map_or(0, |index| index + 1);
         let line_end = text[self.cursor..]
             .find('\n')
             .map_or(text.len(), |offset| self.cursor + offset);
@@ -406,10 +404,14 @@ mod tests {
         composer.handle_event(key(KeyCode::Left)).expect("left cjk");
         let after_cjk = composer.cursor;
         assert!(after_cjk < end);
-        composer.handle_event(key(KeyCode::Left)).expect("left combining");
+        composer
+            .handle_event(key(KeyCode::Left))
+            .expect("left combining");
         let after_combining = composer.cursor;
         assert_eq!(&composer.draft.text[after_combining..after_cjk], "e\u{301}");
-        composer.handle_event(key(KeyCode::Left)).expect("left emoji");
+        composer
+            .handle_event(key(KeyCode::Left))
+            .expect("left emoji");
         let emoji_start = composer.cursor;
         assert_eq!(&composer.draft.text[emoji_start..after_combining], "👨‍👩‍👧‍👦");
 
@@ -426,7 +428,9 @@ mod tests {
         clear_history();
         let mut composer = ComposerState::new("e\u{301}🇨🇭界");
         composer.cursor = 0;
-        composer.handle_event(key(KeyCode::Right)).expect("combining");
+        composer
+            .handle_event(key(KeyCode::Right))
+            .expect("combining");
         assert_eq!(&composer.draft.text[..composer.cursor], "e\u{301}");
         composer.handle_event(key(KeyCode::Right)).expect("flag");
         assert_eq!(&composer.draft.text[..composer.cursor], "e\u{301}🇨🇭");
@@ -439,33 +443,69 @@ mod tests {
         clear_history();
         let mut composer = ComposerState::new("a👩‍💻\nb\u{301}c\n界z");
         composer.cursor = composer.draft.text.find("界").expect("third line") + "界".len();
-        assert_eq!(composer.handle_event(key(KeyCode::Up)).expect("up"), ComposerAction::None);
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Up)).expect("up"),
+            ComposerAction::None
+        );
         let second_line = composer.draft.text.find("b\u{301}c").expect("second line");
         assert_eq!(composer.cursor, second_line + "b\u{301}".len());
-        assert_eq!(composer.handle_event(key(KeyCode::Down)).expect("down"), ComposerAction::None);
-        assert_eq!(&composer.draft.text[..composer.cursor], "a👩‍💻\nb\u{301}c\n界");
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Down)).expect("down"),
+            ComposerAction::None
+        );
+        assert_eq!(
+            &composer.draft.text[..composer.cursor],
+            "a👩‍💻\nb\u{301}c\n界"
+        );
     }
 
     #[test]
     fn history_navigation_only_starts_at_vertical_boundaries() {
         clear_history();
         let mut first = ComposerState::new("first");
-        assert_eq!(first.handle_event(key(KeyCode::Enter)).expect("submit first"), ComposerAction::Submit);
+        assert_eq!(
+            first
+                .handle_event(key(KeyCode::Enter))
+                .expect("submit first"),
+            ComposerAction::Submit
+        );
         let mut second = ComposerState::new("second");
-        assert_eq!(second.handle_event(key(KeyCode::Enter)).expect("submit second"), ComposerAction::Submit);
+        assert_eq!(
+            second
+                .handle_event(key(KeyCode::Enter))
+                .expect("submit second"),
+            ComposerAction::Submit
+        );
 
         let mut composer = ComposerState::new("draft\nline");
         composer.cursor = composer.draft.text.len();
-        assert_eq!(composer.handle_event(key(KeyCode::Up)).expect("vertical up"), ComposerAction::None);
+        assert_eq!(
+            composer
+                .handle_event(key(KeyCode::Up))
+                .expect("vertical up"),
+            ComposerAction::None
+        );
         assert_eq!(composer.draft.text, "draft\nline");
         composer.cursor = 0;
-        assert_eq!(composer.handle_event(key(KeyCode::Up)).expect("history up"), ComposerAction::Changed);
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Up)).expect("history up"),
+            ComposerAction::Changed
+        );
         assert_eq!(composer.draft.text, "second");
-        assert_eq!(composer.handle_event(key(KeyCode::Up)).expect("older"), ComposerAction::Changed);
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Up)).expect("older"),
+            ComposerAction::Changed
+        );
         assert_eq!(composer.draft.text, "first");
-        assert_eq!(composer.handle_event(key(KeyCode::Down)).expect("newer"), ComposerAction::Changed);
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Down)).expect("newer"),
+            ComposerAction::Changed
+        );
         assert_eq!(composer.draft.text, "second");
-        assert_eq!(composer.handle_event(key(KeyCode::Down)).expect("restore"), ComposerAction::Changed);
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Down)).expect("restore"),
+            ComposerAction::Changed
+        );
         assert_eq!(composer.draft.text, "draft\nline");
     }
 
@@ -473,8 +513,14 @@ mod tests {
     fn slash_completion_keeps_up_down_for_command_selection() {
         clear_history();
         let mut composer = ComposerState::new("/mo");
-        assert_eq!(composer.handle_event(key(KeyCode::Up)).expect("up"), ComposerAction::CommandPrevious);
-        assert_eq!(composer.handle_event(key(KeyCode::Down)).expect("down"), ComposerAction::CommandNext);
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Up)).expect("up"),
+            ComposerAction::CommandPrevious
+        );
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Down)).expect("down"),
+            ComposerAction::CommandNext
+        );
     }
 
     #[test]
