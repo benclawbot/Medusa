@@ -70,10 +70,9 @@ mod unix {
         assert_eq!(summary["failed"], 0);
         assert_eq!(summary["passed"], summary["total"]);
         assert!(summary["total"].as_u64().is_some_and(|total| total >= 7));
-        let recorded_target_dirs = fs::read_to_string(&target_record)
-            .expect("target directory record")
-            .lines()
-            .collect::<Vec<_>>();
+        let target_record_contents =
+            fs::read_to_string(&target_record).expect("target directory record");
+        let recorded_target_dirs = target_record_contents.lines().collect::<Vec<_>>();
         assert_eq!(
             recorded_target_dirs.len(),
             summary["total"].as_u64().expect("scenario count") as usize
