@@ -291,32 +291,38 @@ mod tests {
         });
         entered.wait();
 
-        let started = Instant::now();
-        let snapshot = monitor.poll(&mut app);
-        assert_eq!(snapshot.1, "checking");
-        assert!(matches!(
-            app.handle_event(Event::Key(KeyEvent::new(
-                KeyCode::Char('x'),
-                KeyModifiers::NONE,
-            )))
-            .expect("typing"),
-            AppAction::Redraw
-        ));
-        assert!(matches!(
-            app.handle_event(Event::Key(KeyEvent::new(
-                KeyCode::Char('c'),
-                KeyModifiers::CONTROL,
-            )))
-            .expect("interrupt"),
-            AppAction::Interrupt
-        ));
-        let _ = app.handle_event(Event::Resize(120, 40)).expect("resize");
-        assert!(
-            started.elapsed() < Duration::from_millis(100),
-            "presentation path waited on the daemon worker"
-        );
+        // The observer is deliberately blocked on `release`; prove the presentation path can
+        // still complete the latency-sensitive operations before that worker is allowed to run.
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let presentation = thread::spawn(move || {
+            let snapshot = monitor.poll(&mut app);
+            assert_eq!(snapshot.1, "checking");
+            assert!(matches!(
+                app.handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('x'),
+                    KeyModifiers::NONE,
+                )))
+                .expect("typing"),
+                AppAction::Redraw
+            ));
+            assert!(matches!(
+                app.handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('c'),
+                    KeyModifiers::CONTROL,
+                )))
+                .expect("interrupt"),
+                AppAction::Interrupt
+            ));
+            let _ = app.handle_event(Event::Resize(120, 40)).expect("resize");
+            completed_tx.send(()).expect("completion signal");
+            (monitor, app)
+        });
+        completed_rx
+            .recv_timeout(Duration::from_millis(250))
+            .expect("presentation path waited on the daemon worker");
 
         release.wait();
+        let (mut monitor, mut app) = presentation.join().expect("presentation thread");
         let snapshot =
             wait_for_snapshot(&mut monitor, &mut app, |snapshot| snapshot.1 == "connected");
         assert_eq!(snapshot.1, "connected");
