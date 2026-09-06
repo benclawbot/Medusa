@@ -6,7 +6,6 @@
 
 mod diagnostics;
 mod github;
-mod identity;
 // Windows keeps this module compiled for the shared archive/recovery primitives while the
 // dedicated `windows_install` module owns replacement, health checking, locking, and rollback.
 #[cfg_attr(windows, allow(dead_code))]
@@ -24,10 +23,6 @@ pub const CURRENT_RELEASE_ID: &str = "1.0.7.1";
 
 pub use diagnostics::{PhaseTimer, UpdateDiagnostics, UpdatePhase, UpdatePhaseRecord};
 pub use github::{GithubReleaseClient, ReleaseClient};
-pub use identity::{
-    InstalledIdentity, PublicationState, SourceRevision, UpdateAvailability, UpdateChannel,
-    compare_source_revision,
-};
 #[cfg(not(windows))]
 pub use install::AtomicInstaller;
 pub use install::{

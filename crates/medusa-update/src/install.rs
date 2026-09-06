@@ -526,6 +526,8 @@ if ! mv "$candidate" "$target"; then
   printf 'swap-failed\n' > "$state"
   write_outcome 'swap-failed' 'replacement failed while moving candidate' 'restored'
   rm -f "$lock"
+  if [ -x "$target" ]; then "$target" {arguments} >/dev/null 2>&1 & fi
+  rm -f "$0"
   exit 1
 fi
 chmod 755 "$target" || rollback
