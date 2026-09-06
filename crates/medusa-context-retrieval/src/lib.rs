@@ -64,10 +64,18 @@ pub struct ContextRetriever;
 /// query plus the ledger contents. Repeated identical turns (retries,
 /// multi-agent fan-out over the same ledger) skip the full scan; the ledger
 /// fingerprint keeps stale hits impossible.
-#[derive(Clone, Debug, Default)]
+const DEFAULT_MEMO_CAPACITY: usize = 64;
+
+#[derive(Clone, Debug)]
 pub struct RetrievalMemo {
     capacity: usize,
     entries: std::collections::HashMap<String, RetrievalResult>,
+}
+
+impl Default for RetrievalMemo {
+    fn default() -> Self {
+        Self::new(DEFAULT_MEMO_CAPACITY)
+    }
 }
 
 impl RetrievalMemo {
@@ -84,7 +92,11 @@ impl RetrievalMemo {
         ledger: &ContextLedger,
         query: &RetrievalQuery,
     ) -> Result<RetrievalResult, &'static str> {
-        let key = memo_key(ledger, query);
+        // Validate before consulting the cache. A key hit must never turn an invalid
+        // request or ledger into a successful retrieval.
+        query.validate()?;
+        ledger.validate()?;
+        let key = memo_key(ledger, query)?;
         if let Some(hit) = self.entries.get(&key) {
             return Ok(hit.clone());
         }
@@ -101,22 +113,25 @@ impl RetrievalMemo {
     }
 }
 
-fn memo_key(ledger: &ContextLedger, query: &RetrievalQuery) -> String {
+fn memo_key(ledger: &ContextLedger, query: &RetrievalQuery) -> Result<String, &'static str> {
     let mut hasher = Sha256::new();
-    hasher.update(query.text.as_bytes());
-    for id in &query.required_ids {
-        hasher.update(id.as_bytes());
-    }
-    for kind in &query.preferred_kinds {
-        hasher.update(format!("{kind:?}").as_bytes());
-    }
-    hasher.update(query.maximum_items.to_le_bytes());
-    hasher.update(query.maximum_bytes.to_le_bytes());
+    update_framed(&mut hasher, b"medusa-retrieval-memo-v2");
+    // Serialize the typed query so every field, including collection boundaries and
+    // enum discriminants, participates in the identity.
+    let query_bytes = serde_json::to_vec(query)
+        .map_err(|_| "retrieval memo key could not serialize the retrieval query")?;
+    update_framed(&mut hasher, &query_bytes);
     for item in ledger.items() {
-        hasher.update(item.id.as_bytes());
-        hasher.update(item.sequence.to_le_bytes());
+        let item_bytes = serde_json::to_vec(item)
+            .map_err(|_| "retrieval memo key could not serialize a context item")?;
+        update_framed(&mut hasher, &item_bytes);
     }
-    format!("{:x}", hasher.finalize())
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn update_framed(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value);
 }
 
 impl ContextRetriever {
@@ -376,6 +391,69 @@ mod tests {
         let second = memo.retrieve_cached(&ledger, &query).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.ids(), vec!["goal"]);
+    }
+
+    #[test]
+    fn memo_key_includes_context_content_not_only_ids_and_sequences() {
+        let mut first_ledger = ContextLedger::default();
+        first_ledger
+            .append(item("note", ContextKind::Observation, "first version", 1))
+            .unwrap();
+        let mut second_ledger = ContextLedger::default();
+        second_ledger
+            .append(item("note", ContextKind::Observation, "second version", 1))
+            .unwrap();
+        let query = RetrievalQuery {
+            text: "version".to_owned(),
+            required_ids: BTreeSet::new(),
+            preferred_kinds: BTreeSet::new(),
+            maximum_items: 4,
+            maximum_bytes: 4096,
+        };
+        let mut memo = RetrievalMemo::new(2);
+        let first = memo.retrieve_cached(&first_ledger, &query).unwrap();
+        let second = memo.retrieve_cached(&second_ledger, &query).unwrap();
+
+        assert_ne!(first.fingerprint, second.fingerprint);
+        assert_eq!(first.items[0].item.content, "first version");
+        assert_eq!(second.items[0].item.content, "second version");
+    }
+
+    #[test]
+    fn memo_validates_before_returning_a_colliding_cached_hit() {
+        let mut ledger = ContextLedger::default();
+        ledger
+            .append(item("bc", ContextKind::Observation, "memoized content", 1))
+            .unwrap();
+        let valid_query = RetrievalQuery {
+            // Under the old unframed key, `a` + `bc` collided with `ab` + `c`.
+            text: "a".to_owned(),
+            required_ids: BTreeSet::from(["bc".to_owned()]),
+            preferred_kinds: BTreeSet::new(),
+            maximum_items: 4,
+            maximum_bytes: 4096,
+        };
+        let mut memo = RetrievalMemo::new(2);
+        memo.retrieve_cached(&ledger, &valid_query).unwrap();
+
+        let invalid_query = RetrievalQuery {
+            text: "ab".to_owned(),
+            required_ids: BTreeSet::from(["c".to_owned()]),
+            ..valid_query.clone()
+        };
+        assert_eq!(
+            memo.retrieve_cached(&ledger, &invalid_query),
+            Err("required context id does not exist")
+        );
+    }
+
+    #[test]
+    fn default_and_explicit_memo_capacity_have_consistent_semantics() {
+        assert_eq!(RetrievalMemo::default().capacity, DEFAULT_MEMO_CAPACITY);
+        assert_eq!(
+            RetrievalMemo::new(0).capacity,
+            RetrievalMemo::new(1).capacity
+        );
     }
 
     #[test]
