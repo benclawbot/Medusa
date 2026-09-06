@@ -15,6 +15,8 @@ use crate::{
 };
 
 const READ_BUFFER_BYTES: usize = 8 * 1024;
+const MAX_SSE_LINE_BYTES: usize = 1024 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 4 * 1024 * 1024;
 
 pub(crate) fn complete_blocking(
     client: &BlockingClient,
@@ -151,12 +153,24 @@ impl SseDecoder {
     ) -> MedusaResult<()> {
         self.pending.extend_from_slice(bytes);
         while let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') {
+            if newline + 1 > MAX_SSE_LINE_BYTES {
+                return Err(stream_error(format!(
+                    "OpenAI SSE line exceeds {} bytes",
+                    MAX_SSE_LINE_BYTES
+                )));
+            }
             let mut line = self.pending.drain(..=newline).collect::<Vec<_>>();
             line.pop();
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
             self.process_line(&line, &mut sink)?;
+        }
+        if self.pending.len() > MAX_SSE_LINE_BYTES {
+            return Err(stream_error(format!(
+                "OpenAI SSE line exceeds {} bytes",
+                MAX_SSE_LINE_BYTES
+            )));
         }
         Ok(())
     }
@@ -182,6 +196,12 @@ impl SseDecoder {
         if let Some(value) = line.strip_prefix("data:") {
             if !self.data.is_empty() {
                 self.data.push('\n');
+            }
+            if self.data.len().saturating_add(value.len()) > MAX_SSE_EVENT_BYTES {
+                return Err(stream_error(format!(
+                    "OpenAI SSE event exceeds {} bytes",
+                    MAX_SSE_EVENT_BYTES
+                )));
             }
             self.data.push_str(value.strip_prefix(' ').unwrap_or(value));
         }
@@ -293,5 +313,31 @@ mod tests {
             })
             .expect("second fragment");
         assert_eq!(seen, vec!["{\"a\":1}\ntail"]);
+    }
+
+    #[test]
+    fn decoder_rejects_oversized_line() {
+        let mut decoder = SseDecoder::default();
+        let error = decoder
+            .push(&vec![b'x'; MAX_SSE_LINE_BYTES + 1], |_| Ok(()))
+            .expect_err("oversized line must be rejected");
+        assert!(error.to_string().contains("SSE line exceeds"));
+    }
+
+    #[test]
+    fn decoder_rejects_oversized_event() {
+        let mut decoder = SseDecoder::default();
+        let chunk = "x".repeat(MAX_SSE_LINE_BYTES - 16);
+        let mut line = String::new();
+        for _ in 0..5 {
+            line.push_str("data: ");
+            line.push_str(&chunk);
+            line.push('\n');
+        }
+        line.push('\n');
+        let error = decoder
+            .push(line.as_bytes(), |_| Ok(()))
+            .expect_err("oversized event must be rejected");
+        assert!(error.to_string().contains("SSE event exceeds"));
     }
 }
