@@ -10,7 +10,10 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_process_containment::process_start_marker;
 use sha2::{Digest, Sha256};
 
-use crate::install::{AtomicInstaller as LegacyAtomicInstaller, Restart, ScheduledUpdate};
+use crate::install::{
+    AtomicInstaller as LegacyAtomicInstaller, Restart, ScheduledUpdate, UPDATE_OUTCOME_FILE,
+    new_health_nonce,
+};
 
 mod helper;
 
@@ -88,7 +91,17 @@ fn schedule_windows_health_checked_replace(
     let helper_path = target.with_extension("update.ps1");
     let state = directory.join(".medusa-update-state");
     let health = directory.join(".medusa-update-health");
+    let outcome = directory.join(UPDATE_OUTCOME_FILE);
     let lock = directory.join(".medusa-update.lock");
+    let target_revision = restart.target_revision.as_deref();
+    if let Some(revision) = target_revision {
+        if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid(
+                "update target revision must be a full 40-character Git commit SHA",
+            ));
+        }
+    }
+    let nonce = new_health_nonce(target, parent_pid)?;
 
     let mut lock_file = acquire_windows_update_lock(&lock, parent_pid)?;
     let mut helper_process = None;
@@ -120,6 +133,9 @@ fn schedule_windows_health_checked_replace(
             backup: &backup,
             state: &state,
             health: &health,
+            outcome: &outcome,
+            health_nonce: &nonce,
+            target_revision,
             lock: &lock,
             expected_hash: &expected_hash,
             restart,
@@ -164,9 +180,16 @@ fn schedule_windows_health_checked_replace(
         return Err(error);
     }
 
-    // A running Windows executable cannot be swapped. The helper is fully
-    // staged and owns rollback before this process exits.
-    std::process::exit(0)
+    // A running Windows executable cannot be swapped. The caller owns its
+    // shutdown after this durable handoff has been staged.
+    Ok(ScheduledUpdate {
+        helper: helper_path,
+        backup,
+        state,
+        health,
+        outcome,
+        health_nonce: nonce,
+    })
 }
 
 fn acquire_windows_update_lock(lock: &Path, parent_pid: u32) -> MedusaResult<fs::File> {

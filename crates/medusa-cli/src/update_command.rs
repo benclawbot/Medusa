@@ -165,6 +165,7 @@ fn release_channel(
         detached: cfg!(windows),
         sequence_file: Some(repo.join(".medusa/update-sequence")),
         rollout_sequence: Some(release.rollout_sequence),
+        target_revision: Some(release.source.revision.clone()),
     };
     super::request_daemon_shutdown(repo);
     installer.schedule_replace(&candidate, &restart, std::process::id())?;
@@ -173,7 +174,15 @@ fn release_channel(
     #[cfg(windows)]
     {
         progress.stage(UpdateStage::Installing, 99, "replacing executable");
-        wait_for_windows_replacement();
+        diagnostics
+            .phase(UpdatePhase::RestartHandoff)
+            .finish("health-check-pending", None, None)?;
+        progress.finish();
+        println!("Medusa update staged. Restarting.");
+        // The replacement helper waits for this process to exit before it can
+        // move the executable. Returning would leave the old process alive;
+        // terminate immediately after the durable handoff is recorded.
+        std::process::exit(0);
     }
 
     #[cfg(not(windows))]
@@ -268,7 +277,11 @@ fn source_channel(
     #[cfg(windows)]
     {
         progress.stage(UpdateStage::Installing, 99, "replacing executable");
-        wait_for_windows_replacement();
+        progress.finish();
+        println!("Medusa update staged. Restarting.");
+        // The replacement helper waits for this process to exit before it can
+        // move the executable. Terminate immediately after staging the handoff.
+        std::process::exit(0);
     }
 
     #[cfg(not(windows))]
@@ -367,7 +380,6 @@ enum UpdateStage {
     Downloading,
     Verifying,
     Installing,
-    #[cfg(not(windows))]
     Complete,
 }
 
@@ -380,7 +392,6 @@ impl UpdateStage {
             Self::Downloading => "Downloading",
             Self::Verifying => "Verifying",
             Self::Installing => "Installing",
-            #[cfg(not(windows))]
             Self::Complete => "Complete",
         }
     }
@@ -393,7 +404,6 @@ impl UpdateStage {
             Self::Downloading => "\u{1b}[34m",
             Self::Verifying => "\u{1b}[35m",
             Self::Installing => "\u{1b}[32m",
-            #[cfg(not(windows))]
             Self::Complete => "\u{1b}[1;32m",
         }
     }
@@ -556,7 +566,6 @@ impl UpdateProgress {
         let _ = stderr.flush();
     }
 
-    #[cfg(not(windows))]
     fn finish(&mut self) {
         self.stage(UpdateStage::Complete, 100, "ready");
         if self.enabled {
@@ -571,13 +580,6 @@ impl Drop for UpdateProgress {
         if self.enabled && self.started && !self.finished {
             eprintln!();
         }
-    }
-}
-
-#[cfg(windows)]
-fn wait_for_windows_replacement() -> ! {
-    loop {
-        std::thread::sleep(Duration::from_secs(60));
     }
 }
 

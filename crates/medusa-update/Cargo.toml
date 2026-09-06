@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 flate2 = "1.1"
+getrandom.workspace = true
 hex.workspace = true
 medusa-core.workspace = true
 medusa-process-containment.workspace = true

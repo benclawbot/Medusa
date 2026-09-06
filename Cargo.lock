@@ -1849,6 +1849,7 @@ name = "medusa-update"
 version = "1.0.7"
 dependencies = [
  "flate2",
+ "getrandom 0.4.3",
  "hex",
  "medusa-core",
  "medusa-process-containment",
