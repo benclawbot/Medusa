@@ -534,11 +534,7 @@ impl AnthropicSseDecoder {
         mut sink: impl FnMut(&str) -> MedusaResult<()>,
     ) -> MedusaResult<()> {
         self.pending.extend(bytes.iter().copied());
-        if self
-            .pending
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .is_none()
+        if !self.pending.iter().any(|byte| *byte == b'\n')
             && self.pending.len() > MAX_SSE_LINE_BYTES
         {
             return Err(anthropic_stream_error(

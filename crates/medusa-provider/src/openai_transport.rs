@@ -162,11 +162,7 @@ impl SseDecoder {
         mut sink: impl FnMut(&str) -> MedusaResult<()>,
     ) -> MedusaResult<()> {
         self.pending.extend(bytes.iter().copied());
-        if self
-            .pending
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .is_none()
+        if !self.pending.iter().any(|byte| *byte == b'\n')
             && self.pending.len() > MAX_SSE_LINE_BYTES
         {
             return Err(stream_error("OpenAI SSE line exceeds the 1 MiB limit"));
@@ -174,8 +170,7 @@ impl SseDecoder {
         while let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') {
             if newline + 1 > MAX_SSE_LINE_BYTES {
                 return Err(stream_error(format!(
-                    "OpenAI SSE line exceeds {} bytes",
-                    MAX_SSE_LINE_BYTES
+                    "OpenAI SSE line exceeds {MAX_SSE_LINE_BYTES} bytes"
                 )));
             }
             let mut line = self.pending.drain(..=newline).collect::<Vec<_>>();
@@ -187,8 +182,7 @@ impl SseDecoder {
         }
         if self.pending.len() > MAX_SSE_LINE_BYTES {
             return Err(stream_error(format!(
-                "OpenAI SSE line exceeds {} bytes",
-                MAX_SSE_LINE_BYTES
+                "OpenAI SSE line exceeds {MAX_SSE_LINE_BYTES} bytes"
             )));
         }
         Ok(())
@@ -230,8 +224,7 @@ impl SseDecoder {
                 .saturating_add(value.len());
             if next_len > MAX_SSE_EVENT_BYTES {
                 return Err(stream_error(format!(
-                    "OpenAI SSE event exceeds {} bytes",
-                    MAX_SSE_EVENT_BYTES
+                    "OpenAI SSE event exceeds {MAX_SSE_EVENT_BYTES} bytes"
                 )));
             }
             self.data.push_str(value);
