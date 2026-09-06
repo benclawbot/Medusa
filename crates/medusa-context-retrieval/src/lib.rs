@@ -96,7 +96,7 @@ impl RetrievalMemo {
         // request or ledger into a successful retrieval.
         query.validate()?;
         ledger.validate()?;
-        let key = memo_key(ledger, query);
+        let key = memo_key(ledger, query)?;
         if let Some(hit) = self.entries.get(&key) {
             return Ok(hit.clone());
         }
@@ -113,18 +113,20 @@ impl RetrievalMemo {
     }
 }
 
-fn memo_key(ledger: &ContextLedger, query: &RetrievalQuery) -> String {
+fn memo_key(ledger: &ContextLedger, query: &RetrievalQuery) -> Result<String, &'static str> {
     let mut hasher = Sha256::new();
     update_framed(&mut hasher, b"medusa-retrieval-memo-v2");
     // Serialize the typed query so every field, including collection boundaries and
     // enum discriminants, participates in the identity.
-    let query_bytes = serde_json::to_vec(query).expect("retrieval query is serializable");
+    let query_bytes = serde_json::to_vec(query)
+        .map_err(|_| "retrieval memo key could not serialize the retrieval query")?;
     update_framed(&mut hasher, &query_bytes);
     for item in ledger.items() {
-        let item_bytes = serde_json::to_vec(item).expect("context item is serializable");
+        let item_bytes = serde_json::to_vec(item)
+            .map_err(|_| "retrieval memo key could not serialize a context item")?;
         update_framed(&mut hasher, &item_bytes);
     }
-    format!("{:x}", hasher.finalize())
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn update_framed(hasher: &mut Sha256, value: &[u8]) {
@@ -395,21 +397,11 @@ mod tests {
     fn memo_key_includes_context_content_not_only_ids_and_sequences() {
         let mut first_ledger = ContextLedger::default();
         first_ledger
-            .append(item(
-                "note",
-                ContextKind::Observation,
-                "first version",
-                1,
-            ))
+            .append(item("note", ContextKind::Observation, "first version", 1))
             .unwrap();
         let mut second_ledger = ContextLedger::default();
         second_ledger
-            .append(item(
-                "note",
-                ContextKind::Observation,
-                "second version",
-                1,
-            ))
+            .append(item("note", ContextKind::Observation, "second version", 1))
             .unwrap();
         let query = RetrievalQuery {
             text: "version".to_owned(),
@@ -428,19 +420,15 @@ mod tests {
     }
 
     #[test]
-    fn memo_validates_before_returning_a_cached_hit() {
+    fn memo_validates_before_returning_a_colliding_cached_hit() {
         let mut ledger = ContextLedger::default();
         ledger
-            .append(item(
-                "note",
-                ContextKind::Observation,
-                "memoized content",
-                1,
-            ))
+            .append(item("bc", ContextKind::Observation, "memoized content", 1))
             .unwrap();
         let valid_query = RetrievalQuery {
-            text: "memoized".to_owned(),
-            required_ids: BTreeSet::new(),
+            // Under the old unframed key, `a` + `bc` collided with `ab` + `c`.
+            text: "a".to_owned(),
+            required_ids: BTreeSet::from(["bc".to_owned()]),
             preferred_kinds: BTreeSet::new(),
             maximum_items: 4,
             maximum_bytes: 4096,
@@ -449,19 +437,23 @@ mod tests {
         memo.retrieve_cached(&ledger, &valid_query).unwrap();
 
         let invalid_query = RetrievalQuery {
-            text: String::new(),
-            ..valid_query
+            text: "ab".to_owned(),
+            required_ids: BTreeSet::from(["c".to_owned()]),
+            ..valid_query.clone()
         };
         assert_eq!(
             memo.retrieve_cached(&ledger, &invalid_query),
-            Err("retrieval query must include text or required ids")
+            Err("required context id does not exist")
         );
     }
 
     #[test]
     fn default_and_explicit_memo_capacity_have_consistent_semantics() {
         assert_eq!(RetrievalMemo::default().capacity, DEFAULT_MEMO_CAPACITY);
-        assert_eq!(RetrievalMemo::new(0).capacity, RetrievalMemo::new(1).capacity);
+        assert_eq!(
+            RetrievalMemo::new(0).capacity,
+            RetrievalMemo::new(1).capacity
+        );
     }
 
     #[test]
