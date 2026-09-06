@@ -183,7 +183,8 @@ fn list_sessions_page_sync(
     if let Some(cursor) = cursor {
         let (updated_at, id) = decode_session_cursor(cursor)?;
         sessions.retain(|session| {
-            session.updated_at < updated_at || (session.updated_at == updated_at && session.id > id)
+            session.updated_at.as_str() < updated_at
+                || (session.updated_at.as_str() == updated_at && session.id.as_str() > id)
         });
     }
 
