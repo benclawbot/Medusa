@@ -6,8 +6,12 @@ use crate::clipboard::{ClipboardError, PromptDraft};
 
 #[allow(dead_code)]
 mod legacy;
+pub(crate) mod text_cells;
 
 pub use legacy::{MenuItem, SelectionState, select_menu, select_menu_items};
+use text_cells::{
+    byte_at_cell_column, cell_column, next_grapheme_boundary, previous_grapheme_boundary,
+};
 
 const MAX_PROMPT_HISTORY: usize = 100;
 
@@ -181,7 +185,7 @@ impl ComposerState {
         let text = &self.draft.text;
         let line_start = line_start(text, self.cursor);
         let line_end = line_end(text, self.cursor);
-        let column = grapheme_count(&text[line_start..self.cursor]);
+        let column = cell_column(&text[line_start..line_end], self.cursor - line_start);
 
         if direction < 0 {
             if line_start == 0 {
@@ -195,7 +199,7 @@ impl ComposerState {
             let previous_start = text[..previous_end]
                 .rfind('\n')
                 .map_or(0, |index| index + 1);
-            let offset = grapheme_boundary_at_column(&text[previous_start..previous_end], column);
+            let offset = byte_at_cell_column(&text[previous_start..previous_end], column);
             self.cursor = previous_start + offset;
             ComposerAction::None
         } else {
@@ -210,7 +214,7 @@ impl ComposerState {
             let next_end = text[next_start..]
                 .find('\n')
                 .map_or(text.len(), |offset| next_start + offset);
-            let offset = grapheme_boundary_at_column(&text[next_start..next_end], column);
+            let offset = byte_at_cell_column(&text[next_start..next_end], column);
             self.cursor = next_start + offset;
             ComposerAction::None
         }
@@ -402,143 +406,6 @@ fn grapheme_is_whitespace(grapheme: &str) -> bool {
     grapheme_word_class(grapheme) == WordClass::Whitespace
 }
 
-fn previous_grapheme_boundary(text: &str, cursor: usize) -> usize {
-    let target = cursor.min(text.len());
-    if target == 0 {
-        return 0;
-    }
-    let mut boundary = 0;
-    let mut next = 0;
-    while next < target {
-        boundary = next;
-        next = next_grapheme_boundary(text, next);
-        if next >= target {
-            return boundary;
-        }
-    }
-    boundary
-}
-
-fn next_grapheme_boundary(text: &str, cursor: usize) -> usize {
-    let start = cursor.min(text.len());
-    if start >= text.len() {
-        return text.len();
-    }
-    let mut chars = text[start..].char_indices();
-    let Some((_, first)) = chars.next() else {
-        return text.len();
-    };
-    let mut end = start + first.len_utf8();
-
-    if first == '\r' && text[end..].starts_with('\n') {
-        return end + 1;
-    }
-
-    if is_regional_indicator(first) {
-        if let Some(next) = text[end..].chars().next()
-            && is_regional_indicator(next)
-        {
-            end += next.len_utf8();
-        }
-        return consume_grapheme_extenders(text, end);
-    }
-
-    end = consume_grapheme_extenders(text, end);
-    loop {
-        let Some(next) = text[end..].chars().next() else {
-            break;
-        };
-        if next != '\u{200d}' {
-            break;
-        }
-        end += next.len_utf8();
-        let Some(joined) = text[end..].chars().next() else {
-            break;
-        };
-        end += joined.len_utf8();
-        end = consume_grapheme_extenders(text, end);
-    }
-    end
-}
-
-fn consume_grapheme_extenders(text: &str, mut cursor: usize) -> usize {
-    while let Some(character) = text[cursor..].chars().next() {
-        if !is_grapheme_extender(character) {
-            break;
-        }
-        cursor += character.len_utf8();
-    }
-    cursor
-}
-
-fn is_grapheme_extender(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x0300..=0x036f
-            | 0x0483..=0x0489
-            | 0x0591..=0x05bd
-            | 0x05bf
-            | 0x05c1..=0x05c2
-            | 0x05c4..=0x05c5
-            | 0x0610..=0x061a
-            | 0x064b..=0x065f
-            | 0x0670
-            | 0x06d6..=0x06dc
-            | 0x06df..=0x06e4
-            | 0x06e7..=0x06e8
-            | 0x06ea..=0x06ed
-            | 0x0711
-            | 0x0730..=0x074a
-            | 0x07a6..=0x07b0
-            | 0x07eb..=0x07f3
-            | 0x0816..=0x0819
-            | 0x081b..=0x0823
-            | 0x0825..=0x0827
-            | 0x0829..=0x082d
-            | 0x0859..=0x085b
-            | 0x08d3..=0x0902
-            | 0x093a
-            | 0x093c
-            | 0x0941..=0x0948
-            | 0x094d
-            | 0x0951..=0x0957
-            | 0x0962..=0x0963
-            | 0x1ab0..=0x1aff
-            | 0x1dc0..=0x1dff
-            | 0x20d0..=0x20ff
-            | 0xfe00..=0xfe0f
-            | 0xfe20..=0xfe2f
-            | 0x1f3fb..=0x1f3ff
-            | 0xe0020..=0xe007f
-            | 0xe0100..=0xe01ef
-    )
-}
-
-fn is_regional_indicator(character: char) -> bool {
-    matches!(character as u32, 0x1f1e6..=0x1f1ff)
-}
-
-fn grapheme_count(text: &str) -> usize {
-    let mut count = 0;
-    let mut cursor = 0;
-    while cursor < text.len() {
-        cursor = next_grapheme_boundary(text, cursor);
-        count += 1;
-    }
-    count
-}
-
-fn grapheme_boundary_at_column(text: &str, column: usize) -> usize {
-    let mut cursor = 0;
-    for _ in 0..column {
-        if cursor >= text.len() {
-            break;
-        }
-        cursor = next_grapheme_boundary(text, cursor);
-    }
-    cursor
-}
-
 fn normalized_len(text: &str) -> usize {
     text.replace("\r\n", "\n").replace('\r', "\n").len()
 }
@@ -667,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn up_down_move_within_multiline_before_history() {
+    fn up_down_preserve_terminal_cell_column_before_history() {
         clear_history();
         let mut composer = ComposerState::new("a👩‍💻\nb\u{301}c\n界z");
         composer.cursor = composer.draft.text.find("界").expect("third line") + "界".len();
@@ -676,7 +543,7 @@ mod tests {
             ComposerAction::None
         );
         let second_line = composer.draft.text.find("b\u{301}c").expect("second line");
-        assert_eq!(composer.cursor, second_line + "b\u{301}".len());
+        assert_eq!(composer.cursor, second_line + "b\u{301}c".len());
         assert_eq!(
             composer.handle_event(key(KeyCode::Down)).expect("down"),
             ComposerAction::None
