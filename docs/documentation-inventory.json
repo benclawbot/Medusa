@@ -569,6 +569,11 @@
       "sha256": "b16cfacd698eb3fd930b5f95ed74f577c22f740c9f99664e68fd8fc42d96098d"
     },
     {
+      "path": "docs/implementation-ledger-core.md",
+      "disposition": "current",
+      "sha256": "e789c8913112ae0024b2c4edb7a7cab133f699c9d29d123e663a7a4e1f0b4e39"
+    },
+    {
       "path": "docs/issue-307-direct-engine-modules.md",
       "disposition": "historical",
       "sha256": "5c7bf7fbc92485becab89799541e9cf406940569f2b32a92c5596124e9db87bf"
