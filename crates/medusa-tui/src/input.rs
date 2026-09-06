@@ -4,7 +4,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::clipboard::{ClipboardError, PromptDraft};
 
-#[path = "input_legacy.rs"]
 #[allow(dead_code)]
 mod legacy;
 
