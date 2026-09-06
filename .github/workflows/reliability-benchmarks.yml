@@ -82,7 +82,10 @@ jobs:
     name: Deterministic runtime benchmark
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # This job runs the warm-up plus three two-trial acceptance benchmarks.
+    # Keep enough bounded headroom for the two 600-second reliability trials,
+    # orchestration, coding-harness, setup, and evidence upload.
+    timeout-minutes: 60
     steps:
       - name: Bootstrap repository for local actions
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

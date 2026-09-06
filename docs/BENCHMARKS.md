@@ -30,7 +30,7 @@ The command executes the product acceptance contract twice by default and writes
 - `target/reliability-benchmark/reliability-benchmark.md`;
 - the original per-run acceptance summaries and logs.
 
-The CI benchmark job compiles the product acceptance runner and workspace test targets before starting the per-run timeout. The 600-second acceptance bound measures the authoritative test execution and recovery contract rather than a cold test-harness build; it provides evidence-based headroom over the 412,397-ms production-orchestration timing observed on the supported Linux runner while remaining bounded within the 30-minute job budget. Two runs can consume at most 20 minutes, leaving time for setup, warm-up, and reporting.
+The CI benchmark job compiles the product acceptance runner and workspace test targets before starting the per-run timeout. The 600-second acceptance bound measures the authoritative test execution and recovery contract rather than a cold test-harness build; it provides evidence-based headroom over the 412,397-ms production-orchestration timing observed on the supported Linux runner. The deterministic runtime job has a 60-minute outer limit because it runs the warm-up, two bounded reliability trials, two orchestration trials, and two coding-harness trials before uploading evidence. The outer limit bounds the unbounded benchmark subprocesses while leaving time for setup and reporting.
 
 The report records the exact commit, run count, scenario results, time to verified completion, and threshold failures. A test process exiting successfully is not sufficient: the underlying acceptance scenario must emit its required evidence marker and be recorded as `passed`.
 
