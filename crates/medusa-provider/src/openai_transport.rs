@@ -1,6 +1,9 @@
 use std::{
     io::Read,
-    sync::{atomic::AtomicBool, mpsc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
 };
 
@@ -15,6 +18,9 @@ use crate::{
 };
 
 const READ_BUFFER_BYTES: usize = 8 * 1024;
+const MAX_SSE_LINE_BYTES: usize = 1024 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 8 * 1024 * 1024;
+const STREAM_EVENT_CHANNEL_CAPACITY: usize = 64;
 
 pub(crate) fn complete_blocking(
     client: &BlockingClient,
@@ -71,7 +77,8 @@ pub(crate) fn complete_cancellable(
     cancel: &AtomicBool,
     sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
 ) -> MedusaResult<ModelResponse> {
-    let (sender, receiver) = mpsc::channel::<ProviderStreamEvent>();
+    let (sender, receiver) =
+        mpsc::sync_channel::<ProviderStreamEvent>(STREAM_EVENT_CHANNEL_CAPACITY);
     thread::scope(|scope| {
         let worker_sender = sender.clone();
         let worker = scope.spawn(move || {
@@ -129,7 +136,12 @@ pub(crate) fn complete_cancellable(
 
         drop(sender);
         for event in receiver {
-            sink(event)?;
+            if let Err(error) = sink(event) {
+                // A slow or failed consumer must cancel the transport before the scoped worker is
+                // joined; otherwise a stalled response can hold this call until the HTTP timeout.
+                cancel.store(true, Ordering::Release);
+                return Err(error);
+            }
         }
         worker
             .join()
@@ -139,7 +151,7 @@ pub(crate) fn complete_cancellable(
 
 #[derive(Debug, Default)]
 struct SseDecoder {
-    pending: Vec<u8>,
+    pending: std::collections::VecDeque<u8>,
     data: String,
 }
 
@@ -149,8 +161,20 @@ impl SseDecoder {
         bytes: &[u8],
         mut sink: impl FnMut(&str) -> MedusaResult<()>,
     ) -> MedusaResult<()> {
-        self.pending.extend_from_slice(bytes);
+        self.pending.extend(bytes.iter().copied());
+        if self
+            .pending
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .is_none()
+            && self.pending.len() > MAX_SSE_LINE_BYTES
+        {
+            return Err(stream_error("OpenAI SSE line exceeds the 1 MiB limit"));
+        }
         while let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') {
+            if newline > MAX_SSE_LINE_BYTES {
+                return Err(stream_error("OpenAI SSE line exceeds the 1 MiB limit"));
+            }
             let mut line = self.pending.drain(..=newline).collect::<Vec<_>>();
             line.pop();
             if line.last() == Some(&b'\r') {
@@ -163,7 +187,12 @@ impl SseDecoder {
 
     fn finish(&mut self, mut sink: impl FnMut(&str) -> MedusaResult<()>) -> MedusaResult<()> {
         if !self.pending.is_empty() {
-            let line = std::mem::take(&mut self.pending);
+            if self.pending.len() > MAX_SSE_LINE_BYTES {
+                return Err(stream_error("OpenAI SSE line exceeds the 1 MiB limit"));
+            }
+            let line = std::mem::take(&mut self.pending)
+                .into_iter()
+                .collect::<Vec<_>>();
             self.process_line(&line, &mut sink)?;
         }
         self.dispatch(&mut sink)
@@ -180,10 +209,19 @@ impl SseDecoder {
             return self.dispatch(sink);
         }
         if let Some(value) = line.strip_prefix("data:") {
+            let value = value.strip_prefix(' ').unwrap_or(value);
+            let next_len = self
+                .data
+                .len()
+                .saturating_add(usize::from(!self.data.is_empty()))
+                .saturating_add(value.len());
+            if next_len > MAX_SSE_EVENT_BYTES {
+                return Err(stream_error("OpenAI SSE event exceeds the 8 MiB limit"));
+            }
             if !self.data.is_empty() {
                 self.data.push('\n');
             }
-            self.data.push_str(value.strip_prefix(' ').unwrap_or(value));
+            self.data.push_str(value);
         }
         Ok(())
     }
@@ -293,5 +331,30 @@ mod tests {
             })
             .expect("second fragment");
         assert_eq!(seen, vec!["{\"a\":1}\ntail"]);
+    }
+
+    #[test]
+    fn decoder_rejects_an_unterminated_oversized_line() {
+        let mut decoder = SseDecoder::default();
+        let error = decoder
+            .push(&vec![b'x'; MAX_SSE_LINE_BYTES + 1], |_| Ok(()))
+            .expect_err("oversized line");
+        assert!(error.to_string().contains("line exceeds"));
+    }
+
+    #[test]
+    fn decoder_rejects_an_oversized_event_before_json_parsing() {
+        let mut decoder = SseDecoder::default();
+        let mut bytes = Vec::with_capacity(MAX_SSE_EVENT_BYTES + 64);
+        for _ in 0..9 {
+            bytes.extend_from_slice(b"data: ");
+            bytes.extend(std::iter::repeat_n(b'x', MAX_SSE_LINE_BYTES - 8));
+            bytes.extend_from_slice(b"\n");
+        }
+        bytes.extend_from_slice(b"\n");
+        let error = decoder
+            .push(&bytes, |_| Ok(()))
+            .expect_err("oversized event");
+        assert!(error.to_string().contains("event exceeds"));
     }
 }

@@ -260,16 +260,27 @@ fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
 
 fn find_session_path(repo: &Path, session_id: &str) -> Result<PathBuf, String> {
     validate_session_id(session_id)?;
-    for root in [repo.join(".medusa/sessions"), fallback_session_root(repo)] {
+    let roots = [repo.join(".medusa/sessions"), fallback_session_root(repo)];
+    find_session_path_in_roots(&roots, session_id)
+        .ok_or_else(|| format!("session {session_id} was not found for {}", repo.display()))
+}
+
+fn find_session_path_in_roots(roots: &[PathBuf], session_id: &str) -> Option<PathBuf> {
+    for root in roots {
         let path = root.join(format!("{session_id}.json"));
-        if path.is_file() {
-            return Ok(path);
+        if path.is_file() && durable_session_id_matches(&path, session_id) {
+            return Some(path);
         }
     }
-    Err(format!(
-        "session {session_id} was not found for {}",
-        repo.display()
-    ))
+    None
+}
+
+fn durable_session_id_matches(path: &Path, session_id: &str) -> bool {
+    File::open(path)
+        .ok()
+        .and_then(|file| serde_json::from_reader::<_, Value>(file).ok())
+        .and_then(|value| value.get("id").and_then(Value::as_str).map(str::to_owned))
+        .is_some_and(|durable_id| durable_id == session_id)
 }
 
 fn validate_session_id(session_id: &str) -> Result<(), String> {
@@ -762,7 +773,20 @@ mod tests {
 
         let error = read_session_page_sync(&repo.path().to_string_lossy(), "requested", None, 10)
             .expect_err("mismatched durable identity must be rejected");
-        assert!(error.contains("mismatched durable metadata"));
+        assert!(error.contains("was not found"));
+    }
+
+    #[test]
+    fn session_lookup_skips_mismatched_primary_and_uses_valid_fallback() {
+        let repo = crate::tempdir().expect("repo");
+        let primary = repo.path().join("primary");
+        let fallback = repo.path().join("fallback");
+        write_session(&primary, "other", "2026-01-01T00:00:01Z", 1);
+        write_session(&fallback, "requested", "2026-01-01T00:00:02Z", 1);
+
+        let path = find_session_path_in_roots(&[primary.clone(), fallback.clone()], "requested")
+            .expect("valid fallback session");
+        assert_eq!(path, fallback.join("requested.json"));
     }
 
     #[test]
