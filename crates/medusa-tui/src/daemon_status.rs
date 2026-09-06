@@ -49,9 +49,7 @@ impl DaemonMonitor {
         Self::with_observer(move || observe_client(&client))
     }
 
-    fn with_observer(
-        mut observe: impl FnMut() -> DaemonObservation + Send + 'static,
-    ) -> Self {
+    fn with_observer(mut observe: impl FnMut() -> DaemonObservation + Send + 'static) -> Self {
         // Capacity one deliberately coalesces refresh demand while an IPC call is in flight.
         let (refresh_tx, refresh_rx) = mpsc::sync_channel::<()>(1);
         let (observation_tx, observation_rx) = mpsc::channel::<DaemonObservation>();
@@ -244,9 +242,8 @@ mod tests {
         let mut app = app(directory.path());
         let mut monitor = DaemonMonitor::new(paths.socket);
 
-        let snapshot = wait_for_snapshot(&mut monitor, &mut app, |snapshot| {
-            snapshot.1 == "connected"
-        });
+        let snapshot =
+            wait_for_snapshot(&mut monitor, &mut app, |snapshot| snapshot.1 == "connected");
 
         assert_eq!(snapshot.1, "connected");
         assert!(snapshot.0.is_empty());
@@ -320,9 +317,8 @@ mod tests {
         );
 
         release.wait();
-        let snapshot = wait_for_snapshot(&mut monitor, &mut app, |snapshot| {
-            snapshot.1 == "connected"
-        });
+        let snapshot =
+            wait_for_snapshot(&mut monitor, &mut app, |snapshot| snapshot.1 == "connected");
         assert_eq!(snapshot.1, "connected");
         assert_eq!(
             app.transcript
