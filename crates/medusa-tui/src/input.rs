@@ -740,10 +740,17 @@ mod tests {
     #[test]
     fn control_r_searches_bounded_history_by_original_draft() {
         clear_history();
-        for text in ["build frontend", "review docs", "build backend", "ship release"] {
+        for text in [
+            "build frontend",
+            "review docs",
+            "build backend",
+            "ship release",
+        ] {
             let mut composer = ComposerState::new(text);
             assert_eq!(
-                composer.handle_event(key(KeyCode::Enter)).expect("record prompt"),
+                composer
+                    .handle_event(key(KeyCode::Enter))
+                    .expect("record prompt"),
                 ComposerAction::Submit
             );
         }
