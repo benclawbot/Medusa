@@ -169,6 +169,7 @@ fn observe_client(client: &DaemonClient) -> DaemonObservation {
 mod tests {
     use std::{
         sync::{Arc, Barrier},
+        sync::atomic::{AtomicBool, Ordering},
         thread,
         time::{Duration, Instant},
     };
@@ -281,11 +282,15 @@ mod tests {
         let mut app = app(directory.path());
         let entered = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
+        let first_observation = Arc::new(AtomicBool::new(true));
         let worker_entered = Arc::clone(&entered);
         let worker_release = Arc::clone(&release);
+        let worker_first_observation = Arc::clone(&first_observation);
         let mut monitor = DaemonMonitor::with_observer(move || {
-            worker_entered.wait();
-            worker_release.wait();
+            if worker_first_observation.swap(false, Ordering::AcqRel) {
+                worker_entered.wait();
+                worker_release.wait();
+            }
             DaemonObservation {
                 kind: DaemonConnectionKind::Connected,
                 snapshot: (Vec::new(), "connected".to_owned()),
