@@ -63,30 +63,40 @@ describe("runtime timeline store", () => {
     expect(getTimelineSnapshot().busy).toBe(false);
   });
 
-  it("projects typed team snapshots into stable worker activities and removes stale workers", async () => {
+  it("projects typed team snapshots, ignores stale snapshots, and removes workers on a newer snapshot", async () => {
+    const runningSnapshot = {
+      type: "team" as const,
+      snapshot: {
+        executionId: "execution-1",
+        active: true,
+        shutdownRequested: false,
+        sequence: 1,
+        workers: [
+          {
+            workerId: "reviewer-1",
+            role: "reviewer",
+            taskId: "review",
+            lifecycle: "running",
+            sessionId: "session-1",
+            turn: 2,
+            lastUpdate: "checking tests",
+            queuedInstructions: 0,
+          },
+        ],
+      },
+    } satisfies RuntimeEvent;
+
     mockedInvoke
       .mockResolvedValueOnce({ runtimeId: "runtime-team", repo: "/repo" })
+      .mockResolvedValueOnce([{ type: "started" }, runningSnapshot] satisfies RuntimeEvent[])
       .mockResolvedValueOnce([
-        { type: "started" },
         {
           type: "team",
           snapshot: {
-            executionId: "execution-1",
-            active: true,
+            active: false,
             shutdownRequested: false,
-            sequence: 1,
-            workers: [
-              {
-                workerId: "reviewer-1",
-                role: "reviewer",
-                taskId: "review",
-                lifecycle: "running",
-                sessionId: "session-1",
-                turn: 2,
-                lastUpdate: "checking tests",
-                queuedInstructions: 0,
-              },
-            ],
+            sequence: 0,
+            workers: [],
           },
         },
       ] satisfies RuntimeEvent[])
@@ -96,7 +106,7 @@ describe("runtime timeline store", () => {
           snapshot: {
             active: false,
             shutdownRequested: false,
-            sequence: 0,
+            sequence: 2,
             workers: [],
           },
         },
@@ -115,8 +125,20 @@ describe("runtime timeline store", () => {
     ]);
 
     await pollRuntime("runtime-team");
+    expect(getTimelineSnapshot().activities).toEqual([
+      {
+        id: "team:reviewer-1",
+        kind: "progress",
+        title: "reviewer-1 · review · running",
+        details: ["role reviewer", "turn 2", "session session-1", "checking tests"],
+      },
+    ]);
+    expect(getTimelineSnapshot().team?.sequence).toBe(1);
+
+    await pollRuntime("runtime-team");
     expect(getTimelineSnapshot().activities).toEqual([]);
     expect(getTimelineSnapshot().team?.workers).toEqual([]);
+    expect(getTimelineSnapshot().team?.sequence).toBe(2);
   });
 
   it("notifies subscribers and resets when a new runtime starts", async () => {
