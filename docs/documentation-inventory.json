@@ -106,7 +106,7 @@
     {
       "path": "docs/BENCHMARKS.md",
       "disposition": "current",
-      "sha256": "49033ccd9bccd660f1b4ad2c0211905e8224e60744fd5b02e5c95dbd161221c9"
+      "sha256": "63ddb02e102da805e7f8623ee418e9924d47930607419f26da97da6ccc842e8e"
     },
     {
       "path": "docs/CAPABILITY-EVIDENCE.md",
@@ -246,7 +246,7 @@
     {
       "path": "docs/PRODUCT-ACCEPTANCE.md",
       "disposition": "current",
-      "sha256": "64cd87f0ccbb4a3e79b6a6f41fdff262e57202ab4d17bac80672a206658d899b"
+      "sha256": "2ac59f9c65ed6b630259d8dffe02109439df2987f551dfb6f4c4aef655203695"
     },
     {
       "path": "docs/PRODUCTION-EXECUTION-TRACE.md",
