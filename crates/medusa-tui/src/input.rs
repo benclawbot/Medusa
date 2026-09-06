@@ -93,6 +93,31 @@ impl ComposerState {
             (KeyCode::Up, _) => Ok(self.move_vertical(-1)),
             (KeyCode::Down, _) => Ok(self.move_vertical(1)),
             (KeyCode::Tab, _) => Ok(ComposerAction::CompleteCommand),
+            (KeyCode::Home, modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor = 0;
+                Ok(ComposerAction::None)
+            }
+            (KeyCode::End, modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor = self.draft.text.len();
+                Ok(ComposerAction::None)
+            }
+            (KeyCode::Home, _) => {
+                self.cursor = line_start(&self.draft.text, self.cursor);
+                Ok(ComposerAction::None)
+            }
+            (KeyCode::End, _) => {
+                self.cursor = line_end(&self.draft.text, self.cursor);
+                Ok(ComposerAction::None)
+            }
+            (KeyCode::Delete, _) => self.delete_forward(),
+            (KeyCode::Left, modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor = previous_word_boundary(&self.draft.text, self.cursor);
+                Ok(ComposerAction::None)
+            }
+            (KeyCode::Right, modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor = next_word_boundary(&self.draft.text, self.cursor);
+                Ok(ComposerAction::None)
+            }
             (KeyCode::Char(character), modifiers)
                 if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT =>
             {
@@ -129,16 +154,25 @@ impl ComposerState {
         Ok(ComposerAction::Changed)
     }
 
+    fn delete_forward(&mut self) -> Result<ComposerAction, ClipboardError> {
+        if self.cursor >= self.draft.text.len() {
+            return Ok(ComposerAction::None);
+        }
+        let next = next_grapheme_boundary(&self.draft.text, self.cursor);
+        self.draft.text.replace_range(self.cursor..next, "");
+        self.draft.revision = self.draft.revision.saturating_add(1);
+        reset_history_navigation();
+        Ok(ComposerAction::Changed)
+    }
+
     fn slash_completion_navigation_active(&self) -> bool {
         !self.draft.text.contains('\n') && self.draft.text.starts_with('/')
     }
 
     fn move_vertical(&mut self, direction: isize) -> ComposerAction {
         let text = &self.draft.text;
-        let line_start = text[..self.cursor].rfind('\n').map_or(0, |index| index + 1);
-        let line_end = text[self.cursor..]
-            .find('\n')
-            .map_or(text.len(), |offset| self.cursor + offset);
+        let line_start = line_start(text, self.cursor);
+        let line_end = line_end(text, self.cursor);
         let column = grapheme_count(&text[line_start..self.cursor]);
 
         if direction < 0 {
@@ -240,6 +274,98 @@ fn reset_history_navigation() {
         history.position = None;
         history.saved_draft = None;
     });
+}
+
+fn line_start(text: &str, cursor: usize) -> usize {
+    text[..cursor.min(text.len())]
+        .rfind('\n')
+        .map_or(0, |index| index + 1)
+}
+
+fn line_end(text: &str, cursor: usize) -> usize {
+    let cursor = cursor.min(text.len());
+    text[cursor..]
+        .find('\n')
+        .map_or(text.len(), |offset| cursor + offset)
+}
+
+fn previous_word_boundary(text: &str, cursor: usize) -> usize {
+    let mut current = cursor.min(text.len());
+    while current > 0 {
+        let previous = previous_grapheme_boundary(text, current);
+        if !grapheme_is_whitespace(&text[previous..current]) {
+            break;
+        }
+        current = previous;
+    }
+    if current == 0 {
+        return 0;
+    }
+    let previous = previous_grapheme_boundary(text, current);
+    let class = grapheme_word_class(&text[previous..current]);
+    current = previous;
+    while current > 0 {
+        let candidate = previous_grapheme_boundary(text, current);
+        if grapheme_word_class(&text[candidate..current]) != class {
+            break;
+        }
+        current = candidate;
+    }
+    current
+}
+
+fn next_word_boundary(text: &str, cursor: usize) -> usize {
+    let mut current = cursor.min(text.len());
+    while current < text.len() {
+        let next = next_grapheme_boundary(text, current);
+        if !grapheme_is_whitespace(&text[current..next]) {
+            break;
+        }
+        current = next;
+    }
+    if current >= text.len() {
+        return text.len();
+    }
+    let next = next_grapheme_boundary(text, current);
+    let class = grapheme_word_class(&text[current..next]);
+    current = next;
+    while current < text.len() {
+        let candidate = next_grapheme_boundary(text, current);
+        if grapheme_word_class(&text[current..candidate]) != class {
+            break;
+        }
+        current = candidate;
+    }
+    while current < text.len() {
+        let next = next_grapheme_boundary(text, current);
+        if !grapheme_is_whitespace(&text[current..next]) {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WordClass {
+    Word,
+    Punctuation,
+    Whitespace,
+}
+
+fn grapheme_word_class(grapheme: &str) -> WordClass {
+    let first = grapheme.chars().next().unwrap_or(' ');
+    if first.is_whitespace() {
+        WordClass::Whitespace
+    } else if first.is_alphanumeric() || first == '_' {
+        WordClass::Word
+    } else {
+        WordClass::Punctuation
+    }
+}
+
+fn grapheme_is_whitespace(grapheme: &str) -> bool {
+    grapheme_word_class(grapheme) == WordClass::Whitespace
 }
 
 fn previous_grapheme_boundary(text: &str, cursor: usize) -> usize {
@@ -391,6 +517,10 @@ mod tests {
         Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
     }
 
+    fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new(code, modifiers))
+    }
+
     fn clear_history() {
         PROMPT_HISTORY.with(|history| *history.borrow_mut() = PromptHistory::default());
     }
@@ -434,6 +564,64 @@ mod tests {
         composer.handle_event(key(KeyCode::Right)).expect("flag");
         assert_eq!(&composer.draft.text[..composer.cursor], "e\u{301}🇨🇭");
         composer.handle_event(key(KeyCode::Right)).expect("cjk");
+        assert_eq!(composer.cursor, composer.draft.text.len());
+    }
+
+    #[test]
+    fn home_end_and_delete_are_grapheme_safe_in_multiline_text() {
+        clear_history();
+        let mut composer = ComposerState::new("first\ne\u{301}👩‍💻界\nlast");
+        composer.cursor = composer.draft.text.find('界').expect("cjk");
+
+        composer.handle_event(key(KeyCode::Home)).expect("home");
+        assert_eq!(&composer.draft.text[..composer.cursor], "first\n");
+        composer.handle_event(key(KeyCode::End)).expect("end");
+        assert_eq!(&composer.draft.text[..composer.cursor], "first\ne\u{301}👩‍💻界");
+
+        composer.cursor = "first\n".len();
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Delete)).expect("delete combining"),
+            ComposerAction::Changed
+        );
+        assert_eq!(composer.draft.text, "first\n👩‍💻界\nlast");
+        assert_eq!(composer.cursor, "first\n".len());
+        assert_eq!(
+            composer.handle_event(key(KeyCode::Delete)).expect("delete emoji"),
+            ComposerAction::Changed
+        );
+        assert_eq!(composer.draft.text, "first\n界\nlast");
+
+        composer
+            .handle_event(modified_key(KeyCode::End, KeyModifiers::CONTROL))
+            .expect("document end");
+        assert_eq!(composer.cursor, composer.draft.text.len());
+        composer
+            .handle_event(modified_key(KeyCode::Home, KeyModifiers::CONTROL))
+            .expect("document home");
+        assert_eq!(composer.cursor, 0);
+    }
+
+    #[test]
+    fn control_arrows_move_by_unicode_word_boundaries() {
+        clear_history();
+        let mut composer = ComposerState::new("alpha e\u{301}clair 👩‍💻 界_beta");
+        composer.cursor = composer.draft.text.len();
+
+        composer
+            .handle_event(modified_key(KeyCode::Left, KeyModifiers::CONTROL))
+            .expect("left word");
+        assert_eq!(&composer.draft.text[composer.cursor..], "界_beta");
+        composer
+            .handle_event(modified_key(KeyCode::Left, KeyModifiers::CONTROL))
+            .expect("left emoji");
+        assert_eq!(&composer.draft.text[composer.cursor..], "👩‍💻 界_beta");
+        composer
+            .handle_event(modified_key(KeyCode::Right, KeyModifiers::CONTROL))
+            .expect("right emoji");
+        assert_eq!(&composer.draft.text[composer.cursor..], "界_beta");
+        composer
+            .handle_event(modified_key(KeyCode::Right, KeyModifiers::CONTROL))
+            .expect("right word");
         assert_eq!(composer.cursor, composer.draft.text.len());
     }
 
