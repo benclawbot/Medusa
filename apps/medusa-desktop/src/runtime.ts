@@ -115,6 +115,11 @@ export async function performRecoveryAction(
  * Drain canonical runtime events when the backend says replay advanced. The existing caller may
  * ask frequently while a turn is busy, but those calls are local no-ops unless a wake is pending.
  * A 1.5 s fallback protects against a lost native event or older backend.
+ *
+ * A non-empty bounded replay batch keeps exactly one follow-up drain eligible. This prevents a
+ * wake that produced multiple backend batches from leaving later state (for example completion or
+ * an empty team snapshot) stranded until the fallback timer, without introducing an internal
+ * polling loop or bypassing replay ordering.
  */
 export async function pollRuntime(runtimeId: string): Promise<legacy.RuntimeEvent[]> {
   const state = wakeState(runtimeId);
@@ -127,7 +132,9 @@ export async function pollRuntime(runtimeId: string): Promise<legacy.RuntimeEven
   state.pending = false;
   state.lastPollAt = now;
   try {
-    return await legacy.pollRuntime(runtimeId);
+    const events = await legacy.pollRuntime(runtimeId);
+    if (events.length > 0) state.pending = true;
+    return events;
   } catch (error) {
     // A failed drain may still have unread durable replay. Keep the next call eligible instead of
     // suppressing it until the fallback deadline.
