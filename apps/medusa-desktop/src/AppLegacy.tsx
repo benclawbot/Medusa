@@ -88,6 +88,7 @@ interface ConversationMessage {
   createdAt: number;
   attachments?: DesktopAttachment[];
   queued?: boolean;
+  failed?: boolean;
 }
 
 interface WorkLogEntry {
@@ -318,7 +319,9 @@ export function App() {
   const transportFailureCount = useRef(0);
   const transportErrorVisible = useRef(false);
   const pollBusy = useRef(false);
+  const runtimeGeneration = useRef(0);
   const submitInFlight = useRef(false);
+  const failedMessage = useRef<{ id: number; text: string; attachments: DesktopAttachment[] }>();
   const resumeInFlight = useRef(false);
   const runtimeTransitionInFlight = useRef(false);
   const providerRequestId = useRef(0);
@@ -471,9 +474,10 @@ export function App() {
     return configuration;
   }, []);
 
-  const refreshWebArtifact = useCallback(async (id: string, failed = false) => {
+  const refreshWebArtifact = useCallback(async (id: string, failed = false, generation?: number) => {
     try {
       const artifact = await findWebArtifact(id);
+      if (generation !== undefined && generation !== runtimeGeneration.current) return;
       if (artifact) {
         setWebArtifact(artifact);
         setPartialResult(failed);
@@ -643,6 +647,8 @@ export function App() {
   useEffect(() => {
     if (!runtimeId) return;
     let active = true;
+    const generation = runtimeGeneration.current;
+    const pollingRuntimeId = runtimeId;
     let timer: number | undefined;
     const schedule = (delay: number) => {
       if (!active) return;
@@ -661,6 +667,7 @@ export function App() {
       pollBusy.current = true;
       try {
         const events = await pollRuntime(runtimeId);
+        if (!active || generation !== runtimeGeneration.current || pollingRuntimeId !== runtimeId) return;
         transportFailureCount.current = 0;
         if (transportErrorVisible.current) {
           transportErrorVisible.current = false;
@@ -670,7 +677,7 @@ export function App() {
         events.forEach(applyEvent);
         const terminalEvent = events.find((event) => event.type === "completed" || event.type === "turnFinished" || event.type === "failed" || event.type === "cancelled");
         if (terminalEvent) {
-          void refreshWebArtifact(runtimeId, terminalEvent.type === "failed");
+          void refreshWebArtifact(runtimeId, terminalEvent.type === "failed", generation);
         }
       } catch (cause) {
         if (active) {
@@ -740,6 +747,7 @@ export function App() {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
     let disposed = false;
     const start = async () => {
+      runtimeGeneration.current += 1;
       const configuration = await refreshConfiguration();
       if (!configuration.configured || !configuration.provider.trim() || !configuration.model.trim()) return undefined;
       if (configuration.provider === "openai-oauth") {
@@ -811,6 +819,7 @@ export function App() {
     }
     resumeInFlight.current = true;
     runtimeTransitionInFlight.current = true;
+    runtimeGeneration.current += 1;
     setError(undefined);
     try {
       const started = await startRuntime(repo);
@@ -841,7 +850,13 @@ export function App() {
 
   useEffect(() => {
     const onResumeRequest = (event: Event) => {
-      const sessionId = (event as CustomEvent<string>).detail;
+      const detail = (event as CustomEvent<{ sessionId?: string; repo?: string } | string>).detail;
+      const sessionId = typeof detail === "string" ? detail : detail?.sessionId;
+      const requestedRepo = typeof detail === "string" ? "" : detail?.repo?.trim() ?? "";
+      if (requestedRepo && requestedRepo !== repo) {
+        setError("That saved session belongs to a different project. Open that project before resuming it.");
+        return;
+      }
       if (sessionId) void resumeSession(sessionId);
     };
     window.addEventListener(RUNTIME_RESUME_EVENT, onResumeRequest);
@@ -853,6 +868,7 @@ export function App() {
     const selected = await open({ directory: true, multiple: false, title: "Open a Medusa project" });
     if (typeof selected !== "string") return;
     runtimeTransitionInFlight.current = true;
+    runtimeGeneration.current += 1;
     let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
     try {
       started = await startRuntime(selected);
@@ -888,6 +904,7 @@ export function App() {
   const openGeneralChat = async () => {
     if (runtimeTransitionInFlight.current) return;
     runtimeTransitionInFlight.current = true;
+    runtimeGeneration.current += 1;
     let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
     try {
       started = await startRuntime();
@@ -992,7 +1009,11 @@ export function App() {
     await addImages(images);
   };
 
-  const sendText = async (text: string, suppliedAttachments = attachments) => {
+  const sendText = async (
+    text: string,
+    suppliedAttachments = attachments,
+    existingMessageId?: number,
+  ) => {
     if (!runtimeId || (!text.trim() && suppliedAttachments.length === 0)) return;
     if (suppliedAttachments.some((attachment) => attachment.kind === "image") && imageCompatibility.supported === false) {
       setError(`${imageCompatibility.text} Switch model/route or remove the image.`);
@@ -1027,14 +1048,16 @@ export function App() {
       text: clean || suppliedAttachments.map((attachment) => attachment.kind === "file" ? basename(attachment.path) : attachment.name).join(", ") || "Attached context",
       status: "Sent",
     });
-    const userMessageId = nextMessageId();
-    setMessages((current) => appendBounded(current, {
-        id: userMessageId,
-        role: "user",
-        text: text || "Attached context",
-        createdAt: Date.now(),
-        attachments: suppliedAttachments,
-      }, MAX_MESSAGE_HISTORY));
+    const userMessageId = existingMessageId ?? nextMessageId();
+    setMessages((current) => existingMessageId
+      ? current.map((message) => message.id === existingMessageId ? { ...message, failed: false, queued: false } : message)
+      : appendBounded(current, {
+          id: userMessageId,
+          role: "user",
+          text: text || "Attached context",
+          createdAt: Date.now(),
+          attachments: suppliedAttachments,
+        }, MAX_MESSAGE_HISTORY));
     if (submitsTurn) {
       setLastRequest({ text, attachments: suppliedAttachments });
     }
@@ -1054,8 +1077,9 @@ export function App() {
           revision: Date.now(),
         });
         setMessages((current) => current.map((message) => message.id === userMessageId
-            ? { ...message, queued: disposition === "queued" }
+            ? { ...message, queued: disposition === "queued", failed: false }
             : message));
+        failedMessage.current = undefined;
       }
     } catch (cause) {
       if (submitsTurn) {
@@ -1065,6 +1089,12 @@ export function App() {
       const message = toUserError(cause);
       setError(message);
       if (submitsTurn) {
+        failedMessage.current = { id: userMessageId, text, attachments: suppliedAttachments };
+        setMessages((current) => current.map((entry) => entry.id === userMessageId ? { ...entry, failed: true, queued: false } : entry));
+        // Keep a rejected request editable. Do not overwrite new text entered
+        // while the transport was in flight.
+        setPrompt((current) => current || text);
+        setAttachments((current) => current.length ? current : suppliedAttachments);
         appendAssistantMessage(`Medusa could not start the request:\n\n${message}`);
       }
     } finally {
@@ -1083,7 +1113,7 @@ export function App() {
       composerRef.current?.focus();
       return;
     }
-    await sendText(lastRequest.text, lastRequest.attachments);
+    await sendText(lastRequest.text, lastRequest.attachments, failedMessage.current?.id);
   };
 
   const selectSlashSuggestion = (suggestion: CommandSuggestion) => {
@@ -1432,6 +1462,7 @@ export function App() {
               className="side-panel-resize-handle"
               type="button"
               aria-label="Resize side panel"
+              aria-keyshortcuts="ArrowLeft ArrowRight"
               title="Drag to resize"
               onPointerDown={beginSidePanelResize}
               onKeyDown={(event) => {
@@ -1566,7 +1597,7 @@ export function App() {
                   <div className="message-heading">
                     <span>{message.role === "user" ? "You" : "Medusa"}</span>
                     <time dateTime={new Date(message.createdAt).toISOString()}>{formatTimestamp(message.createdAt)}</time>
-                    {message.queued && <small>queued for next turn</small>}
+                    {message.failed ? <small>not sent · edit or retry</small> : message.queued && <small>queued for next turn</small>}
                   </div>
                   <div className="message-body"><MarkdownMessage text={message.text} streaming={busy && message.role === "assistant" && messageIndex === visible.length - 1} /></div>
                   {!!message.attachments?.length && (
@@ -1675,9 +1706,13 @@ export function App() {
                     ref={composerRef}
                     value={prompt}
                     disabled={!runtimeId}
+                    aria-label="Message Medusa"
                     onChange={(event) => setPrompt(event.target.value)}
                     onPaste={onPaste}
                     onKeyDown={(event) => {
+                      // Browsers dispatch Enter while an IME candidate is being
+                      // confirmed. Treat it as composition input, never as send.
+                      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
                       if (slashSuggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); const direction = event.key === "ArrowDown" ? 1 : -1; setSlashSelection((current) => (current + direction + slashSuggestions.length) % slashSuggestions.length); return; }
                       if (slashSuggestions.length && event.key === "Tab" && !event.shiftKey) { event.preventDefault(); selectSlashSuggestion(slashSuggestions[slashSelection]); return; }
                       if (slashSuggestions.length && event.key === "Enter" && !event.shiftKey) { const selected = slashSuggestions[slashSelection]; const exact = prompt.trim() === `/${selected.name}`; if (!exact || prompt.trim() === "/skills") { event.preventDefault(); selectSlashSuggestion(selected); return; } }

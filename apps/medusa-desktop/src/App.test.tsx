@@ -402,6 +402,20 @@ it("gives the icon-only send button an accessible name", async () => {
   expect(sendButton).toBeEnabled();
 });
 
+it("does not submit while an IME is confirming a composition", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "日本語" } });
+  fireEvent.keyDown(composer, { key: "Enter", isComposing: true });
+  expect(submitRuntime).not.toHaveBeenCalled();
+
+  fireEvent.keyDown(composer, { key: "Enter", isComposing: false });
+  await waitFor(() => expect(submitRuntime).toHaveBeenCalledTimes(1));
+});
+
 it("copies a conversation message from its hover control", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   vi.mocked(submitRuntime).mockResolvedValue("started");
@@ -760,6 +774,27 @@ it("keeps technical error details behind disclosure and retries the last request
 
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(submitRuntime).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("textbox")).toHaveValue("");
+});
+
+it("restores a rejected send for editing and retries it without duplicating the user message", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime)
+    .mockRejectedValueOnce(new Error("provider unavailable"))
+    .mockResolvedValueOnce("started");
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Keep this request" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Keep this request"));
+  expect(document.querySelectorAll(".message.user")).toHaveLength(1);
+  expect(screen.getByText("not sent · edit or retry")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(submitRuntime).toHaveBeenCalledTimes(2));
+  expect(document.querySelectorAll(".message.user")).toHaveLength(1);
   expect(screen.getByRole("textbox")).toHaveValue("");
 });
 

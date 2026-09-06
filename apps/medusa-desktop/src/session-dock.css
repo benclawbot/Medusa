@@ -102,6 +102,33 @@
   padding: 8px;
 }
 
+.session-search {
+  display: block;
+  padding: 4px 4px 8px;
+}
+
+.session-search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.session-search input::placeholder {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.session-search input:focus-visible {
+  outline: 2px solid rgb(147, 197, 253);
+  outline-offset: 1px;
+}
+
 .session-dock-item {
   width: 100%;
   padding: 11px 12px;
