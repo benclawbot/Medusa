@@ -35,6 +35,8 @@ cargo product-acceptance --output product-acceptance-artifacts
 
 The complete Linux, macOS, and Windows matrix runs for every commit merged to `main` and through manual workflow dispatch. This preserves the full production runtime, platform containment, durable interruption and resume, checkpoint restoration, repository rollback, bounded escalation, corrupted-state recovery, and byte-exact upgrade rollback contract.
 
+All scenarios reuse the caller's `CARGO_TARGET_DIR` (or `target` by default), so the workspace graph is compiled once and reused throughout the acceptance run.
+
 The authoritative command exits non-zero when any scenario fails and writes:
 
 - `summary.json`, a versioned machine-readable result;
