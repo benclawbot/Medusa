@@ -166,6 +166,7 @@ fn release_channel(
         sequence_file: Some(repo.join(".medusa/update-sequence")),
         rollout_sequence: Some(release.rollout_sequence),
         target_revision: Some(release.source.revision.clone()),
+        previous_revision: Some(env!("MEDUSA_BUILD_COMMIT").to_owned()),
     };
     super::request_daemon_shutdown(repo);
     installer.schedule_replace(&candidate, &restart, std::process::id())?;
@@ -216,11 +217,18 @@ fn source_channel(
     let updater = MainBranchUpdater::public()?;
     let latest = updater.latest_main()?;
     let current = env!("MEDUSA_BUILD_COMMIT");
-    if current == latest.sha {
+    if current != "unknown" && current.eq_ignore_ascii_case(&latest.sha) {
         println!("Medusa is up to date.");
         return Ok(());
     }
     if check_only {
+        if !updater.main_cli_artifact_available(&latest.sha)? {
+            println!(
+                "Medusa main revision {} is newer, but its verified CLI artifact is still being published; check again shortly.",
+                short_revision(&latest.sha)
+            );
+            return Ok(());
+        }
         println!(
             "Medusa main update available: {} -> {}.",
             short_revision(current),

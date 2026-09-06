@@ -54,6 +54,7 @@ $health = {health}
 $outcome = {outcome}
 $healthNonce = {health_nonce}
 $targetRevision = {target_revision}
+$previousRevision = {previous_revision}
 $lock = {lock}
 $expectedHash = {expected_hash}
 $restartArguments = {arguments}
@@ -85,13 +86,16 @@ function Restore-Previous([string]$Reason, $Child) {{
     }}
   }} catch {{}}
   Remove-Item $target -Force -ErrorAction SilentlyContinue
+  $restored = $false
   if (Test-Path -LiteralPath $backup) {{
     Move-Item -LiteralPath $backup -Destination $target -Force
+    $restored = $true
   }}
   Set-Content -LiteralPath $state -Value 'rolled-back' -Encoding ascii
-  Write-Outcome 'rolled-back' $Reason 'restored'
+  $rollbackResult = if ($restored) {{ 'restored' }} else {{ 'failed-recovery' }}
+  Write-Outcome 'rolled-back' $Reason $rollbackResult
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
-  try {{ Start-Medusa $false | Out-Null }} catch {{}}
+  if ($restored) {{ try {{ Start-Medusa $false | Out-Null }} catch {{}} }}
   Write-Error "Medusa update failed: $Reason"
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
   exit 1
@@ -101,10 +105,10 @@ function Write-Outcome([string]$Stage, [string]$Reason, [string]$RollbackResult)
   $record = @{{
     schema = 1
     targetRevision = if ($targetRevision -eq '') {{ $null }} else {{ $targetRevision }}
-    previousRevision = $null
+    previousRevision = if ($previousRevision -eq '') {{ $null }} else {{ $previousRevision }}
     stage = $Stage
     reason = $Reason
-    startedUnixSeconds = 0
+    startedUnixSeconds = $started
     finishedUnixSeconds = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     rollbackResult = $RollbackResult
   }} | ConvertTo-Json -Compress
@@ -113,6 +117,7 @@ function Write-Outcome([string]$Stage, [string]$Reason, [string]$RollbackResult)
   Move-Item -LiteralPath $temporary -Destination $outcome -Force
 }}
 
+$started = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $helperReady = $false
 for ($i = 0; $i -lt 200; $i++) {{
   if (Test-Path -LiteralPath $lock) {{
@@ -123,6 +128,7 @@ for ($i = 0; $i -lt 200; $i++) {{
 }}
 if (-not $helperReady) {{
   Set-Content -LiteralPath $state -Value 'helper-not-ready' -Encoding ascii
+  Write-Outcome 'helper-not-ready' 'update helper did not become ready' 'not-required'
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
   exit 1
@@ -156,6 +162,7 @@ for ($i = 0; $i -lt 100; $i++) {{
 }}
 if ((Get-TargetProcesses).Count -ne 0) {{
   Set-Content -LiteralPath $state -Value 'stop-failed' -Encoding ascii
+  Write-Outcome 'stop-failed' 'could not stop the running executable' 'not-required'
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
   Write-Error 'Medusa update failed: could not stop all processes using the target executable'
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
@@ -174,6 +181,7 @@ try {{
     Move-Item -LiteralPath $backup -Destination $target -Force
   }}
   Set-Content -LiteralPath $state -Value 'swap-failed' -Encoding ascii
+  Write-Outcome 'swap-failed' ("replacement failed while swapping the executable: " + $_.Exception.Message) 'restored'
   Remove-Item $lock -Force -ErrorAction SilentlyContinue
   Write-Error "Medusa update failed while replacing the executable: $($_.Exception.Message)"
   Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
@@ -239,6 +247,8 @@ Restore-Previous 'replacement did not acknowledge startup health before timeout'
         outcome = powershell_quote_path(outcome),
         health_nonce = powershell_quote(health_nonce),
         target_revision = powershell_quote(target_revision.unwrap_or_default()),
+        previous_revision =
+            powershell_quote(restart.previous_revision.as_deref().unwrap_or_default()),
         lock = powershell_quote_path(lock),
         create_no_window = if restart.detached { "$true" } else { "$false" },
         expected_hash = powershell_quote(expected_hash),

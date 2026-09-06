@@ -39,6 +39,7 @@ fn windows_helper_contract_restarts_exact_target_and_requires_health() {
         sequence_file: Some(PathBuf::from(r"C:\repo\.medusa\update-sequence")),
         rollout_sequence: Some(42),
         target_revision: None,
+        previous_revision: None,
     };
     let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
         parent_pid: 4242,
@@ -109,6 +110,7 @@ fn windows_helper_commits_only_after_replacement_health_ack() {
         sequence_file: Some(sequence.clone()),
         rollout_sequence: Some(42),
         target_revision: None,
+        previous_revision: None,
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
     let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {
@@ -178,6 +180,7 @@ fn windows_helper_rolls_back_when_replacement_exits_without_health() {
         sequence_file: Some(sequence.clone()),
         rollout_sequence: Some(42),
         target_revision: None,
+        previous_revision: None,
     };
     let expected_hash = sha256_file(&staged).expect("staged hash");
     let script = helper::windows_health_checked_replace_script(helper::WindowsReplaceScript {

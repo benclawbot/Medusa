@@ -92,9 +92,6 @@ pub fn daemon_config() -> Result<medusa_config::Config, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
-    if let Err(error) = medusa_update::acknowledge_update_health() {
-        eprintln!("desktop update health acknowledgement failed: {error}");
-    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(RuntimeRegistry::default())
@@ -173,10 +170,12 @@ pub fn run() -> tauri::Result<()> {
         ])
         .build(tauri::generate_context!())?
         .run(|app_handle, event| {
-            if matches!(
-                event,
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
+            if matches!(event, tauri::RunEvent::Ready) {
+                if let Err(error) = medusa_update::acknowledge_update_health() {
+                    eprintln!("desktop update health acknowledgement failed: {error}");
+                }
+            }
+            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
                 if let Some(registry) = app_handle.try_state::<RuntimeRegistry>() {
                     registry.shutdown_all();
                 }

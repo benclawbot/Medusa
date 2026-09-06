@@ -214,6 +214,7 @@ impl MainBranchUpdater {
             sequence_file: None,
             rollout_sequence: None,
             target_revision: Some(revision.clone()),
+            previous_revision: None,
         };
         installer.schedule_replace(&candidate, &restart, parent_pid)
     }
@@ -287,6 +288,7 @@ impl MainBranchUpdater {
             sequence_file: None,
             rollout_sequence: None,
             target_revision: Some(revision.clone()),
+            previous_revision: None,
         };
         let scheduled = installer.schedule_replace(&candidate, &restart, parent_pid)?;
         progress(MainBuildProgress {

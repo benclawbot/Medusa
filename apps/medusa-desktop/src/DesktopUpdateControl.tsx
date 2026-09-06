@@ -7,10 +7,17 @@ import { toUserError } from "./errorPresentation";
 
 interface DesktopUpdateStatus {
   currentVersion: string;
+  currentRevision?: string;
   latestMainSha?: string;
   executable: string;
   ready: boolean;
   artifactPublished: boolean;
+  upToDate?: boolean;
+  lastOutcome?: {
+    stage: string;
+    reason: string;
+    rollbackResult: string;
+  } | null;
 }
 
 interface DesktopUpdateProgress {
@@ -142,13 +149,26 @@ export function DesktopUpdateControl() {
       {status && (
         <div className="desktop-update-status">
           <span><CheckCircle2 size={14} /> Installed v{status.currentVersion}</span>
+          <span>Installed main: <code>{status.currentRevision && status.currentRevision !== "unknown" ? status.currentRevision.slice(0, 8) : "unknown"}</code></span>
           <span>Checked main: <code>{status.latestMainSha ? status.latestMainSha.slice(0, 8) : "unavailable"}</code></span>
+        </div>
+      )}
+
+      {status?.lastOutcome && status.lastOutcome.stage !== "healthy" && (
+        <div className="desktop-update-warning">
+          <TriangleAlert size={15} /> Last update {status.lastOutcome.stage}: {status.lastOutcome.reason}
         </div>
       )}
 
       {status && !status.artifactPublished && (
         <div className="desktop-update-warning">
           <TriangleAlert size={15} /> The checked revision is still being published; check again shortly.
+        </div>
+      )}
+
+      {status?.upToDate && (
+        <div className="desktop-update-status" role="status">
+          <span><CheckCircle2 size={14} /> Up to date on the checked main revision.</span>
         </div>
       )}
 
