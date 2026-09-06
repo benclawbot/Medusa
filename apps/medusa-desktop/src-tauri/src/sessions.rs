@@ -97,10 +97,8 @@ fn message_indexes() -> &'static Mutex<BTreeMap<PathBuf, MessageIndex>> {
 /// authority controls page size and can reuse indexed metadata between requests.
 #[tauri::command]
 pub async fn runtime_list_sessions(repo: String) -> Result<Vec<DesktopSessionSummary>, String> {
-    run_blocking(move || {
-        Ok(list_sessions_page_sync(&repo, None, MAX_DESKTOP_SESSIONS)?.sessions)
-    })
-    .await
+    run_blocking(move || Ok(list_sessions_page_sync(&repo, None, MAX_DESKTOP_SESSIONS)?.sessions))
+        .await
 }
 
 #[tauri::command]
@@ -109,8 +107,14 @@ pub async fn runtime_list_sessions_page(
     cursor: Option<String>,
     limit: Option<usize>,
 ) -> Result<DesktopSessionPage, String> {
-    run_blocking(move || list_sessions_page_sync(&repo, cursor.as_deref(), page_limit(limit, DEFAULT_SESSION_PAGE_SIZE)))
-        .await
+    run_blocking(move || {
+        list_sessions_page_sync(
+            &repo,
+            cursor.as_deref(),
+            page_limit(limit, DEFAULT_SESSION_PAGE_SIZE),
+        )
+    })
+    .await
 }
 
 /// Compatibility wrapper returning the newest bounded message window.
@@ -120,12 +124,7 @@ pub async fn runtime_read_session(
     session_id: String,
 ) -> Result<DesktopSessionDetail, String> {
     run_blocking(move || {
-        let page = read_session_page_sync(
-            &repo,
-            &session_id,
-            None,
-            MAX_DESKTOP_SESSION_MESSAGES,
-        )?;
+        let page = read_session_page_sync(&repo, &session_id, None, MAX_DESKTOP_SESSION_MESSAGES)?;
         Ok(DesktopSessionDetail {
             summary: page.summary,
             messages: page.messages,
@@ -184,8 +183,7 @@ fn list_sessions_page_sync(
     if let Some(cursor) = cursor {
         let (updated_at, id) = decode_session_cursor(cursor)?;
         sessions.retain(|session| {
-            session.updated_at < updated_at
-                || (session.updated_at == updated_at && session.id > id)
+            session.updated_at < updated_at || (session.updated_at == updated_at && session.id > id)
         });
     }
 
@@ -217,8 +215,8 @@ fn read_session_page_sync(
         None => index.ranges.len(),
     };
     let start = end.saturating_sub(limit);
-    let mut file = File::open(&path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let mut file =
+        File::open(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let mut messages = Vec::with_capacity(end.saturating_sub(start));
     for &(range_start, range_end) in &index.ranges[start..end] {
         let len = usize::try_from(range_end.saturating_sub(range_start))
@@ -302,7 +300,10 @@ fn collect_sessions_indexed(
         }
         seen.insert(path.clone());
         let fingerprint = fingerprint(&metadata);
-        let cached = index.entries.get(&path).filter(|entry| entry.fingerprint == fingerprint);
+        let cached = index
+            .entries
+            .get(&path)
+            .filter(|entry| entry.fingerprint == fingerprint);
         let summary = if let Some(cached) = cached {
             cached.summary.clone()
         } else {
@@ -327,8 +328,8 @@ fn collect_sessions_indexed(
 }
 
 fn read_summary(path: &Path) -> Result<Option<DesktopSessionSummary>, String> {
-    let file = File::open(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let file =
+        File::open(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let value: Value = serde_json::from_reader(file)
         .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
     Ok(summary_from_value(&value))
@@ -348,12 +349,14 @@ fn message_index(path: &Path, session_id: &str) -> Result<MessageIndex, String> 
         return Ok(cached);
     }
 
-    let bytes = fs::read(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
     if value.get("id").and_then(Value::as_str) != Some(session_id) {
-        return Err(format!("session {session_id} has mismatched durable metadata"));
+        return Err(format!(
+            "session {session_id} has mismatched durable metadata"
+        ));
     }
     let summary = summary_from_value(&value)
         .ok_or_else(|| format!("session {session_id} is missing required metadata"))?;
@@ -648,13 +651,21 @@ mod tests {
         let repo_text = repo.path().to_string_lossy();
         let first = list_sessions_page_sync(&repo_text, None, 2).expect("first page");
         assert_eq!(
-            first.sessions.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            first
+                .sessions
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["b", "c"]
         );
         let second = list_sessions_page_sync(&repo_text, first.next_cursor.as_deref(), 2)
             .expect("second page");
         assert_eq!(
-            second.sessions.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(),
+            second
+                .sessions
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["a"]
         );
         assert!(second.next_cursor.is_none());
@@ -686,27 +697,25 @@ mod tests {
 
         let newest = read_session_page_sync(&repo_text, "history", None, 3).expect("newest");
         assert_eq!(
-            newest.messages.iter().map(|item| item.text.as_str()).collect::<Vec<_>>(),
+            newest
+                .messages
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["message 4", "message 5", "message 6"]
         );
-        let older = read_session_page_sync(
-            &repo_text,
-            "history",
-            newest.next_cursor.as_deref(),
-            3,
-        )
-        .expect("older");
+        let older = read_session_page_sync(&repo_text, "history", newest.next_cursor.as_deref(), 3)
+            .expect("older");
         assert_eq!(
-            older.messages.iter().map(|item| item.text.as_str()).collect::<Vec<_>>(),
+            older
+                .messages
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["message 1", "message 2", "message 3"]
         );
-        let oldest = read_session_page_sync(
-            &repo_text,
-            "history",
-            older.next_cursor.as_deref(),
-            3,
-        )
-        .expect("oldest");
+        let oldest = read_session_page_sync(&repo_text, "history", older.next_cursor.as_deref(), 3)
+            .expect("oldest");
         assert_eq!(oldest.messages[0].text, "message 0");
         assert!(oldest.next_cursor.is_none());
     }
