@@ -31,6 +31,7 @@ mod runtime {
     include!("desktop_projection.rs");
     include!("runtime_resume.rs");
     include!("runtime_recovery.rs");
+    include!("runtime_wakeup.rs");
 }
 mod sessions;
 #[cfg(test)]
@@ -74,9 +75,9 @@ use provider_auth::{desktop_browser_oauth, desktop_ensure_browser_oauth};
 use pull_requests::runtime_create_draft_pull_request;
 use review::{runtime_apply_review_action, runtime_export_review_audit, runtime_read_review};
 use runtime::{
-    RuntimeRegistry, runtime_cancel, runtime_command, runtime_command_suggestions,
-    runtime_configure_model, runtime_open_web_artifact, runtime_poll, runtime_recovery_action,
-    runtime_resume, runtime_start, runtime_submit,
+    RuntimeRegistry, runtime_begin_wakeups, runtime_cancel, runtime_command,
+    runtime_command_suggestions, runtime_configure_model, runtime_open_web_artifact, runtime_poll,
+    runtime_recovery_action, runtime_resume, runtime_start, runtime_submit,
 };
 use sessions::{
     runtime_list_sessions, runtime_list_sessions_page, runtime_read_session,
@@ -118,6 +119,7 @@ pub fn run() -> tauri::Result<()> {
             desktop_ensure_browser_oauth,
             runtime_start,
             runtime_resume,
+            runtime_begin_wakeups,
             preview_runtime_close,
             runtime_submit,
             runtime_command,
