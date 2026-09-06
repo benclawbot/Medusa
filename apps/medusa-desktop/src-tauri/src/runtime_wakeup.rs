@@ -1,11 +1,10 @@
 use std::{
     collections::BTreeSet,
-    sync::{Mutex, OnceLock, TryLockError},
-    thread,
+    sync::{OnceLock, TryLockError},
     time::Duration,
 };
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::Emitter;
 
 const ACTIVE_WAKE_INTERVAL: Duration = Duration::from_millis(180);
 const IDLE_WAKE_INTERVAL: Duration = Duration::from_millis(750);
@@ -61,25 +60,24 @@ pub fn runtime_begin_wakeups(
                     break;
                 };
 
-                let mut active = false;
-                let mut changed = false;
-                match entry.try_lock() {
+                let (active, changed) = match entry.try_lock() {
                     Ok(mut entry) => {
-                        active = entry.session_id.is_some();
-                        if active {
+                        let active = entry.session_id.is_some();
+                        let changed = if active {
                             let before = entry.replay_cursor;
-                            if entry.poll_daemon().is_ok() {
-                                changed = entry.replay_cursor != before;
-                            }
-                        }
+                            entry.poll_daemon().is_ok() && entry.replay_cursor != before
+                        } else {
+                            false
+                        };
+                        (active, changed)
                     }
                     Err(TryLockError::WouldBlock) => {
                         // A foreground command owns the authority lock. Do not queue behind it;
                         // the next watcher pass or renderer fallback will observe the result.
-                        active = true;
+                        (true, false)
                     }
                     Err(TryLockError::Poisoned(_)) => break,
-                }
+                };
 
                 if changed {
                     let _ = app.emit(RUNTIME_WAKE_EVENT, &runtime_id);
@@ -100,7 +98,7 @@ pub fn runtime_begin_wakeups(
 }
 
 #[cfg(test)]
-mod tests {
+mod runtime_wakeup_tests {
     use super::*;
 
     #[test]
