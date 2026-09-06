@@ -284,34 +284,75 @@ export interface ModelConfiguration {
   baseUrl?: string;
 }
 
+interface RuntimeRecoveryState {
+  snapshot?: RecoveryView;
+  completion?: { auditPath: string };
+  suppressed: boolean;
+}
+
 const pendingResumeKey = "medusa.desktop.resumeSession";
 const emptyTimeline: TimelineSnapshot = { plan: [], activities: [], busy: false };
-let timelineSnapshot: TimelineSnapshot = emptyTimeline;
+const MAX_RUNTIME_STATE_ENTRIES = 8;
+const timelineSnapshots = new Map<string, TimelineSnapshot>();
+const recoverySnapshots = new Map<string, RuntimeRecoveryState>();
 const timelineListeners = new Set<() => void>();
 const recoveryListeners = new Set<() => void>();
+let activeRuntimeId: string | undefined;
+let timelineSnapshot: TimelineSnapshot = emptyTimeline;
 let recoverySnapshot: RecoveryView | undefined;
 let recoveryCompletion: { auditPath: string } | undefined;
-// A recovery notice belongs to the interrupted turn that produced it. Once a
-// user starts a newer turn, stale recovery events can still arrive from the
-// durable runtime queue; keep those notices hidden until a new failure emits a
-// fresh actionable recovery state.
-let recoverySuppressed = false;
 
-function publishRecovery(recovery: RecoveryView | undefined, completion?: { auditPath: string }): void {
-  recoverySnapshot = recovery;
-  recoveryCompletion = completion;
+function pruneRuntimeMap<T>(map: Map<string, T>): void {
+  while (map.size > MAX_RUNTIME_STATE_ENTRIES) {
+    const candidate = [...map.keys()].find((runtimeId) => runtimeId !== activeRuntimeId);
+    if (!candidate) return;
+    map.delete(candidate);
+  }
+}
+
+function rememberTimeline(runtimeId: string, next: TimelineSnapshot): void {
+  timelineSnapshots.delete(runtimeId);
+  timelineSnapshots.set(runtimeId, next);
+  pruneRuntimeMap(timelineSnapshots);
+  if (activeRuntimeId === runtimeId && timelineSnapshot !== next) {
+    timelineSnapshot = next;
+    timelineListeners.forEach((listener) => listener());
+  }
+}
+
+function rememberRecovery(runtimeId: string, next: RuntimeRecoveryState): void {
+  recoverySnapshots.delete(runtimeId);
+  recoverySnapshots.set(runtimeId, next);
+  pruneRuntimeMap(recoverySnapshots);
+  if (activeRuntimeId === runtimeId) {
+    recoverySnapshot = next.snapshot;
+    recoveryCompletion = next.completion;
+    recoveryListeners.forEach((listener) => listener());
+  }
+}
+
+function activateRuntime(runtimeId: string): void {
+  activeRuntimeId = runtimeId;
+  const timeline = timelineSnapshots.get(runtimeId) ?? { ...emptyTimeline, runtimeId };
+  timelineSnapshots.set(runtimeId, timeline);
+  const recovery = recoverySnapshots.get(runtimeId) ?? { suppressed: false };
+  recoverySnapshots.set(runtimeId, recovery);
+  pruneRuntimeMap(timelineSnapshots);
+  pruneRuntimeMap(recoverySnapshots);
+  timelineSnapshot = timeline;
+  recoverySnapshot = recovery.snapshot;
+  recoveryCompletion = recovery.completion;
+  timelineListeners.forEach((listener) => listener());
   recoveryListeners.forEach((listener) => listener());
 }
 
-function publishTimeline(next: TimelineSnapshot): void {
-  timelineSnapshot = next;
-  timelineListeners.forEach((listener) => listener());
+function activityIsTerminal(activity: RuntimeActivity): boolean {
+  return activity.kind === "done" || activity.kind === "error";
 }
 
 function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
-  let next = timelineSnapshot.runtimeId === runtimeId
-    ? timelineSnapshot
-    : { ...emptyTimeline, runtimeId };
+  const previous = timelineSnapshots.get(runtimeId) ?? { ...emptyTimeline, runtimeId };
+  let next = previous;
   let activities = next.activities;
   let activitiesDirty = false;
   let activityIndexes: Map<string, number> | undefined;
@@ -326,21 +367,31 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
   };
 
   const replaceOrAppendActivity = (activity: RuntimeActivity): void => {
-    if (!activitiesDirty) {
-      activities = [...activities];
-      activitiesDirty = true;
-    }
     if (!activity.id) {
+      if (!activitiesDirty) {
+        activities = [...activities];
+        activitiesDirty = true;
+      }
       activities.push(activity);
       return;
     }
     const indexes = ensureActivityIndexes();
     const index = indexes.get(activity.id);
-    if (index === undefined) {
-      indexes.set(activity.id, activities.length);
+    if (index !== undefined && activityIsTerminal(activities[index]) && !activityIsTerminal(activity)) {
+      return;
+    }
+    if (!activitiesDirty) {
+      activities = [...activities];
+      activitiesDirty = true;
+      activityIndexes = undefined;
+    }
+    const refreshedIndexes = ensureActivityIndexes();
+    const refreshedIndex = refreshedIndexes.get(activity.id);
+    if (refreshedIndex === undefined) {
+      refreshedIndexes.set(activity.id, activities.length);
       activities.push(activity);
     } else {
-      activities[index] = activity;
+      activities[refreshedIndex] = activity;
     }
   };
 
@@ -354,6 +405,7 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
         break;
       }
       case "team": {
+        if (next.team && event.snapshot.sequence < next.team.sequence) break;
         const activeWorkerIds = new Set(
           event.snapshot.workers.map((worker) => `team:${worker.workerId}`),
         );
@@ -412,7 +464,7 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
   }
 
   if (activitiesDirty) next = { ...next, activities };
-  if (next !== timelineSnapshot) publishTimeline(next);
+  if (next !== previous || !timelineSnapshots.has(runtimeId)) rememberTimeline(runtimeId, next);
 }
 
 export function getTimelineSnapshot(): TimelineSnapshot {
@@ -439,8 +491,9 @@ export function subscribeRecovery(listener: () => void): () => void {
 
 /** Hide the recovery overlay without pretending that its durable state was repaired. */
 export function dismissRecovery(): void {
-  recoverySuppressed = true;
-  publishRecovery(undefined);
+  if (!activeRuntimeId) return;
+  const state = recoverySnapshots.get(activeRuntimeId) ?? { suppressed: false };
+  rememberRecovery(activeRuntimeId, { ...state, suppressed: true, snapshot: undefined });
 }
 
 export async function loadSharedConfiguration(): Promise<SharedConfiguration> {
@@ -453,9 +506,9 @@ export async function startRuntime(repo?: string): Promise<RuntimeStartResponse>
     ? await invoke<RuntimeStartResponse>("runtime_resume", { repo, sessionId: pendingSession })
     : await invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
   if (repo && pendingSession) window.localStorage.removeItem(pendingResumeKey);
-  publishTimeline({ ...emptyTimeline, runtimeId: response.runtimeId });
-  recoverySuppressed = false;
-  publishRecovery(undefined);
+  timelineSnapshots.set(response.runtimeId, { ...emptyTimeline, runtimeId: response.runtimeId });
+  recoverySnapshots.set(response.runtimeId, { suppressed: false });
+  activateRuntime(response.runtimeId);
   return response;
 }
 
@@ -492,8 +545,16 @@ export async function listRuntimeMemories(
 
 export async function closeRuntime(runtimeId: string): Promise<void> {
   await invoke("runtime_close", { runtimeId });
-  if (timelineSnapshot.runtimeId === runtimeId) publishTimeline(emptyTimeline);
-  publishRecovery(undefined);
+  timelineSnapshots.delete(runtimeId);
+  recoverySnapshots.delete(runtimeId);
+  if (activeRuntimeId === runtimeId) {
+    activeRuntimeId = undefined;
+    timelineSnapshot = emptyTimeline;
+    recoverySnapshot = undefined;
+    recoveryCompletion = undefined;
+    timelineListeners.forEach((listener) => listener());
+    recoveryListeners.forEach((listener) => listener());
+  }
 }
 
 export async function submitRuntime(
@@ -530,26 +591,25 @@ export async function openWebArtifact(runtimeId: string, path: string): Promise<
 export async function pollRuntime(runtimeId: string): Promise<RuntimeEvent[]> {
   const events = await invoke<RuntimeEvent[]>("runtime_poll", { runtimeId, maxEvents: 200 });
   reduceTimeline(runtimeId, events);
+  let recovery = recoverySnapshots.get(runtimeId) ?? { suppressed: false };
   for (const event of events) {
-    if (event.type === "recoveryAvailable" && !recoverySuppressed) {
-      publishRecovery(event.recovery);
+    if (event.type === "recoveryAvailable" && !recovery.suppressed) {
+      recovery = { ...recovery, snapshot: event.recovery, completion: undefined };
     }
     if (event.type === "recoveryCompleted") {
-      recoverySuppressed = true;
-      publishRecovery(undefined, { auditPath: event.auditPath });
+      recovery = { suppressed: true, snapshot: undefined, completion: { auditPath: event.auditPath } };
     }
     if (event.type === "completed" || event.type === "turnFinished") {
-      recoverySuppressed = true;
-      publishRecovery(undefined);
+      recovery = { ...recovery, suppressed: true, snapshot: undefined, completion: undefined };
     }
     if (event.type === "failed" || event.type === "cancelled") {
-      recoverySuppressed = false;
+      recovery = { ...recovery, suppressed: false };
     }
     if (event.type === "newSession") {
-      recoverySuppressed = false;
-      publishRecovery(undefined);
+      recovery = { suppressed: false };
     }
   }
+  rememberRecovery(runtimeId, recovery);
   return events;
 }
 
