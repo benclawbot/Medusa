@@ -219,8 +219,8 @@ fn read_session_page_sync(
             None => index.ranges.len(),
         };
         let start = end.saturating_sub(limit);
-        let mut file =
-            File::open(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let mut file = File::open(&path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         let mut messages = Vec::with_capacity(end.saturating_sub(start));
         for &(range_start, range_end) in &index.ranges[start..end] {
             let len = usize::try_from(range_end.saturating_sub(range_start))
@@ -235,7 +235,9 @@ fn read_session_page_sync(
                 messages.push(message);
             }
         }
-        let current_fingerprint = fs::metadata(&path).ok().map(|metadata| fingerprint(&metadata));
+        let current_fingerprint = fs::metadata(&path)
+            .ok()
+            .map(|metadata| fingerprint(&metadata));
         if current_fingerprint == Some(index.fingerprint) {
             return Ok(DesktopSessionMessagePage {
                 summary: index.summary,
@@ -758,13 +760,8 @@ mod tests {
         write_session(&root, "other", "2026-01-01T00:00:01Z", 1);
         fs::rename(root.join("other.json"), root.join("requested.json")).expect("rename session");
 
-        let error = read_session_page_sync(
-            &repo.path().to_string_lossy(),
-            "requested",
-            None,
-            10,
-        )
-        .expect_err("mismatched durable identity must be rejected");
+        let error = read_session_page_sync(&repo.path().to_string_lossy(), "requested", None, 10)
+            .expect_err("mismatched durable identity must be rejected");
         assert!(error.contains("mismatched durable metadata"));
     }
 
