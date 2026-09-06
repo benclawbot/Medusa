@@ -3,6 +3,7 @@ name: Verified Prebuilt Update
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    # Keep this trigger set aligned with engineering-policy release-artifact paths.
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
