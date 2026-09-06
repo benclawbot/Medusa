@@ -47,15 +47,17 @@ pub fn runtime_begin_wakeups(
     }
 
     let registry = registry.inner().clone();
+    let watcher_id = runtime_id.clone();
+    let thread_runtime_id = watcher_id.clone();
     thread::Builder::new()
-        .name(format!("medusa-desktop-wakeup-{runtime_id}"))
+        .name(format!("medusa-desktop-wakeup-{watcher_id}"))
         .spawn(move || {
             loop {
                 let entry = registry
                     .entries
                     .lock()
                     .ok()
-                    .and_then(|entries| entries.get(&runtime_id).cloned());
+                    .and_then(|entries| entries.get(&thread_runtime_id).cloned());
                 let Some(entry) = entry else {
                     break;
                 };
@@ -69,6 +71,10 @@ pub fn runtime_begin_wakeups(
                         } else {
                             false
                         };
+                        // A bound runtime can remain open after a turn finishes. Use the
+                        // presentation lifecycle for the interval so completed or waiting
+                        // sessions settle to the idle cadence while still checking for replay.
+                        let active = entry.presentation.run_active;
                         (active, changed)
                     }
                     Err(TryLockError::WouldBlock) => {
@@ -80,7 +86,7 @@ pub fn runtime_begin_wakeups(
                 };
 
                 if changed {
-                    let _ = app.emit(RUNTIME_WAKE_EVENT, &runtime_id);
+                    let _ = app.emit(RUNTIME_WAKE_EVENT, &thread_runtime_id);
                 }
                 thread::sleep(if active {
                     ACTIVE_WAKE_INTERVAL
@@ -90,10 +96,15 @@ pub fn runtime_begin_wakeups(
             }
 
             if let Ok(mut watchers) = active_watchers().lock() {
-                watchers.remove(&runtime_id);
+                watchers.remove(&thread_runtime_id);
             }
         })
-        .map_err(|error| format!("cannot start desktop runtime wakeup worker: {error}"))?;
+        .map_err(|error| {
+            if let Ok(mut watchers) = active_watchers().lock() {
+                watchers.remove(&runtime_id);
+            }
+            format!("cannot start desktop runtime wakeup worker: {error}")
+        })?;
     Ok(())
 }
 

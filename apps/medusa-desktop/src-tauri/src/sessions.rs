@@ -15,6 +15,7 @@ const MAX_DESKTOP_SESSION_MESSAGES: usize = 2_000;
 const DEFAULT_SESSION_PAGE_SIZE: usize = 50;
 const DEFAULT_MESSAGE_PAGE_SIZE: usize = 100;
 const MAX_PAGE_SIZE: usize = 200;
+const MAX_CACHED_SESSION_FILES: usize = 512;
 const SESSION_CURSOR_SEPARATOR: char = '\u{1f}';
 
 #[derive(Clone, Debug, Serialize)]
@@ -206,37 +207,43 @@ fn read_session_page_sync(
     limit: usize,
 ) -> Result<DesktopSessionMessagePage, String> {
     let repo = canonical_repo(repo)?;
-    let path = find_session_path(&repo, session_id)?;
-    let index = message_index(&path, session_id)?;
-    let end = match cursor {
-        Some(cursor) => cursor
-            .parse::<usize>()
-            .map_err(|_| "invalid session message cursor".to_owned())?
-            .min(index.ranges.len()),
-        None => index.ranges.len(),
-    };
-    let start = end.saturating_sub(limit);
-    let mut file =
-        File::open(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let mut messages = Vec::with_capacity(end.saturating_sub(start));
-    for &(range_start, range_end) in &index.ranges[start..end] {
-        let len = usize::try_from(range_end.saturating_sub(range_start))
-            .map_err(|_| format!("session message in {} is too large", path.display()))?;
-        let mut buffer = vec![0_u8; len];
-        file.seek(SeekFrom::Start(range_start))
-            .and_then(|_| file.read_exact(&mut buffer))
-            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-        let value: Value = serde_json::from_slice(&buffer)
-            .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
-        if let Some(message) = message_from_value(&value) {
-            messages.push(message);
+    for _attempt in 0..2 {
+        let path = find_session_path(&repo, session_id)?;
+        let index = message_index(&path, session_id)?;
+        let end = match cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| "invalid session message cursor".to_owned())?
+                .min(index.ranges.len()),
+            None => index.ranges.len(),
+        };
+        let start = end.saturating_sub(limit);
+        let mut file =
+            File::open(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let mut messages = Vec::with_capacity(end.saturating_sub(start));
+        for &(range_start, range_end) in &index.ranges[start..end] {
+            let len = usize::try_from(range_end.saturating_sub(range_start))
+                .map_err(|_| format!("session message in {} is too large", path.display()))?;
+            let mut buffer = vec![0_u8; len];
+            file.seek(SeekFrom::Start(range_start))
+                .and_then(|_| file.read_exact(&mut buffer))
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+            let value: Value = serde_json::from_slice(&buffer)
+                .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+            if let Some(message) = message_from_value(&value) {
+                messages.push(message);
+            }
+        }
+        let current_fingerprint = fs::metadata(&path).ok().map(|metadata| fingerprint(&metadata));
+        if current_fingerprint == Some(index.fingerprint) {
+            return Ok(DesktopSessionMessagePage {
+                summary: index.summary,
+                messages,
+                next_cursor: (start > 0).then(|| start.to_string()),
+            });
         }
     }
-    Ok(DesktopSessionMessagePage {
-        summary: index.summary,
-        messages,
-        next_cursor: (start > 0).then(|| start.to_string()),
-    })
+    Err("session changed while it was being read; retry the request".to_owned())
 }
 
 fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
@@ -325,6 +332,11 @@ fn collect_sessions_indexed(
         }
     }
     index.entries.retain(|path, _| seen.contains(path));
+    while index.entries.len() > MAX_CACHED_SESSION_FILES {
+        if let Some(path) = index.entries.keys().next().cloned() {
+            index.entries.remove(&path);
+        }
+    }
     Ok(())
 }
 
@@ -372,6 +384,13 @@ fn message_index(path: &Path, session_id: &str) -> Result<MessageIndex, String> 
         .lock()
         .map_err(|_| "desktop message index lock is poisoned".to_owned())?
         .insert(path.to_path_buf(), index.clone());
+    if let Ok(mut indexes) = message_indexes().lock() {
+        while indexes.len() > MAX_CACHED_SESSION_FILES {
+            if let Some(path) = indexes.keys().next().cloned() {
+                indexes.remove(&path);
+            }
+        }
+    }
     Ok(index)
 }
 
@@ -722,8 +741,25 @@ mod tests {
     }
 
     #[test]
+    fn message_pages_reject_a_file_with_mismatched_durable_identity() {
+        let repo = crate::tempdir().expect("repo");
+        let root = repo.path().join(".medusa/sessions");
+        write_session(&root, "other", "2026-01-01T00:00:01Z", 1);
+        fs::rename(root.join("other.json"), root.join("requested.json")).expect("rename session");
+
+        let error = read_session_page_sync(
+            &repo.path().to_string_lossy(),
+            "requested",
+            None,
+            10,
+        )
+        .expect_err("mismatched durable identity must be rejected");
+        assert!(error.contains("mismatched durable metadata"));
+    }
+
+    #[test]
     fn message_range_scanner_handles_nested_content_and_escaped_strings() {
-        let value = br#"{"id":"x","messages":[{"role":"user","content":[{"type":"text","text":"a \\" quoted"}]},{"role":"assistant","content":[{"type":"tool_use","input":{"nested":[1,2,3]}}]}],"turn":1}"#;
+        let value = br#"{"id":"x","messages":[{"role":"user","content":[{"type":"text","text":"a \" quoted"}]},{"role":"assistant","content":[{"type":"tool_use","input":{"nested":[1,2,3]}}]}],"turn":1}"#;
         let ranges = locate_message_ranges(value).expect("ranges");
         assert_eq!(ranges.len(), 2);
         for (start, end) in ranges {

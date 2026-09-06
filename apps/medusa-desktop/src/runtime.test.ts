@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   getRuntimeWakeupMetrics,
+  closeRuntime,
   pollRuntime,
   runtimeWakeupPolicy,
   startRuntime,
@@ -92,5 +93,26 @@ describe("desktop runtime adapter", () => {
       drainedEvents: 1,
     });
     now.mockRestore();
+  });
+
+  it("does not resurrect a listener when the runtime closes during setup", async () => {
+    let resolveListen: ((unlisten: () => void) => void) | undefined;
+    mockedListen.mockImplementation((() =>
+      new Promise((resolve) => {
+        resolveListen = resolve;
+      })) as typeof listen);
+    mockedInvoke.mockResolvedValue({ runtimeId: "runtime-disposed", repo: "/repo" });
+
+    await startRuntime("/repo");
+    await Promise.resolve();
+    const close = closeRuntime("runtime-disposed");
+    const unlisten = vi.fn();
+    resolveListen?.(unlisten);
+    await close;
+    await Promise.resolve();
+
+    expect(unlisten).toHaveBeenCalledOnce();
+    expect(getRuntimeWakeupMetrics("runtime-disposed")).toBeUndefined();
+    expect(mockedInvoke).not.toHaveBeenCalledWith("runtime_begin_wakeups", expect.anything());
   });
 });

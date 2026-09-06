@@ -20,6 +20,7 @@ interface WakeCounters {
 interface WakeState extends WakeCounters {
   pending: boolean;
   lastPollAt: number;
+  disposed: boolean;
   starting?: Promise<void>;
   unlisten?: UnlistenFn;
 }
@@ -47,7 +48,7 @@ function emptyCounters(): WakeCounters {
 function wakeState(runtimeId: string): WakeState {
   let state = wakeStates.get(runtimeId);
   if (!state) {
-    state = { pending: true, lastPollAt: 0, ...emptyCounters() };
+    state = { pending: true, lastPollAt: 0, disposed: false, ...emptyCounters() };
     wakeStates.set(runtimeId, state);
   }
   return state;
@@ -66,11 +67,21 @@ async function ensureRuntimeWakeups(runtimeId: string): Promise<void> {
 
   state.starting = (async () => {
     const unlisten = await listen<string>(RUNTIME_WAKE_EVENT, (event) => {
-      if (event.payload === runtimeId) markRuntimeWake(runtimeId, true);
+      if (!state.disposed && event.payload === runtimeId) markRuntimeWake(runtimeId, true);
     });
+    // closeRuntime can run while the native listener is being installed. Do not publish a stale
+    // listener or issue a backend command for a runtime that has already been disposed.
+    if (state.disposed) {
+      unlisten();
+      return;
+    }
     try {
       await invoke("runtime_begin_wakeups", { runtimeId });
-      state.unlisten = unlisten;
+      if (state.disposed) {
+        unlisten();
+      } else {
+        state.unlisten = unlisten;
+      }
     } catch (error) {
       state.wakeupInstallFailures += 1;
       unlisten();
@@ -84,6 +95,8 @@ async function ensureRuntimeWakeups(runtimeId: string): Promise<void> {
 
 function disposeRuntimeWakeups(runtimeId: string): void {
   const state = wakeStates.get(runtimeId);
+  if (!state) return;
+  state.disposed = true;
   state?.unlisten?.();
   wakeStates.delete(runtimeId);
 }
