@@ -2,6 +2,7 @@ name: Reliability Benchmarks
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
     paths:
       - 'benchmarks/**'
       - 'scripts/reliability-benchmark.py'
@@ -37,9 +38,13 @@ jobs:
 
   coding-harness-pr:
     name: Same-model coding harness baseline
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Two bounded acceptance trials plus the workspace warm-up and evidence upload.
+    timeout-minutes: 45
     steps:
       - name: Bootstrap repository for local actions
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -63,9 +68,15 @@ jobs:
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
+      - name: Build product acceptance runner and warm test targets
+        run: |
+          cargo build --locked -p medusa-cli --bin medusa-product-acceptance
+          cargo test --workspace --locked --no-run
       - name: Run production coding harness baseline
         env:
           MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
+          MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance
+          MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '600'
         run: python3 scripts/coding-harness-benchmark.py
       - name: Upload coding harness evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
