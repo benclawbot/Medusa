@@ -37,6 +37,8 @@ The complete Linux, macOS, and Windows matrix runs for every commit merged to `m
 
 All scenarios reuse the caller's `CARGO_TARGET_DIR` (or `target` by default), so the workspace graph is compiled once and reused throughout the acceptance run.
 
+The reliability benchmark warms the workspace test targets before starting its per-run timeout, so the bounded benchmark measures acceptance execution rather than first-build latency.
+
 The authoritative command exits non-zero when any scenario fails and writes:
 
 - `summary.json`, a versioned machine-readable result;

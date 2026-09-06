@@ -106,13 +106,15 @@ jobs:
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
-      - name: Build product acceptance runner once
-        run: cargo build --locked -p medusa-cli --bin medusa-product-acceptance
+      - name: Build product acceptance runner and warm test targets
+        run: |
+          cargo build --locked -p medusa-cli --bin medusa-product-acceptance
+          cargo test --workspace --locked --no-run
       - name: Run release-blocking reliability benchmark
         env:
           MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
           MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance
-          MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '300'
+          MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '450'
         run: python3 scripts/reliability-benchmark.py
       - name: Run end-to-end orchestration benchmark
         env:

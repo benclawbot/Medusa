@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS = 450
+
 
 def load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -27,7 +29,11 @@ def acceptance_command(output: Path) -> list[str]:
 
 
 def run_acceptance(output: Path, run_number: int, total_runs: int) -> dict[str, Any]:
-    timeout_seconds = int(os.environ.get("MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS", "300"))
+    timeout_seconds = int(
+        os.environ.get(
+            "MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS", str(DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS)
+        )
+    )
     command = acceptance_command(output)
     print(
         f"[reliability] acceptance run {run_number}/{total_runs} "

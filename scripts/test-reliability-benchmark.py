@@ -75,10 +75,13 @@ def main() -> int:
         output = Path(directory)
         (output / "summary.json").write_text(json.dumps(summary()), encoding="utf-8")
         original_run = MODULE.subprocess.run
+        calls = []
+        previous_timeout = MODULE.os.environ.pop("MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS", None)
         try:
-            MODULE.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
-                args[0], 17
-            )
+            MODULE.subprocess.run = lambda *args, **kwargs: (
+                calls.append(kwargs),
+                subprocess.CompletedProcess(args[0], 17),
+            )[1]
             try:
                 MODULE.run_acceptance(output, 1, 1)
             except RuntimeError as error:
@@ -87,6 +90,9 @@ def main() -> int:
                 raise AssertionError("failed product acceptance was accepted")
         finally:
             MODULE.subprocess.run = original_run
+            if previous_timeout is not None:
+                MODULE.os.environ["MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS"] = previous_timeout
+        assert calls[0]["timeout"] == MODULE.DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS
 
     print("reliability-benchmark-fixtures-ok")
     return 0
