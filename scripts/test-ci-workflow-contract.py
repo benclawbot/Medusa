@@ -72,18 +72,18 @@ def test_windows_distribution_requires_authenticode() -> None:
         "Compress-Archive -Path cli-package/*"
     )
 
+    # Rolling main is authenticated by the required Ed25519 updater authority.
+    # It must not depend on stable-release platform credentials or a reviewed
+    # platform-signing environment, otherwise every main push stops for approval
+    # or fails when stable signing credentials are intentionally absent.
     rolling = read_workflow("rolling-main-cli.yml")
-    assert rolling.count("environment: release-signing") >= 2
-    assert "Authenticode-sign rolling Windows CLI" in rolling
-    assert "Authenticode-sign rolling Windows desktop executable" in rolling
-    assert rolling.count("WINDOWS_SIGNING_CERTIFICATE_BASE64") >= 2
-    assert rolling.count("https://timestamp.digicert.com") >= 2
-    assert rolling.index("Authenticode-sign rolling Windows CLI") < rolling.index(
-        "Package exact-revision rolling CLI asset"
-    )
-    assert rolling.index("Authenticode-sign rolling Windows desktop executable") < rolling.index(
-        "Package exact-revision desktop asset"
-    )
+    assert "\n    environment: release-signing\n" not in rolling
+    assert "WINDOWS_SIGNING_CERTIFICATE_BASE64" not in rolling
+    assert "WINDOWS_SIGNING_CERTIFICATE_PASSWORD" not in rolling
+    assert "Authenticode-sign rolling Windows CLI" not in rolling
+    assert "Authenticode-sign rolling Windows desktop executable" not in rolling
+    assert "Package exact-revision rolling CLI asset" in rolling
+    assert "Package exact-revision desktop asset" in rolling
 
 
 def test_stable_release_is_complete_before_publication() -> None:
