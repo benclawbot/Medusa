@@ -1,4 +1,5 @@
 import { App as DesktopShell } from "./AppLegacy";
+import { DesktopSlotsProvider } from "./DesktopSlots";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
@@ -16,7 +17,7 @@ export * from "./AppLegacy";
  */
 export function App() {
   return (
-    <>
+    <DesktopSlotsProvider>
       <DesktopShell />
       <PermissionModeControl />
       <DesktopTimelineBridge />
@@ -26,6 +27,6 @@ export function App() {
       <DesktopUpdateControl />
       <LearningDock />
       <EngineeringDashboardLauncher />
-    </>
+    </DesktopSlotsProvider>
   );
 }
