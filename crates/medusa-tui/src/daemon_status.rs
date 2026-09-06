@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
+        mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
 };
@@ -70,15 +70,23 @@ impl DaemonMonitor {
                     }
                 }
             })
-            .expect("daemon observer thread should start");
+            .ok();
+        let worker_started = worker.is_some();
 
         let mut monitor = Self {
-            refresh_tx: Some(refresh_tx),
+            refresh_tx: worker_started.then_some(refresh_tx),
             observation_rx,
-            worker: Some(worker),
+            worker,
             shutting_down,
             last_kind: None,
-            snapshot: (Vec::new(), "checking".to_owned()),
+            snapshot: if worker_started {
+                (Vec::new(), "checking".to_owned())
+            } else {
+                (
+                    Vec::new(),
+                    "degraded: daemon observer unavailable".to_owned(),
+                )
+            },
         };
         monitor.request_refresh();
         monitor
@@ -88,16 +96,11 @@ impl DaemonMonitor {
     ///
     /// This method performs no socket I/O and never waits for the observer worker.
     pub fn poll(&mut self, app: &mut AppState) -> DaemonSnapshot {
-        loop {
-            match self.observation_rx.try_recv() {
-                Ok(observation) => {
-                    if self.should_record(observation.kind) {
-                        app.push_transcript(TranscriptEntry::System(observation.transition));
-                    }
-                    self.snapshot = observation.snapshot;
-                }
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+        while let Ok(observation) = self.observation_rx.try_recv() {
+            if self.should_record(observation.kind) {
+                app.push_transcript(TranscriptEntry::System(observation.transition));
             }
+            self.snapshot = observation.snapshot;
         }
         self.request_refresh();
         self.snapshot.clone()
