@@ -576,17 +576,24 @@ mod tests {
         composer.handle_event(key(KeyCode::Home)).expect("home");
         assert_eq!(&composer.draft.text[..composer.cursor], "first\n");
         composer.handle_event(key(KeyCode::End)).expect("end");
-        assert_eq!(&composer.draft.text[..composer.cursor], "first\ne\u{301}👩‍💻界");
+        assert_eq!(
+            &composer.draft.text[..composer.cursor],
+            "first\ne\u{301}👩‍💻界"
+        );
 
         composer.cursor = "first\n".len();
         assert_eq!(
-            composer.handle_event(key(KeyCode::Delete)).expect("delete combining"),
+            composer
+                .handle_event(key(KeyCode::Delete))
+                .expect("delete combining"),
             ComposerAction::Changed
         );
         assert_eq!(composer.draft.text, "first\n👩‍💻界\nlast");
         assert_eq!(composer.cursor, "first\n".len());
         assert_eq!(
-            composer.handle_event(key(KeyCode::Delete)).expect("delete emoji"),
+            composer
+                .handle_event(key(KeyCode::Delete))
+                .expect("delete emoji"),
             ComposerAction::Changed
         );
         assert_eq!(composer.draft.text, "first\n界\nlast");
