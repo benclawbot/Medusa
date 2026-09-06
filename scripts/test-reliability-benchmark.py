@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -35,6 +36,12 @@ def summary(status: str = "passed") -> dict:
 
 
 def main() -> int:
+    workflow = Path(".github/workflows/reliability-benchmarks.yml").read_text(encoding="utf-8")
+    deterministic_job = re.search(
+        r"(?ms)^  deterministic-runtime:\n.*?^    timeout-minutes: (\d+)$", workflow
+    )
+    assert deterministic_job and int(deterministic_job.group(1)) == 60
+
     suite = json.loads(Path("benchmarks/reliability-suite.json").read_text(encoding="utf-8"))
     assert MODULE.DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS == 600
     report = MODULE.score(suite, [summary(), summary()])
