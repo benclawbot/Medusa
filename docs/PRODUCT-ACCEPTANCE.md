@@ -44,6 +44,8 @@ The authoritative command exits non-zero when any scenario fails and writes:
 - `summary.json`, a versioned machine-readable result;
 - one log per scenario containing captured stdout and stderr.
 
+The summary also includes top-level deterministic metrics. `false_completion_rate` is the sum of scenario false-completion evidence divided by the scenario count, so a failed scenario cannot be reported as a clean run; `manual_interventions` is explicitly zero because this credential-free contract has no human-in-the-loop steps.
+
 ## Evidence model
 
 PR smoke is an early feedback layer, not a substitute for full evidence. A pull request cannot claim cross-platform acceptance from the smoke result. The merged commit is the provenance anchor for the full matrix and its uploaded artifacts.

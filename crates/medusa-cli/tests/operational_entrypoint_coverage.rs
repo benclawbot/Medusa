@@ -45,7 +45,7 @@ mod unix {
         fs::create_dir_all(&bin).expect("bin directory");
         write_executable(
             &bin.join("cargo"),
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$CARGO_TARGET_DIR\" >> \"$MEDUSA_TARGET_DIR_RECORD\"\nprintf 'fake cargo output for %s\\n' \"$*\"\nexit 0\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$CARGO_TARGET_DIR\" >> \"$MEDUSA_TARGET_DIR_RECORD\"\nprintf 'fake cargo output for %s\\n' \"$*\"\nif [ \"${MEDUSA_ACCEPTANCE_FAIL:-0}\" = 1 ]; then\n  exit 1\nfi\nexit 0\n",
         );
 
         let output = assert_success(
@@ -69,6 +69,8 @@ mod unix {
         .expect("parse acceptance summary");
         assert_eq!(summary["failed"], 0);
         assert_eq!(summary["passed"], summary["total"]);
+        assert_eq!(summary["metrics"]["false_completion_rate"], 0.0);
+        assert_eq!(summary["metrics"]["manual_interventions"], 0);
         assert!(summary["total"].as_u64().is_some_and(|total| total >= 7));
         let target_record_contents =
             fs::read_to_string(&target_record).expect("target directory record");
@@ -103,6 +105,26 @@ mod unix {
                 );
             }
         }
+
+        let failed_output_dir = temp.path().join("failed-acceptance");
+        let failed_output = Command::new(env!("CARGO_BIN_EXE_medusa-product-acceptance"))
+            .args(["--output", failed_output_dir.to_str().expect("output path")])
+            .env("PATH", fake_path(&bin))
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env("MEDUSA_TARGET_DIR_RECORD", &target_record)
+            .env("MEDUSA_ACCEPTANCE_FAIL", "1")
+            .output()
+            .expect("run failed product acceptance");
+        assert!(
+            !failed_output.status.success(),
+            "failure fixture unexpectedly passed"
+        );
+        let failed_summary: serde_json::Value = serde_json::from_slice(
+            &fs::read(failed_output_dir.join("summary.json")).expect("failed acceptance summary"),
+        )
+        .expect("parse failed acceptance summary");
+        assert_eq!(failed_summary["metrics"]["false_completion_rate"], 1.0);
+        assert_eq!(failed_summary["metrics"]["manual_interventions"], 0);
     }
 
     #[cfg(target_os = "linux")]
