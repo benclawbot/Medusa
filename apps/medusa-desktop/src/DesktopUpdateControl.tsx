@@ -142,7 +142,7 @@ export function DesktopUpdateControl() {
       {status && (
         <div className="desktop-update-status">
           <span><CheckCircle2 size={14} /> Installed v{status.currentVersion}</span>
-     <span>Checked main: <code>{status.latestMainSha ? status.latestMainSha.slice(0, 8) : "unavailable"}</code></span>
+          <span>Checked main: <code>{status.latestMainSha ? status.latestMainSha.slice(0, 8) : "unavailable"}</code></span>
         </div>
       )}
 

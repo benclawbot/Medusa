@@ -49,8 +49,6 @@ function useTodoTarget(): HTMLElement | null {
   const [target, setTarget] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
-    let timer: number | undefined;
-    let attempts = 0;
     const resolve = () => {
       const composer = document.querySelector<HTMLElement>(".composer-wrap");
       const card = composer?.querySelector<HTMLElement>(".composer-card");
@@ -62,15 +60,16 @@ function useTodoTarget(): HTMLElement | null {
           composer.insertBefore(mount, card);
         }
         setTarget(mount);
-        return;
       }
-      attempts += 1;
-      if (attempts < 40) timer = window.setTimeout(resolve, 100);
     };
 
     resolve();
+    // The composer is mounted conditionally during startup and repository switching. Observe
+    // the DOM until it exists instead of giving up after a fixed timeout window.
+    const observer = new MutationObserver(resolve);
+    observer.observe(document.body, { childList: true, subtree: true });
     return () => {
-      if (timer !== undefined) window.clearTimeout(timer);
+      observer.disconnect();
     };
   }, []);
 

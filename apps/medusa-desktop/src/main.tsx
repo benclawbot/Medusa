@@ -1,14 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
-import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
-import { DesktopUpdateControl } from "./DesktopUpdateControl";
-import { DiffDock } from "./DiffDock";
-import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
-import { LearningDock } from "./LearningDock";
-import { MemoryDock } from "./MemoryDock";
-import { PermissionModeControl } from "./PermissionModeControl";
-import { SessionDock } from "./SessionDock";
 import "./styles.css";
 import "./medusa-desktop.css";
 import "./recovery.css";
@@ -61,14 +53,6 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <DesktopErrorBoundary>
       <App />
-      <PermissionModeControl />
-      <DesktopTimelineBridge />
-      <SessionDock />
-      <DiffDock />
-      <MemoryDock />
-      <DesktopUpdateControl />
-      <LearningDock />
-      <EngineeringDashboardLauncher />
     </DesktopErrorBoundary>
   </React.StrictMode>,
 );

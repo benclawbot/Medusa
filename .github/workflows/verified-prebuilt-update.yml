@@ -3,13 +3,16 @@ name: Verified Prebuilt Update
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    # Keep this trigger set aligned with engineering-policy release-artifact paths.
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/medusa-update/**'
       - 'crates/medusa-cli/**'
       - 'apps/medusa-desktop/src-tauri/src/desktop_update.rs'
+      - 'apps/medusa-desktop/src/DesktopUpdateControl.tsx'
       - 'apps/medusa-desktop/src-tauri/tauri.conf.json'
+      - '.github/workflows/verified-prebuilt-update.yml'
       - '.github/workflows/rolling-main-cli.yml'
       - 'scripts/package-main-update.py'
       - 'scripts/package-main-desktop-update.py'
