@@ -1,7 +1,6 @@
 import { CheckCircle2, ChevronDown, Circle, ListChecks, OctagonX } from "lucide-react";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { useDesktopSlots } from "./DesktopSlots";
 import {
   getTimelineSnapshot,
   subscribeTimeline,
@@ -42,8 +41,44 @@ function TodoStatusIcon({ status }: { status: PlanStep["status"] }) {
   return <Circle size={15} />;
 }
 
+/**
+ * Mount directly above the composer card. A dedicated mount keeps the to-do
+ * surface out of the transcript, so tool-call churn never pushes chat content.
+ */
+function useTodoTarget(): HTMLElement | null {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    let attempts = 0;
+    const resolve = () => {
+      const composer = document.querySelector<HTMLElement>(".composer-wrap");
+      const card = composer?.querySelector<HTMLElement>(".composer-card");
+      if (composer && card) {
+        let mount = composer.querySelector<HTMLElement>("[data-medusa-todos]");
+        if (!mount) {
+          mount = document.createElement("div");
+          mount.dataset.medusaTodos = "true";
+          composer.insertBefore(mount, card);
+        }
+        setTarget(mount);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 40) timer = window.setTimeout(resolve, 100);
+    };
+
+    resolve();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+
+  return target;
+}
+
 export function DesktopTimelineBridge() {
-  const { todoTarget: target } = useDesktopSlots();
+  const target = useTodoTarget();
   const snapshot = useSyncExternalStore(subscribeTimeline, getTimelineSnapshot, getTimelineSnapshot);
   const [expanded, setExpanded] = useState(false);
   const counts = useMemo(() => summarizePlan(snapshot.plan), [snapshot.plan]);
