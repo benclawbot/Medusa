@@ -178,7 +178,6 @@ impl SseDecoder {
                     MAX_SSE_LINE_BYTES
                 )));
             }
-            }
             let mut line = self.pending.drain(..=newline).collect::<Vec<_>>();
             line.pop();
             if line.last() == Some(&b'\r') {
@@ -220,14 +219,6 @@ impl SseDecoder {
         }
         if let Some(value) = line.strip_prefix("data:") {
             let value = value.strip_prefix(' ').unwrap_or(value);
-            let next_len = self
-                .data
-                .len()
-                .saturating_add(usize::from(!self.data.is_empty()))
-                .saturating_add(value.len());
-            if next_len > MAX_SSE_EVENT_BYTES {
-                return Err(stream_error("OpenAI SSE event exceeds the 8 MiB limit"));
-            }
             if !self.data.is_empty() {
                 self.data.push('\n');
             }
