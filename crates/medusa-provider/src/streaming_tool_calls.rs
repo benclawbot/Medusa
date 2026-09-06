@@ -5,6 +5,9 @@ use serde_json::Value;
 
 use crate::ProviderStreamEvent;
 
+const MAX_TOOL_ARGUMENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TOOL_CALLS: usize = 128;
+
 #[derive(Clone, Debug, Default)]
 struct PartialToolCall {
     id: Option<String>,
@@ -30,6 +33,9 @@ impl StreamingToolCallAssembler {
         name: Option<&str>,
         arguments: &str,
     ) -> MedusaResult<()> {
+        if !self.calls.contains_key(&index) && self.calls.len() >= MAX_TOOL_CALLS {
+            return Err(tool_stream_error("provider emitted too many tool calls"));
+        }
         let call = self.calls.entry(index).or_default();
         if call.completed {
             return Err(tool_stream_error(format!(
@@ -38,6 +44,11 @@ impl StreamingToolCallAssembler {
         }
         merge_stable_field(&mut call.id, id, "id", index)?;
         merge_stable_field(&mut call.name, name, "name", index)?;
+        if call.arguments.len().saturating_add(arguments.len()) > MAX_TOOL_ARGUMENT_BYTES {
+            return Err(tool_stream_error(format!(
+                "provider tool call {index} arguments exceed the 8 MiB limit"
+            )));
+        }
         call.arguments.push_str(arguments);
         Ok(())
     }
@@ -156,5 +167,19 @@ mod tests {
         );
         assembler.finish(0).expect("finish");
         assert!(assembler.push_fragment(0, None, None, " ").is_err());
+    }
+
+    #[test]
+    fn oversized_tool_arguments_are_rejected_before_accumulation() {
+        let mut assembler = StreamingToolCallAssembler::default();
+        let error = assembler
+            .push_fragment(
+                0,
+                Some("call-1"),
+                Some("tool"),
+                &"x".repeat(MAX_TOOL_ARGUMENT_BYTES + 1),
+            )
+            .expect_err("oversized tool arguments");
+        assert!(error.to_string().contains("arguments exceed"));
     }
 }

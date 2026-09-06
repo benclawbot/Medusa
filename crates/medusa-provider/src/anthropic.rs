@@ -2,7 +2,11 @@ use std::{
     collections::HashMap,
     env,
     io::Read,
-    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
 };
 
@@ -20,6 +24,12 @@ use crate::{
 };
 
 type WireHistory = Arc<Mutex<HashMap<String, Arc<Vec<Value>>>>>;
+
+const MAX_SSE_LINE_BYTES: usize = 1024 * 1024;
+const MAX_SSE_EVENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_RESPONSE_TEXT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TOOL_ARGUMENT_BYTES: usize = 8 * 1024 * 1024;
+const STREAM_EVENT_CHANNEL_CAPACITY: usize = 64;
 
 /// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.
 #[derive(Clone)]
@@ -310,7 +320,8 @@ impl MiniMaxProvider {
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
     ) -> MedusaResult<ModelResponse> {
         self.validate_request(request)?;
-        let (sender, receiver) = mpsc::channel::<ProviderStreamEvent>();
+        let (sender, receiver) =
+            mpsc::sync_channel::<ProviderStreamEvent>(STREAM_EVENT_CHANNEL_CAPACITY);
         let endpoint = format!("{}/v1/messages", self.base_url);
         let body = self.request_body_with_stream(request, true);
         thread::scope(|scope| {
@@ -383,7 +394,10 @@ impl MiniMaxProvider {
             });
             drop(sender);
             for event in receiver {
-                sink(event)?;
+                if let Err(error) = sink(event) {
+                    cancel.store(true, Ordering::Release);
+                    return Err(error);
+                }
             }
             worker
                 .join()
@@ -509,7 +523,7 @@ fn anthropic_capabilities() -> ProviderCapabilities {
 
 #[derive(Debug, Default)]
 struct AnthropicSseDecoder {
-    pending: Vec<u8>,
+    pending: std::collections::VecDeque<u8>,
     data: String,
 }
 
@@ -519,8 +533,24 @@ impl AnthropicSseDecoder {
         bytes: &[u8],
         mut sink: impl FnMut(&str) -> MedusaResult<()>,
     ) -> MedusaResult<()> {
-        self.pending.extend_from_slice(bytes);
+        self.pending.extend(bytes.iter().copied());
+        if self
+            .pending
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .is_none()
+            && self.pending.len() > MAX_SSE_LINE_BYTES
+        {
+            return Err(anthropic_stream_error(
+                "MiniMax SSE line exceeds the 1 MiB limit",
+            ));
+        }
         while let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') {
+            if newline > MAX_SSE_LINE_BYTES {
+                return Err(anthropic_stream_error(
+                    "MiniMax SSE line exceeds the 1 MiB limit",
+                ));
+            }
             let mut line = self.pending.drain(..=newline).collect::<Vec<_>>();
             line.pop();
             if line.last() == Some(&b'\r') {
@@ -533,7 +563,14 @@ impl AnthropicSseDecoder {
 
     fn finish(&mut self, mut sink: impl FnMut(&str) -> MedusaResult<()>) -> MedusaResult<()> {
         if !self.pending.is_empty() {
-            let line = std::mem::take(&mut self.pending);
+            if self.pending.len() > MAX_SSE_LINE_BYTES {
+                return Err(anthropic_stream_error(
+                    "MiniMax SSE line exceeds the 1 MiB limit",
+                ));
+            }
+            let line = std::mem::take(&mut self.pending)
+                .into_iter()
+                .collect::<Vec<_>>();
             self.process_line(&line, &mut sink)?;
         }
         self.dispatch(&mut sink)
@@ -551,10 +588,21 @@ impl AnthropicSseDecoder {
             return self.dispatch(sink);
         }
         if let Some(value) = line.strip_prefix("data:") {
+            let value = value.strip_prefix(' ').unwrap_or(value);
+            let next_len = self
+                .data
+                .len()
+                .saturating_add(usize::from(!self.data.is_empty()))
+                .saturating_add(value.len());
+            if next_len > MAX_SSE_EVENT_BYTES {
+                return Err(anthropic_stream_error(
+                    "MiniMax SSE event exceeds the 8 MiB limit",
+                ));
+            }
             if !self.data.is_empty() {
                 self.data.push('\n');
             }
-            self.data.push_str(value.strip_prefix(' ').unwrap_or(value));
+            self.data.push_str(value);
         }
         Ok(())
     }
@@ -677,6 +725,12 @@ impl AnthropicStreamAccumulator {
                             if let Some(Some(WireBlock::Text { text: output })) =
                                 self.blocks.get_mut(index)
                             {
+                                if output.len().saturating_add(text.len()) > MAX_RESPONSE_TEXT_BYTES
+                                {
+                                    return Err(anthropic_stream_error(
+                                        "MiniMax response text exceeds the 8 MiB limit",
+                                    ));
+                                }
                                 output.push_str(text);
                             }
                             sink(ProviderStreamEvent::TextDelta {
@@ -690,16 +744,27 @@ impl AnthropicStreamAccumulator {
                                 thinking: output, ..
                             })) = self.blocks.get_mut(index)
                         {
+                            if output.len().saturating_add(thinking.len()) > MAX_RESPONSE_TEXT_BYTES
+                            {
+                                return Err(anthropic_stream_error(
+                                    "MiniMax reasoning text exceeds the 8 MiB limit",
+                                ));
+                            }
                             output.push_str(thinking);
                         }
                     }
                     Some("input_json_delta") => {
-                        self.tool_fragments.entry(index).or_default().push_str(
-                            delta
-                                .get("partial_json")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default(),
-                        );
+                        let fragment = delta
+                            .get("partial_json")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let entry = self.tool_fragments.entry(index).or_default();
+                        if entry.len().saturating_add(fragment.len()) > MAX_TOOL_ARGUMENT_BYTES {
+                            return Err(anthropic_stream_error(
+                                "MiniMax tool input exceeds the 8 MiB limit",
+                            ));
+                        }
+                        entry.push_str(fragment);
                     }
                     _ => {}
                 }
