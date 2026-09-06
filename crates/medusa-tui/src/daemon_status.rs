@@ -168,8 +168,8 @@ fn observe_client(client: &DaemonClient) -> DaemonObservation {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{Arc, Barrier},
         sync::atomic::{AtomicBool, Ordering},
+        sync::{Arc, Barrier},
         thread,
         time::{Duration, Instant},
     };
