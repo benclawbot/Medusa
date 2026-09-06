@@ -41,6 +41,19 @@ def main() -> int:
         r"(?ms)^  deterministic-runtime:\n.*?^    timeout-minutes: (\d+)$", workflow
     )
     assert deterministic_job and int(deterministic_job.group(1)) == 60
+    coding_harness_job = re.search(
+        r"(?ms)^  coding-harness-pr:\n(?P<body>.*?)(?=^  deterministic-runtime:)",
+        workflow,
+    )
+    assert coding_harness_job
+    coding_body = coding_harness_job.group("body")
+    assert "github.event.pull_request.draft == false" in coding_body
+    assert "final-issue-validation" in coding_body
+    assert "timeout-minutes: 45" in coding_body
+    assert "cargo build --locked -p medusa-cli --bin medusa-product-acceptance" in coding_body
+    assert "cargo test --workspace --locked --no-run" in coding_body
+    assert "MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance" in coding_body
+    assert "MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '600'" in coding_body
 
     suite = json.loads(Path("benchmarks/reliability-suite.json").read_text(encoding="utf-8"))
     assert MODULE.DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS == 600

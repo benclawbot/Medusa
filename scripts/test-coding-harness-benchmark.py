@@ -106,19 +106,58 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory)
         (output / "summary.json").write_text(json.dumps(summary()), encoding="utf-8")
+        previous_binary = os.environ.get("MEDUSA_PRODUCT_ACCEPTANCE_BIN")
+        os.environ["MEDUSA_PRODUCT_ACCEPTANCE_BIN"] = "target/debug/fixture-acceptance"
+        assert MODULE.acceptance_command(output) == [
+            "target/debug/fixture-acceptance", "--output", str(output)
+        ]
+        if previous_binary is None:
+            os.environ.pop("MEDUSA_PRODUCT_ACCEPTANCE_BIN")
+        else:
+            os.environ["MEDUSA_PRODUCT_ACCEPTANCE_BIN"] = previous_binary
         original_run = MODULE.subprocess.run
+        previous_timeout = os.environ.pop("MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS", None)
         try:
-            MODULE.subprocess.run = lambda *args, **kwargs: subprocess.CompletedProcess(
-                args[0], 17
-            )
+            assert MODULE.acceptance_timeout_seconds() == MODULE.DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS
+            os.environ["MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS"] = "0"
             try:
-                MODULE.run_acceptance(output)
+                MODULE.acceptance_timeout_seconds()
             except RuntimeError as error:
+                assert "positive integer" in str(error)
+            else:
+                raise AssertionError("non-positive acceptance timeout was accepted")
+            os.environ.pop("MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS")
+            calls = []
+
+            def failed(*args, **kwargs):
+                calls.append(kwargs)
+                return subprocess.CompletedProcess(args[0], 17)
+
+            MODULE.subprocess.run = failed
+            try:
+                MODULE.run_acceptance(output, 1, 1)
+            except RuntimeError as error:
+                assert "run 1/1" in str(error)
                 assert "exit status 17" in str(error)
             else:
                 raise AssertionError("failed product acceptance was accepted")
+            assert calls[0]["timeout"] == MODULE.DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS
+
+            def timed_out(*args, **kwargs):
+                raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+            MODULE.subprocess.run = timed_out
+            try:
+                MODULE.run_acceptance(output, 1, 1)
+            except RuntimeError as error:
+                assert "run 1/1" in str(error)
+                assert "timed out after" in str(error)
+            else:
+                raise AssertionError("timed out product acceptance was accepted")
         finally:
             MODULE.subprocess.run = original_run
+            if previous_timeout is not None:
+                os.environ["MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS"] = previous_timeout
 
     print("coding-harness-benchmark-fixtures-ok")
     return 0

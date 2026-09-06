@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS = 600
+
 
 def load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -54,13 +56,54 @@ def validate_suite(suite: dict[str, Any]) -> None:
         raise ValueError("frozen harness feature matrix changed")
 
 
-def run_acceptance(output: Path) -> dict[str, Any]:
-    completed = subprocess.run(
-        ["cargo", "product-acceptance", "--output", str(output)], check=False
+def acceptance_command(output: Path) -> list[str]:
+    configured = os.environ.get("MEDUSA_PRODUCT_ACCEPTANCE_BIN")
+    if configured:
+        return [configured, "--output", str(output)]
+    return ["cargo", "product-acceptance", "--output", str(output)]
+
+
+def acceptance_timeout_seconds() -> int:
+    raw = os.environ.get(
+        "MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS", str(DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS)
+    )
+    try:
+        timeout_seconds = int(raw)
+    except ValueError as error:
+        raise RuntimeError(
+            "MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS must be a positive integer"
+        ) from error
+    if timeout_seconds <= 0:
+        raise RuntimeError("MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS must be a positive integer")
+    return timeout_seconds
+
+
+def run_acceptance(output: Path, run_number: int, total_runs: int) -> dict[str, Any]:
+    timeout_seconds = acceptance_timeout_seconds()
+    command = acceptance_command(output)
+    print(
+        f"[coding-harness] acceptance run {run_number}/{total_runs} "
+        f"(timeout={timeout_seconds}s): {' '.join(command)}",
+        flush=True,
+    )
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(command, check=False, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f"product acceptance run {run_number}/{total_runs} timed out after "
+            f"{timeout_seconds}s"
+        ) from error
+    elapsed = time.monotonic() - started
+    print(
+        f"[coding-harness] acceptance run {run_number}/{total_runs} "
+        f"finished with exit={completed.returncode} in {elapsed:.1f}s",
+        flush=True,
     )
     if completed.returncode != 0:
         raise RuntimeError(
-            f"product acceptance failed with exit status {completed.returncode}"
+            f"product acceptance run {run_number}/{total_runs} failed with exit status "
+            f"{completed.returncode}"
         )
     summary = output / "summary.json"
     if not summary.exists():
@@ -302,8 +345,11 @@ def main() -> int:
     summaries = [load(path) for path in args.summary] if args.summary else []
     args.output.mkdir(parents=True, exist_ok=True)
     if not summaries:
-        for index in range(int(suite["default_runs"])):
-            summaries.append(run_acceptance(args.output / f"acceptance-{index + 1}"))
+        total_runs = int(suite["default_runs"])
+        for index in range(total_runs):
+            summaries.append(
+                run_acceptance(args.output / f"acceptance-{index + 1}", index + 1, total_runs)
+            )
     report = make_report(suite, args.variant, summaries, {"provider": args.provider, "model": args.model, "configuration": configuration})
     (args.output / "coding-harness-benchmark.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (args.output / "coding-harness-benchmark.md").write_text(markdown(report), encoding="utf-8")
