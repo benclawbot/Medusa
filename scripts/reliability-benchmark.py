@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS = 450
+DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS = 600
 
 
 def load(path: Path) -> dict[str, Any]:

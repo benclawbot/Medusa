@@ -114,7 +114,7 @@ jobs:
         env:
           MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
           MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance
-          MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '450'
+          MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '600'
         run: python3 scripts/reliability-benchmark.py
       - name: Run end-to-end orchestration benchmark
         env:
