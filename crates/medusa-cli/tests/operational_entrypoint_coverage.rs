@@ -40,16 +40,20 @@ mod unix {
         let temp = tempfile::tempdir().expect("tempdir");
         let bin = temp.path().join("bin");
         let output_dir = temp.path().join("acceptance");
+        let target_dir = temp.path().join("shared-target");
+        let target_record = temp.path().join("target-dir-record");
         fs::create_dir_all(&bin).expect("bin directory");
         write_executable(
             &bin.join("cargo"),
-            "#!/bin/sh\nprintf '%s\\n' \"$*\"\nexit 0\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$CARGO_TARGET_DIR\" >> \"$MEDUSA_TARGET_DIR_RECORD\"\nprintf 'fake cargo output for %s\\n' \"$*\"\nexit 0\n",
         );
 
         let output = assert_success(
             Command::new(env!("CARGO_BIN_EXE_medusa-product-acceptance"))
                 .args(["--output", output_dir.to_str().expect("output path")])
                 .env("PATH", fake_path(&bin))
+                .env("CARGO_TARGET_DIR", &target_dir)
+                .env("MEDUSA_TARGET_DIR_RECORD", &target_record)
                 .output()
                 .expect("run product acceptance"),
         );
@@ -66,6 +70,18 @@ mod unix {
         assert_eq!(summary["failed"], 0);
         assert_eq!(summary["passed"], summary["total"]);
         assert!(summary["total"].as_u64().is_some_and(|total| total >= 7));
+        let target_record_contents =
+            fs::read_to_string(&target_record).expect("target directory record");
+        let recorded_target_dirs = target_record_contents.lines().collect::<Vec<_>>();
+        assert_eq!(
+            recorded_target_dirs.len(),
+            summary["total"].as_u64().expect("scenario count") as usize
+        );
+        assert!(
+            recorded_target_dirs
+                .iter()
+                .all(|recorded| *recorded == target_dir.to_str().expect("target path"))
+        );
         for scenario in summary["scenarios"].as_array().expect("scenario array") {
             assert_eq!(scenario["status"], "passed");
             assert_eq!(scenario["verification_status"], "satisfied");
@@ -73,6 +89,13 @@ mod unix {
             assert_eq!(scenario["metrics"]["safety_regressions"], 0);
             let log = PathBuf::from(scenario["log"].as_str().expect("scenario log"));
             assert!(log.is_file(), "missing scenario log: {}", log.display());
+            assert!(
+                fs::read_to_string(&log)
+                    .expect("scenario log contents")
+                    .contains("fake cargo output"),
+                "scenario log omitted child output: {}",
+                log.display()
+            );
         }
     }
 

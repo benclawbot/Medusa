@@ -54,11 +54,16 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let output_dir = parse_output_dir()?;
     fs::create_dir_all(&output_dir)?;
+    let target_dir = env::var_os("CARGO_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target"));
+    fs::create_dir_all(&target_dir)?;
     let scenarios = scenarios_for_platform();
     let mut results = Vec::with_capacity(scenarios.len());
     for scenario in scenarios {
         println!("==> {}: {}", scenario.id, scenario.guarantee);
-        let result = execute_scenario(&scenario, &output_dir)?;
+        let result = execute_scenario(&scenario, &output_dir, &target_dir)?;
         println!("    {} ({} ms)", result.status, result.duration_ms);
         results.push(result);
     }
@@ -220,6 +225,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
 fn execute_scenario(
     scenario: &Scenario,
     output_dir: &Path,
+    target_dir: &Path,
 ) -> Result<ScenarioResult, Box<dyn std::error::Error>> {
     let mut args = vec![
         "test".to_string(),
@@ -233,12 +239,10 @@ fn execute_scenario(
     args.push("--".to_string());
     args.push("--nocapture".to_string());
 
-    let target_dir = output_dir.join("targets").join(scenario.id);
-    fs::create_dir_all(&target_dir)?;
     let started = Instant::now();
     let output = Command::new(cargo_program())
         .args(&args)
-        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("CARGO_TARGET_DIR", target_dir)
         .env("MEDUSA_PRODUCT_ACCEPTANCE", "1")
         .output()?;
     let duration = started.elapsed();
