@@ -1366,9 +1366,9 @@ mod tests {
             .worktree
             .join(".medusa")
             .join("executions")
-            .join(execution_id)
+            .join(&execution_id)
             .join("sessions")
-            .join(session_id)
+            .join(&session_id)
             .join("request-manifests")
             .join(request_id)
             .join("artifacts")
