@@ -9,6 +9,7 @@ import {
   commandSuggestions,
   configureRuntime,
   findWebArtifact,
+  openWebArtifact,
   loadSharedConfiguration,
   pollRuntime,
   requestRuntimeResume,
@@ -122,6 +123,7 @@ vi.mock("./runtime", async () => {
     cancelRuntime: vi.fn(),
     configureRuntime: vi.fn(),
     findWebArtifact: vi.fn(),
+    openWebArtifact: vi.fn(),
     webArtifactPreviewUrl: vi.fn((path: string) => path),
   };
 });
@@ -147,6 +149,7 @@ beforeEach(() => {
   vi.mocked(closeRuntime).mockReset().mockResolvedValue(undefined);
   vi.mocked(configureRuntime).mockReset().mockResolvedValue(undefined);
   vi.mocked(findWebArtifact).mockReset().mockResolvedValue(undefined);
+  vi.mocked(openWebArtifact).mockReset().mockResolvedValue(undefined);
   vi.mocked(commandSuggestions).mockReset().mockResolvedValue([]);
   vi.mocked(runRuntimeCommand).mockReset();
   vi.mocked(submitRuntime).mockReset();
@@ -247,15 +250,18 @@ it("keeps the empty chat quiet and starts the composer at one line", async () =>
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
 });
 
-it("offers starter prompts and a context bar on an empty chat", async () => {
+it("keeps the empty transcript free of starter copy and keeps the context bar", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);
 
   await screen.findByRole("textbox");
 
-  expect(screen.getByRole("heading", { name: "What should Medusa do?" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Summarize repo state" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Run tests and fix failures" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "What should Medusa do?" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Describe the task, attach files, or start from a suggestion.")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Summarize repo state" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Run tests and fix failures" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Review open diff" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Tip: type / for commands, @ to reference a file, Enter to send.")).not.toBeInTheDocument();
   expect(screen.getByRole("status", { name: "Session usage" })).toBeInTheDocument();
 });
 
@@ -358,12 +364,14 @@ it("persists the composer provider, model, and effort until changed and applies 
   render(<App />);
 
   await screen.findByRole("textbox");
-  fireEvent.click(screen.getByRole("button", { name: /Choose provider, model, and effort/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Choose model and settings/ }));
   fireEvent.change(screen.getByLabelText("Composer provider"), { target: { value: "openai" } });
   await waitFor(() => expect(screen.getByLabelText("Composer model")).toHaveValue("gpt-5.1-codex"));
   fireEvent.change(screen.getByLabelText("Composer effort"), { target: { value: "high" } });
 
-  expect(screen.getByRole("button", { name: /Choose provider, model, and effort/ })).toHaveTextContent("OpenAI API · gpt-5.1-codex · High");
+  expect(screen.getByRole("button", { name: /Choose model and settings/ })).toHaveTextContent("gpt-5.1-codex");
+  expect(screen.getByRole("button", { name: /Choose model and settings/ })).not.toHaveTextContent("OpenAI API");
+  expect(screen.getByRole("button", { name: /Choose model and settings/ })).not.toHaveTextContent("High");
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Use the selected route" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
@@ -378,7 +386,7 @@ it("persists the composer provider, model, and effort until changed and applies 
     }),
   );
   expect(vi.mocked(configureRuntime).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(submitRuntime).mock.invocationCallOrder[0]);
-  expect(screen.getByRole("button", { name: /Choose provider, model, and effort/ })).toHaveTextContent("OpenAI API · gpt-5.1-codex · High");
+  expect(screen.getByRole("button", { name: /Choose model and settings/ })).toHaveTextContent("gpt-5.1-codex");
 });
 
 it("closes the composer selector when clicking outside it", async () => {
@@ -386,11 +394,24 @@ it("closes the composer selector when clicking outside it", async () => {
   render(<App />);
 
   await screen.findByRole("textbox");
-  fireEvent.click(screen.getByRole("button", { name: /Choose provider, model, and effort/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Choose model and settings/ }));
   expect(screen.getByRole("dialog", { name: "Provider, model, and effort" })).toBeInTheDocument();
 
   fireEvent.pointerDown(document.body);
   expect(screen.queryByRole("dialog", { name: "Provider, model, and effort" })).not.toBeInTheDocument();
+});
+
+it("places the context meter below the prompt input without a checkmark", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  const composerCard = document.querySelector(".composer-card");
+  const contextBar = screen.getByRole("status", { name: "Session usage" });
+
+  expect(composerCard).not.toBeNull();
+  expect(composerCard!.compareDocumentPosition(contextBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(contextBar).not.toHaveTextContent("✓");
 });
 
 it("gives the icon-only send button an accessible name", async () => {
@@ -567,6 +588,7 @@ it("accepts slash suggestions with Enter and shows skills as selectable options"
   const composer = screen.getByRole("textbox");
   fireEvent.change(composer, { target: { value: "/" } });
   expect(await screen.findByRole("option", { name: /skills/i })).toBeInTheDocument();
+  expect(screen.queryByText("command", { exact: true })).not.toBeInTheDocument();
   fireEvent.keyDown(composer, { key: "Enter" });
   expect(composer).toHaveValue("/skills ");
 
@@ -757,6 +779,37 @@ it("summarizes active tool work before exposing collapsed details", async () => 
 
   expect(await screen.findByRole("status", { name: /running run focused tests/i })).toBeInTheDocument();
   expect(screen.getByLabelText("Tool progress")).toBeInTheDocument();
+});
+
+it("shows live actions during a turn and replaces them with a final summary and artifact card", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-summary", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(findWebArtifact).mockResolvedValue({ path: "C:/work/index.html", title: "Agentic Signals" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([
+      { type: "started" },
+      { type: "activity", activity: { id: "tool-1", kind: "tool", title: "Build artifact", details: ["writing index.html"] } },
+    ])
+    .mockResolvedValueOnce([{ type: "assistantText", text: "The artifact is ready." }, { type: "turnFinished" }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Build the page" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(await screen.findByRole("region", { name: "Actions in progress" })).toBeInTheDocument();
+  expect(await screen.findByText(/Worked for/)).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Actions in progress" })).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Turn summary" })).toHaveTextContent("Turn completed");
+  expect(screen.getAllByText("Agentic Signals").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getByRole("link", { name: "Download Agentic Signals" })).toHaveAttribute("download", "index.html");
+  const browserLink = screen.getByRole("link", { name: /Open Agentic Signals in your default browser/i });
+  expect(browserLink).toHaveAttribute("href", "file:///C:/work/index.html");
+  fireEvent.click(browserLink);
+  await waitFor(() => expect(openWebArtifact).toHaveBeenCalledWith("runtime-summary", "C:/work/index.html"));
+  expect(screen.getByText("Open in")).toBeInTheDocument();
 });
 
 it("keeps technical error details behind disclosure and retries the last request", async () => {

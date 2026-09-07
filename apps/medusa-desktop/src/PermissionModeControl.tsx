@@ -1,4 +1,4 @@
-import { ShieldAlert, ShieldCheck } from "lucide-react";
+import { BookOpen, Hand, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toUserError } from "./errorPresentation";
 import {
@@ -7,6 +7,40 @@ import {
   setPermissionMode,
   type PermissionModeOption,
 } from "./permissionModes";
+
+function modeCopy(mode: PermissionModeOption): { label: string; description: string } {
+  switch (mode.id) {
+    case "ask-for-approval":
+      return {
+        label: "Ask for approval",
+        description: "Always ask to edit external files and use the internet",
+      };
+    case "approve-for-me":
+      return {
+        label: "Approve for me",
+        description: "Only ask for actions detected as potentially unsafe",
+      };
+    case "full-access":
+      return {
+        label: "Full access",
+        description: "Unrestricted access to the internet and any file on your computer",
+      };
+    case "read-only":
+      return {
+        label: "Read only",
+        description: "Read files in the workspace; ask before edits or internet access",
+      };
+    default:
+      return { label: mode.label, description: mode.description };
+  }
+}
+
+function ModeIcon({ id }: { id: string }) {
+  if (id === "ask-for-approval") return <Hand size={19} aria-hidden="true" />;
+  if (id === "full-access") return <ShieldAlert size={19} aria-hidden="true" />;
+  if (id === "read-only") return <BookOpen size={19} aria-hidden="true" />;
+  return <ShieldCheck size={19} aria-hidden="true" />;
+}
 
 export function PermissionModeControl() {
   const [modes, setModes] = useState<PermissionModeOption[]>([]);
@@ -50,10 +84,12 @@ export function PermissionModeControl() {
   }, [open]);
 
   const active = useMemo(() => modes.find((mode) => mode.active), [modes]);
+  const activeCopy = active ? modeCopy(active) : undefined;
   const display = active ?? {
     label: error ? "Permissions unavailable" : "Loading permissions…",
     description: error ? "The current permission mode could not be loaded." : "Loading the current permission mode.",
   };
+  const displayCopy = activeCopy ?? display;
 
   const choose = async (id: string) => {
     if (busy || id === active?.id) {
@@ -79,32 +115,39 @@ export function PermissionModeControl() {
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`${display.label}: ${display.description}`}
+        title={`${displayCopy.label}: ${displayCopy.description}`}
         onClick={() => setOpen((value) => !value)}
       >
-        {active?.id === "full-access" ? <ShieldAlert size={16} /> : <ShieldCheck size={16} />}
-        <span>{display.label}</span>
+        {active ? <ModeIcon id={active.id} /> : <ShieldCheck size={16} aria-hidden="true" />}
+        <span>{displayCopy.label}</span>
       </button>
       {open && (
-        <div className="permission-mode-menu" role="menu" aria-label="Model permissions">
-          <div className="permission-mode-heading">Model permissions</div>
-          {modes.map((mode) => (
-            <button
-              key={mode.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={mode.active}
-              className={`permission-mode-option${mode.active ? " active" : ""}${mode.id === "full-access" ? " danger" : ""}`}
-              disabled={busy}
-              onClick={() => void choose(mode.id)}
-            >
-              <span className="permission-mode-option-mark">{mode.active ? "✓" : ""}</span>
-              <span className="permission-mode-option-copy">
-                <strong>{mode.label}</strong>
-                <small>{mode.description}</small>
-              </span>
-            </button>
-          ))}
+        <div className="permission-mode-menu" role="menu" aria-label="How should ChatGPT actions be approved?">
+          <div className="permission-mode-menu-header">
+            <div className="permission-mode-heading">How should ChatGPT actions be approved?</div>
+            <span className="permission-mode-learn-more">Learn more</span>
+          </div>
+          {modes.map((mode) => {
+            const copy = modeCopy(mode);
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={mode.active}
+                className={`permission-mode-option${mode.active ? " active" : ""}${mode.id === "full-access" ? " danger" : ""}`}
+                disabled={busy}
+                onClick={() => void choose(mode.id)}
+              >
+                <span className="permission-mode-option-icon"><ModeIcon id={mode.id} /></span>
+                <span className="permission-mode-option-copy">
+                  <strong>{copy.label}</strong>
+                  <small>{copy.description}</small>
+                </span>
+                <span className="permission-mode-option-mark">{mode.active ? "✓" : ""}</span>
+              </button>
+            );
+          })}
           {!error && modes.length === 0 && <div role="status">Loading permission modes…</div>}
           {error && <div className="permission-mode-error" role="alert">{error}</div>}
         </div>

@@ -51,6 +51,22 @@ body,
   background-image: none !important;
 }
 
+/* Keep usage visible without letting the meter dominate the composer. */
+.context-bar {
+  width: min(440px, 100%);
+  margin: 4px auto 0;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: 10px;
+  opacity: 0.72;
+}
+
+.context-bar-track {
+  flex: 0 1 180px;
+  width: 180px;
+  height: 2px;
+}
+
 .sidebar,
 .topbar,
 .inspector {

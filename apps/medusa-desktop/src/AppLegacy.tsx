@@ -9,6 +9,8 @@ import {
   ChevronRight,
   Circle,
   Copy,
+  Download,
+  ExternalLink,
   FilePlus2,
   FolderOpen,
   Gauge,
@@ -61,6 +63,7 @@ import {
   configureRuntime,
   dismissRecovery,
   findWebArtifact,
+  openWebArtifact,
   loadSharedConfiguration,
   pollRuntime,
   publishRepoChanged,
@@ -78,6 +81,7 @@ import {
   type RuntimeEvent,
   type SharedConfiguration,
   type WebArtifact,
+  webArtifactBrowserUrl,
   webArtifactPreviewUrl,
   visibleAssistantText,
 } from "./runtime";
@@ -264,6 +268,161 @@ function finishActivities(
   });
 }
 
+type TurnSummaryStatus = "completed" | "failed" | "cancelled";
+
+interface TurnSummaryState {
+  status: TurnSummaryStatus;
+  elapsedSeconds: number;
+  error?: string;
+}
+
+function formatWorkedDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m ${remainingSeconds}s`;
+}
+
+function activityStatusClass(entry: WorkLogEntry): string {
+  return entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : "";
+}
+
+function LiveActivityTrail({
+  entries,
+  verboseDetails,
+}: {
+  entries: WorkLogEntry[];
+  verboseDetails: boolean;
+}) {
+  if (!entries.length) return null;
+  return (
+    <section className="activity-summary live-activity-trail" aria-label="Actions in progress">
+      <div className="activity-summary-heading">
+        <span><Activity size={15} aria-hidden="true" /> Working</span>
+        <small>Live actions</small>
+      </div>
+      {entries.map((entry) => (
+        <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={verboseDetails || undefined}>
+          <summary>
+            <span aria-hidden="true"><Activity size={14} /></span>
+            <strong>{entry.text}</strong>
+            <small>{entry.status ?? "Working"}</small>
+          </summary>
+          {!!entry.details?.length && (
+            <div className="activity-details">
+              {entry.details.map((detail, index) => <p key={`${entry.id}-${index}`}>{detail}</p>)}
+            </div>
+          )}
+        </details>
+      ))}
+    </section>
+  );
+}
+
+function FinalTurnSummary({
+  summary,
+  activities,
+  artifact,
+  onPreview,
+  onOpenExternally,
+}: {
+  summary: TurnSummaryState;
+  activities: WorkLogEntry[];
+  artifact?: WebArtifact;
+  onPreview: () => void;
+  onOpenExternally: () => void;
+}) {
+  const statusLabel = summary.status === "completed"
+    ? "Turn completed"
+    : summary.status === "cancelled"
+      ? "Turn cancelled"
+      : "Turn failed";
+  const statusIcon = summary.status === "completed"
+    ? <CheckCircle2 size={16} aria-hidden="true" />
+    : <OctagonX size={16} aria-hidden="true" />;
+
+  return (
+    <section className={`turn-summary-card ${summary.status}`} aria-label="Turn summary">
+      <div className="turn-summary-heading">
+        <span className="turn-summary-worked">Worked for {formatWorkedDuration(summary.elapsedSeconds)}</span>
+        <ChevronRight size={17} aria-hidden="true" />
+      </div>
+      <div className="turn-summary-status">
+        <span className="turn-summary-status-icon">{statusIcon}</span>
+        <strong>{statusLabel}</strong>
+      </div>
+      {!!summary.error && <p className="turn-summary-error">{summary.error}</p>}
+
+      {!!activities.length && (
+        <details className="turn-summary-details">
+          <summary>Show execution details ({activities.length})</summary>
+          <div className="turn-summary-activity-list">
+            {activities.map((entry) => (
+              <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id}>
+                <summary>
+                  <span aria-hidden="true"><Activity size={14} /></span>
+                  <strong>{entry.text}</strong>
+                  <small>{entry.status ?? "Recorded"}</small>
+                </summary>
+                {!!entry.details?.length && (
+                  <div className="activity-details">
+                    {entry.details.map((detail, index) => <p key={`${entry.id}-${index}`}>{detail}</p>)}
+                  </div>
+                )}
+              </details>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {artifact && (
+        <article className="turn-artifact-card">
+          <div className="turn-artifact-heading">
+            <div className="turn-artifact-icon" aria-hidden="true"><FilePlus2 size={18} /></div>
+            <div>
+              <a
+                className="turn-artifact-link"
+                href={webArtifactBrowserUrl(artifact.path)}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open ${artifact.title} in your default browser`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onOpenExternally();
+                }}
+                title="Open the built page in your default browser"
+              >
+                {artifact.title} <ExternalLink size={13} aria-hidden="true" />
+              </a>
+              <small>Website · {basename(artifact.path)}</small>
+            </div>
+          </div>
+          <div className="turn-artifact-actions">
+            <a
+              className="turn-artifact-download"
+              href={webArtifactPreviewUrl(artifact.path)}
+              download={basename(artifact.path)}
+              aria-label={`Download ${artifact.title}`}
+              title="Download artifact"
+            >
+              <Download size={17} aria-hidden="true" />
+            </a>
+            <details className="turn-artifact-open-menu">
+              <summary>Open in <ChevronDown size={15} aria-hidden="true" /></summary>
+              <div role="menu">
+                <button type="button" role="menuitem" onClick={onPreview}>Preview in Medusa</button>
+                <button type="button" role="menuitem" onClick={onOpenExternally}><ExternalLink size={14} aria-hidden="true" /> Default browser</button>
+              </div>
+            </details>
+          </div>
+        </article>
+      )}
+    </section>
+  );
+}
+
 interface AppProps {
   settingsSlot?: React.ReactNode;
   composerSlot?: React.ReactNode;
@@ -355,6 +514,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const [lastRequest, setLastRequest] = useState<{ text: string; attachments: DesktopAttachment[] }>();
   const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
   const [slashSelection, setSlashSelection] = useState(0);
+  const slashOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [previewImage, setPreviewImage] = useState<Extract<DesktopAttachment, { kind: "image" }>>();
   const [draggingImage, setDraggingImage] = useState(false);
@@ -384,6 +544,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const sidePanelResizeStart = useRef<{ x: number; width: number }>();
   const [webArtifact, setWebArtifact] = useState<WebArtifact>();
   const [partialResult, setPartialResult] = useState(false);
+  const [turnSummary, setTurnSummary] = useState<TurnSummaryState>();
+  const turnStartedAt = useRef<number>();
   const assistantResponseInTurn = useRef(false);
   const assistantStream = useRef<{ id: number; raw: string; text: string; createdAt: number }>();
   const assistantDeltaFrame = useRef<number>();
@@ -582,12 +744,23 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     }
   }, []);
 
+  const openArtifactExternally = useCallback(async () => {
+    if (!runtimeId || !webArtifact) return;
+    try {
+      await openWebArtifact(runtimeId, webArtifact.path);
+    } catch (cause) {
+      setError(toUserError(cause));
+    }
+  }, [runtimeId, webArtifact]);
+
   const applyEvent = useCallback((event: RuntimeEvent) => {
     switch (event.type) {
       case "started":
         setBusy(true);
         setError(undefined);
         setPartialResult(false);
+        turnStartedAt.current = Date.now();
+        setTurnSummary(undefined);
         assistantResponseInTurn.current = false;
         assistantStream.current = undefined;
         lastTransportError.current = undefined;
@@ -686,6 +859,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setTurn(0);
         setLastRequest(undefined);
         setWebArtifact(undefined);
+        setTurnSummary(undefined);
+        turnStartedAt.current = undefined;
         setPartialResult(false);
         setSidePanelView("work");
         assistantResponseInTurn.current = false;
@@ -700,6 +875,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setBusy(false);
         setActivities((current) => finishActivities(current, "done", "Turn completed."));
         appendWorkLog({ kind: "status", text: "Final response ready", status: "Done" });
+        setTurnSummary({ status: "completed", elapsedSeconds: Math.max(0, Math.round((Date.now() - (turnStartedAt.current ?? Date.now())) / 1000)) });
+        turnStartedAt.current = undefined;
         if (!assistantResponseInTurn.current) {
           appendAssistantMessage("The request completed successfully, but Medusa did not return a chat summary. Check Work for the execution details.");
         }
@@ -708,6 +885,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setBusy(false);
         setActivities((current) => finishActivities(current, "done", "Turn finished."));
         appendWorkLog({ kind: "status", text: "Turn finished", status: "Done" });
+        setTurnSummary({ status: "completed", elapsedSeconds: Math.max(0, Math.round((Date.now() - (turnStartedAt.current ?? Date.now())) / 1000)) });
+        turnStartedAt.current = undefined;
         if (!assistantResponseInTurn.current) {
           appendAssistantMessage("The turn finished successfully, but Medusa did not return a chat summary. Check Work for the execution details.");
         }
@@ -716,6 +895,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setBusy(false);
         setActivities((current) => finishActivities(current, "error", "Stopped because the turn was cancelled."));
         appendWorkLog({ kind: "status", text: "Turn stopped", status: "Stopped" });
+        setTurnSummary({ status: "cancelled", elapsedSeconds: Math.max(0, Math.round((Date.now() - (turnStartedAt.current ?? Date.now())) / 1000)) });
+        turnStartedAt.current = undefined;
         appendAssistantMessage("The turn was stopped before completion. You can retry the last request when you are ready.");
         break;
       case "failed":
@@ -724,6 +905,12 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setError(event.message);
         setPartialResult(false);
         appendWorkLog({ kind: "status", text: "Turn failed", status: "Error", details: [event.message] });
+        setTurnSummary({
+          status: "failed",
+          elapsedSeconds: Math.max(0, Math.round((Date.now() - (turnStartedAt.current ?? Date.now())) / 1000)),
+          error: event.message,
+        });
+        turnStartedAt.current = undefined;
         appendAssistantMessage(`The request did not complete because the runtime reported an error:\n\n${event.message}\n\nRetry the request or inspect Work for the failed execution step. If Preview is available, it contains the partial result that was produced before the failure.`);
         break;
     }
@@ -837,6 +1024,13 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   }, [runtimeId, prompt]);
 
   useEffect(() => {
+    const option = slashOptionRefs.current[slashSelection];
+    if (option && typeof option.scrollIntoView === "function") {
+      option.scrollIntoView({ block: "nearest" });
+    }
+  }, [slashSelection, slashSuggestions.length]);
+
+  useEffect(() => {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
     let disposed = false;
     const start = async () => {
@@ -927,6 +1121,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       setQuestions([]);
       setLastRequest(undefined);
       setWebArtifact(undefined);
+      setTurnSummary(undefined);
+      turnStartedAt.current = undefined;
       setPartialResult(false);
       setSidePanelView("work");
     } catch (cause) {
@@ -971,6 +1167,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       setQuestions([]);
       setLastRequest(undefined);
       setWebArtifact(undefined);
+      setTurnSummary(undefined);
+      turnStartedAt.current = undefined;
       setPartialResult(false);
       setSidePanelView("work");
       setError(undefined);
@@ -1007,6 +1205,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       setQuestions([]);
       setLastRequest(undefined);
       setWebArtifact(undefined);
+      setTurnSummary(undefined);
+      turnStartedAt.current = undefined;
       setPartialResult(false);
       setSidePanelView("work");
       setError(undefined);
@@ -1129,6 +1329,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       assistantResponseInTurn.current = false;
       lastTransportError.current = undefined;
       setWebArtifact(undefined);
+      setTurnSummary(undefined);
+      turnStartedAt.current = Date.now();
       setPartialResult(false);
       setSidePanelView("work");
     }
@@ -1384,9 +1586,10 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     ),
     [providerCatalog, provider],
   );
+  const selectedModelDisplayName = selectedProvider?.models?.find((candidate) => candidate.id === model)?.display_name;
   const composerSelectorLabel = selectedProvider && model
-    ? `${selectedProvider.displayName} · ${model} · ${effortLabel(effort)}`
-    : "Choose provider and model";
+    ? selectedModelDisplayName ?? model
+    : "Choose model";
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.total;
   const openDesktopTool = (tool: DesktopTool) => requestDesktopTool(tool);
@@ -1417,6 +1620,10 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     );
   })();
   const verboseDetails = settings.verbosity === "verbose";
+  const liveActivityEntries = visibleWorkLog
+    .filter((entry) => entry.kind === "activity")
+    .slice(-8);
+  const completedActivityEntries = workLog.filter((entry) => entry.kind === "activity");
   const hasPartialResult = partialResult && Boolean(webArtifact);
 
   const beginSidePanelResize = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -1658,18 +1865,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         {activePanel === "chat" && (
           <>
             <div className="transcript" ref={transcriptRef}>
-              {messages.length === 0 && !busy && (
-                <div className="transcript-empty">
-                  <h2>What should Medusa do?</h2>
-                  <p>Describe the task, attach files, or start from a suggestion.</p>
-                  <div className="transcript-starters">
-                    <button type="button" onClick={() => void sendText("Summarize the current repo state and suggest the highest-value next change.", [])}>Summarize repo state</button>
-                    <button type="button" onClick={() => void sendText("Run the test suite and fix any failures.", [])}>Run tests and fix failures</button>
-                    <button type="button" onClick={() => void sendText("Review the open diff for correctness and style.", [])}>Review open diff</button>
-                  </div>
-                  <p className="transcript-hint">Tip: type / for commands, @ to reference a file, Enter to send.</p>
-                </div>
-              )}
               {messages.length > transcriptLimit && (
                 <button type="button" className="transcript-show-more" onClick={() => setTranscriptLimit((limit) => limit + 200)}>
                   Show {messages.length - transcriptLimit} earlier messages
@@ -1706,6 +1901,16 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                   )}
                 </article>
               ))}
+              {busy && <LiveActivityTrail entries={liveActivityEntries} verboseDetails={verboseDetails} />}
+              {!busy && turnSummary && (
+                <FinalTurnSummary
+                  summary={turnSummary}
+                  activities={completedActivityEntries}
+                  artifact={webArtifact}
+                  onPreview={() => setSidePanelView("preview")}
+                  onOpenExternally={() => void openArtifactExternally()}
+                />
+              )}
               <div className="timeline-anchor" aria-hidden="true" />
               <ApprovalCard
                 prompts={questions}
@@ -1718,16 +1923,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
               />
             </div>
 
-            <div className="context-bar" role="status" aria-label="Session usage">
-                <span className="context-bar-label">Context</span>
-                <span className="context-bar-track" aria-hidden="true">
-                  <span
-                    className="context-bar-fill"
-                    style={{ width: `${usage.total > 0 ? Math.min(100, Math.round((usage.cached / Math.max(1, usage.total)) * 100)) : 0}%` }}
-                  />
-                </span>
-                <span className="context-bar-stats">{usage.input.toLocaleString()} in · {usage.output.toLocaleString()} out · {usage.cached.toLocaleString()} cached</span>
-              </div>
             <footer className="composer-wrap">
               {composerSlot}
               {!!error && (
@@ -1784,10 +1979,21 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                   <div className="mention-hint" role="status">Type a repo-relative path after @ to reference a file, e.g. @crates/medusa-tui/src/app.rs</div>
                 )}
                 {!!slashSuggestions.length && (
-                  <div className="slash-menu" role="listbox" aria-label="Slash commands">
+                  <div id="slash-command-listbox" className="slash-menu" role="listbox" aria-label="Slash command suggestions">
                     {slashSuggestions.map((suggestion, index) => (
-                      <button className={`slash-row${index === slashSelection ? " active" : ""}`} key={suggestion.name} role="option" aria-selected={index === slashSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => selectSlashSuggestion(suggestion)}>
-                        <span className="slash-row-label">{suggestion.usage}</span><span className="slash-row-desc">{suggestion.description}</span><span className="slash-row-kind">{prompt.startsWith("/skills ") ? "skill" : "command"}</span>
+                      <button
+                        id={`slash-option-${index}`}
+                        ref={(element) => { slashOptionRefs.current[index] = element; }}
+                        className={`slash-row${index === slashSelection ? " active" : ""}`}
+                        key={suggestion.name}
+                        role="option"
+                        aria-selected={index === slashSelection}
+                        aria-posinset={index + 1}
+                        aria-setsize={slashSuggestions.length}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectSlashSuggestion(suggestion)}
+                      >
+                        <span className="slash-row-label" title={suggestion.usage}>{suggestion.usage}</span><span className="slash-row-desc">{suggestion.description}</span>
                       </button>
                     ))}
                   </div>
@@ -1803,6 +2009,9 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                     value={prompt}
                     disabled={!runtimeId}
                     aria-label="Message Medusa"
+                    aria-autocomplete="list"
+                    aria-controls={slashSuggestions.length ? "slash-command-listbox" : undefined}
+                    aria-activedescendant={slashSuggestions.length ? `slash-option-${slashSelection}` : undefined}
                     onChange={(event) => setPrompt(event.target.value)}
                     onPaste={onPaste}
                     onKeyDown={(event) => {
@@ -1825,7 +2034,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                         disabled={!runtimeId}
                         aria-expanded={composerSelectorOpen}
                         aria-haspopup="dialog"
-                        aria-label={`Choose provider, model, and effort: ${composerSelectorLabel}`}
+                        aria-label={`Choose model and settings: ${composerSelectorLabel}`}
                         onClick={() => setComposerSelectorOpen((current) => !current)}
                       >
                         <span>{composerSelectorLabel}</span>
@@ -1882,6 +2091,16 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                     )}
                   </div>
                 </div>
+              </div>
+              <div className="context-bar" role="status" aria-label="Session usage">
+                <span className="context-bar-label">Context</span>
+                <span className="context-bar-track" aria-hidden="true">
+                  <span
+                    className="context-bar-fill"
+                    style={{ width: `${usage.total > 0 ? Math.min(100, Math.round((usage.cached / Math.max(1, usage.total)) * 100)) : 0}%` }}
+                  />
+                </span>
+                <span className="context-bar-stats">{usage.input.toLocaleString()} in · {usage.output.toLocaleString()} out · {usage.cached.toLocaleString()} cached</span>
               </div>
             </footer>
           </>

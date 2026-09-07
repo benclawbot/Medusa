@@ -30,6 +30,16 @@ The desktop shell uses two isolated presentation layers:
 - start events set the active state
 - questions, completion, cancellation, turn completion, and failures clear the active state
 - the central timeline keeps only the latest twelve activity cards visible while the inspector retains its existing summary behavior
+- while a turn is active, the conversation shows a compact live action trail; after a terminal event, that temporary trail is replaced by a `Worked for …` summary with expandable execution details
+- generated web artifacts remain attached to the final summary with preview, download, and external-open actions
+- completed, cancelled, and failed turns show their elapsed wall-clock duration in the conversation summary
+
+## Interaction contracts
+
+- `/verbose` is available from the slash-command palette and controls how much activity detail is shown during the current session
+- typing `/` opens a compact scrollable autocomplete list; arrow keys, Tab, Enter, and pointer selection choose a suggestion without repeating a command-type badge
+- generated page titles in the final summary are real `file:` links backed by the native default-browser handoff, with the URL remaining available for copying
+- in the TUI, `Esc` clears a non-empty composer draft; an empty composer uses `Esc` to cancel an active run, keeping prompt editing and run cancellation separate
 
 ## Validation
 

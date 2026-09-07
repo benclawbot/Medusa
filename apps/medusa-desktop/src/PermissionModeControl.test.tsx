@@ -58,6 +58,41 @@ it("shows the backend-selected permission mode once loaded", async () => {
   await waitFor(() => expect(screen.getByRole("button", { name: "Ask for approval" })).toBeInTheDocument());
 });
 
+it("renders the Codex approval copy and puts the selected mark on the active option", async () => {
+  vi.mocked(loadPermissionModes).mockResolvedValue([
+    {
+      id: "ask-for-approval",
+      label: "Ask for approval",
+      description: "backend description",
+      active: false,
+    },
+    {
+      id: "approve-for-me",
+      label: "Approve for me",
+      description: "backend description",
+      active: false,
+    },
+    {
+      id: "full-access",
+      label: "Full Access",
+      description: "backend description",
+      active: true,
+    },
+  ]);
+  render(<PermissionModeControl />);
+
+  const trigger = await screen.findByRole("button", { name: "Full access" });
+  fireEvent.click(trigger);
+
+  expect(screen.getByRole("menu", { name: "How should ChatGPT actions be approved?" })).toHaveTextContent(
+    "How should ChatGPT actions be approved?",
+  );
+  expect(screen.getByText("Always ask to edit external files and use the internet")).toBeInTheDocument();
+  expect(screen.getByText("Only ask for actions detected as potentially unsafe")).toBeInTheDocument();
+  expect(screen.getByText("Unrestricted access to the internet and any file on your computer")).toBeInTheDocument();
+  expect(screen.getByRole("menuitemradio", { name: /Full access/ })).toHaveTextContent("✓");
+});
+
 it("refreshes the displayed mode after another surface changes permissions", async () => {
   vi.mocked(loadPermissionModes)
     .mockResolvedValueOnce([
@@ -93,6 +128,6 @@ it("refreshes the displayed mode after another surface changes permissions", asy
   await waitFor(() => expect(screen.getByRole("button", { name: "Ask for approval" })).toBeInTheDocument());
   window.dispatchEvent(new Event(PERMISSION_MODE_CHANGED_EVENT));
 
-  await waitFor(() => expect(screen.getByRole("button", { name: "Full Access" })).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole("button", { name: "Full access" })).toBeInTheDocument());
   expect(loadPermissionModes).toHaveBeenCalledTimes(2);
 });

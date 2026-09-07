@@ -273,7 +273,7 @@ impl AppState {
                     self.set_scrollback_offset(0);
                     return Ok(AppAction::Redraw);
                 }
-                KeyCode::Esc => return Ok(AppAction::Quit),
+                KeyCode::Esc => return Ok(AppAction::ClearPrompt),
                 _ => {}
             }
             if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -604,6 +604,14 @@ impl AppState {
         let cursor = draft.text.len();
         self.composer = ComposerState { draft, cursor };
         self.persist_draft()
+    }
+
+    pub fn clear_composer(&mut self) -> io::Result<()> {
+        self.composer = ComposerState::new("");
+        self.command_selection = 0;
+        self.draft_store.delete(&self.draft_key)?;
+        self.status = "prompt cleared".to_owned();
+        Ok(())
     }
 
     pub fn open_question(&mut self, questions: Vec<QuestionPrompt>) {

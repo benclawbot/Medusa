@@ -185,6 +185,58 @@ fn typed_slash_commands_are_selected_before_they_are_submitted() {
 }
 
 #[test]
+fn verbose_command_is_submitted_and_clears_the_composer() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "verbose-command",
+        "/verbose",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+
+    assert_eq!(
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .expect("submit verbose command"),
+        AppAction::Command(SlashCommand::Verbose { mode: None })
+    );
+    assert!(app.composer.draft.text.is_empty());
+}
+
+#[test]
+fn escape_is_a_prompt_clear_action() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "escape-prompt",
+        "/verbose ",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+    app.persist_draft().expect("persist draft");
+
+    assert_eq!(
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )))
+        .expect("clear prompt"),
+        AppAction::ClearPrompt
+    );
+    app.clear_composer().expect("clear durable draft");
+    assert!(app.composer.draft.text.is_empty());
+    assert!(
+        DraftStore::for_repo(repository.path())
+            .load("escape-prompt")
+            .expect("load draft")
+            .is_none()
+    );
+}
+
+#[test]
 fn starting_a_new_turn_removes_the_stale_terminal_failure_marker() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(

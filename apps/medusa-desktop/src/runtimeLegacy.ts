@@ -73,6 +73,22 @@ export function webArtifactPreviewUrl(path: string): string {
   return convertFileSrc(path);
 }
 
+/**
+ * Keep a real file URL on the artifact action so it remains copyable and usable
+ * from the conversation even when the native browser handoff is unavailable.
+ */
+export function webArtifactBrowserUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const encodeSegments = (value: string) => value.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    return `file:///${normalized.slice(0, 2)}${encodeSegments(normalized.slice(2))}`;
+  }
+  if (normalized.startsWith("//")) {
+    return `file://${encodeSegments(normalized.slice(2))}`;
+  }
+  return `file://${encodeSegments(normalized.startsWith("/") ? normalized : `/${normalized}`)}`;
+}
+
 export interface SharedConfiguration {
   revision: number;
   activeProfile: string;

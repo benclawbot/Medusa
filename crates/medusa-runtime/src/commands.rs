@@ -768,9 +768,12 @@ pub fn command_suggestions(input: &str, repo: &Path) -> Vec<CommandSuggestion> {
             usage: spec.usage.to_owned(),
             description: spec.description.to_owned(),
         })
-        .take(6)
+        // Keep the root palette useful without hiding the controls that affect
+        // the current turn. In particular, `/verbose` must be discoverable
+        // immediately after typing `/`, not only after guessing its prefix.
+        .take(8)
         .collect::<Vec<_>>();
-    let remaining = 6_usize.saturating_sub(suggestions.len());
+    let remaining = 8_usize.saturating_sub(suggestions.len());
     suggestions.extend(
         skill_command_suggestions(repo)
             .into_iter()
@@ -1379,6 +1382,12 @@ mod tests {
             "help"
         );
         assert_eq!(complete_first_command("/zz", directory.path()), None);
-        assert_eq!(command_suggestions("/", directory.path()).len(), 6);
+        let root_suggestions = command_suggestions("/", directory.path());
+        assert!(root_suggestions.len() >= 7);
+        assert!(
+            root_suggestions
+                .iter()
+                .any(|suggestion| suggestion.name == "verbose")
+        );
     }
 }

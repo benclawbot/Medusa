@@ -62,6 +62,7 @@ pub enum TranscriptPlanStepState {
 pub enum AppAction {
     None,
     Redraw,
+    ClearPrompt,
     Submit(PromptDraft),
     AnswerQuestion(String),
     Command(SlashCommand),

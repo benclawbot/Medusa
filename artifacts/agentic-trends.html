@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A field note on the latest agentic AI trends from July through September 2026.">
+  <title>Agentic Signals — July–September 2026</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #f2f6f2;
+      --ink-soft: #b7c3bd;
+      --ink-faint: #7f9189;
+      --bg: #07100e;
+      --bg-raised: #0c1714;
+      --bg-raised-2: #11201c;
+      --line: rgba(185, 220, 204, 0.15);
+      --line-strong: rgba(185, 220, 204, 0.25);
+      --lime: #c7f36b;
+      --mint: #88e6ba;
+      --violet: #b9a6ff;
+      --coral: #ff9d7a;
+      --yellow: #f2d77c;
+      --serif: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+      --sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+      --mono: "DM Mono", ui-monospace, monospace;
+      --radius-lg: 22px;
+      --radius-md: 14px;
+      --shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 84% 7%, rgba(137, 230, 186, 0.11), transparent 28rem),
+        radial-gradient(circle at 8% 32%, rgba(185, 166, 255, 0.08), transparent 24rem),
+        var(--bg);
+      font: 16px/1.6 var(--sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    :focus-visible { outline: 2px solid var(--lime); outline-offset: 4px; }
+    .skip-link {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 50;
+      padding: 9px 12px;
+      color: var(--bg);
+      background: var(--lime);
+      border-radius: 8px;
+      transform: translateY(-160%);
+    }
+    .skip-link:focus { transform: translateY(0); }
+
+    .progress {
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 40;
+      height: 3px;
+      background: var(--lime);
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+
+    .shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 24px 0 20px;
+      border-bottom: 1px solid var(--line);
+    }
+    .wordmark {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font: 500 13px/1 var(--mono);
+      letter-spacing: 0.08em;
+      text-decoration: none;
+      text-transform: uppercase;
+    }
+    .wordmark-mark {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      color: var(--bg);
+      background: var(--lime);
+      border-radius: 7px;
+      font: 700 12px/1 var(--serif);
+    }
+    .topbar-meta {
+      display: flex;
+      align-items: center;
+      gap: 22px;
+      color: var(--ink-faint);
+      font: 12px/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .live {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--mint);
+    }
+    .live::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 0 4px rgba(136, 230, 186, 0.12);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: clamp(42px, 8vw, 110px);
+      align-items: end;
+      padding: clamp(70px, 11vw, 132px) 0 88px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin: 0 0 20px;
+      color: var(--lime);
+      font: 500 12px/1 var(--mono);
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { content: "//"; color: var(--ink-faint); }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 780px;
+      margin-bottom: 26px;
+      font: 600 clamp(3.2rem, 8.1vw, 7.4rem)/0.94 var(--serif);
+      letter-spacing: -0.07em;
+    }
+    .hero-copy {
+      max-width: 620px;
+      margin-bottom: 30px;
+      color: var(--ink-soft);
+      font-size: clamp(1.08rem, 1.7vw, 1.34rem);
+      line-height: 1.48;
+    }
+    .hero-note {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink-faint);
+      font: 12px/1.45 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .hero-note span { color: var(--coral); font-size: 18px; }
+
+    .pulse-card {
+      position: relative;
+      min-height: 290px;
+      padding: 22px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(145deg, rgba(17, 32, 28, 0.96), rgba(9, 18, 16, 0.94));
+      box-shadow: var(--shadow);
+    }
+    .pulse-card::after {
+      content: "";
+      position: absolute;
+      width: 190px;
+      height: 190px;
+      right: -78px;
+      bottom: -82px;
+      border: 1px solid rgba(199, 243, 107, 0.22);
+      border-radius: 50%;
+      box-shadow: 0 0 0 20px rgba(199, 243, 107, 0.035), 0 0 0 44px rgba(199, 243, 107, 0.025);
+    }
+    .mini-label {
+      color: var(--ink-faint);
+      font: 500 11px/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .pulse-number {
+      margin: 24px 0 4px;
+      color: var(--lime);
+      font: 600 86px/0.88 var(--serif);
+      letter-spacing: -0.08em;
+    }
+    .pulse-caption { margin: 0; color: var(--ink-soft); font-size: 15px; }
+    .pulse-footer {
+      position: absolute;
+      right: 22px;
+      bottom: 20px;
+      left: 22px;
+      display: flex;
+      justify-content: space-between;
+      padding-top: 15px;
+      border-top: 1px solid var(--line);
+      color: var(--ink-faint);
+      font: 11px/1.3 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .section { padding: 74px 0; border-top: 1px solid var(--line); }
+    .section-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 34px;
+    }
+    .section-kicker { margin: 0 0 10px; color: var(--ink-faint); font: 500 11px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; }
+    h2 { margin-bottom: 0; font: 600 clamp(2rem, 4vw, 3.65rem)/1.02 var(--serif); letter-spacing: -0.06em; }
+    .section-intro { max-width: 380px; margin: 0; color: var(--ink-soft); line-height: 1.5; }
+
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 30px;
+    }
+    .filter {
+      cursor: pointer;
+      min-height: 42px;
+      padding: 9px 14px;
+      color: var(--ink-soft);
+      background: transparent;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font: 500 12px/1 var(--mono);
+      transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+    .filter:hover { color: var(--ink); border-color: var(--line-strong); background: rgba(255,255,255,0.04); }
+    .filter[aria-pressed="true"] { color: var(--bg); border-color: var(--lime); background: var(--lime); }
+
+    .trend-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+    .trend-card {
+      position: relative;
+      display: flex;
+      min-height: 306px;
+      flex-direction: column;
+      grid-column: span 4;
+      padding: 22px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: rgba(12, 23, 20, 0.84);
+      transition: border-color 220ms ease, background 220ms ease, transform 220ms ease;
+    }
+    .trend-card:hover { border-color: var(--line-strong); background: rgba(18, 34, 29, 0.96); transform: translateY(-3px); }
+    .trend-card.featured { grid-column: span 8; min-height: 350px; background: linear-gradient(140deg, rgba(26, 44, 36, 0.95), rgba(12, 23, 20, 0.92)); }
+    .trend-card:nth-child(4) { grid-column: span 5; }
+    .trend-card:nth-child(5) { grid-column: span 7; }
+    .trend-card.is-hidden { display: none; }
+    .card-head, .card-meta, .card-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .card-head { margin-bottom: 32px; }
+    .card-number { color: var(--ink-faint); font: 500 12px/1 var(--mono); }
+    .card-tag {
+      padding: 5px 8px;
+      color: var(--mint);
+      border: 1px solid rgba(136, 230, 186, 0.25);
+      border-radius: 5px;
+      font: 500 10px/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .trend-card:nth-child(2) .card-tag, .trend-card:nth-child(5) .card-tag { color: var(--violet); border-color: rgba(185, 166, 255, 0.3); }
+    .trend-card:nth-child(3) .card-tag, .trend-card:nth-child(6) .card-tag { color: var(--coral); border-color: rgba(255, 157, 122, 0.3); }
+    .trend-card h3 { max-width: 390px; margin-bottom: 14px; font: 600 clamp(1.6rem, 2.5vw, 2.25rem)/1.05 var(--serif); letter-spacing: -0.05em; }
+    .trend-card p { max-width: 48ch; margin-bottom: 22px; color: var(--ink-soft); font-size: 14px; line-height: 1.55; }
+    .trend-card .card-foot { margin-top: auto; padding-top: 18px; border-top: 1px solid var(--line); }
+    .card-meta { justify-content: flex-start; color: var(--ink-faint); font: 11px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; }
+    .source-link { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font: 500 11px/1 var(--mono); text-decoration: none; }
+    .source-link::after { content: "↗"; color: var(--lime); transition: transform 180ms ease; }
+    .source-link:hover { color: var(--ink); }
+    .source-link:hover::after { transform: translate(2px, -2px); }
+    .signal-meter { display: flex; align-items: center; gap: 8px; min-width: 116px; }
+    .meter-track { flex: 1; height: 4px; overflow: hidden; background: rgba(255,255,255,0.1); border-radius: 999px; }
+    .meter-track span { display: block; height: 100%; background: var(--lime); border-radius: inherit; }
+    .meter-value { color: var(--lime); font: 500 11px/1 var(--mono); }
+
+    .readout {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 50px;
+      align-items: start;
+    }
+    .readout h2 { max-width: 600px; }
+    .readout-lede { max-width: 600px; margin: 22px 0 0; color: var(--ink-soft); font-size: 18px; line-height: 1.5; }
+    .readout-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+    .readout-list li { display: grid; grid-template-columns: 28px 1fr; gap: 16px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .readout-list strong { display: block; margin-bottom: 3px; font: 600 16px/1.2 var(--serif); }
+    .readout-list p { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
+    .readout-index { color: var(--lime); font: 500 12px/1.4 var(--mono); }
+
+    .journey-wrap { overflow-x: auto; padding-bottom: 12px; scrollbar-color: var(--line-strong) transparent; }
+    .journey { position: relative; display: grid; grid-template-columns: repeat(6, minmax(178px, 1fr)); min-width: 1040px; gap: 16px; padding-top: 42px; }
+    .journey::before { content: ""; position: absolute; top: 12px; right: 0; left: 0; height: 1px; background: var(--line-strong); }
+    .milestone { position: relative; padding-right: 12px; }
+    .milestone::before { content: ""; position: absolute; top: -36px; left: 0; width: 10px; height: 10px; border: 2px solid var(--bg); border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 1px var(--lime); }
+    .milestone:nth-child(2)::before, .milestone:nth-child(5)::before { background: var(--violet); box-shadow: 0 0 0 1px var(--violet); }
+    .milestone:nth-child(3)::before, .milestone:nth-child(6)::before { background: var(--coral); box-shadow: 0 0 0 1px var(--coral); }
+    .milestone time { color: var(--ink-faint); font: 500 11px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+    .milestone h3 { margin: 15px 0 8px; font: 600 17px/1.1 var(--serif); letter-spacing: -0.03em; }
+    .milestone p { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.45; }
+
+    .signal-lab {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 14px;
+    }
+    .lab-card { padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(12, 23, 20, 0.72); }
+    .lab-card .lab-icon { width: 38px; height: 38px; display: grid; place-items: center; margin-bottom: 24px; color: var(--bg); background: var(--lime); border-radius: 10px; }
+    .lab-card:nth-child(2) .lab-icon { background: var(--violet); }
+    .lab-card:nth-child(3) .lab-icon { background: var(--coral); }
+    .lab-card h3 { margin-bottom: 8px; font: 600 20px/1.1 var(--serif); letter-spacing: -0.04em; }
+    .lab-card p { margin: 0; color: var(--ink-soft); font-size: 14px; line-height: 1.5; }
+    .lab-card code { color: var(--lime); font: 500 12px/1.3 var(--mono); }
+
+    .sources { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 46px; align-items: start; }
+    .source-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+    .source-list li { padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .source-list a { display: block; margin-bottom: 5px; color: var(--ink); font: 600 15px/1.3 var(--serif); text-decoration: none; }
+    .source-list a:hover { color: var(--lime); }
+    .source-list span { color: var(--ink-faint); font: 11px/1.2 var(--mono); text-transform: uppercase; letter-spacing: 0.05em; }
+    .method-note { padding: 20px; border: 1px solid rgba(199, 243, 107, 0.28); border-radius: var(--radius-md); background: rgba(199, 243, 107, 0.05); }
+    .method-note h3 { margin-bottom: 12px; color: var(--lime); font: 500 12px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+    .method-note p { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+
+    footer { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 26px 0 40px; border-top: 1px solid var(--line); color: var(--ink-faint); font: 11px/1.4 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; }
+    footer a { color: var(--ink-soft); text-decoration: none; }
+    footer a:hover { color: var(--lime); }
+
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity 500ms ease, transform 500ms ease; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    @media (max-width: 860px) {
+      .hero, .readout, .sources { grid-template-columns: 1fr; }
+      .hero { gap: 44px; }
+      .pulse-card { min-height: 240px; }
+      .trend-card, .trend-card.featured, .trend-card:nth-child(4), .trend-card:nth-child(5) { grid-column: span 6; }
+      .signal-lab { grid-template-columns: 1fr; }
+      .lab-card { min-height: 170px; }
+    }
+    @media (max-width: 620px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      .topbar { padding-top: 18px; }
+      .topbar-meta span:not(.live) { display: none; }
+      .hero { padding: 68px 0 68px; }
+      h1 { font-size: clamp(3.15rem, 16vw, 5.4rem); }
+      .section { padding: 56px 0; }
+      .section-heading { display: block; }
+      .section-intro { margin-top: 16px; }
+      .trend-card, .trend-card.featured, .trend-card:nth-child(4), .trend-card:nth-child(5) { grid-column: 1 / -1; min-height: 280px; }
+      .source-list { grid-template-columns: 1fr; }
+      footer { display: block; }
+      footer span { display: block; margin-bottom: 10px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#signals">Skip to trend signals</a>
+  <div class="progress" id="readProgress" aria-hidden="true"></div>
+
+  <div class="shell">
+    <header class="topbar">
+      <a class="wordmark" href="#top" aria-label="Agentic Signals home">
+        <span class="wordmark-mark">A</span>
+        <span>Agentic / Signals</span>
+      </a>
+      <div class="topbar-meta">
+        <span class="live">Live field note</span>
+        <span>07 Sep 2026</span>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">The July → September 2026 read</p>
+          <h1 id="page-title">The agent became a work surface.</h1>
+          <p class="hero-copy">The latest shift is not simply smarter chat. It is longer-running, more connected, more embodied systems — with the control layer finally becoming part of the product.</p>
+          <p class="hero-note"><span>↳</span> Six signals worth tracking now</p>
+        </div>
+        <aside class="pulse-card" aria-label="Trend pulse summary">
+          <div class="mini-label">Signal pulse / Q3</div>
+          <div class="pulse-number">06</div>
+          <p class="pulse-caption">clear movements from public releases and field reports</p>
+          <div class="pulse-footer"><span>Scope</span><span>01 Jul — 07 Sep</span></div>
+        </aside>
+      </section>
+
+      <section class="section" id="signals" aria-labelledby="signals-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">01 / The signals</p>
+            <h2 id="signals-title">What changed this quarter</h2>
+          </div>
+          <p class="section-intro">Filter the field note by the part of the agent stack that moved. Each card links to the primary announcement or report behind the read.</p>
+        </div>
+
+        <div class="filters" role="group" aria-label="Filter trend signals">
+          <button class="filter" type="button" data-filter="all" aria-pressed="true">All signals</button>
+          <button class="filter" type="button" data-filter="work" aria-pressed="false">Work + coding</button>
+          <button class="filter" type="button" data-filter="protocols" aria-pressed="false">Protocols + runtime</button>
+          <button class="filter" type="button" data-filter="science" aria-pressed="false">Science + robotics</button>
+          <button class="filter" type="button" data-filter="safety" aria-pressed="false">Safety + governance</button>
+        </div>
+
+        <div class="trend-grid" id="trendGrid" aria-live="polite">
+          <article class="trend-card featured reveal" data-topic="work">
+            <div class="card-head"><span class="card-number">01 / 06</span><span class="card-tag">Work surface</span></div>
+            <h3>Agents are absorbing the whole assignment.</h3>
+            <p>OpenAI’s July launch positioned ChatGPT Work as an agent that can move across apps and files, decompose a project, and stay with it for hours. The product language has shifted from “answer me” to “finish this.”</p>
+            <div class="card-foot"><div class="card-meta"><span>09 Jul 2026</span><span>↗</span></div><div class="signal-meter" aria-label="Signal strength 92 percent"><div class="meter-track"><span style="width: 92%"></span></div><span class="meter-value">92</span></div><a class="source-link" href="https://openai.com/index/chatgpt-for-your-most-ambitious-work/" target="_blank" rel="noreferrer">OpenAI</a></div>
+          </article>
+
+          <article class="trend-card reveal" data-topic="protocols">
+            <div class="card-head"><span class="card-number">02 / 06</span><span class="card-tag">Reach</span></div>
+            <h3>The agent stack is becoming a protocol stack.</h3>
+            <p>AWS framed MCP, A2A, UTCP, AG-UI and x402 as complementary layers — a sign that tool reach and agent-to-agent communication are becoming infrastructure decisions.</p>
+            <div class="card-foot"><div class="card-meta"><span>16 Jul 2026</span><span>↗</span></div><div class="signal-meter" aria-label="Signal strength 84 percent"><div class="meter-track"><span style="width: 84%"></span></div><span class="meter-value">84</span></div><a class="source-link" href="https://aws.amazon.com/blogs/opensource/" target="_blank" rel="noreferrer">AWS Open Source</a></div>
+          </article>
+
+          <article class="trend-card reveal" data-topic="science">
+            <div class="card-head"><span class="card-number">03 / 06</span><span class="card-tag">Research loop</span></div>
+            <h3>Science is becoming an agentic testbed.</h3>
+            <p>Field reports from genomics and academic research show agents taking on implementation, analysis and maintenance — while humans keep the scientific direction and validation bar.</p>
+            <div class="card-foot"><div class="card-meta"><span>28–29 Jul 2026</span><span>↗</span></div><div class="signal-meter" aria-label="Signal strength 78 percent"><div class="meter-track"><span style="width: 78%"></span></div><span class="meter-value">78</span></div><a class="source-link" href="https://openai.com/index/scientific-computing-agentic-ai/" target="_blank" rel="noreferrer">OpenAI report</a></div>
+          </article>
+
+          <article class="trend-card reveal" data-topic="protocols">
+            <div class="card-head"><span class="card-number">04 / 06</span><span class="card-tag">Runtime</span></div>
+            <h3>Portability and verification are shipping together.</h3>
+            <p>Agent Plugins 1.0.0 aims to make extensions portable across clients; Dogwood adds runtime verification around tool calls. Distribution and proof are becoming neighboring problems.</p>
+            <div class="card-foot"><div class="card-meta"><span>06 Aug 2026</span><span>↗</span></div><div class="signal-meter" aria-label="Signal strength 86 percent"><div class="meter-track"><span style="width: 86%"></span></div><span class="meter-value">86</span></div><a class="source-link" href="https://aws.amazon.com/blogs/opensource/aws-supports-agent-plugins-an-open-standard-for-portable-agent-extensions/" target="_blank" rel="noreferrer">AWS Open Source</a></div>
+          </article>
+
+          <article class="trend-card reveal" data-topic="science">
+            <div class="card-head"><span class="card-number">05 / 06</span><span class="card-tag">Embodiment</span></div>
+            <h3>Physical-world agents need a shared language.</h3>
+            <p>Anthropic’s Model Hardware Standard preview targets microscopes, liquid handlers and robotic arms — letting agents coordinate instruments in parallel and recover from some hardware errors.</p>
+            <div class="card-foot"><div class="card-meta"><span>27 Aug 2026</span><span>↗</span></div><div class="signal-meter" aria-label="Signal strength 73 percent"><div class="meter-track"><span style="width: 73%"></span></div><span class="meter-value">73</span></div><a class="source-link" href="https://www.anthropic.com/news/model-hardware-standard-research-preview" target="_blank" rel="noreferrer">Anthropic</a></div>
+          </article>
+
+          <article class="trend-card reveal" data-topic="safety">
+            <div class="card-head"><span class="card-number">06 / 06</span><span class="card-tag">Control layer</span></div>
+            <h3>Governance is moving into the runtime.</h3>
+            <p>Recent enterprise guidance centers authorization context, guardrails around tool interactions, customer-controlled data and continuous detection — not just model filtering at the edge.</p>
+            <div class="card-foot"><div class="card-meta"><span>01–02 Sep 2026</span><span>↗</span></div><div class="signal-meter" aria-label="Signal strength 95 percent"><div class="meter-track"><span style="width: 95%"></span></div><span class="meter-value">95</span></div><a class="source-link" href="https://aws.amazon.com/blogs/security/agentic-security-detection-and-response-at-machine-speed/" target="_blank" rel="noreferrer">AWS Security</a></div>
+          </article>
+        </div>
+        <p id="filterStatus" class="section-intro" style="margin: 18px 0 0; font: 11px/1.3 var(--mono); text-transform: uppercase; letter-spacing: .06em;">Showing 6 of 6 signals</p>
+      </section>
+
+      <section class="section" aria-labelledby="readout-title">
+        <div class="readout">
+          <div class="reveal">
+            <p class="section-kicker">02 / The readout</p>
+            <h2 id="readout-title">From chat window to operating layer.</h2>
+            <p class="readout-lede">The common thread is not autonomy for its own sake. It is the construction of a dependable surface where agents can reach systems, run for longer, and be held accountable for what they do.</p>
+          </div>
+          <ol class="readout-list reveal">
+            <li><span class="readout-index">01</span><div><strong>Duration is a feature.</strong><p>Long-running work changes the product from response latency to task continuity.</p></div></li>
+            <li><span class="readout-index">02</span><div><strong>Interfaces are the moat.</strong><p>Protocols, authorization and runtime state decide how far an agent can travel.</p></div></li>
+            <li><span class="readout-index">03</span><div><strong>Validation is the bottleneck.</strong><p>In science and software, first drafts arrive quickly; proving correctness still needs people and tests.</p></div></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="journey-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">03 / The journey</p>
+            <h2 id="journey-title">Seven weeks of stack hardening</h2>
+          </div>
+          <p class="section-intro">A horizontal scan of the announcements that make the larger direction visible.</p>
+        </div>
+        <div class="journey-wrap" tabindex="0" aria-label="Scrollable timeline of agentic developments">
+          <div class="journey">
+            <div class="milestone"><time>09 Jul</time><h3>Work surface</h3><p>ChatGPT Work turns a goal into a multi-step project across apps and files.</p></div>
+            <div class="milestone"><time>16 Jul</time><h3>Protocol map</h3><p>AWS describes the growing family of agent connectivity layers.</p></div>
+            <div class="milestone"><time>28 Jul</time><h3>Stateless MCP</h3><p>The protocol core drops the initialize handshake and session header.</p></div>
+            <div class="milestone"><time>06 Aug</time><h3>Runtime proof</h3><p>Portable plugins and runtime verification arrive as open-source ideas.</p></div>
+            <div class="milestone"><time>27 Aug</time><h3>Physical reach</h3><p>Model Hardware Standard previews agent control of lab instruments.</p></div>
+            <div class="milestone"><time>01–02 Sep</time><h3>Control plane</h3><p>Enterprise safeguards and security operations move closer to execution.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="lab-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">04 / Working thesis</p>
+            <h2 id="lab-title">The new design brief</h2>
+          </div>
+          <p class="section-intro">Three questions now matter more than “which model is smartest?”</p>
+        </div>
+        <div class="signal-lab">
+          <article class="lab-card reveal"><div class="lab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h16M12 4v16M7 7l10 10M17 7 7 17"/></svg></div><h3>Can it reach the right context?</h3><p>Build for the agent’s real surface area: tools, data, identity and the protocols that connect them.</p></article>
+          <article class="lab-card reveal"><div class="lab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/><circle cx="12" cy="12" r="3.2"/></svg></div><h3>Can it prove the work?</h3><p>Make evaluation part of the loop — <code>acceptance tests</code>, references, traces, and human review where judgment matters.</p></article>
+          <article class="lab-card reveal"><div class="lab-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4.5 6.5v5.1c0 4.4 3 7.5 7.5 9.4 4.5-1.9 7.5-5 7.5-9.4V6.5L12 3Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg></div><h3>Can it earn more agency?</h3><p>Use graduated permissions and customer-controlled data so autonomy expands with demonstrated reliability.</p></article>
+        </div>
+      </section>
+
+      <section class="section" id="sources" aria-labelledby="sources-title">
+        <div class="sources">
+          <div>
+            <div class="section-heading" style="display:block; margin-bottom: 22px;"><p class="section-kicker">05 / Source desk</p><h2 id="sources-title">Read the primary signals</h2></div>
+            <ul class="source-list">
+              <li><a href="https://openai.com/index/chatgpt-for-your-most-ambitious-work/" target="_blank" rel="noreferrer">ChatGPT is now a partner for your most ambitious work</a><span>OpenAI · 09 Jul 2026</span></li>
+              <li><a href="https://blog.google/innovation-and-ai/technology/ai/google-ai-updates-july-2026/" target="_blank" rel="noreferrer">The latest AI news announced in July</a><span>Google · 04 Aug 2026</span></li>
+              <li><a href="https://openai.com/index/scientific-computing-agentic-ai/" target="_blank" rel="noreferrer">Scientific computing in the age of agentic AI</a><span>OpenAI · 28 Jul 2026</span></li>
+              <li><a href="https://www.anthropic.com/news/model-hardware-standard-research-preview" target="_blank" rel="noreferrer">Previewing the Model Hardware Standard</a><span>Anthropic · 27 Aug 2026</span></li>
+              <li><a href="https://www.anthropic.com/news/enterprise-frontier-safeguards" target="_blank" rel="noreferrer">Developing Enterprise Frontier Safeguards</a><span>Anthropic · 01 Sep 2026</span></li>
+              <li><a href="https://aws.amazon.com/blogs/security/agentic-security-detection-and-response-at-machine-speed/" target="_blank" rel="noreferrer">Agentic security: Detection and response at machine speed</a><span>AWS · 02 Sep 2026</span></li>
+            </ul>
+          </div>
+          <aside class="method-note">
+            <h3>Method note</h3>
+            <p>This page is a directional synthesis of public primary-source announcements and field reports published from 1 July through 7 September 2026. “Signal strength” is editorial, not a market metric. Claims are intentionally framed as trends, not forecasts.</p>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer><span>Agentic / Signals · field note 03</span><a href="#top">Back to top ↑</a></footer>
+  </div>
+
+  <script>
+    (() => {
+      const filters = [...document.querySelectorAll('.filter')];
+      const cards = [...document.querySelectorAll('.trend-card')];
+      const status = document.getElementById('filterStatus');
+      const progress = document.getElementById('readProgress');
+
+      function applyFilter(filter) {
+        let visible = 0;
+        cards.forEach((card) => {
+          const show = filter === 'all' || card.dataset.topic === filter;
+          card.classList.toggle('is-hidden', !show);
+          if (show) visible += 1;
+        });
+        filters.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.filter === filter)));
+        status.textContent = `Showing ${visible} of ${cards.length} signals`;
+      }
+
+      filters.forEach((button) => button.addEventListener('click', () => applyFilter(button.dataset.filter)));
+
+      function updateProgress() {
+        const scrollable = document.documentElement.scrollHeight - window.innerHeight;
+        progress.style.transform = `scaleX(${scrollable ? window.scrollY / scrollable : 0})`;
+      }
+      window.addEventListener('scroll', updateProgress, { passive: true });
+      updateProgress();
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12 });
+      document.querySelectorAll('.reveal').forEach((element) => observer.observe(element));
+    })();
+  </script>
+</body>
+</html>

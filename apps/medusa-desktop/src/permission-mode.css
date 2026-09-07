@@ -19,6 +19,17 @@
   cursor: pointer;
 }
 
+/* The trigger and menu live inside .composer-tools. Keep the generic compact
+   tool-button rule from collapsing these controls into 30px squares. */
+.permission-mode-control .permission-mode-trigger {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  min-height: 34px;
+  place-items: initial;
+  align-items: center;
+}
+
 .permission-mode-trigger:hover,
 .permission-mode-trigger[aria-expanded="true"] {
   background: color-mix(in srgb, currentColor 8%, transparent);
@@ -33,30 +44,45 @@
   z-index: 1000;
   left: 0;
   bottom: calc(100% + 10px);
-  width: min(390px, calc(100vw - 28px));
-  padding: 8px;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 140px));
+  overflow: auto;
+  padding: 10px;
   border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
-  border-radius: 13px;
+  border-radius: 15px;
   background: var(--surface-elevated, #fff);
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.18);
 }
 
+.permission-mode-menu-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 10px 9px;
+}
+
 .permission-mode-heading {
-  padding: 7px 10px 9px;
   color: var(--text-tertiary, #7b7f85);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.permission-mode-learn-more {
+  color: var(--text-tertiary, #7b7f85);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
 }
 
 .permission-mode-option {
   width: 100%;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr) 20px;
   gap: 4px;
   align-items: start;
-  padding: 9px 10px;
+  padding: 10px 10px;
   border: 0;
   border-radius: 9px;
   background: transparent;
@@ -65,37 +91,64 @@
   cursor: pointer;
 }
 
+.permission-mode-control .permission-mode-option {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  place-items: initial;
+  align-items: start;
+}
+
 .permission-mode-option:hover,
 .permission-mode-option.active {
   background: color-mix(in srgb, currentColor 7%, transparent);
 }
 
-.permission-mode-option.danger strong {
+.permission-mode-option.danger {
   color: var(--warning-text, #c45f18);
 }
 
+.permission-mode-option-icon,
 .permission-mode-option-mark {
   min-height: 18px;
   padding-top: 1px;
+}
+
+.permission-mode-option-icon {
+  color: var(--text-secondary, #5f6368);
+}
+
+.permission-mode-option.danger .permission-mode-option-icon {
+  color: currentColor;
+}
+
+.permission-mode-option-mark {
   color: currentColor;
   font-weight: 700;
+  justify-self: end;
 }
 
 .permission-mode-option-copy {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 2px;
 }
 
 .permission-mode-option-copy strong {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .permission-mode-option-copy small {
   color: var(--text-secondary, #70757a);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.35;
+}
+
+.permission-mode-option.danger .permission-mode-option-copy small {
+  color: currentColor;
 }
 
 .permission-mode-error {

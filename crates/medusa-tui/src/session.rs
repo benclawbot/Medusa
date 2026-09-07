@@ -173,7 +173,7 @@ pub(super) fn run_loop(
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
             if let Some(action) =
-                session_control_action(&terminal_event, modal_open, &mut last_ctrl_c)
+                session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
             {
                 if handle_action(app, runtime, action)? {
                     return Ok(ExitReason::UserQuit);
@@ -256,7 +256,7 @@ pub(super) fn run_loop(
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
             if let Some(action) =
-                session_control_action(&terminal_event, modal_open, &mut last_ctrl_c)
+                session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
             {
                 if handle_action(app, runtime, action)? {
                     return Ok(ExitReason::UserQuit);
@@ -380,6 +380,7 @@ fn handle_mouse_selection(
 fn session_control_action(
     terminal_event: &Event,
     modal_open: bool,
+    app: &AppState,
     last_ctrl_c: &mut Option<Instant>,
 ) -> Option<AppAction> {
     let Event::Key(key) = terminal_event else {
@@ -402,7 +403,13 @@ fn session_control_action(
 
     *last_ctrl_c = None;
     if key.code == KeyCode::Esc && !modal_open {
-        return Some(AppAction::Interrupt);
+        if !app.composer.draft.text.is_empty() || !app.composer.draft.attachments.is_empty() {
+            return Some(AppAction::ClearPrompt);
+        }
+        if app.is_running() {
+            return Some(AppAction::Interrupt);
+        }
+        return Some(AppAction::ClearPrompt);
     }
     None
 }
@@ -423,6 +430,10 @@ fn handle_action(
 ) -> io::Result<bool> {
     match action {
         AppAction::Quit => Ok(true),
+        AppAction::ClearPrompt => {
+            app.clear_composer()?;
+            Ok(false)
+        }
         AppAction::Interrupt => {
             app.status = if runtime.cancel() {
                 "cancellation requested".to_owned()
@@ -772,31 +783,15 @@ pub(super) fn drain_runtime_events(
                 app.finish_run();
             }
             RuntimeEvent::Failed(error) => {
-                let retry_draft = if app.composer.draft.text.is_empty()
-                    && app.composer.draft.attachments.is_empty()
-                {
-                    app.transcript.iter().rev().find_map(|entry| match entry {
-                        TranscriptEntry::User(draft) => Some(draft.clone()),
-                        _ => None,
-                    })
-                } else {
-                    None
-                };
                 app.record_activity(TranscriptActivity {
                     id: None,
                     kind: TranscriptActivityKind::Error,
                     title: "Task failed".to_owned(),
                     details: vec![user_visible_runtime_error(&error)],
                 });
-                app.status = if retry_draft.is_some() {
-                    "agent failed; draft restored".to_owned()
-                } else {
-                    "agent failed".to_owned()
-                };
+                app.status = "agent failed; press ↑ to retry the last prompt".to_owned();
                 app.finish_run();
-                if let Some(draft) = retry_draft {
-                    app.restore_failed_submission(draft)?;
-                }
+                app.clear_composer()?;
             }
         }
     }
@@ -828,6 +823,7 @@ pub(super) fn ctrl_l_redraw(event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossterm::event::KeyEvent;
 
     #[test]
     fn input_poll_waits_until_the_next_scheduled_work() {
@@ -888,6 +884,51 @@ mod tests {
         let mut release = crossterm::event::KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
         release.kind = KeyEventKind::Release;
         assert!(!is_permission_mode_shortcut(&release));
+    }
+
+    #[test]
+    fn escape_clears_a_draft_before_it_can_interrupt_a_running_turn() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let app = AppState::new(
+            directory.path().to_path_buf(),
+            "escape-running",
+            "/verbose",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        let mut app = app;
+        app.begin_run();
+        let mut last_ctrl_c = None;
+        let action = session_control_action(
+            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            false,
+            &app,
+            &mut last_ctrl_c,
+        );
+        assert_eq!(action, Some(AppAction::ClearPrompt));
+    }
+
+    #[test]
+    fn escape_interrupts_only_when_the_running_turn_has_no_draft() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "escape-interrupt",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.begin_run();
+        let mut last_ctrl_c = None;
+        assert_eq!(
+            session_control_action(
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+                false,
+                &app,
+                &mut last_ctrl_c,
+            ),
+            Some(AppAction::Interrupt)
+        );
     }
 
     #[test]

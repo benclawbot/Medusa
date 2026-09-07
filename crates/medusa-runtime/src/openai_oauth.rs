@@ -4,7 +4,7 @@ use std::{
     path::Path,
     process::{Child, ChildStdin, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, TryRecvError},
     },
@@ -20,6 +20,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DIAGNOSTIC_LINES: usize = 20;
 const APP_SERVER_TIMEOUT: &str = "timed out waiting for Codex app-server";
 // OAuth credentials are owned by the first-party Codex service; do not inherit
 // a user's unrelated local router endpoint from the Codex CLI configuration.
@@ -95,6 +96,7 @@ pub struct CodexAppServer {
     incoming: Receiver<Result<Value, String>>,
     notifications: VecDeque<Value>,
     pending_request: Option<PendingServerRequest>,
+    stderr_diagnostics: Arc<Mutex<VecDeque<String>>>,
     next_id: u64,
     initialized: bool,
     last_usage: Option<Value>,
@@ -115,7 +117,7 @@ impl CodexAppServer {
             .args(codex_app_server_args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| {
                 format!(
@@ -131,6 +133,13 @@ impl CodexAppServer {
             terminate_child(&mut child);
             return Err("Codex app-server did not expose stdin".to_owned());
         };
+        let diagnostics = Arc::new(Mutex::new(VecDeque::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let diagnostics_for_reader = Arc::clone(&diagnostics);
+            let _ = thread::Builder::new()
+                .name("medusa-codex-app-server-diagnostics".to_owned())
+                .spawn(move || read_diagnostic_lines(stderr, diagnostics_for_reader));
+        }
         let (sender, receiver) = mpsc::channel();
         if let Err(error) = thread::Builder::new()
             .name("medusa-codex-app-server-reader".to_owned())
@@ -147,6 +156,7 @@ impl CodexAppServer {
             incoming: receiver,
             notifications: VecDeque::new(),
             pending_request: None,
+            stderr_diagnostics: diagnostics,
             next_id: 1,
             initialized: false,
             last_usage: None,
@@ -555,7 +565,13 @@ impl CodexAppServer {
         self.write_message(json!({"id": id, "method": method, "params": params}))?;
         let deadline = Instant::now() + PROTOCOL_TIMEOUT;
         loop {
-            let message = self.receive_incoming(deadline)?;
+            let message = match self.receive_incoming(deadline) {
+                Ok(message) => message,
+                Err(error) if error == APP_SERVER_TIMEOUT => {
+                    return Err(self.protocol_timeout_error(method));
+                }
+                Err(error) => return Err(error),
+            };
             if message.get("id") == Some(&id) {
                 if let Some(error) = message.get("error") {
                     return Err(format!(
@@ -636,6 +652,24 @@ impl CodexAppServer {
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 Err("Codex app-server closed its protocol stream".to_owned())
             }
+        }
+    }
+
+    fn protocol_timeout_error(&self, method: &str) -> String {
+        let diagnostic = self
+            .stderr_diagnostics
+            .lock()
+            .ok()
+            .and_then(|lines| lines.back().cloned());
+        match diagnostic {
+            Some(diagnostic) if !diagnostic.is_empty() => format!(
+                "{APP_SERVER_TIMEOUT} during Codex app-server request `{method}` after {}s; last diagnostic: {diagnostic}",
+                PROTOCOL_TIMEOUT.as_secs()
+            ),
+            _ => format!(
+                "{APP_SERVER_TIMEOUT} during Codex app-server request `{method}` after {}s",
+                PROTOCOL_TIMEOUT.as_secs()
+            ),
         }
     }
 }
@@ -744,6 +778,22 @@ fn read_protocol_lines(stdout: impl io::Read, sender: mpsc::Sender<Result<Value,
                     "could not read Codex app-server output: {error}"
                 )));
                 return;
+            }
+        }
+    }
+}
+
+fn read_diagnostic_lines(stderr: impl io::Read, diagnostics: Arc<Mutex<VecDeque<String>>>) {
+    let reader = BufReader::new(stderr);
+    for line in reader.lines().map_while(Result::ok) {
+        let line = safe_error_text(&Value::String(line));
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(mut entries) = diagnostics.lock() {
+            entries.push_back(line);
+            while entries.len() > MAX_DIAGNOSTIC_LINES {
+                entries.pop_front();
             }
         }
     }

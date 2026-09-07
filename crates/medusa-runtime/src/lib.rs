@@ -894,7 +894,7 @@ fn worker_loop_with_discovery<F>(
     // Warm the OAuth app-server before the first user turn. Connecting and
     // authenticating lazily made an otherwise trivial prompt pay the full cold
     // startup cost (often tens of seconds).
-    let oauth_warmup = if state.config.model.provider == medusa_config::openai_oauth::PROVIDER {
+    let mut oauth_warmup = if state.config.model.provider == medusa_config::openai_oauth::PROVIDER {
         let (warmup_tx, warmup_rx) = mpsc::channel();
         if let Err(error) = thread::Builder::new()
             .name("medusa-oauth-warmup".to_owned())
@@ -951,6 +951,28 @@ fn worker_loop_with_discovery<F>(
         match command {
             RuntimeCommand::Submit { draft, accepted } => {
                 let _ = events.send(RuntimeEvent::Started);
+                if state.config.model.provider == medusa_config::openai_oauth::PROVIDER
+                    && state.codex_app_server.is_none()
+                    && let Some(warmup_rx) = oauth_warmup.take()
+                {
+                    match wait_for_oauth_warmup(&warmup_rx, &cancel) {
+                        Ok(Some(server)) => state.codex_app_server = Some(server),
+                        Ok(None) => {
+                            let _ = events.send(RuntimeEvent::Notice {
+                                title: "ChatGPT app-server warmup deferred".to_owned(),
+                                details: vec![
+                                    "The warm-up process ended before producing a reusable app-server connection; retrying with a fresh connection.".to_owned(),
+                                ],
+                            });
+                        }
+                        Err(error) => {
+                            let _ = accepted.send(Err(error.to_string()));
+                            mark_idle(&submission, true);
+                            let _ = events.send(RuntimeEvent::Failed(error.to_string()));
+                            continue;
+                        }
+                    }
+                }
                 let outcome = run_prompt(
                     &mut state,
                     draft,
@@ -1057,6 +1079,28 @@ fn capability_event(repo: PathBuf) -> RuntimeEvent {
             title: "Runtime capabilities unavailable".to_owned(),
             details: vec![error.to_string()],
         },
+    }
+}
+
+fn wait_for_oauth_warmup(
+    warmup_rx: &Receiver<Result<openai_oauth::CodexAppServer, String>>,
+    cancel: &AtomicBool,
+) -> Result<Option<openai_oauth::CodexAppServer>, RuntimeError> {
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(RuntimeError::agent(
+                "ChatGPT OAuth turn cancelled while the app-server was warming up",
+            ));
+        }
+        match warmup_rx.recv_timeout(std::time::Duration::from_millis(250)) {
+            Ok(Ok(server)) => return Ok(Some(server)),
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "ChatGPT app-server warmup failed");
+                return Ok(None);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(None),
+        }
     }
 }
 
