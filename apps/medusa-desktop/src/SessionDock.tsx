@@ -1,18 +1,19 @@
 import {
   ArrowLeft,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   History,
   LoaderCircle,
   MessageCircleQuestion,
   Play,
   RefreshCw,
-  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   REPO_CHANGED_EVENT,
   requestRuntimeResume,
+  RUNTIME_DATA_CHANGED_EVENT,
   type SessionDetail,
   type SessionSummary,
 } from "./runtime";
@@ -20,7 +21,6 @@ import {
   listRuntimeSessionPage,
   readRuntimeSessionPage,
 } from "./sessionPaging";
-import { useDockShell } from "./useDockShell";
 import { toUserError } from "./errorPresentation";
 import "./session-dock.css";
 
@@ -47,8 +47,13 @@ function sessionStatus(session: SessionSummary): { label: string; className: str
   return { label: "In progress", className: "active" };
 }
 
+/**
+ * The session browser is intentionally rendered in the rail. Keeping it mounted there makes
+ * the current-session list immediately visible and avoids a competing modal surface.
+ */
 export function SessionDock() {
   const [repo, setRepo] = useState(currentRepo);
+  const [expanded, setExpanded] = useState(true);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionCursor, setSessionCursor] = useState<string>();
   const [query, setQuery] = useState("");
@@ -56,12 +61,10 @@ export function SessionDock() {
   const [messageCursor, setMessageCursor] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<string>();
   const requestGeneration = useRef(0);
-  const { open, setOpen, error, setError, dialogRef } = useDockShell<HTMLElement>("sessions");
 
   useEffect(() => {
-    requestGeneration.current += 1;
-    if (!open) return;
     const sync = () => {
       const next = currentRepo();
       setRepo((current) => current === next ? current : next);
@@ -73,7 +76,7 @@ export function SessionDock() {
       window.removeEventListener("focus", sync);
       window.removeEventListener(REPO_CHANGED_EVENT, sync);
     };
-  }, [open]);
+  }, []);
 
   useEffect(() => {
     setSelected(undefined);
@@ -81,10 +84,18 @@ export function SessionDock() {
     setSessions([]);
     setSessionCursor(undefined);
     setQuery("");
+    setError(undefined);
   }, [repo]);
 
   const refresh = useCallback(async () => {
     const generation = ++requestGeneration.current;
+    if (!repo) {
+      setSessions([]);
+      setSessionCursor(undefined);
+      setLoading(false);
+      setError(undefined);
+      return;
+    }
     setLoading(true);
     setError(undefined);
     try {
@@ -97,7 +108,19 @@ export function SessionDock() {
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [repo, setError]);
+  }, [repo]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    void refresh();
+    const refreshAfterRuntimeChange = () => void refresh();
+    window.addEventListener(RUNTIME_DATA_CHANGED_EVENT, refreshAfterRuntimeChange);
+    window.addEventListener("focus", refreshAfterRuntimeChange);
+    return () => {
+      window.removeEventListener(RUNTIME_DATA_CHANGED_EVENT, refreshAfterRuntimeChange);
+      window.removeEventListener("focus", refreshAfterRuntimeChange);
+    };
+  }, [expanded, refresh]);
 
   const loadMoreSessions = useCallback(async () => {
     if (!repo || !sessionCursor || loading) return;
@@ -117,7 +140,7 @@ export function SessionDock() {
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [repo, sessionCursor, loading, setError]);
+  }, [loading, repo, sessionCursor]);
 
   const openSession = useCallback(async (sessionId: string) => {
     const generation = ++requestGeneration.current;
@@ -133,7 +156,7 @@ export function SessionDock() {
     } finally {
       if (generation === requestGeneration.current) setDetailLoading(false);
     }
-  }, [repo, setError]);
+  }, [repo]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!selected || !messageCursor || detailLoading) return;
@@ -152,7 +175,7 @@ export function SessionDock() {
     } finally {
       if (generation === requestGeneration.current) setDetailLoading(false);
     }
-  }, [repo, selected, messageCursor, detailLoading, setError]);
+  }, [detailLoading, messageCursor, repo, selected]);
 
   const resumeSession = useCallback(() => {
     if (!selected) return;
@@ -164,78 +187,82 @@ export function SessionDock() {
     ? sessions.filter((session) => session.objective.toLocaleLowerCase().includes(normalizedQuery))
     : sessions;
 
-  useEffect(() => {
-    if (open) void refresh();
-  }, [open, refresh]);
-
   return (
-    open ? (
-      <div className="session-dock open">
-        <section ref={dialogRef} className="session-dock-panel" role="dialog" aria-modal="true" aria-label="Recent Medusa sessions" tabIndex={-1}>
-          <header>
-            <div>
-              <small>{selected ? "Saved conversation" : repo ? "Current project" : "General chat"}</small>
-              <strong>{selected ? selected.summary.objective || "Untitled session" : "Recent sessions"}</strong>
-            </div>
-            <div className="session-dock-actions">
-              {selected && (
-                <button type="button" onClick={() => { setSelected(undefined); setMessageCursor(undefined); }} aria-label="Back to sessions">
-                  <ArrowLeft size={14} />
-                </button>
-              )}
-              {!selected && (
-                <button type="button" onClick={() => void refresh()} disabled={loading} aria-label="Refresh sessions">
-                  <RefreshCw size={14} className={loading ? "spin" : undefined} />
-                </button>
-              )}
-              <button type="button" onClick={() => setOpen(false)} aria-label="Close recent sessions">
-                <X size={15} />
-              </button>
-            </div>
-          </header>
+    <section className={`sessions-inline ${expanded ? "expanded" : "collapsed"}`} aria-label="Sessions">
+      <button
+        className="nav-item sessions-inline-toggle"
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        title="Sessions"
+        aria-expanded={expanded}
+        aria-controls="sessions-inline-content"
+      >
+        <History size={17} />
+        <span className="rail-label">Sessions</span>
+        <ChevronDown className={`session-chevron rail-label${expanded ? " expanded" : ""}`} size={15} aria-hidden="true" />
+      </button>
 
+      {expanded && (
+        <div className="sessions-inline-content" id="sessions-inline-content">
           {selected ? (
-            <div className="session-history">
-              <div className="session-history-meta">
-                <span>Turn {selected.summary.turn}</span>
-                <span>{formatSessionAge(selected.summary.updatedAt)}</span>
-                <code>{(selected.summary.id ?? "").slice(0, 8) || "unavailable"}</code>
-              </div>
-              {messageCursor && (
-                <button type="button" className="session-resume" onClick={() => void loadOlderMessages()} disabled={detailLoading}>
-                  {detailLoading ? <LoaderCircle className="spin" size={14} /> : <History size={14} />} Load older messages
+            <>
+              <div className="session-inline-heading">
+                <button type="button" onClick={() => { setSelected(undefined); setMessageCursor(undefined); }} aria-label="Back to sessions">
+                  <ArrowLeft size={13} />
                 </button>
-              )}
-              {selected.messages.length ? selected.messages.map((message, index) => (
-                <article className={`session-history-message ${message.role}`} key={`${message.role}-${index}-${message.text.slice(0, 24)}`}>
-                  <small>{message.role === "assistant" ? "Medusa" : message.role === "user" ? "You" : message.role}</small>
-                  <p>{message.text}</p>
-                </article>
-              )) : (
-                <div className="session-dock-empty"><History size={18} /> No durable messages in this session.</div>
-              )}
-            </div>
+                <strong title={selected.summary.objective}>{selected.summary.objective || "Untitled session"}</strong>
+              </div>
+              <div className="session-history">
+                <div className="session-history-meta">
+                  <span>Turn {selected.summary.turn}</span>
+                  <span>{formatSessionAge(selected.summary.updatedAt)}</span>
+                  <code>{(selected.summary.id ?? "").slice(0, 8) || "unavailable"}</code>
+                </div>
+                {messageCursor && (
+                  <button type="button" className="session-resume" onClick={() => void loadOlderMessages()} disabled={detailLoading}>
+                    {detailLoading ? <LoaderCircle className="spin" size={13} /> : <History size={13} />} Load older messages
+                  </button>
+                )}
+                {selected.messages.length ? selected.messages.map((message, index) => (
+                  <article className={`session-history-message ${message.role}`} key={`${message.role}-${index}-${message.text.slice(0, 24)}`}>
+                    <small>{message.role === "assistant" ? "Medusa" : message.role === "user" ? "You" : message.role}</small>
+                    <p>{message.text}</p>
+                  </article>
+                )) : (
+                  <div className="session-dock-empty"><History size={16} /> No durable messages.</div>
+                )}
+              </div>
+              <button type="button" className="session-resume" onClick={resumeSession}>
+                <Play size={13} /> Resume session
+              </button>
+            </>
           ) : (
-            <div className="session-dock-list">
+            <>
+              <div className="session-inline-heading">
+                <span><strong>{repo ? "Recent sessions" : "General chat"}</strong><small>{repo ? "Saved for this project" : "Open a project to browse saved sessions"}</small></span>
+                <button type="button" onClick={() => void refresh()} disabled={loading} aria-label="Refresh sessions" title="Refresh sessions">
+                  <RefreshCw size={13} className={loading ? "spin" : undefined} />
+                </button>
+              </div>
               <label className="session-search">
                 <span className="visually-hidden">Search saved sessions</span>
                 <input
                   type="search"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search session titles"
+                  placeholder="Search sessions"
                   aria-label="Search saved sessions"
                 />
               </label>
-              {(loading || detailLoading) && sessions.length === 0 && (
-                <div className="session-dock-empty"><LoaderCircle className="spin" size={18} /> Loading sessions…</div>
+              {loading && sessions.length === 0 && (
+                <div className="session-dock-empty"><LoaderCircle className="spin" size={16} /> Loading sessions…</div>
               )}
               {!!error && <div className="session-dock-error">{error}</div>}
-              {(!loading || !repo) && !error && sessions.length === 0 && (
-                <div className="session-dock-empty"><History size={18} /> No saved sessions for this project.</div>
+              {!loading && !error && sessions.length === 0 && (
+                <div className="session-dock-empty"><History size={16} /> No saved sessions for this project.</div>
               )}
               {!loading && !error && sessions.length > 0 && visibleSessions.length === 0 && (
-                <div className="session-dock-empty"><History size={18} /> No sessions match “{query}”.</div>
+                <div className="session-dock-empty"><History size={16} /> No sessions match “{query}”.</div>
               )}
               {visibleSessions.map((session) => {
                 const status = sessionStatus(session);
@@ -250,7 +277,7 @@ export function SessionDock() {
                     <div className="session-dock-item-top">
                       <strong>{session.objective || "Untitled session"}</strong>
                       <span className={`session-status ${status.className}`}>
-                        {session.waitingForUser ? <MessageCircleQuestion size={12} /> : session.completed ? <CheckCircle2 size={12} /> : <Clock3 size={12} />}
+                        {session.waitingForUser ? <MessageCircleQuestion size={11} /> : session.completed ? <CheckCircle2 size={11} /> : <Clock3 size={11} />}
                         {status.label}
                       </span>
                     </div>
@@ -264,22 +291,13 @@ export function SessionDock() {
               })}
               {sessionCursor && (
                 <button type="button" className="session-resume" onClick={() => void loadMoreSessions()} disabled={loading}>
-                  {loading ? <LoaderCircle className="spin" size={14} /> : <History size={14} />} Load older sessions
+                  {loading ? <LoaderCircle className="spin" size={13} /> : <History size={13} />} Load older sessions
                 </button>
               )}
-            </div>
+            </>
           )}
-          <footer>
-            {selected ? (
-              <button type="button" className="session-resume" onClick={resumeSession}>
-                <Play size={14} /> Resume session
-              </button>
-            ) : (
-              <span>Sessions are loaded in bounded pages; older history remains available.</span>
-            )}
-          </footer>
-        </section>
-      </div>
-    ) : null
+        </div>
+      )}
+    </section>
   );
 }

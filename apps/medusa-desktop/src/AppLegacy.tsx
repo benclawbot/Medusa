@@ -2,7 +2,6 @@ import {
   Activity,
   BarChart3,
   Bot,
-  Brain,
   CheckCircle2,
   Check,
   ChevronDown,
@@ -14,9 +13,7 @@ import {
   FilePlus2,
   FolderOpen,
   Gauge,
-  GitCompareArrows,
   GraduationCap,
-  History,
   ImagePlus,
   Info,
   ListChecks,
@@ -45,6 +42,7 @@ import { RecoveryDock } from "./RecoveryDock";
 import { DesktopOnboarding } from "./DesktopOnboarding";
 import { requestDesktopTool, type DesktopTool } from "./desktop-tools";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { SessionDock } from "./SessionDock";
 import { useDialogFocus } from "./useDialogFocus";
 import { toUserError } from "./errorPresentation";
 import "./approval-card.css";
@@ -292,19 +290,22 @@ function activityStatusClass(entry: WorkLogEntry): string {
 function LiveActivityTrail({
   entries,
   verboseDetails,
+  elapsedSeconds,
+  activeEntry,
 }: {
   entries: WorkLogEntry[];
   verboseDetails: boolean;
+  elapsedSeconds: number;
+  activeEntry?: WorkLogEntry;
 }) {
-  if (!entries.length) return null;
   return (
     <section className="activity-summary live-activity-trail" aria-label="Actions in progress">
       <div className="activity-summary-heading">
-        <span><Activity size={15} aria-hidden="true" /> Working</span>
-        <small>Live actions</small>
+        <span><Activity size={15} aria-hidden="true" /> Working for {formatWorkedDuration(elapsedSeconds)}</span>
+        <small>{activeEntry?.text ?? "Starting turn…"}</small>
       </div>
       {entries.map((entry) => (
-        <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={verboseDetails || undefined}>
+        <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={entry.status === "Working" || verboseDetails || undefined}>
           <summary>
             <span aria-hidden="true"><Activity size={14} /></span>
             <strong>{entry.text}</strong>
@@ -545,6 +546,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const [webArtifact, setWebArtifact] = useState<WebArtifact>();
   const [partialResult, setPartialResult] = useState(false);
   const [turnSummary, setTurnSummary] = useState<TurnSummaryState>();
+  const [liveElapsedSeconds, setLiveElapsedSeconds] = useState(0);
   const turnStartedAt = useRef<number>();
   const assistantResponseInTurn = useRef(false);
   const assistantStream = useRef<{ id: number; raw: string; text: string; createdAt: number }>();
@@ -915,6 +917,21 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         break;
     }
   }, [appendAssistantDelta, appendAssistantMessage, appendWorkLog, refreshConfiguration]);
+
+  useEffect(() => {
+    if (!busy) {
+      setLiveElapsedSeconds(0);
+      return;
+    }
+    const updateElapsed = () => {
+      const startedAt = turnStartedAt.current;
+      if (startedAt === undefined) return;
+      setLiveElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    };
+    updateElapsed();
+    const interval = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(interval);
+  }, [busy]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -1537,6 +1554,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
 
   const newSession = useCallback(async () => {
     if (!runtimeId) return;
+    setActivePanel("chat");
     try {
       await runRuntimeCommand(runtimeId, "/new");
     } catch (cause) {
@@ -1682,16 +1700,10 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
           <div className="rail-label"><h1>Medusa</h1><small>Desktop</small></div>
           <span className="version rail-label">v{packageMetadata.version}</span>
         </div>
-        <button className="new-session" onClick={newSession} disabled={!runtimeId} aria-keyshortcuts={macPlatform ? "Meta+N" : "Control+N"} title="New session">
-          <span><Plus size={16} /><span className="rail-label">New session</span></span><kbd className="rail-label">{newSessionShortcut}</kbd>
+        <button className="new-session" onClick={newSession} disabled={!runtimeId} aria-keyshortcuts={macPlatform ? "Meta+N" : "Control+N"} title="New Chat">
+          <span><Plus size={16} /><span className="rail-label">New Chat</span></span><kbd className="rail-label">{newSessionShortcut}</kbd>
         </button>
         <nav className="nav-list" aria-label="Workspace views">
-          <button className={`nav-item ${activePanel === "chat" ? "active" : ""}`} onClick={() => setActivePanel("chat")} title="Chat">
-            <MessageSquare size={17} /><span className="rail-label">Chat</span>
-          </button>
-          <button className={`nav-item ${activePanel === "plan" ? "active" : ""}`} onClick={() => setActivePanel("plan")} title="Plan">
-            <ListChecks size={17} /><span className="rail-label">Plan</span>
-          </button>
           <button className={`nav-item ${activePanel === "settings" ? "active" : ""}`} onClick={() => setActivePanel("settings")} title="Settings">
             <Settings size={17} /><span className="rail-label">Settings</span>
           </button>
@@ -1706,10 +1718,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
           {!!repo && <button className="projectless-action rail-label" onClick={openGeneralChat}>Switch to general chat</button>}
         </section>
         <section className="rail-tools">
-          <p className="section-label rail-label">Tools</p>
-          <button className="nav-item" onClick={() => openDesktopTool("sessions")} title="Sessions"><History size={17} /><span className="rail-label">Sessions</span></button>
-          <button className="nav-item" onClick={() => openDesktopTool("review")} title="Review changes"><GitCompareArrows size={17} /><span className="rail-label">Review changes</span></button>
-          <button className="nav-item" onClick={() => openDesktopTool("memory")} title="Memory"><Brain size={17} /><span className="rail-label">Memory</span></button>
+          <SessionDock />
           <button className="nav-item" onClick={() => openDesktopTool("learning")} title="Learning"><GraduationCap size={17} /><span className="rail-label">Learning</span></button>
           <button className="nav-item" onClick={() => openDesktopTool("engineering")} title="Engineering"><BarChart3 size={17} /><span className="rail-label">Engineering</span></button>
         </section>
@@ -1901,7 +1910,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                   )}
                 </article>
               ))}
-              {busy && <LiveActivityTrail entries={liveActivityEntries} verboseDetails={verboseDetails} />}
+              {busy && <LiveActivityTrail entries={liveActivityEntries} verboseDetails={verboseDetails} elapsedSeconds={liveElapsedSeconds} activeEntry={activeWorkEntry} />}
               {!busy && turnSummary && (
                 <FinalTurnSummary
                   summary={turnSummary}

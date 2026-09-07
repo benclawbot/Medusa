@@ -8,7 +8,6 @@ import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { LearningDock } from "./LearningDock";
 import { MemoryDock } from "./MemoryDock";
 import { PermissionModeControl } from "./PermissionModeControl";
-import { SessionDock } from "./SessionDock";
 
 export * from "./AppLegacy";
 
@@ -29,7 +28,6 @@ export function App() {
         composerSlot={<DesktopTimelineBridge />}
         composerToolsSlot={<PermissionModeControl />}
       />
-      <SessionDock />
       <DiffDock />
       <MemoryDock />
       <LearningDock />

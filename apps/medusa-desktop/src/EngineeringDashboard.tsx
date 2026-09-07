@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownRight,
@@ -13,7 +13,7 @@ import {
 } from "./engineeringApi";
 import { useDockShell } from "./useDockShell";
 import { toUserError } from "./errorPresentation";
-import { REPO_CHANGED_EVENT } from "./runtime";
+import { REPO_CHANGED_EVENT, RUNTIME_DATA_CHANGED_EVENT } from "./runtime";
 import "./engineering-dashboard.css";
 
 const pct = (value: number) => `${value.toFixed(1)}%`;
@@ -49,14 +49,39 @@ function Dashboard({ repo }: { repo: string }) {
   const [data, setData] = useState<EngineeringDashboardData>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const reload = async () => {
+  const reloadGeneration = useRef(0);
+  const reload = useCallback(async () => {
     if (!repo) return;
+    const generation = ++reloadGeneration.current;
     setBusy(true);
-    try { setData(await loadEngineeringDashboard(repo, days)); setError(undefined); }
-    catch (cause) { setError(toUserError(cause)); }
-    finally { setBusy(false); }
-  };
-  useEffect(() => { void reload(); }, [repo, days]);
+    try {
+      const next = await loadEngineeringDashboard(repo, days);
+      if (generation !== reloadGeneration.current) return;
+      setData(next);
+      setError(undefined);
+    } catch (cause) {
+      if (generation === reloadGeneration.current) setError(toUserError(cause));
+    } finally {
+      if (generation === reloadGeneration.current) setBusy(false);
+    }
+  }, [days, repo]);
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    const refreshAfterRuntimeChange = () => void reload();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") refreshAfterRuntimeChange();
+    };
+    window.addEventListener(RUNTIME_DATA_CHANGED_EVENT, refreshAfterRuntimeChange);
+    window.addEventListener("focus", refreshAfterRuntimeChange);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    const interval = window.setInterval(refreshAfterRuntimeChange, 10_000);
+    return () => {
+      window.removeEventListener(RUNTIME_DATA_CHANGED_EVENT, refreshAfterRuntimeChange);
+      window.removeEventListener("focus", refreshAfterRuntimeChange);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.clearInterval(interval);
+    };
+  }, [reload]);
   if (!repo) return <div className="engineering-empty">Open a repository to view its engineering dashboard.</div>;
   return <div className="engineering-dashboard">
     <header className="engineering-header"><div><span className="eyebrow">Medusa engineering system</span><h2>Factory Dashboard</h2><p>Typed outcomes, recurring friction, and guarded self-improvement.</p><small>Canonical runtime candidates are read-only here. Use the shared learning commands for lifecycle changes.</small></div><div className="dashboard-actions"><select value={days} onChange={(event)=>setDays(Number(event.target.value))}><option value={30}>30 days</option><option value={90}>90 days</option><option value={365}>1 year</option></select><button onClick={()=>void reload()} disabled={busy}><RefreshCw size={15}/>Refresh</button></div></header>

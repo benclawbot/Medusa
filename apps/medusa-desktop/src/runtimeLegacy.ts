@@ -572,6 +572,8 @@ export async function resumeRuntime(repo: string, sessionId: string): Promise<Ru
 
 export const RUNTIME_RESUME_EVENT = "medusa-runtime-resume";
 export const REPO_CHANGED_EVENT = "medusa-repo-changed";
+/** Published after a terminal runtime event has been drained so read-only desktop views can refresh. */
+export const RUNTIME_DATA_CHANGED_EVENT = "medusa-runtime-data-changed";
 
 export function requestRuntimeResume(sessionId: string, repo = ""): void {
   const request: PendingResume = { sessionId, repo: repo.trim() };
@@ -667,6 +669,9 @@ export async function pollRuntime(runtimeId: string): Promise<RuntimeEvent[]> {
     if (event.type === "newSession") {
       recovery = { suppressed: false };
     }
+  }
+  if (events.some((event) => event.type === "completed" || event.type === "turnFinished" || event.type === "failed" || event.type === "cancelled")) {
+    window.dispatchEvent(new CustomEvent<string>(RUNTIME_DATA_CHANGED_EVENT, { detail: runtimeId }));
   }
   rememberRecovery(runtimeId, recovery);
   return events;

@@ -1,6 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
-import { DESKTOP_TOOL_EVENT } from "./desktop-tools";
 import { SessionDock } from "./SessionDock";
 
 afterEach(() => {
@@ -8,15 +7,15 @@ afterEach(() => {
   window.localStorage.clear();
 });
 
-it("opens without a repository and closes when the user clicks outside", async () => {
+it("renders expanded inline without a repository and collapses beneath Sessions", () => {
   render(<SessionDock />);
 
-  window.dispatchEvent(new CustomEvent(DESKTOP_TOOL_EVENT, { detail: "sessions" }));
-
-  expect(await screen.findByRole("dialog", { name: "Recent Medusa sessions" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Sessions" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Sessions" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByText("No saved sessions for this project.")).toBeInTheDocument();
 
-  fireEvent.pointerDown(document.body);
-
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Recent Medusa sessions" })).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
+  expect(screen.getByRole("button", { name: "Sessions" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("No saved sessions for this project.")).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });

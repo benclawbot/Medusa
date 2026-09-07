@@ -6,6 +6,7 @@ import {
   closeRuntime,
   pollRuntime,
   runtimeWakeupPolicy,
+  RUNTIME_DATA_CHANGED_EVENT,
   startRuntime,
   submitRuntime,
 } from "./runtime";
@@ -46,6 +47,18 @@ describe("desktop runtime adapter", () => {
     await expect(submitRuntime("runtime-1", { text: "more detail", attachments: [], revision: 2 })).resolves.toBe("queued");
     mockedInvoke.mockResolvedValueOnce([{ type: "progress", turn: 4 }]);
     await expect(pollRuntime("runtime-1")).resolves.toEqual([{ type: "progress", turn: 4 }]);
+  });
+
+  it("publishes a refresh event after a terminal turn event", async () => {
+    const changes: string[] = [];
+    const onChange = (event: Event) => changes.push((event as CustomEvent<string>).detail);
+    window.addEventListener(RUNTIME_DATA_CHANGED_EVENT, onChange);
+    mockedInvoke.mockResolvedValueOnce([{ type: "turnFinished" }]);
+
+    await pollRuntime("runtime-refresh");
+
+    expect(changes).toEqual(["runtime-refresh"]);
+    window.removeEventListener(RUNTIME_DATA_CHANGED_EVENT, onChange);
   });
 
   it("skips redundant drains and performs a bounded fallback drain", async () => {

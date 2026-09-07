@@ -5,7 +5,6 @@ import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { LearningDock } from "./LearningDock";
 import { MemoryDock } from "./MemoryDock";
 import { DESKTOP_TOOL_EVENT } from "./desktop-tools";
-import { SessionDock } from "./SessionDock";
 
 afterEach(() => {
   cleanup();
@@ -13,7 +12,6 @@ afterEach(() => {
 });
 
 it.each([
-  ["sessions", "Recent Medusa sessions"],
   ["review", "Code review"],
   ["memory", "Medusa memory browser"],
   ["learning", "Learning review"],
@@ -21,7 +19,6 @@ it.each([
 ] as const)("opens and dismisses the %s tool independently of repository context", async (tool, label) => {
   render(
     <>
-      <SessionDock />
       <DiffDock />
       <MemoryDock />
       <LearningDock />

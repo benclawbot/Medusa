@@ -287,16 +287,11 @@ it("grows the composer only when the prompt spans additional lines", async () =>
   await waitFor(() => expect(composer).toHaveStyle({ height: "84px" }));
 });
 
-it("keeps Plan and Settings in the central workspace", async () => {
+it("keeps Settings in the central workspace", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);
 
   await screen.findByRole("textbox");
-  fireEvent.click(screen.getByRole("button", { name: "Plan" }));
-  const planHeading = screen.getByRole("heading", { name: "Execution plan" });
-  expect(planHeading.closest(".workspace")).toBeInTheDocument();
-  expect(planHeading.closest(".side-panel")).not.toBeInTheDocument();
-
   fireEvent.click(screen.getByRole("button", { name: "Settings" }));
   const settingsHeading = screen.getByRole("heading", { name: "Model settings" });
   expect(settingsHeading.closest(".workspace")).toBeInTheDocument();
@@ -714,11 +709,15 @@ it("consolidates desktop tools in the session rail", async () => {
   render(<App />);
 
   await screen.findByRole("textbox");
+  expect(screen.getByRole("button", { name: /New Chat/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sessions" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Review changes" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Learning" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Engineering" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Review changes" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Memory" })).not.toBeInTheDocument();
 });
 
 it("routes every Tools rail item through the shared desktop-tool event", async () => {
@@ -729,11 +728,12 @@ it("routes every Tools rail item through the shared desktop-tool event", async (
   render(<App />);
 
   await screen.findByRole("textbox");
-  for (const name of ["Sessions", "Review changes", "Memory", "Learning", "Engineering"]) {
+  fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
+  for (const name of ["Learning", "Engineering"]) {
     fireEvent.click(screen.getByRole("button", { name }));
   }
 
-  expect(requested).toEqual(["sessions", "review", "memory", "learning", "engineering"]);
+  expect(requested).toEqual(["learning", "engineering"]);
   window.removeEventListener(DESKTOP_TOOL_EVENT, onToolRequest);
 });
 
@@ -799,7 +799,10 @@ it("shows live actions during a turn and replaces them with a final summary and 
   fireEvent.change(composer, { target: { value: "Build the page" } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
-  expect(await screen.findByRole("region", { name: "Actions in progress" })).toBeInTheDocument();
+  const liveActions = await screen.findByRole("region", { name: "Actions in progress" });
+  expect(liveActions).toHaveTextContent("Working for");
+  expect(await screen.findByText("Build artifact")).toBeInTheDocument();
+  expect(screen.getByText("writing index.html")).toBeInTheDocument();
   expect(await screen.findByText(/Worked for/)).toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Actions in progress" })).not.toBeInTheDocument();
   expect(screen.getByRole("region", { name: "Turn summary" })).toHaveTextContent("Turn completed");
