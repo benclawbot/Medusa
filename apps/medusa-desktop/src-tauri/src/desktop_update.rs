@@ -71,7 +71,9 @@ fn status() -> MedusaResult<DesktopUpdateStatus> {
     let updater = MainBranchUpdater::public()?;
     let latest_main_sha = updater.latest_main()?.sha;
     let artifact_published = updater.main_desktop_artifact_available(&latest_main_sha)?;
-    let current_revision = option_env!("MEDUSA_BUILD_COMMIT").unwrap_or("unknown").to_owned();
+    let current_revision = option_env!("MEDUSA_BUILD_COMMIT")
+        .unwrap_or("unknown")
+        .to_owned();
     let installed = revisions_match(&current_revision, &latest_main_sha);
     let last_outcome = executable
         .parent()

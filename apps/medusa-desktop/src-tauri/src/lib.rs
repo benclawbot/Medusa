@@ -175,7 +175,10 @@ pub fn run() -> tauri::Result<()> {
                     eprintln!("desktop update health acknowledgement failed: {error}");
                 }
             }
-            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
                 if let Some(registry) = app_handle.try_state::<RuntimeRegistry>() {
                     registry.shutdown_all();
                 }
