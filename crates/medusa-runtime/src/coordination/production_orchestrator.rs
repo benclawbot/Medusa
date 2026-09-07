@@ -853,6 +853,48 @@ mod tests {
     }
 
     #[test]
+    fn live_multi_language_repair_scope_keeps_punctuation_and_protected_files_out() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("src")).unwrap();
+        for path in [
+            "package.json",
+            "src/counter.js",
+            "src/slugify.py",
+            "test.mjs",
+            "value.txt",
+            "verify.py",
+        ] {
+            fs::write(directory.path().join(path), "fixture\n").unwrap();
+        }
+        let planned = plan_for_repository(
+            directory.path(),
+            &PromptDraft {
+                text: "Inspect this repository and repair all three product defects without modifying verify.py, test.mjs, package.json, fixtures, or expected outputs. Correct value.txt to the verified value, robustly implement src/slugify.py while preserving its public API, and repair the counter transitions in src/counter.js. Run python verify.py and npm run test.".to_owned(),
+                ..PromptDraft::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            planned.planning.scope.effective,
+            vec![
+                "src/counter.js".to_owned(),
+                "src/slugify.py".to_owned(),
+                "value.txt".to_owned(),
+            ]
+        );
+        assert_eq!(
+            planned
+                .planning
+                .task(TaskKind::Implementation)
+                .unwrap()
+                .task
+                .write_paths,
+            planned.planning.scope.effective
+        );
+    }
+
+    #[test]
     fn web_artifact_requests_get_a_narrow_default_write_scope() {
         let directory = tempfile::tempdir().unwrap();
         let draft = PromptDraft {

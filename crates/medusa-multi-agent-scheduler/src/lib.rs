@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use sha2::{Digest, Sha256};
 
 #[path = "inner.rs"]
@@ -63,7 +65,11 @@ const TERMINAL_PROSE_PATH_DELIMITERS: &[char] = &['.', ',', ';', ':', ')', ']', 
 /// is restored before returning.
 pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static str> {
     let original_objective = input.objective.trim().to_owned();
+    let protected_paths = scoped_protected_paths(&original_objective, &input.repository_paths);
     input.objective = original_objective.clone();
+    for path in &protected_paths {
+        input.objective = input.objective.replace(path, "protected-file");
+    }
 
     if has_affirmative_mutation_request(&input.objective) {
         input.objective = neutralize_scoped_read_only_phrases(&input.objective);
@@ -82,6 +88,39 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
     result.fingerprint = planning_fingerprint(&result)?;
     result.validate()?;
     Ok(result)
+}
+
+fn scoped_protected_paths(objective: &str, repository_paths: &[String]) -> BTreeSet<String> {
+    let lower = objective.to_ascii_lowercase();
+    let mut protected = BTreeSet::new();
+    for phrase in SCOPED_READ_ONLY_PHRASES {
+        let mut search_from = 0;
+        while let Some(relative_start) = lower[search_from..].find(phrase) {
+            let start = search_from + relative_start + phrase.len();
+            let remainder = &objective[start..];
+            let end = remainder
+                .find(". ")
+                .or_else(|| remainder.find('\n'))
+                .unwrap_or(remainder.len());
+            let clause = &remainder[..end];
+            for path in repository_paths {
+                if clause.split_whitespace().any(|token| {
+                    let candidate = token.trim_matches(|character: char| {
+                        !character.is_ascii_alphanumeric()
+                            && !matches!(character, '/' | '\\' | '.' | '-' | '_')
+                    });
+                    candidate == path
+                        || path
+                            .strip_prefix(candidate)
+                            .is_some_and(|remainder| remainder.starts_with('/'))
+                }) {
+                    protected.insert(path.clone());
+                }
+            }
+            search_from = start;
+        }
+    }
+    protected
 }
 
 fn has_affirmative_mutation_request(objective: &str) -> bool {
@@ -151,6 +190,9 @@ fn resolve_prose_delimited_path_token(token: &str, repository_paths: &[String]) 
         }
     }
 
+    if repository_paths.is_empty() && stripped != candidate {
+        return token.replacen(candidate, stripped, 1);
+    }
     token.to_owned()
 }
 
@@ -214,5 +256,26 @@ mod tests {
 
         assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedReadOnly);
         assert_eq!(planned.scope.resolution, ScopeResolution::NotRequested);
+    }
+
+    #[test]
+    fn protected_paths_are_excluded_from_mutation_scope() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Repair src/lib.rs without modifying tests/regression.rs. Run the tests."
+                .to_owned(),
+            attachment_count: 0,
+            repository_paths: vec!["src/lib.rs".to_owned(), "tests/regression.rs".to_owned()],
+        })
+        .expect("scoped protection should preserve the affirmative repair");
+
+        assert_eq!(planned.scope.effective, vec!["src/lib.rs".to_owned()]);
+        assert_eq!(
+            planned
+                .task(TaskKind::Implementation)
+                .expect("implementation task")
+                .task
+                .write_paths,
+            vec!["src/lib.rs".to_owned()]
+        );
     }
 }
