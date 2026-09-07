@@ -27,6 +27,12 @@ fn close(manager: &ToolManager, repository: &std::path::Path) {
         .expect("close browser session");
 }
 
+fn warm(manager: &ToolManager, repository: &std::path::Path) {
+    manager
+        .execute(repository, "browser_ping", &json!({}))
+        .expect("warm verified browser before bounded payload proof");
+}
+
 #[test]
 fn production_browser_dispatch_hardening() {
     if std::env::var(E2E_ENV).ok().as_deref() != Some("1") {
@@ -124,6 +130,7 @@ fn production_browser_dispatch_hardening() {
                 .expect("close restarted sidecar");
         }
         "dom" => {
+            warm(&manager, repository.path());
             let error = manager
                 .execute(repository.path(), "browser_snapshot", &json!({}))
                 .expect_err("oversized DOM must fail closed inside the bridge");
@@ -131,6 +138,7 @@ fn production_browser_dispatch_hardening() {
             close(&manager, repository.path());
         }
         "text" => {
+            warm(&manager, repository.path());
             let error = manager
                 .execute(repository.path(), "browser_snapshot", &json!({}))
                 .expect_err("oversized snapshot text must fail closed inside the bridge");
@@ -141,6 +149,7 @@ fn production_browser_dispatch_hardening() {
             close(&manager, repository.path());
         }
         "screenshot" => {
+            warm(&manager, repository.path());
             let error = manager
                 .execute(
                     repository.path(),
