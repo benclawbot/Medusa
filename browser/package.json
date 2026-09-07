@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "type": "module",
   "engines": { "node": ">=20" },
-  "dependencies": { "playwright": "1.55.0" },
+  "dependencies": { "playwright": "1.55.1" },
   "scripts": { "test:e2e": "node e2e.mjs" }
 }
