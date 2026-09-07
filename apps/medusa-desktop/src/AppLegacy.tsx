@@ -65,6 +65,7 @@ import {
   pollRuntime,
   publishRepoChanged,
   RUNTIME_RESUME_EVENT,
+  resumeRuntime,
   runRuntimeCommand,
   startRuntime,
   submitRuntime,
@@ -263,9 +264,80 @@ function finishActivities(
   });
 }
 
-export function App() {
+interface AppProps {
+  settingsSlot?: React.ReactNode;
+  composerSlot?: React.ReactNode;
+  composerToolsSlot?: React.ReactNode;
+}
+
+const DESKTOP_DRAFT_VERSION = 1;
+const DESKTOP_DRAFT_LIMIT_BYTES = 512_000;
+
+type PersistedDraftAttachment =
+  | Extract<DesktopAttachment, { kind: "file" }>
+  | Extract<DesktopAttachment, { kind: "text" }>;
+
+interface PersistedDesktopDraft {
+  version: typeof DESKTOP_DRAFT_VERSION;
+  text: string;
+  attachments: PersistedDraftAttachment[];
+}
+
+function desktopDraftKey(repo: string): string {
+  const scope = repo.trim() || "__general__";
+  return `medusa.desktop.draft.v${DESKTOP_DRAFT_VERSION}:${encodeURIComponent(scope)}`;
+}
+
+function loadDesktopDraft(repo: string): PersistedDesktopDraft | undefined {
+  try {
+    const raw = window.localStorage.getItem(desktopDraftKey(repo));
+    if (!raw || raw.length > DESKTOP_DRAFT_LIMIT_BYTES) return undefined;
+    const parsed = JSON.parse(raw) as Partial<PersistedDesktopDraft>;
+    if (parsed.version !== DESKTOP_DRAFT_VERSION || typeof parsed.text !== "string" || !Array.isArray(parsed.attachments)) return undefined;
+    const attachments = parsed.attachments.filter((attachment): attachment is PersistedDraftAttachment => {
+      if (!attachment || typeof attachment !== "object" || !("kind" in attachment)) return false;
+      return attachment.kind === "file" && typeof attachment.path === "string"
+        || attachment.kind === "text" && typeof attachment.name === "string" && typeof attachment.text === "string";
+    });
+    return { version: DESKTOP_DRAFT_VERSION, text: parsed.text, attachments };
+  } catch {
+    return undefined;
+  }
+}
+
+function persistDesktopDraft(repo: string, text: string, attachments: DesktopAttachment[]): void {
+  const persisted: PersistedDesktopDraft = {
+    version: DESKTOP_DRAFT_VERSION,
+    text,
+    // Image payloads are intentionally excluded: data URLs contain private content and can
+    // exceed storage quotas. The current send still retains them in memory for this turn.
+    attachments: attachments.filter((attachment): attachment is PersistedDraftAttachment => attachment.kind !== "image"),
+  };
+  if (!persisted.text.trim() && persisted.attachments.length === 0) {
+    window.localStorage.removeItem(desktopDraftKey(repo));
+    return;
+  }
+  const serialized = JSON.stringify(persisted);
+  if (serialized.length <= DESKTOP_DRAFT_LIMIT_BYTES) {
+    window.localStorage.setItem(desktopDraftKey(repo), serialized);
+  }
+}
+
+function clearDesktopDraft(repo: string): void {
+  window.localStorage.removeItem(desktopDraftKey(repo));
+}
+
+export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps = {}) {
   const [runtimeId, setRuntimeId] = useState<string>();
   const [repo, setRepo] = useState("");
+  // Keep the active project synchronously available to event handlers. React state
+  // updates are scheduled, so a resume request can arrive between startRuntime()
+  // resolving and the render that publishes its repo.
+  const activeRepoRef = useRef("");
+  const setActiveRepo = useCallback((nextRepo: string) => {
+    activeRepoRef.current = nextRepo;
+    setRepo(nextRepo);
+  }, []);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [activities, setActivities] = useState<RuntimeActivity[]>([]);
   const [workLog, setWorkLog] = useState<WorkLogEntry[]>([]);
@@ -322,6 +394,8 @@ export function App() {
   const runtimeGeneration = useRef(0);
   const submitInFlight = useRef(false);
   const failedMessage = useRef<{ id: number; text: string; attachments: DesktopAttachment[] }>();
+  const hydratedDraftScope = useRef<string>();
+  const hydratedDraftRepo = useRef<string>();
   const resumeInFlight = useRef(false);
   const runtimeTransitionInFlight = useRef(false);
   const providerRequestId = useRef(0);
@@ -336,6 +410,25 @@ export function App() {
   const previewDialogRef = useRef<HTMLDivElement>(null);
   const closeComposerSelector = useCallback(() => setComposerSelectorOpen(false), []);
   const closePreviewImage = useCallback(() => setPreviewImage(undefined), []);
+
+  useEffect(() => {
+    if (hydratedDraftRepo.current !== undefined && hydratedDraftRepo.current !== repo) {
+      persistDesktopDraft(hydratedDraftRepo.current, prompt, attachments);
+    }
+    const draft = loadDesktopDraft(repo);
+    hydratedDraftScope.current = desktopDraftKey(repo);
+    hydratedDraftRepo.current = repo;
+    setPrompt(draft?.text ?? "");
+    setAttachments(draft?.attachments ?? []);
+  }, [repo]);
+
+  useEffect(() => {
+    const scope = desktopDraftKey(repo);
+    if (hydratedDraftScope.current !== scope) return;
+    if (submitInFlight.current) return;
+    const timer = window.setTimeout(() => persistDesktopDraft(repo, prompt, attachments), 200);
+    return () => window.clearTimeout(timer);
+  }, [attachments, pendingSubmit, prompt, repo]);
 
   useDialogFocus(composerSelectorOpen, composerSelectorRef, closeComposerSelector);
   useDialogFocus(Boolean(previewImage), previewDialogRef, closePreviewImage);
@@ -775,7 +868,7 @@ export function App() {
       // daemon may need to start or recover, but that must not make the
       // composer unavailable or make the whole window appear hung.
       setRuntimeId(started.runtimeId);
-      setRepo(started.repo);
+      setActiveRepo(started.repo);
       try {
         return await configureStartedRuntime(started, {
           provider: configuration.provider,
@@ -786,7 +879,7 @@ export function App() {
       } catch (cause) {
         if (!disposed && !String(cause).includes("dependency unavailable: daemon")) {
           setRuntimeId(undefined);
-          setRepo("");
+          setActiveRepo("");
         }
         throw cause;
       }
@@ -813,16 +906,12 @@ export function App() {
 
   const resumeSession = useCallback(async (sessionId: string) => {
     if (resumeInFlight.current || runtimeTransitionInFlight.current) return;
-    if (!repo) {
-      setError("Open a project before resuming a saved session.");
-      return;
-    }
     resumeInFlight.current = true;
     runtimeTransitionInFlight.current = true;
     runtimeGeneration.current += 1;
     setError(undefined);
     try {
-      const started = await startRuntime(repo);
+      const started = await resumeRuntime(activeRepoRef.current, sessionId);
       await configureStartedRuntime(started, {
         provider,
         model,
@@ -830,7 +919,7 @@ export function App() {
         expectedRevision: sharedConfiguration?.revision ?? 0,
       });
       setRuntimeId(started.runtimeId);
-      setRepo(started.repo);
+      setActiveRepo(started.repo);
       setMessages([]);
       setActivities([]);
       setWorkLog([]);
@@ -846,14 +935,14 @@ export function App() {
       resumeInFlight.current = false;
       runtimeTransitionInFlight.current = false;
     }
-  }, [effort, model, provider, repo, sharedConfiguration?.revision]);
+  }, [effort, model, provider, setActiveRepo, sharedConfiguration?.revision]);
 
   useEffect(() => {
     const onResumeRequest = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId?: string; repo?: string } | string>).detail;
       const sessionId = typeof detail === "string" ? detail : detail?.sessionId;
       const requestedRepo = typeof detail === "string" ? "" : detail?.repo?.trim() ?? "";
-      if (requestedRepo && requestedRepo !== repo) {
+      if (requestedRepo && requestedRepo !== activeRepoRef.current) {
         setError("That saved session belongs to a different project. Open that project before resuming it.");
         return;
       }
@@ -874,7 +963,7 @@ export function App() {
       started = await startRuntime(selected);
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
-      setRepo(started.repo);
+      setActiveRepo(started.repo);
       setMessages([]);
       setActivities([]);
       setWorkLog([]);
@@ -910,7 +999,7 @@ export function App() {
       started = await startRuntime();
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
-      setRepo("");
+      setActiveRepo("");
       setMessages([]);
       setActivities([]);
       setWorkLog([]);
@@ -1060,15 +1149,17 @@ export function App() {
         }, MAX_MESSAGE_HISTORY));
     if (submitsTurn) {
       setLastRequest({ text, attachments: suppliedAttachments });
+      // Keep the durable draft while transport is pending; a failed send restores it below.
+      // Clearing the visible composer immediately lets the user prepare the next turn.
+      setPrompt("");
+      setAttachments([]);
     }
-    // Clear the composer as soon as the request is captured. The runtime may
-    // take a while to configure the provider or accept the request, and the
-    // user should be free to see that the turn was sent or start steering it.
-    setPrompt("");
-    setAttachments([]);
     try {
       if (clean.startsWith("/") && suppliedAttachments.length === 0) {
         await runRuntimeCommand(runtimeId, clean);
+        clearDesktopDraft(repo);
+        setPrompt("");
+        setAttachments([]);
       } else {
         await configureSelectedModelForTurn();
         const disposition = await submitRuntime(runtimeId, {
@@ -1080,6 +1171,9 @@ export function App() {
             ? { ...message, queued: disposition === "queued", failed: false }
             : message));
         failedMessage.current = undefined;
+        clearDesktopDraft(repo);
+        setPrompt("");
+        setAttachments([]);
       }
     } catch (cause) {
       if (submitsTurn) {
@@ -1138,7 +1232,7 @@ export function App() {
       setModel(configuration.model);
       setEffort(configuration.effort);
       setRuntimeId(started.runtimeId);
-      setRepo(started.repo);
+      setActiveRepo(started.repo);
       setError(undefined);
     } catch (cause) {
       await closeRuntime(started.runtimeId).catch(() => undefined);
@@ -1635,6 +1729,7 @@ export function App() {
                 <span className="context-bar-stats">{usage.input.toLocaleString()} in · {usage.output.toLocaleString()} out · {usage.cached.toLocaleString()} cached</span>
               </div>
             <footer className="composer-wrap">
+              {composerSlot}
               {!!error && (
                 <div className={`error-banner${hasPartialResult ? " partial" : ""}`} role={hasPartialResult ? "status" : "alert"}>
                   {hasPartialResult ? <CheckCircle2 size={15} /> : <OctagonX size={15} />}
@@ -1699,6 +1794,7 @@ export function App() {
                 )}
                 <div className="composer-line">
                   <div className="composer-tools">
+                    {composerToolsSlot}
                     <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void addImages(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
                     <button className="composer-icon-button" onClick={() => imageInputRef.current?.click()} disabled={!runtimeId} title="Add image" aria-label="Add image"><Plus size={21} /></button>
                   </div>
@@ -1818,6 +1914,7 @@ export function App() {
             {selectedProvider?.customValues && <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.example.com/v1" /></label>}
             {selectedProvider && <small>Route: {selectedProvider.customValues ? baseUrl || "not set" : selectedProvider.baseUrl ?? "provider default"}. Medusa verifies the endpoint and selected model before applying.</small>}
             <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !sharedConfiguration || !provider.trim() || !model.trim() || loadingModels || authenticating || (oauthProvider && !oauthAuthenticated) || Boolean(selectedProvider?.disabledReason)}>Apply configuration</button>
+            {settingsSlot}
           </div>
         )}
       </section>

@@ -263,7 +263,6 @@ fn run() -> MedusaResult<()> {
             .collect::<BTreeMap<_, _>>();
         let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
         oauth_preflight::run_if_needed(&config)?;
-        medusa_update::acknowledge_update_health()?;
         let mut options = TuiOptions::for_repo(repo);
         options.build_label = Some(CLI_DISPLAY_VERSION.to_owned());
         options.initial_prompt = cli.prompt;

@@ -1,5 +1,6 @@
 use super::support::StyledLine;
 use super::*;
+use crate::input::text_cells::{display_width, wrap_to_cells};
 
 pub(super) fn markdown_block_lines(
     first_marker: &str,
@@ -7,7 +8,7 @@ pub(super) fn markdown_block_lines(
     markdown: &str,
     width: u16,
 ) -> Vec<StyledLine> {
-    let marker_width = first_marker.chars().count();
+    let marker_width = display_width(first_marker);
     let content_width = usize::from(width).saturating_sub(marker_width).max(1);
     let continuation = " ".repeat(marker_width);
     let mut rendered = Vec::new();
@@ -384,20 +385,15 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let mut rows = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
-        if word.chars().count() > width {
+        if display_width(word) > width {
             if !current.is_empty() {
                 rows.push(std::mem::take(&mut current));
             }
-            let characters = word.chars().collect::<Vec<_>>();
-            rows.extend(
-                characters
-                    .chunks(width)
-                    .map(|chunk| chunk.iter().collect::<String>()),
-            );
+            rows.extend(wrap_to_cells(word, width).split('\n').map(str::to_owned));
             continue;
         }
         let required =
-            current.chars().count() + usize::from(!current.is_empty()) + word.chars().count();
+            display_width(&current) + usize::from(!current.is_empty()) + display_width(word);
         if required > width && !current.is_empty() {
             rows.push(std::mem::take(&mut current));
         }

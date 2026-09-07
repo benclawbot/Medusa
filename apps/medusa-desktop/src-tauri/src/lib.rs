@@ -43,7 +43,9 @@ extern crate self as tempfile;
 pub(crate) use test_tempfile::tempdir;
 
 use config::{desktop_provider_catalog, desktop_shared_configuration};
-use desktop_update::{desktop_update_from_main, desktop_update_status};
+use desktop_update::{
+    desktop_update_from_main, desktop_update_renderer_ready, desktop_update_status,
+};
 use diffs::runtime_read_diff;
 use engineering::runtime_engineering_dashboard;
 use github_actions::runtime_retry_github_actions_job;
@@ -166,15 +168,11 @@ pub fn run() -> tauri::Result<()> {
             runtime_learning_redaction_preview,
             runtime_learning_export,
             desktop_update_status,
+            desktop_update_renderer_ready,
             desktop_update_from_main,
         ])
         .build(tauri::generate_context!())?
         .run(|app_handle, event| {
-            if matches!(event, tauri::RunEvent::Ready) {
-                if let Err(error) = medusa_update::acknowledge_update_health() {
-                    eprintln!("desktop update health acknowledgement failed: {error}");
-                }
-            }
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit

@@ -84,12 +84,6 @@ export function SessionDock() {
   }, [repo]);
 
   const refresh = useCallback(async () => {
-    if (!repo) {
-      setSessions([]);
-      setSessionCursor(undefined);
-      setError(undefined);
-      return;
-    }
     const generation = ++requestGeneration.current;
     setLoading(true);
     setError(undefined);
@@ -180,7 +174,7 @@ export function SessionDock() {
         <section ref={dialogRef} className="session-dock-panel" role="dialog" aria-modal="true" aria-label="Recent Medusa sessions" tabIndex={-1}>
           <header>
             <div>
-              <small>{selected ? "Saved conversation" : "Current project"}</small>
+              <small>{selected ? "Saved conversation" : repo ? "Current project" : "General chat"}</small>
               <strong>{selected ? selected.summary.objective || "Untitled session" : "Recent sessions"}</strong>
             </div>
             <div className="session-dock-actions">
@@ -237,7 +231,7 @@ export function SessionDock() {
                 <div className="session-dock-empty"><LoaderCircle className="spin" size={18} /> Loading sessions…</div>
               )}
               {!!error && <div className="session-dock-error">{error}</div>}
-              {!loading && !error && sessions.length === 0 && (
+              {(!loading || !repo) && !error && sessions.length === 0 && (
                 <div className="session-dock-empty"><History size={18} /> No saved sessions for this project.</div>
               )}
               {!loading && !error && sessions.length > 0 && visibleSessions.length === 0 && (

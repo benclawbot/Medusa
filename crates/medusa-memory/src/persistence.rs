@@ -5,6 +5,7 @@ use walkdir::WalkDir;
 
 use crate::{
     engine::MemoryEngine,
+    index::recover_index_swap,
     schema::MemoryDocument,
     support::{atomic_write, invalid, sanitize_component},
 };
@@ -21,6 +22,7 @@ impl MemoryEngine {
         // Lifecycle operations keep their journal until the derived index is rebuilt. Replay
         // before serving reads so a crash cannot expose deleted/superseded content from SQLite.
         self.recover_lifecycle_journal()?;
+        recover_index_swap(&self.index_path)?;
         if !self.index_path.exists() {
             self.rebuild_index()?;
         }

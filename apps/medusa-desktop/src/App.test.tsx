@@ -12,6 +12,7 @@ import {
   loadSharedConfiguration,
   pollRuntime,
   requestRuntimeResume,
+  resumeRuntime,
   runRuntimeCommand,
   startRuntime,
   submitRuntime,
@@ -112,6 +113,7 @@ vi.mock("./runtime", async () => {
       credentialConfigured: false,
     }),
     startRuntime: vi.fn(),
+    resumeRuntime: vi.fn(),
     closeRuntime: vi.fn(),
     pollRuntime: vi.fn().mockResolvedValue([]),
     commandSuggestions: vi.fn().mockResolvedValue([]),
@@ -141,6 +143,7 @@ beforeEach(() => {
     credentialConfigured: false,
   });
   vi.mocked(startRuntime).mockReset();
+  vi.mocked(resumeRuntime).mockReset();
   vi.mocked(closeRuntime).mockReset().mockResolvedValue(undefined);
   vi.mocked(configureRuntime).mockReset().mockResolvedValue(undefined);
   vi.mocked(findWebArtifact).mockReset().mockResolvedValue(undefined);
@@ -171,14 +174,14 @@ it("starts a general chat without requiring a project", async () => {
 
 it("resumes a saved session in place without reloading the window", async () => {
   vi.mocked(startRuntime)
-    .mockResolvedValueOnce({ runtimeId: "runtime-general", repo: "/repo" })
-    .mockResolvedValueOnce({ runtimeId: "runtime-resumed", repo: "/repo" });
+    .mockResolvedValueOnce({ runtimeId: "runtime-general", repo: "/repo" });
+  vi.mocked(resumeRuntime).mockResolvedValue({ runtimeId: "runtime-resumed", repo: "/repo" });
   render(<App />);
 
   await waitFor(() => expect(startRuntime).toHaveBeenCalledWith(undefined));
   requestRuntimeResume("session-123");
 
-  await waitFor(() => expect(startRuntime).toHaveBeenCalledWith("/repo"));
+  await waitFor(() => expect(resumeRuntime).toHaveBeenCalledWith("/repo", "session-123"));
   await waitFor(() => expect(closeRuntime).toHaveBeenCalledWith("runtime-general"));
   expect(screen.getByRole("heading", { name: "repo" })).toBeInTheDocument();
 });
@@ -600,7 +603,7 @@ it("focuses Approve by default and renders conversation URLs as Ctrl-click links
   expect(approve).toHaveAttribute("aria-keyshortcuts", "Y");
   expect(screen.getByRole("button", { name: /Deny/i })).toHaveAttribute("aria-keyshortcuts", "N");
   const link = await screen.findByRole("link", { name: "https://example.com/docs" });
-  expect(link).toHaveAttribute("title", "Ctrl+click to open");
+  expect(link).toHaveAttribute("title", "Open link");
 });
 
 it("keeps diagnostics behind an explicit Session details control", async () => {
@@ -791,6 +794,8 @@ it("restores a rejected send for editing and retries it without duplicating the 
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue("Keep this request"));
   expect(document.querySelectorAll(".message.user")).toHaveLength(1);
   expect(screen.getByText("not sent · edit or retry")).toBeInTheDocument();
+  await waitFor(() => expect(JSON.parse(window.localStorage.getItem("medusa.desktop.draft.v1:__general__") ?? "{}"))
+    .toMatchObject({ text: "Keep this request", attachments: [] }));
 
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(submitRuntime).toHaveBeenCalledTimes(2));

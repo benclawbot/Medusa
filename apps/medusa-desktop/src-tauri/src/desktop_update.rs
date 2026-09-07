@@ -9,6 +9,14 @@ use tauri::Emitter;
 
 const DESKTOP_UPDATE_PROGRESS_EVENT: &str = "desktop-update-progress";
 
+/// Commit update health only after the React renderer has mounted its recovery-capable shell.
+/// Tauri's `Ready` event means the native window exists; it does not prove the user interface
+/// successfully bootstrapped.
+#[tauri::command]
+pub fn desktop_update_renderer_ready() -> Result<bool, String> {
+    medusa_update::acknowledge_update_health().map_err(|error| error.to_string())
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopUpdateStatus {

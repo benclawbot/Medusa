@@ -49,6 +49,9 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         UiIdentity::for_repo_with_build(&options.repo, options.build_label.as_deref());
     let mut runtime = runtime_for_options(&options).map_err(runtime_error)?;
     let mut terminal = TerminalGuard::enter()?;
+    // The updater's health marker is written only after the runtime and interactive terminal
+    // have both initialized. A CLI process that exits before this milestone remains rollbackable.
+    medusa_update::acknowledge_update_health().map_err(io::Error::other)?;
     run_loop(
         terminal.stdout(),
         &options,

@@ -50,6 +50,7 @@ enum JournalRecord {
     },
 }
 
+#[derive(Clone)]
 struct JournalState {
     events: Vec<EventEnvelope>,
     committed_snapshot: Option<AgentSession>,
@@ -71,7 +72,7 @@ pub(crate) fn append_payload_committed(
     verify_chain_incremental(&session.id.to_string(), &session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
-    let state = read_journal(&path, &session.id, true, true)?;
+    let state = read_journal_cached(&path, &session.id)?;
     merge_committed_events(session, &state.events)?;
 
     if let EventPayload::SessionActionAccepted { action } = &payload
@@ -283,7 +284,7 @@ pub(crate) fn append_event(
         }
         ensure_initialized(session)?;
         let path = journal_path(&session.repo, &session.id)?;
-        let state = read_journal(&path, &session.id, true, false)?;
+        let state = read_journal_cached(&path, &session.id)?;
         let index = usize::try_from(event.sequence.saturating_sub(1))
             .map_err(|_| persistence_error("event sequence is unsupported on this platform"))?;
         if state.events.get(index) == Some(event) {
@@ -316,7 +317,7 @@ pub(crate) fn append_event(
 
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
-    let state = read_journal(&path, &session.id, true, false)?;
+    let state = read_journal_cached(&path, &session.id)?;
     if state.events != session.events {
         return Err(persistence_error(
             "journal event prefix does not match the materialized session",
@@ -356,7 +357,7 @@ fn commit_snapshot_locked(session: &AgentSession) -> MedusaResult<AgentSession> 
     verify_chain_incremental(&session.id.to_string(), &session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
-    let state = read_journal(&path, &session.id, true, false)?;
+    let state = read_journal_cached(&path, &session.id)?;
     let mut merged = session.clone();
 
     if state.events != merged.events {
@@ -366,7 +367,7 @@ fn commit_snapshot_locked(session: &AgentSession) -> MedusaResult<AgentSession> 
     }
 
     if state.events != merged.events {
-        let recovered = read_journal(&path, &session.id, true, true)?;
+        let recovered = read_journal_cached(&path, &session.id)?;
         merged = session.clone();
         merge_committed_events(&mut merged, &recovered.events)?;
         if recovered.events != merged.events {
@@ -535,12 +536,44 @@ fn append_record(path: &Path, record: &JournalRecord) -> MedusaResult<()> {
 
 fn append_records(path: &Path, records: &[JournalRecord]) -> MedusaResult<()> {
     create_parent(path)?;
+    let cached_state = JOURNAL_CACHE.get().and_then(|cache| {
+        cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(path)
+            .map(|cached| Arc::clone(&cached.state))
+    });
     let mut file = OpenOptions::new().append(true).open(path)?;
     for record in records {
         write_record(&mut file, record)?;
     }
     file.sync_data()?;
-    invalidate_journal_cache(path);
+    if let Some(cached_state) = cached_state {
+        let mut state = (*cached_state).clone();
+        for record in records {
+            match record {
+                JournalRecord::Event { event } => state.events.push((**event).clone()),
+                JournalRecord::Snapshot { session, .. } => {
+                    state.committed_snapshot = Some((**session).clone());
+                }
+            }
+        }
+        let metadata = fs::metadata(path)?;
+        JOURNAL_CACHE
+            .get_or_init(|| Mutex::new(BTreeMap::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                path.to_path_buf(),
+                CachedJournal {
+                    length: metadata.len(),
+                    modified: metadata.modified().ok(),
+                    state: Arc::new(state),
+                },
+            );
+    } else {
+        invalidate_journal_cache(path);
+    }
     Ok(())
 }
 

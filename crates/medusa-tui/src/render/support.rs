@@ -1,5 +1,6 @@
 use super::*;
 use crate::commands::Verbosity;
+use crate::input::text_cells::{display_width, wrap_to_cells};
 
 pub(super) fn render_loading_screen(frame: &mut [StyledLine], width: u16, height: u16) {
     let logo = MEDUSA_LOADING_LOGO
@@ -197,7 +198,7 @@ fn conversation_block_lines(
     attribute: Attribute,
     width: u16,
 ) -> Vec<StyledLine> {
-    let marker_width = first_marker.chars().count();
+    let marker_width = display_width(first_marker);
     let content_width = usize::from(width).saturating_sub(marker_width).max(1);
     let continuation = " ".repeat(marker_width);
     let mut visual_rows = Vec::new();
@@ -206,11 +207,10 @@ fn conversation_block_lines(
             visual_rows.push(String::new());
             continue;
         }
-        let characters = source_line.chars().collect::<Vec<_>>();
         visual_rows.extend(
-            characters
-                .chunks(content_width)
-                .map(|chunk| chunk.iter().collect::<String>()),
+            wrap_to_cells(source_line, content_width)
+                .split('\n')
+                .map(str::to_owned),
         );
     }
     if visual_rows.is_empty() {

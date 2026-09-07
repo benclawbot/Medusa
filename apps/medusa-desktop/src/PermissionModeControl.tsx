@@ -1,6 +1,5 @@
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { toUserError } from "./errorPresentation";
 import {
   loadPermissionModes,
@@ -9,35 +8,12 @@ import {
   type PermissionModeOption,
 } from "./permissionModes";
 
-function findComposerHost(): HTMLElement | null {
-  return document.querySelector<HTMLElement>(".composer-tools");
-}
-
 export function PermissionModeControl() {
-  const [host, setHost] = useState<HTMLElement | null>(() => findComposerHost());
   const [modes, setModes] = useState<PermissionModeOption[]>([]);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    let timer: number | undefined;
-    const refreshHost = () => setHost(findComposerHost());
-    refreshHost();
-    const observer = new MutationObserver(() => {
-      if (timer !== undefined) return;
-      timer = window.setTimeout(() => {
-        timer = undefined;
-        refreshHost();
-      }, 100);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => {
-      observer.disconnect();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,9 +72,7 @@ export function PermissionModeControl() {
     }
   };
 
-  if (!host) return null;
-
-  return createPortal(
+  return (
     <div className="permission-mode-control" ref={rootRef}>
       <button
         className={`permission-mode-trigger${active?.id === "full-access" ? " full-access" : ""}`}
@@ -135,7 +109,6 @@ export function PermissionModeControl() {
           {error && <div className="permission-mode-error" role="alert">{error}</div>}
         </div>
       )}
-    </div>,
-    host,
+    </div>
   );
 }

@@ -1,6 +1,5 @@
 import { CheckCircle2, Download, RefreshCw, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toUserError } from "./errorPresentation";
@@ -38,35 +37,11 @@ function progressPercent(progress: DesktopUpdateProgress): number {
 }
 
 export function DesktopUpdateControl() {
-  const [target, setTarget] = useState<Element | null>(null);
   const [status, setStatus] = useState<DesktopUpdateStatus>();
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [progress, setProgress] = useState<DesktopUpdateProgress>();
   const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    let timer: number | undefined;
-    const findTarget = () => {
-      if (typeof document !== "undefined") {
-        const next = document.querySelector(".settings-form");
-        setTarget((current) => current === next ? current : next);
-      }
-    };
-    findTarget();
-    const observer = new MutationObserver(() => {
-      if (timer !== undefined || typeof window === "undefined") return;
-      timer = window.setTimeout(() => {
-        timer = undefined;
-        findTarget();
-      }, 100);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => {
-      observer.disconnect();
-      if (timer !== undefined && typeof window !== "undefined") window.clearTimeout(timer);
-    };
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -130,11 +105,9 @@ export function DesktopUpdateControl() {
     }
   };
 
-  if (!target) return null;
-
   const percentage = progress ? progressPercent(progress) : 0;
 
-  return createPortal(
+  return (
     <section className="desktop-update-card" aria-label="Desktop updates">
       <div className="desktop-update-heading">
         <span className="desktop-update-icon"><Download size={17} /></span>
@@ -207,7 +180,6 @@ export function DesktopUpdateControl() {
         </button>
       </div>
       <small>The app verifies the exact published executable and shows download progress. It closes only for the final replacement, then reopens automatically.</small>
-    </section>,
-    target,
+    </section>
   );
 }

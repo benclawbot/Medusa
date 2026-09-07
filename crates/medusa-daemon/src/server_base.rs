@@ -50,6 +50,9 @@ use crate::protocol::{FrontendArtifactUpload, FrontendCredentialUpdate};
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+// Frontend replay responses can contain a bounded transcript/artifact projection, but a peer
+// must never be able to make the client retain an unbounded line while waiting for a newline.
+const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const FRONTEND_REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(600);
 const FRONTEND_CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -195,7 +198,30 @@ impl DaemonClient {
         stream.write_all(b"\n")?;
         stream.flush()?;
         let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line)?;
+        let bytes_read = BufReader::new(stream)
+            .take((MAX_RESPONSE_BYTES + 1) as u64)
+            .read_line(&mut line)?;
+        if bytes_read == 0 {
+            return Err(MedusaError::new(
+                ErrorCode::PersistenceFailed,
+                ErrorCategory::Persistence,
+                "daemon closed the response before sending a JSON envelope",
+            ));
+        }
+        if bytes_read > MAX_RESPONSE_BYTES {
+            return Err(MedusaError::new(
+                ErrorCode::PersistenceFailed,
+                ErrorCategory::Persistence,
+                format!("daemon response exceeds {MAX_RESPONSE_BYTES} bytes"),
+            ));
+        }
+        if !line.ends_with('\n') {
+            return Err(MedusaError::new(
+                ErrorCode::PersistenceFailed,
+                ErrorCategory::Persistence,
+                "daemon response was truncated before its newline delimiter",
+            ));
+        }
         let response: ResponseEnvelope = serde_json::from_str(&line)?;
         if response.version != DAEMON_PROTOCOL_VERSION {
             return Err(MedusaError::new(
