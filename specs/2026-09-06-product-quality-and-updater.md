@@ -391,3 +391,19 @@ Focused Rust suites, desktop tests/typecheck/build, updater fixtures, native des
 After all reviewed implementation PRs merge, fetch and record the resulting main SHA. Run the complete workspace gates above, the complete desktop frontend and native adapter suites, and dispatch all applicable full CI/acceptance workflows that support manual dispatch. For workflows without dispatch, verify runs attached to that exact main commit. Inspect coverage, adversarial regressions, migration/chaos, browser, package/platform, documentation, dependency-policy and production acceptance checks required by affected areas. Record credential-gated or unavailable jobs explicitly; never bypass their gates or invent credentials.
 
 Collect every failed job/test and its complete diagnostic output before choosing repairs. Group shared/cascading causes, fix them coherently, run focused regressions, merge reviewed fixes, then rerun the complete integrated sweep against the new main SHA. Canceled, skipped-required, missing, and earlier-commit checks are not success. Do not stop at the first green platform or describe targeted tests as all tests. Preserve test expectations and investigate flakiness rather than rerunning until green.
+
+### Final integrated-main result (2026-09-07)
+
+The consolidated implementation was merged through PR #1141, with browser/CI follow-ups #1142, #1146, #1147, and #1148. The resulting `main` commit is `e62ab3d465eab6ac0343e4e9dc715cbdca582d74`.
+
+Final main workflows for that exact commit all passed:
+
+- Architecture policy: run [34130502263](https://github.com/benclawbot/Medusa/actions/runs/34130502263)
+- Browser Dispatch Certification: run [34130502363](https://github.com/benclawbot/Medusa/actions/runs/34130502363)
+- Browser Dispatch Hardening Certification: run [34130502266](https://github.com/benclawbot/Medusa/actions/runs/34130502266)
+- Publish Rolling Main: run [34130502674](https://github.com/benclawbot/Medusa/actions/runs/34130502674)
+- Push on main / CodeQL: run [34130501932](https://github.com/benclawbot/Medusa/actions/runs/34130501932)
+
+The local integrated sweep also passed formatting, workspace clippy, workspace tests, documentation, dependency policy, audit, desktop frontend tests/typecheck/build, native desktop tests, updater/CLI fixtures, memory/daemon/browser/config/agent/TUI focused suites, and `git diff --check`. The coverage job initially exposed one invalid `llvm-profdata` input; its exact rerun passed without a source change, so it is recorded as a transient CI profile failure rather than suppressed.
+
+The implementation is **PARTIALLY VERIFIED** against the original ledger. Source behavior and disposable fixtures are covered, and the final cross-platform CI matrix is green. These acceptance items remain environment-dependent and are intentionally not inferred: a real installed-binary restart on every supported OS, reproduction of the historical legacy helper, live publication-channel latency/identity behavior, native packaged renderer/accessibility interaction, credential-gated live provider scenarios, and production latency benchmarks. See the issue comments on #1124–#1127 for the exact remaining limits.
