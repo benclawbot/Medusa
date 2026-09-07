@@ -3,7 +3,10 @@ import { createServer } from 'node:http';
 
 const html = await readFile(new URL('./interactive.html', import.meta.url));
 const largeDom = `<!doctype html><html><body>${'<div>node</div>'.repeat(4100)}</body></html>`;
-const largeText = `<!doctype html><html><body>${'x'.repeat(1024 * 1024 + 1024)}</body></html>`;
+// Keep the transport fixture small. The snapshot proof should exercise the
+// browser-side text ceiling without coupling it to multi-megabyte response
+// delivery differences between hosted runners.
+const largeText = `<!doctype html><html><body><script>document.body.textContent = 'x'.repeat(1024 * 1024 + 1024);</script></body></html>`;
 const hugeScreenshot = '<!doctype html><html><body style="margin:0;width:5000px;height:5000px">huge screenshot fixture</body></html>';
 let timeoutHangRequests = 0;
 let cancellationHangRequests = 0;
