@@ -11,7 +11,25 @@ type MarkdownBlock =
 
 function splitTableRow(line: string): string[] {
   const value = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return value.split("|").map((cell) => cell.trim());
+  const cells: string[] = [];
+  let current = "";
+  let escaped = false;
+  for (const character of value) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === "|") {
+      cells.push(current.trim());
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+  if (escaped) current += "\\";
+  cells.push(current.trim());
+  return cells;
 }
 
 function isTableDivider(line: string): boolean {
@@ -145,10 +163,10 @@ function renderInline(value: string, keyPrefix: string): React.ReactNode[] {
       const closing = token.lastIndexOf("](");
       const label = token.slice(1, closing);
       const href = safeHref(token.slice(closing + 2, -1));
-      children.push(href ? <a key={key} href={href} target="_blank" rel="noreferrer" title="Ctrl+click to open" onClick={(event) => { if (!event.ctrlKey && event.detail !== 0) event.preventDefault(); }}>{renderInline(label, key)}</a> : label);
+      children.push(href ? <a key={key} href={href} target="_blank" rel="noreferrer" title="Open link">{renderInline(label, key)}</a> : label);
     } else if (/^https?:\/\//i.test(token)) {
       const href = token.replace(/[.,;:!?\)\]\}]+$/, "");
-      children.push(<a key={key} href={href} target="_blank" rel="noreferrer" title="Ctrl+click to open" onClick={(event) => { if (!event.ctrlKey && event.detail !== 0) event.preventDefault(); }}>{href}</a>);
+      children.push(<a key={key} href={href} target="_blank" rel="noreferrer" title="Open link">{href}</a>);
       if (href.length < token.length) children.push(token.slice(href.length));
     } else if ((token.startsWith("**") && token.endsWith("**")) || (token.startsWith("__") && token.endsWith("__"))) {
       children.push(<strong key={key}>{renderInline(token.slice(2, -2), key)}</strong>);

@@ -534,6 +534,26 @@ export async function startRuntime(repo?: string): Promise<RuntimeStartResponse>
   return response;
 }
 
+/** Resume an explicitly selected session without using the process-wide pending-start slot. */
+export async function resumeRuntime(repo: string, sessionId: string): Promise<RuntimeStartResponse> {
+  // A legacy request may have written the process-wide pending slot before the
+  // typed event reached the active app. Consume it for this explicit attempt so
+  // a failed resume cannot be replayed accidentally by a later project start.
+  let response: RuntimeStartResponse;
+  try {
+    response = await invoke<RuntimeStartResponse>("runtime_resume", {
+      repo,
+      sessionId,
+    });
+  } finally {
+    window.localStorage.removeItem(pendingResumeKey);
+  }
+  timelineSnapshots.set(response.runtimeId, { ...emptyTimeline, runtimeId: response.runtimeId });
+  recoverySnapshots.set(response.runtimeId, { suppressed: false });
+  activateRuntime(response.runtimeId);
+  return response;
+}
+
 export const RUNTIME_RESUME_EVENT = "medusa-runtime-resume";
 export const REPO_CHANGED_EVENT = "medusa-repo-changed";
 

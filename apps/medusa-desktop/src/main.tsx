@@ -43,6 +43,10 @@ class DesktopErrorBoundary extends React.Component<React.PropsWithChildren, Erro
           <h1>Medusa Desktop needs attention</h1>
           <p>The renderer stopped while processing the request. The background runtime is still available for retry or restart.</p>
           <pre style={{ whiteSpace: "pre-wrap" }}>{toUserError(this.state.error)}</pre>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <button type="button" onClick={() => this.setState({ error: undefined })}>Retry renderer</button>
+            <button type="button" onClick={() => window.location.reload()}>Restart desktop</button>
+          </div>
         </section>
       </main>
     );

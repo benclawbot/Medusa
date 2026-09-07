@@ -8,6 +8,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_process_containment::process_start_marker;
 use serde::{Deserialize, Serialize};
 
 const CONFIGURATION_STATE_SCHEMA_VERSION: u32 = 1;
@@ -113,9 +114,21 @@ impl ConfigurationStateStore {
                 .open(&lock_path)
             {
                 Ok(mut file) => {
-                    writeln!(file, "pid={}", std::process::id()).map_err(|error| {
-                        store_error(format!("write {}: {error}", lock_path.display()))
-                    })?;
+                    let identity = process_start_marker(std::process::id())
+                        .ok()
+                        .flatten()
+                        .map(|marker| {
+                            format!(
+                                "{}:{}:{}",
+                                marker.platform,
+                                marker.value,
+                                marker.boot_id.unwrap_or_default()
+                            )
+                        })
+                        .unwrap_or_else(|| "unavailable".to_owned());
+                    writeln!(file, "pid={}\nidentity={identity}", std::process::id()).map_err(
+                        |error| store_error(format!("write {}: {error}", lock_path.display())),
+                    )?;
                     file.sync_all().map_err(|error| {
                         store_error(format!("sync {}: {error}", lock_path.display()))
                     })?;
@@ -304,11 +317,52 @@ fn safe_change_key(key: &str) -> bool {
 }
 
 fn lock_is_stale(path: &Path) -> bool {
-    fs::metadata(path)
+    let old_enough = fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_some_and(|age| age >= STALE_LOCK_AGE)
+        .is_some_and(|age| age >= STALE_LOCK_AGE);
+    if !old_enough {
+        return false;
+    }
+
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    let fields = contents
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let Ok(pid) = fields
+        .get("pid")
+        .copied()
+        .unwrap_or_default()
+        .parse::<u32>()
+    else {
+        // Unknown legacy lock formats are not safe to reclaim: there is no owner identity to
+        // distinguish a crashed writer from a slow live writer.
+        return false;
+    };
+    let Some(recorded) = fields.get("identity").copied() else {
+        // Legacy locks have no identity, so reclaiming them could turn a slow writer into a
+        // concurrent writer. Leave recovery to an explicit operator action.
+        return false;
+    };
+    if recorded == "unavailable" {
+        return false;
+    }
+    let observed = match process_start_marker(pid) {
+        Ok(Some(observed)) => observed,
+        Ok(None) => return true,
+        Err(_) => return false,
+    };
+    let observed = format!(
+        "{}:{}:{}",
+        observed.platform,
+        observed.value,
+        observed.boot_id.unwrap_or_default()
+    );
+    observed != recorded
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {

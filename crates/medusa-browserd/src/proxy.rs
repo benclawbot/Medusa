@@ -1,6 +1,10 @@
 use std::{
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::Duration,
 };
@@ -13,6 +17,10 @@ const MAX_HEADER_BYTES: usize = 32 * 1024;
 
 pub struct Proxy {
     address: SocketAddr,
+    shutdown: Arc<AtomicBool>,
+    active_connections: Arc<Mutex<Vec<(u64, TcpStream)>>>,
+    connection_threads: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
+    listener_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Proxy {
@@ -24,24 +32,79 @@ impl Proxy {
 
 pub fn spawn() -> io::Result<Proxy> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    listener.set_nonblocking(true)?;
     let address = listener.local_addr()?;
-    thread::Builder::new()
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let active_connections = Arc::new(Mutex::new(Vec::new()));
+    let connection_threads = Arc::new(Mutex::new(Vec::new()));
+    let listener_shutdown = Arc::clone(&shutdown);
+    let listener_connections = Arc::clone(&active_connections);
+    let listener_threads = Arc::clone(&connection_threads);
+    let listener_thread = thread::Builder::new()
         .name("medusa-browser-proxy".to_owned())
         .spawn(move || {
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => {
-                        let _ = thread::Builder::new()
+            let mut next_connection_id = 0_u64;
+            while !listener_shutdown.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let connection_id = next_connection_id;
+                        next_connection_id = next_connection_id.wrapping_add(1);
+                        if let Ok(tracked) = stream.try_clone()
+                            && let Ok(mut connections) = listener_connections.lock()
+                        {
+                            connections.push((connection_id, tracked));
+                        }
+                        let connections = Arc::clone(&listener_connections);
+                        if let Ok(worker) = thread::Builder::new()
                             .name("medusa-browser-proxy-connection".to_owned())
                             .spawn(move || {
                                 let _ = handle_connection(stream);
-                            });
+                                if let Ok(mut connections) = connections.lock() {
+                                    connections.retain(|(id, _)| *id != connection_id);
+                                }
+                            })
+                        {
+                            if let Ok(mut workers) = listener_threads.lock() {
+                                workers.push(worker);
+                            }
+                        } else if let Ok(mut connections) = listener_connections.lock() {
+                            connections.retain(|(id, _)| *id != connection_id);
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(20));
                     }
                     Err(_) => break,
                 }
             }
         })?;
-    Ok(Proxy { address })
+    Ok(Proxy {
+        address,
+        shutdown,
+        active_connections,
+        connection_threads,
+        listener_thread: Some(listener_thread),
+    })
+}
+
+impl Drop for Proxy {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+        if let Ok(connections) = self.active_connections.lock() {
+            for (_, connection) in connections.iter() {
+                let _ = connection.shutdown(Shutdown::Both);
+            }
+        }
+        let _ = TcpStream::connect(self.address);
+        if let Some(thread) = self.listener_thread.take() {
+            let _ = thread.join();
+        }
+        if let Ok(mut workers) = self.connection_threads.lock() {
+            for worker in workers.drain(..) {
+                let _ = worker.join();
+            }
+        }
+    }
 }
 
 fn handle_connection(mut client: TcpStream) -> io::Result<()> {
@@ -174,6 +237,10 @@ fn connect_pinned(target: &ResolvedTarget) -> io::Result<TcpStream> {
 }
 
 fn tunnel(client: TcpStream, upstream: TcpStream) -> io::Result<()> {
+    client.set_read_timeout(Some(Duration::from_secs(15)))?;
+    client.set_write_timeout(Some(Duration::from_secs(15)))?;
+    upstream.set_read_timeout(Some(Duration::from_secs(15)))?;
+    upstream.set_write_timeout(Some(Duration::from_secs(15)))?;
     let mut client_read = client.try_clone()?;
     let mut upstream_write = upstream.try_clone()?;
     let client_to_upstream = thread::spawn(move || {

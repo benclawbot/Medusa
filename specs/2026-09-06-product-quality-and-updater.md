@@ -370,6 +370,22 @@ Outstanding evidence: precise legacy desktop rollback reason; real interactive W
 
 Initial state: implementation criteria NOT YET VERIFIED. Some P/T/Q work exists in unmerged PR1122 and must be mapped individually after review. Baseline observations above are VERIFIED only at their stated scope. For each U/D/P/T/Q/R identifier record: source changes, regression/check, result, review result, remaining limitation. Final status must be PARTIALLY VERIFIED or BLOCKED while required checks or material acceptance criteria remain unmet.
 
+### Consolidated completion pass (2026-09-07)
+
+The remaining work is being delivered from the latest `origin/main` in one reviewable branch and one pull request. The implementation order is: explicit desktop ownership and recovery/draft state; bounded daemon and durable storage primitives; browser/configuration lifecycle ownership; then focused updater, TUI and frontend regressions. Each item remains `NOT YET VERIFIED` until its source change and executable check are recorded here. The final update to this ledger will name the exact commit, commands, CI runs, and any platform-specific limitation; it will not treat a green subset as completion.
+
+### Consolidated implementation evidence (working tree, 2026-09-07)
+
+The replacement pass now contains the following source-level fixes and focused regression evidence:
+
+- `D3/D4/D5/D6/D9`: typed session resume with legacy-intent cleanup, per-project/general draft persistence with failed-send recovery, projectless session navigation, conventional safe links and escaped table cells, and renderer retry/restart actions.
+- `Q1/Q2`: explicit React slots for settings/composer ownership, removal of production body-wide mount observers, and synchronous active-project identity for lifecycle events.
+- `P2/T1`: daemon observation moved to a bounded background worker, terminal rendering uses display-cell/grapheme widths, and CLI/TUI update health is acknowledged only after runtime/terminal bootstrap.
+- `R1/R4/R5/R6/R8`: journal cache updates avoid reparsing on append, memory indexes publish through a transaction and recoverable atomic swap, browser proxy workers/sockets are owned and joined with bounded I/O, configuration locks record process identity, and daemon responses use bounded framing.
+- `U3`: desktop health acknowledgement is an explicit renderer-ready command rather than an unconditional native `Ready` event.
+
+Focused Rust suites, desktop tests/typecheck/build, updater fixtures, native desktop tests, workspace clippy, workspace tests, documentation, dependency policy, and audit were executed on this branch. This evidence does not close the platform limitations below: a live installed-binary restart on every supported OS, historical legacy-helper reproduction, publication latency/identity behavior against a live release channel, Playwright/Chromium prerequisites, credential-gated live provider tests, and measured production latency benchmarks remain environment-dependent and are not inferred as verified.
+
 ## Final integrated-main test sweep (explicit user requirement)
 
 After all reviewed implementation PRs merge, fetch and record the resulting main SHA. Run the complete workspace gates above, the complete desktop frontend and native adapter suites, and dispatch all applicable full CI/acceptance workflows that support manual dispatch. For workflows without dispatch, verify runs attached to that exact main commit. Inspect coverage, adversarial regressions, migration/chaos, browser, package/platform, documentation, dependency-policy and production acceptance checks required by affected areas. Record credential-gated or unavailable jobs explicitly; never bypass their gates or invent credentials.

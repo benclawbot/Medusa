@@ -4,6 +4,7 @@ import {
   readRuntimeSession,
   requestRuntimeResume,
   publishRepoChanged,
+  resumeRuntime,
   REPO_CHANGED_EVENT,
   RUNTIME_RESUME_EVENT,
   startRuntime,
@@ -61,6 +62,18 @@ it("drops a resume intent scoped to another repository instead of cross-wiring i
 
   expect(invoke).toHaveBeenCalledWith("runtime_start", { repo: "C:/project-b" });
   expect(invoke).not.toHaveBeenCalledWith("runtime_resume", expect.anything());
+  expect(window.localStorage.getItem("medusa.desktop.resumeSession")).toBeNull();
+});
+
+it("clears a legacy pending intent after an explicit resume attempt", async () => {
+  vi.mocked(invoke).mockResolvedValue({ runtimeId: "runtime-2", repo: "/repo" });
+  requestRuntimeResume("session-explicit", "/repo");
+
+  await expect(resumeRuntime("/repo", "session-explicit")).resolves.toEqual({
+    runtimeId: "runtime-2",
+    repo: "/repo",
+  });
+
   expect(window.localStorage.getItem("medusa.desktop.resumeSession")).toBeNull();
 });
 

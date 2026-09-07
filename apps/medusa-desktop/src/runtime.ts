@@ -113,6 +113,13 @@ export async function startRuntime(repo?: string): Promise<legacy.RuntimeStartRe
   return response;
 }
 
+export async function resumeRuntime(repo: string, sessionId: string): Promise<legacy.RuntimeStartResponse> {
+  const response = await legacy.resumeRuntime(repo, sessionId);
+  markRuntimeWake(response.runtimeId);
+  void ensureRuntimeWakeups(response.runtimeId).catch(() => undefined);
+  return response;
+}
+
 export async function closeRuntime(runtimeId: string): Promise<void> {
   disposeRuntimeWakeups(runtimeId);
   await legacy.closeRuntime(runtimeId);

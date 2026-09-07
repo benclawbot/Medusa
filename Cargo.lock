@@ -1280,6 +1280,7 @@ name = "medusa-config"
 version = "1.0.7"
 dependencies = [
  "medusa-core",
+ "medusa-process-containment",
  "reqwest",
  "serde",
  "serde_json",
@@ -1826,6 +1827,7 @@ dependencies = [
  "medusa-protocol",
  "medusa-recovery-coordinator",
  "medusa-runtime",
+ "medusa-update",
  "serde",
  "serde_json",
  "sha2",
