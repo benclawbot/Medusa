@@ -1765,7 +1765,7 @@ fn execute_production_implementer(
             .with_execution_policy(policy)
             .with_team_context(request.team_context.clone());
     let objective = format!(
-        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. These paths are exact contract boundaries: do not create sibling files, package metadata, or convenience files outside them; report any genuinely required out-of-scope change instead. Use the hard {}-turn model budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
+        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. These paths are exact contract boundaries: do not create sibling files, package metadata, or convenience files outside them; report any genuinely required out-of-scope change instead. Use the hard {}-turn model budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Preserve standard text-file formatting: every changed text file must end with a real final newline character; never write a literal backslash-n sequence as a substitute for a line break. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
         request.contract.task_id,
         request.contract.objective,
         request.contract.allowed_write_paths,

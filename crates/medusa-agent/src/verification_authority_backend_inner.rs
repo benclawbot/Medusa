@@ -121,6 +121,7 @@ pub fn prepare_components_for_verification(
     repo: &Path,
     components: &[ChangedComponent],
 ) -> MedusaResult<()> {
+    normalize_text_file_final_newlines(repo, components)?;
     let mut rust_paths = components
         .iter()
         .filter(|component| component.kind != ChangeKind::Deleted)
@@ -151,6 +152,97 @@ pub fn prepare_components_for_verification(
         ));
     }
     Ok(())
+}
+
+fn normalize_text_file_final_newlines(
+    repo: &Path,
+    components: &[ChangedComponent],
+) -> MedusaResult<()> {
+    for component in components {
+        if component.kind == ChangeKind::Deleted {
+            continue;
+        }
+        let path = repo.join(&component.path);
+        if !path.is_file() || !is_text_path(&component.path) {
+            continue;
+        }
+        let mut bytes = fs::read(&path).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!(
+                    "failed to read changed text file {}: {error}",
+                    component.path
+                ),
+            )
+        })?;
+        if bytes.is_empty() || bytes.contains(&0) || bytes.ends_with(b"\n") {
+            continue;
+        }
+        bytes.push(b'\n');
+        fs::write(&path, bytes).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!(
+                    "failed to normalize final newline in {}: {error}",
+                    component.path
+                ),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn is_text_path(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "bash"
+                | "c"
+                | "cc"
+                | "cfg"
+                | "conf"
+                | "cpp"
+                | "css"
+                | "cs"
+                | "fish"
+                | "go"
+                | "h"
+                | "hpp"
+                | "htm"
+                | "html"
+                | "ini"
+                | "java"
+                | "js"
+                | "json"
+                | "jsx"
+                | "kt"
+                | "kts"
+                | "less"
+                | "md"
+                | "mjs"
+                | "php"
+                | "py"
+                | "rb"
+                | "rs"
+                | "scss"
+                | "sh"
+                | "sql"
+                | "swift"
+                | "toml"
+                | "ts"
+                | "tsx"
+                | "txt"
+                | "xml"
+                | "yaml"
+                | "yml"
+        )
+    )
 }
 
 pub(crate) fn prepare_paths_for_verification(repo: &Path, paths: &[String]) -> MedusaResult<()> {
@@ -1361,6 +1453,29 @@ mod tests {
         assert_eq!(
             fs::read_to_string(directory.path().join("untouched.txt")).expect("untouched"),
             "unchanged\n"
+        );
+    }
+
+    #[test]
+    fn text_preparation_adds_final_newline_without_touching_binary_or_deleted_files() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("value.txt"), "42").expect("text");
+        fs::write(directory.path().join("image.png"), [0, 1, 2, 3]).expect("binary");
+        let components = vec![
+            ChangedComponent::new(ChangeKind::Modified, "value.txt").expect("text component"),
+            ChangedComponent::new(ChangeKind::Modified, "image.png").expect("binary component"),
+            ChangedComponent::new(ChangeKind::Deleted, "removed.txt").expect("deleted component"),
+        ];
+
+        prepare_components_for_verification(directory.path(), &components).expect("preparation");
+
+        assert_eq!(
+            fs::read(directory.path().join("value.txt")).expect("text bytes"),
+            b"42\n"
+        );
+        assert_eq!(
+            fs::read(directory.path().join("image.png")).expect("binary bytes"),
+            [0, 1, 2, 3]
         );
     }
 
