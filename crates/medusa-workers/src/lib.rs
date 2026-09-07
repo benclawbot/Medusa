@@ -682,11 +682,11 @@ fn remove_worker_worktree(repo: &Path, worktree: &Path) -> MedusaResult<()> {
         repo,
         &["worktree", "remove", "--force", path_text(worktree)?],
     );
-    if removal.is_ok() || !worktree.exists() {
-        return Ok(());
-    }
-
-    let git_error = removal.expect_err("checked removal error");
+    let git_error = match removal {
+        Ok(()) => return Ok(()),
+        Err(_error) if !worktree.exists() => return Ok(()),
+        Err(error) => error,
+    };
     let mut last_error = None;
     for attempt in 0..3 {
         match fs::remove_dir_all(worktree) {
@@ -700,7 +700,10 @@ fn remove_worker_worktree(repo: &Path, worktree: &Path) -> MedusaResult<()> {
             }
         }
     }
-    let direct_error = last_error.expect("at least one direct removal attempt");
+    let direct_error = match last_error {
+        Some(error) => error,
+        None => std::io::Error::other("direct worker cleanup did not run"),
+    };
     Err(MedusaError::new(
         ErrorCode::ToolExecutionFailed,
         ErrorCategory::Execution,
