@@ -110,7 +110,9 @@ jobs:
           MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
         run: |
           set -o pipefail
-          cargo test ${{ steps.changed_rust.outputs.cargo_args }} --all-features --locked --lib -- --nocapture 2>&1 | tee changed-package-tests.log
+          # Run every target exposed by each changed package. Some packages,
+          # such as medusa-browserd, are binary-only and reject --lib.
+          cargo test ${{ steps.changed_rust.outputs.cargo_args }} --all-features --locked -- --nocapture 2>&1 | tee changed-package-tests.log
       - name: Upload changed-package test diagnostics
         if: failure() && steps.changed_package_tests.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

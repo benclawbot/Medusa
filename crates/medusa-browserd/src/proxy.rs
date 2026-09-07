@@ -160,12 +160,16 @@ fn handle_http(
         if line.is_empty() {
             break;
         }
-        if line.to_ascii_lowercase().starts_with("proxy-connection:") {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("proxy-connection:") || lower.starts_with("connection:") {
             continue;
         }
         write!(upstream, "{line}\r\n")?;
     }
-    upstream.write_all(b"\r\n")?;
+    // Plain HTTP responses can use chunked keep-alive framing. The tunnel
+    // forwards bytes without parsing that framing, so close the upstream
+    // response explicitly after the body to let the browser observe EOF.
+    upstream.write_all(b"Connection: close\r\n\r\n")?;
     upstream.flush()?;
     tunnel(client, upstream)
 }
