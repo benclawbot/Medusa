@@ -97,7 +97,9 @@ jobs:
           MEDUSA_BROWSER_ENABLED: "true"
           MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/large-dom.html
-          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+          # These payload fixtures are also the verification route, so the first
+          # request includes a cold Playwright startup on macOS and Windows.
+          MEDUSA_BROWSER_TIMEOUT_MS: "30000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
       - name: Prove snapshot text ceiling
         env:
@@ -106,7 +108,9 @@ jobs:
           MEDUSA_BROWSER_ENABLED: "true"
           MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/large-text.html
-          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+          # These payload fixtures are also the verification route, so the first
+          # request includes a cold Playwright startup on macOS and Windows.
+          MEDUSA_BROWSER_TIMEOUT_MS: "30000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
       - name: Prove screenshot ceiling
         env:
@@ -115,7 +119,9 @@ jobs:
           MEDUSA_BROWSER_ENABLED: "true"
           MEDUSA_BROWSER_PATH: ${{ github.workspace }}/target/debug/medusa-browserd${{ matrix.exe }}
           MEDUSA_BROWSER_VERIFY_URL: http://127.0.0.1:4173/huge-screenshot.html
-          MEDUSA_BROWSER_TIMEOUT_MS: "10000"
+          # These payload fixtures are also the verification route, so the first
+          # request includes a cold Playwright startup on macOS and Windows.
+          MEDUSA_BROWSER_TIMEOUT_MS: "30000"
         run: cargo test -p medusa-agent --test browser_dispatch_hardening --locked -- --nocapture
       - name: Prove evaluation result ceiling
         env:
