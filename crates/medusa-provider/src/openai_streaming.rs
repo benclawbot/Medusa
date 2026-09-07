@@ -8,6 +8,8 @@ use crate::{
     StreamingToolCallAssembler, Usage,
 };
 
+const MAX_RESPONSE_TEXT_BYTES: usize = 8 * 1024 * 1024;
+
 /// Stateful OpenAI chat-completions SSE parser that emits provider-neutral stream events.
 #[derive(Debug, Default)]
 pub struct OpenAiStreamAccumulator {
@@ -65,6 +67,9 @@ impl OpenAiStreamAccumulator {
                 sink(ProviderStreamEvent::OutputStarted)?;
             }
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
+                if self.text.len().saturating_add(content.len()) > MAX_RESPONSE_TEXT_BYTES {
+                    return Err(stream_error("OpenAI response text exceeds the 8 MiB limit"));
+                }
                 self.text.push_str(&content);
                 sink(ProviderStreamEvent::TextDelta { text: content })?;
             }

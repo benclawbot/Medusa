@@ -631,7 +631,7 @@ Shell execution fails closed if the platform backend is unavailable:
 - **macOS:** Seatbelt with explicit repository/runtime roots, network denial, and a rebuilt minimal environment rather than ambient host-wide file-read access.
 - **Windows:** Windows 11 composable sandbox API / AppContainer-style execution with repository read/write binding, selected toolchain roots read-only, network denial, environment allowlisting, suspended process creation before Job Object assignment, process-tree termination, active-process limits, memory limits, and bounded execution.
 
-Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox` available. There is no unsandboxed fallback through that API.
+Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox` and its isolated-environment contract available. Hosts that reject the explicit environment block fail closed as unavailable; there is no unsandboxed fallback through that API.
 
 ### Credentials and sensitive state
 

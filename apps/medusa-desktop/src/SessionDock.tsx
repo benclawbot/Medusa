@@ -9,7 +9,7 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   REPO_CHANGED_EVENT,
   requestRuntimeResume,
@@ -51,13 +51,16 @@ export function SessionDock() {
   const [repo, setRepo] = useState(currentRepo);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionCursor, setSessionCursor] = useState<string>();
+  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<SessionDetail>();
   const [messageCursor, setMessageCursor] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const requestGeneration = useRef(0);
   const { open, setOpen, error, setError, dialogRef } = useDockShell<HTMLElement>("sessions");
 
   useEffect(() => {
+    requestGeneration.current += 1;
     if (!open) return;
     const sync = () => {
       const next = currentRepo();
@@ -77,6 +80,7 @@ export function SessionDock() {
     setMessageCursor(undefined);
     setSessions([]);
     setSessionCursor(undefined);
+    setQuery("");
   }, [repo]);
 
   const refresh = useCallback(async () => {
@@ -86,72 +90,85 @@ export function SessionDock() {
       setError(undefined);
       return;
     }
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setError(undefined);
     try {
       const page = await listRuntimeSessionPage(repo);
+      if (generation !== requestGeneration.current) return;
       setSessions(page.sessions);
       setSessionCursor(page.nextCursor);
     } catch (cause) {
-      setError(toUserError(cause));
+      if (generation === requestGeneration.current) setError(toUserError(cause));
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [repo, setError]);
 
   const loadMoreSessions = useCallback(async () => {
     if (!repo || !sessionCursor || loading) return;
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setError(undefined);
     try {
       const page = await listRuntimeSessionPage(repo, sessionCursor);
+      if (generation !== requestGeneration.current) return;
       setSessions((current) => {
         const seen = new Set(current.map((item) => item.id));
         return [...current, ...page.sessions.filter((item) => !seen.has(item.id))];
       });
       setSessionCursor(page.nextCursor);
     } catch (cause) {
-      setError(toUserError(cause));
+      if (generation === requestGeneration.current) setError(toUserError(cause));
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [repo, sessionCursor, loading, setError]);
 
   const openSession = useCallback(async (sessionId: string) => {
+    const generation = ++requestGeneration.current;
     setDetailLoading(true);
     setError(undefined);
     try {
       const page = await readRuntimeSessionPage(repo, sessionId);
+      if (generation !== requestGeneration.current) return;
       setSelected({ summary: page.summary, messages: page.messages });
       setMessageCursor(page.nextCursor);
     } catch (cause) {
-      setError(toUserError(cause));
+      if (generation === requestGeneration.current) setError(toUserError(cause));
     } finally {
-      setDetailLoading(false);
+      if (generation === requestGeneration.current) setDetailLoading(false);
     }
   }, [repo, setError]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!selected || !messageCursor || detailLoading) return;
+    const generation = ++requestGeneration.current;
     setDetailLoading(true);
     setError(undefined);
     try {
       const page = await readRuntimeSessionPage(repo, selected.summary.id, messageCursor);
+      if (generation !== requestGeneration.current) return;
       setSelected((current) => current && current.summary.id === page.summary.id
         ? { ...current, messages: [...page.messages, ...current.messages] }
         : current);
       setMessageCursor(page.nextCursor);
     } catch (cause) {
-      setError(toUserError(cause));
+      if (generation === requestGeneration.current) setError(toUserError(cause));
     } finally {
-      setDetailLoading(false);
+      if (generation === requestGeneration.current) setDetailLoading(false);
     }
   }, [repo, selected, messageCursor, detailLoading, setError]);
 
   const resumeSession = useCallback(() => {
     if (!selected) return;
-    requestRuntimeResume(selected.summary.id);
-  }, [selected]);
+    requestRuntimeResume(selected.summary.id, repo);
+  }, [repo, selected]);
+
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visibleSessions = normalizedQuery
+    ? sessions.filter((session) => session.objective.toLocaleLowerCase().includes(normalizedQuery))
+    : sessions;
 
   useEffect(() => {
     if (open) void refresh();
@@ -206,6 +223,16 @@ export function SessionDock() {
             </div>
           ) : (
             <div className="session-dock-list">
+              <label className="session-search">
+                <span className="visually-hidden">Search saved sessions</span>
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search session titles"
+                  aria-label="Search saved sessions"
+                />
+              </label>
               {(loading || detailLoading) && sessions.length === 0 && (
                 <div className="session-dock-empty"><LoaderCircle className="spin" size={18} /> Loading sessions…</div>
               )}
@@ -213,7 +240,10 @@ export function SessionDock() {
               {!loading && !error && sessions.length === 0 && (
                 <div className="session-dock-empty"><History size={18} /> No saved sessions for this project.</div>
               )}
-              {(sessions ?? []).map((session) => {
+              {!loading && !error && sessions.length > 0 && visibleSessions.length === 0 && (
+                <div className="session-dock-empty"><History size={18} /> No sessions match “{query}”.</div>
+              )}
+              {visibleSessions.map((session) => {
                 const status = sessionStatus(session);
                 return (
                   <button

@@ -32,7 +32,8 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
             assert!(
                 message.contains("sandbox unavailable")
                     && message.contains("Windows composable sandbox")
-                    && message.contains("Windows 11 support is required"),
+                    && (message.contains("Windows 11 support is required")
+                        || message.contains("isolated environment on this Windows build")),
                 "unsupported Windows hosts must fail closed with the effective sandbox boundary: {message}"
             );
             assert_eq!(

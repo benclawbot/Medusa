@@ -622,25 +622,25 @@ fn run_loop(input: RunLoopInput) -> MedusaResult<()> {
         }
         Ok(())
     })();
-    if shutdown.load(Ordering::SeqCst) == SHUTDOWN_IMMEDIATE {
+    let cancellation_result = if shutdown.load(Ordering::SeqCst) == SHUTDOWN_IMMEDIATE {
         // Cancel provider work before joining connection workers. A frontend
         // request can hold the control-plane mutex while waiting for a model;
         // without this out-of-band signal, closing the desktop waits for the
         // provider timeout instead of stopping promptly.
         frontend_shutdown.cancel_all();
-    }
-    let connection_result = connections.shutdown();
-    let (cancellation_result, scheduler_result) = match lock_scheduler(&scheduler) {
-        Ok(mut scheduler) => {
-            let cancellation_result = if shutdown.load(Ordering::SeqCst) == SHUTDOWN_IMMEDIATE {
-                cancel_all_jobs(&paths, &jobs, &processes, &scheduler)
-            } else {
-                Ok(())
-            };
-            let scheduler_result = scheduler.shutdown();
-            (cancellation_result, scheduler_result)
+        // Cancel daemon child processes before joining connection workers as well. This keeps
+        // immediate shutdown bounded even when a worker is still draining a process capture.
+        match lock_scheduler(&scheduler) {
+            Ok(scheduler) => cancel_all_jobs(&paths, &jobs, &processes, &scheduler),
+            Err(error) => Err(error),
         }
-        Err(error) => (Err(error), Ok(())),
+    } else {
+        Ok(())
+    };
+    let connection_result = connections.shutdown();
+    let scheduler_result = match lock_scheduler(&scheduler) {
+        Ok(mut scheduler) => scheduler.shutdown(),
+        Err(error) => Err(error),
     };
     listener.cleanup();
     match (

@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::{ExitStatus, Output},
     ptr::{null, null_mut},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     thread,
     time::{Duration, Instant},
 };
@@ -38,17 +38,20 @@ use windows_sys::Win32::{
     },
 };
 
-const SANDBOX_IDENTITY: &str = "Medusa.CommandSandbox.v2";
+const SANDBOX_IDENTITY_PREFIX: &str = "Medusa_CommandSandbox_v2";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const PROCESSMODEL_DLL: &str = "processmodel.dll";
 const SANDBOX_EXPORT: &[u8] = b"Experimental_CreateProcessInSandbox\0";
 const BROKEN_PIPE: u32 = 109;
 const ERROR_CALL_NOT_IMPLEMENTED: i32 = 120;
+const ERROR_ENVVAR_NOT_FOUND: i32 = 203;
 // Win32 JOB_OBJECT_LIMIT_PROCESS_TIME (winnt.h). Kept local because this windows-sys feature surface does not export it.
 const JOB_OBJECT_LIMIT_PROCESS_TIME_FLAG: u32 = 0x0000_0002;
 // Reserved by Experimental_CreateProcessInSandbox and required to be FALSE.
 // TRUE fails with ERROR_NOT_SUPPORTED before process creation.
 const INHERIT_HANDLES: i32 = 0;
+
+static NEXT_SANDBOX_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 type CreateProcessInSandbox = unsafe extern "system" fn(
     *const u16,
@@ -195,6 +198,16 @@ unsafe fn launch(
     controls: &mut LaunchControls<'_>,
 ) -> io::Result<Output> {
     let sandbox_limits = controls.limits;
+    // The OS treats this as the identity of one sandbox instance. Reusing a
+    // fixed profile name makes concurrent or recently-finished launches race
+    // in the AppContainer profile manager and can fail with ERROR_ALREADY_EXISTS.
+    // A per-process monotonic suffix keeps each launch isolated while avoiding
+    // a shared profile whose permissions could outlive the command.
+    let identity = format!(
+        "{SANDBOX_IDENTITY_PREFIX}_{}_{}",
+        std::process::id(),
+        NEXT_SANDBOX_IDENTITY.fetch_add(1, Ordering::Relaxed)
+    );
     let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -225,11 +238,11 @@ unsafe fn launch(
     let mut environment = environment_block(root)?;
     let executable_wide = wide_null(executable.as_os_str());
     let root_wide = wide_null(root.as_os_str());
-    let identity = wide_null(OsStr::new(SANDBOX_IDENTITY));
+    let identity = wide_null(OsStr::new(&identity));
     let mut startup: STARTUPINFOW = unsafe { zeroed() };
     startup.cb = size_of::<STARTUPINFOW>() as u32;
     startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdInput = INVALID_HANDLE_VALUE;
+    startup.hStdInput = null_mut();
     startup.hStdOutput = stdout_write.0;
     startup.hStdError = stderr_write.0;
     let mut process: PROCESS_INFORMATION = unsafe { zeroed() };
@@ -323,10 +336,13 @@ unsafe fn launch(
 }
 
 fn sandbox_process_creation_error(error: io::Error) -> io::Error {
-    if error.raw_os_error() == Some(ERROR_CALL_NOT_IMPLEMENTED) {
+    if matches!(
+        error.raw_os_error(),
+        Some(ERROR_CALL_NOT_IMPLEMENTED | ERROR_ENVVAR_NOT_FOUND)
+    ) {
         return io::Error::new(
             io::ErrorKind::Unsupported,
-            "Windows composable sandbox API is unavailable; Windows 11 support is required",
+            "Windows composable sandbox API cannot launch with an isolated environment on this Windows build",
         );
     }
     io::Error::new(
@@ -653,6 +669,23 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_identities_are_unique_per_launch() {
+        let first = format!(
+            "{SANDBOX_IDENTITY_PREFIX}_{}_{}",
+            std::process::id(),
+            NEXT_SANDBOX_IDENTITY.fetch_add(1, Ordering::Relaxed)
+        );
+        let second = format!(
+            "{SANDBOX_IDENTITY_PREFIX}_{}_{}",
+            std::process::id(),
+            NEXT_SANDBOX_IDENTITY.fetch_add(1, Ordering::Relaxed)
+        );
+        assert_ne!(first, second);
+        assert!(first.starts_with(SANDBOX_IDENTITY_PREFIX));
+        assert!(second.starts_with(SANDBOX_IDENTITY_PREFIX));
+    }
+
+    #[test]
     fn unsupported_process_creation_has_a_locale_independent_error() {
         let error = sandbox_process_creation_error(io::Error::from_raw_os_error(
             ERROR_CALL_NOT_IMPLEMENTED,
@@ -660,7 +693,14 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
         assert_eq!(
             error.to_string(),
-            "Windows composable sandbox API is unavailable; Windows 11 support is required"
+            "Windows composable sandbox API cannot launch with an isolated environment on this Windows build"
         );
+    }
+
+    #[test]
+    fn environment_rejection_is_reported_as_unsupported() {
+        let error =
+            sandbox_process_creation_error(io::Error::from_raw_os_error(ERROR_ENVVAR_NOT_FOUND));
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
 }

@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
     thread,
+    time::Duration,
 };
 
 #[cfg(windows)]
@@ -615,16 +616,14 @@ impl WorkerManager {
     pub fn cleanup(&self, workers: &[Worker]) -> MedusaResult<()> {
         let mut first_error = None;
         for worker in workers {
+            if let Err(error) = validate_owned_worktree(&self.worktree_root, worker) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+                continue;
+            }
             if worker.worktree.exists()
-                && let Err(error) = run_git(
-                    &self.repo,
-                    &[
-                        "worktree",
-                        "remove",
-                        "--force",
-                        path_text(&worker.worktree)?,
-                    ],
-                )
+                && let Err(error) = remove_worker_worktree(&self.repo, &worker.worktree)
                 && first_error.is_none()
             {
                 first_error = Some(error);
@@ -655,6 +654,63 @@ impl WorkerManager {
             None => Ok(()),
         }
     }
+}
+
+fn validate_owned_worktree(root: &Path, worker: &Worker) -> MedusaResult<()> {
+    validate_worker_id(&worker.id)?;
+    let expected = root.join(&worker.id);
+    if worker.worktree != expected {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!(
+                "refusing to clean worker path outside the manager root: {}",
+                worker.worktree.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn remove_worker_worktree(repo: &Path, worktree: &Path) -> MedusaResult<()> {
+    // Git's Windows path handling can leave a long-path or transiently locked
+    // child behind even after `worktree remove --force`. Clean untracked
+    // execution residue first, then fall back to direct removal with bounded
+    // retries so failed verification cannot strand worker resources.
+    let _ = run_git(worktree, &["clean", "-fdx"]);
+    let removal = run_git(
+        repo,
+        &["worktree", "remove", "--force", path_text(worktree)?],
+    );
+    let git_error = match removal {
+        Ok(()) => return Ok(()),
+        Err(_error) if !worktree.exists() => return Ok(()),
+        Err(error) => error,
+    };
+    let mut last_error = None;
+    for attempt in 0..3 {
+        match fs::remove_dir_all(worktree) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < 2 {
+                    thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+                }
+            }
+        }
+    }
+    let direct_error = match last_error {
+        Some(error) => error,
+        None => std::io::Error::other("direct worker cleanup did not run"),
+    };
+    Err(MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        format!(
+            "git worktree removal failed: {git_error}; direct worker cleanup failed: {direct_error}"
+        ),
+    ))
 }
 
 fn execute_worker(mut worker: Worker, task: DelegatedTask) -> MedusaResult<Worker> {
@@ -1313,9 +1369,9 @@ mod tests {
             .worktree
             .join(".medusa")
             .join("executions")
-            .join(execution_id)
+            .join(&execution_id)
             .join("sessions")
-            .join(session_id)
+            .join(&session_id)
             .join("request-manifests")
             .join(request_id)
             .join("artifacts")
@@ -1333,8 +1389,42 @@ mod tests {
             .expect("discard deep runtime state");
         assert!(!manifest.exists(), "deep runtime manifest must be removed");
 
+        let stranded = worker
+            .worktree
+            .join("build-output")
+            .join("nested")
+            .join(&execution_id)
+            .join(&session_id)
+            .join("leftover.bin");
+        fs::create_dir_all(stranded.parent().expect("stranded parent")).expect("stranded path");
+        fs::write(&stranded, "leftover\n").expect("stranded file");
+
         manager.cleanup(&[worker]).expect("cleanup worktree");
         assert!(!worktree.exists());
+    }
+
+    #[test]
+    fn cleanup_rejects_worker_paths_outside_manager_root() {
+        let (directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let outside = directory.path().join("outside-worker");
+        fs::create_dir_all(&outside).expect("outside worker");
+        let worker = Worker {
+            id: "worker-implement".to_owned(),
+            branch: "medusa/worker-implement".to_owned(),
+            worktree: outside.clone(),
+            state: WorkerState::Failed,
+            commit: None,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+
+        let error = manager
+            .cleanup(&[worker])
+            .expect_err("outside path must be rejected");
+        assert!(error.to_string().contains("outside the manager root"));
+        assert!(outside.is_dir());
+        fs::remove_dir_all(outside).expect("outside worker cleanup");
     }
 
     #[test]

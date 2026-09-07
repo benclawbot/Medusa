@@ -22,7 +22,10 @@ use medusa_process_containment::WindowsJob;
 use medusa_process_containment::{ProcessOwnershipReceipt, ProcessOwnershipVerification};
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+#[cfg(unix)]
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
+#[cfg(windows)]
+const WINDOWS_TERMINATION_GRACE: Duration = Duration::from_millis(500);
 const MAX_STREAM_OUTPUT_BYTES: usize = 1024 * 1024;
 
 pub(crate) struct ProcessResult {
@@ -593,18 +596,11 @@ fn terminate_process_tree(
             return Err(ownership_error(pid, verification, "terminate"));
         }
     }
-    let deadline = Instant::now() + TERMINATION_GRACE;
-    loop {
-        if job.is_empty().map_err(MedusaError::from)? {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            break;
-        }
-        thread::sleep(PROCESS_POLL_INTERVAL);
-    }
+    // Windows Job Objects provide an atomic process-tree termination primitive. Do not spend
+    // the normal graceful-termination grace period polling first: immediate shutdown and user
+    // cancellation must release the worker promptly even when the child is still starting.
     job.terminate().map_err(MedusaError::from)?;
-    let deadline = Instant::now() + TERMINATION_GRACE;
+    let deadline = Instant::now() + WINDOWS_TERMINATION_GRACE;
     loop {
         if job.is_empty().map_err(MedusaError::from)? {
             return Ok(());

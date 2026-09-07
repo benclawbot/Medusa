@@ -27,7 +27,11 @@ const MIN_SAMPLES: usize = 3;
 const NEGATIVE_RATE_MILLI: u16 = 500;
 const COOLDOWN_MS: i64 = 15 * 60 * 1_000;
 const LOCK_FILE_NAME: &str = ".learning-monitor.lock";
-const LOCK_RETRY_ATTEMPTS: usize = 200;
+// Opening a monitor store replays and reconciles the durable projection while holding this
+// process-wide file lock. Windows filesystem scheduling and endpoint scanners can make one
+// commit take substantially longer than the nominal 25 ms interval, so allow a bounded 30 s
+// admission window for legitimate concurrent writers instead of failing a valid update.
+const LOCK_RETRY_ATTEMPTS: usize = 1_200;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(25);
 const STALE_LOCK_AGE: Duration = Duration::from_secs(5 * 60);
 

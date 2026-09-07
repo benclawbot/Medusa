@@ -86,6 +86,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # Cross-platform and protected live checks may queue behind the
+          # repository matrix; wait long enough to observe their conclusion.
           python3 scripts/engineering-policy.py enforce \
             --policy .github/engineering-policy.json \
             --report engineering-policy-report.json \
@@ -94,7 +96,7 @@ jobs:
             --satisfied architecture-policy \
             --satisfied certified-tool-pipeline \
             --satisfied engineering-policy-base \
-            --timeout-seconds 600
+            --timeout-seconds 1800
       - name: Publish architecture report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

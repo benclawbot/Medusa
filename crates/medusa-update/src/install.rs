@@ -61,6 +61,8 @@ pub struct Restart {
     pub rollout_sequence: Option<u64>,
     /// Immutable source identity for the replacement, when known.
     pub target_revision: Option<String>,
+    /// Immutable source identity of the currently running binary, when known.
+    pub previous_revision: Option<String>,
 }
 
 /// Paths retained by the detached replacement helper.
@@ -80,6 +82,7 @@ pub struct ScheduledUpdate {
 pub struct UpdateOutcome {
     pub schema: u8,
     pub target_revision: Option<String>,
+    #[serde(default)]
     pub previous_revision: Option<String>,
     pub stage: String,
     pub reason: String,
@@ -262,6 +265,7 @@ impl AtomicInstaller {
                     &outcome,
                     &nonce,
                     target_revision,
+                    restart.previous_revision.as_deref(),
                     &lock,
                     restart,
                 )
@@ -276,6 +280,7 @@ impl AtomicInstaller {
                     &outcome,
                     &nonce,
                     target_revision,
+                    restart.previous_revision.as_deref(),
                     &lock,
                     restart,
                 )
@@ -461,6 +466,7 @@ fn unix_replace_script(
     outcome: &Path,
     health_nonce: &str,
     target_revision: Option<&str>,
+    previous_revision: Option<&str>,
     lock: &Path,
     restart: &Restart,
 ) -> String {
@@ -491,6 +497,7 @@ health={health}
 outcome={outcome}
 health_nonce={health_nonce}
 target_revision={target_revision}
+previous_revision={previous_revision}
 lock={lock}
 sequence_file={sequence_file}
 sequence_value={sequence_value}
@@ -501,8 +508,8 @@ write_outcome() {{
   rollback_result=$3
   finished=$(date +%s)
   tmp="$outcome.tmp.$$"
-  printf '{{"schema":1,"targetRevision":%s,"previousRevision":null,"stage":"%s","reason":"%s","startedUnixSeconds":%s,"finishedUnixSeconds":%s,"rollbackResult":"%s"}}\n' \
-    "$target_revision" "$stage" "$reason" "$started" "$finished" "$rollback_result" > "$tmp" &&
+  printf '{{"schema":1,"targetRevision":%s,"previousRevision":%s,"stage":"%s","reason":"%s","startedUnixSeconds":%s,"finishedUnixSeconds":%s,"rollbackResult":"%s"}}\n' \
+    "$target_revision" "$previous_revision" "$stage" "$reason" "$started" "$finished" "$rollback_result" > "$tmp" &&
     mv -f "$tmp" "$outcome"
 }}
 rollback() {{
@@ -567,6 +574,11 @@ rollback
                 .map(|revision| format!("\"{revision}\""))
                 .unwrap_or_else(|| "null".to_owned()),
         ),
+        previous_revision = shell_quote(
+            &previous_revision
+                .map(|revision| format!("\"{revision}\""))
+                .unwrap_or_else(|| "null".to_owned()),
+        ),
         lock = shell_quote_path(lock),
         health_check_attempts = HEALTH_CHECK_ATTEMPTS,
     )
@@ -584,6 +596,7 @@ fn windows_replace_script(
     outcome: &Path,
     health_nonce: &str,
     target_revision: Option<&str>,
+    _previous_revision: Option<&str>,
     lock: &Path,
     restart: &Restart,
 ) -> String {
@@ -993,7 +1006,8 @@ mod tests {
             detached: false,
             sequence_file: Some(PathBuf::from("sequence file")),
             rollout_sequence: Some(42),
-            target_revision: None,
+            target_revision: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+            previous_revision: Some("fedcba9876543210fedcba9876543210fedcba98".to_owned()),
         };
         let unix = unix_replace_script(
             42,
@@ -1004,7 +1018,8 @@ mod tests {
             Path::new("/tmp/health"),
             Path::new("/tmp/outcome"),
             "0123456789abcdef0123456789abcdef",
-            None,
+            restart.target_revision.as_deref(),
+            restart.previous_revision.as_deref(),
             Path::new("/tmp/lock"),
             &restart,
         );
@@ -1013,6 +1028,8 @@ mod tests {
         assert!(unix.contains("repository with spaces"));
         assert!(unix.contains("sequence file"));
         assert!(unix.contains("42"));
+        assert!(unix.contains("previousRevision"));
+        assert!(unix.contains("fedcba98765432"));
 
         let windows = windows_replace_script(
             42,
@@ -1023,6 +1040,7 @@ mod tests {
             Path::new(r"C:\bin\health"),
             Path::new(r"C:\bin\outcome"),
             "0123456789abcdef0123456789abcdef",
+            None,
             None,
             Path::new(r"C:\bin\lock"),
             &restart,

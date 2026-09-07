@@ -36,7 +36,7 @@ it("keeps pending resume state until a repository is available", async () => {
   await startRuntime();
 
   expect(invoke).toHaveBeenCalledWith("runtime_start", {});
-  expect(window.localStorage.getItem("medusa.desktop.resumeSession")).toBe("session-456");
+  expect(window.localStorage.getItem("medusa.desktop.resumeSession")).toBe(JSON.stringify({ sessionId: "session-456", repo: "" }));
 });
 
 it("notifies the active desktop when a session resume is requested", () => {
@@ -46,8 +46,22 @@ it("notifies the active desktop when a session resume is requested", () => {
   requestRuntimeResume("session-789");
 
   expect(listener).toHaveBeenCalledTimes(1);
-  expect((listener.mock.calls[0][0] as CustomEvent<string>).detail).toBe("session-789");
+  expect((listener.mock.calls[0][0] as CustomEvent<{ sessionId: string; repo: string }>).detail).toEqual({
+    sessionId: "session-789",
+    repo: "",
+  });
   window.removeEventListener(RUNTIME_RESUME_EVENT, listener);
+});
+
+it("drops a resume intent scoped to another repository instead of cross-wiring it", async () => {
+  vi.mocked(invoke).mockResolvedValue({ runtimeId: "runtime-other", repo: "C:/other" });
+  requestRuntimeResume("session-a", "C:/project-a");
+
+  await expect(startRuntime("C:/project-b")).resolves.toEqual({ runtimeId: "runtime-other", repo: "C:/other" });
+
+  expect(invoke).toHaveBeenCalledWith("runtime_start", { repo: "C:/project-b" });
+  expect(invoke).not.toHaveBeenCalledWith("runtime_resume", expect.anything());
+  expect(window.localStorage.getItem("medusa.desktop.resumeSession")).toBeNull();
 });
 
 it("publishes repository changes and keeps the shared repository pointer current", () => {

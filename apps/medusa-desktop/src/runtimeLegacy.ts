@@ -291,6 +291,11 @@ interface RuntimeRecoveryState {
 }
 
 const pendingResumeKey = "medusa.desktop.resumeSession";
+
+interface PendingResume {
+  sessionId: string;
+  repo: string;
+}
 const emptyTimeline: TimelineSnapshot = { plan: [], activities: [], busy: false };
 const MAX_RUNTIME_STATE_ENTRIES = 8;
 const timelineSnapshots = new Map<string, TimelineSnapshot>();
@@ -501,11 +506,28 @@ export async function loadSharedConfiguration(): Promise<SharedConfiguration> {
 }
 
 export async function startRuntime(repo?: string): Promise<RuntimeStartResponse> {
-  const pendingSession = window.localStorage.getItem(pendingResumeKey);
-  const response = repo && pendingSession
-    ? await invoke<RuntimeStartResponse>("runtime_resume", { repo, sessionId: pendingSession })
+  const rawPending = window.localStorage.getItem(pendingResumeKey);
+  let pending: PendingResume | undefined;
+  if (rawPending) {
+    try {
+      const parsed = JSON.parse(rawPending) as Partial<PendingResume>;
+      if (typeof parsed.sessionId === "string" && typeof parsed.repo === "string") {
+        pending = { sessionId: parsed.sessionId, repo: parsed.repo };
+      }
+    } catch {
+      // Legacy versions stored only the session id. Preserve compatibility while
+      // treating malformed values as stale intent rather than routing it later.
+      if (rawPending.trim()) pending = { sessionId: rawPending, repo: "" };
+    }
+  }
+  if (pending && pending.repo && pending.repo !== (repo ?? "")) {
+    window.localStorage.removeItem(pendingResumeKey);
+    pending = undefined;
+  }
+  const response = repo && pending
+    ? await invoke<RuntimeStartResponse>("runtime_resume", { repo, sessionId: pending.sessionId })
     : await invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
-  if (repo && pendingSession) window.localStorage.removeItem(pendingResumeKey);
+  if (repo && pending) window.localStorage.removeItem(pendingResumeKey);
   timelineSnapshots.set(response.runtimeId, { ...emptyTimeline, runtimeId: response.runtimeId });
   recoverySnapshots.set(response.runtimeId, { suppressed: false });
   activateRuntime(response.runtimeId);
@@ -515,9 +537,10 @@ export async function startRuntime(repo?: string): Promise<RuntimeStartResponse>
 export const RUNTIME_RESUME_EVENT = "medusa-runtime-resume";
 export const REPO_CHANGED_EVENT = "medusa-repo-changed";
 
-export function requestRuntimeResume(sessionId: string): void {
-  window.localStorage.setItem(pendingResumeKey, sessionId);
-  window.dispatchEvent(new CustomEvent<string>(RUNTIME_RESUME_EVENT, { detail: sessionId }));
+export function requestRuntimeResume(sessionId: string, repo = ""): void {
+  const request: PendingResume = { sessionId, repo: repo.trim() };
+  window.localStorage.setItem(pendingResumeKey, JSON.stringify(request));
+  window.dispatchEvent(new CustomEvent<PendingResume>(RUNTIME_RESUME_EVENT, { detail: request }));
 }
 
 export function publishRepoChanged(repo: string): void {

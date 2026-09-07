@@ -1,7 +1,9 @@
 use std::env;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_update::{CURRENT_RELEASE_ID, MainBranchUpdater, Restart};
+use medusa_update::{
+    CURRENT_RELEASE_ID, MainBranchUpdater, Restart, UpdateOutcome, read_update_outcome,
+};
 use serde::Serialize;
 use tauri::Emitter;
 
@@ -11,10 +13,13 @@ const DESKTOP_UPDATE_PROGRESS_EVENT: &str = "desktop-update-progress";
 #[serde(rename_all = "camelCase")]
 pub struct DesktopUpdateStatus {
     current_version: String,
+    current_revision: String,
     latest_main_sha: String,
     executable: String,
     ready: bool,
     artifact_published: bool,
+    up_to_date: bool,
+    last_outcome: Option<UpdateOutcome>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -66,13 +71,29 @@ fn status() -> MedusaResult<DesktopUpdateStatus> {
     let updater = MainBranchUpdater::public()?;
     let latest_main_sha = updater.latest_main()?.sha;
     let artifact_published = updater.main_desktop_artifact_available(&latest_main_sha)?;
+    let current_revision = option_env!("MEDUSA_BUILD_COMMIT")
+        .unwrap_or("unknown")
+        .to_owned();
+    let installed = revisions_match(&current_revision, &latest_main_sha);
+    let last_outcome = executable
+        .parent()
+        .map(read_update_outcome)
+        .transpose()?
+        .flatten();
     Ok(DesktopUpdateStatus {
         current_version: CURRENT_RELEASE_ID.to_owned(),
+        current_revision,
         latest_main_sha,
         executable: executable.display().to_string(),
-        ready: artifact_published,
+        ready: artifact_published && !installed,
         artifact_published,
+        up_to_date: installed,
+        last_outcome,
     })
+}
+
+fn revisions_match(installed: &str, available: &str) -> bool {
+    installed != "unknown" && installed.eq_ignore_ascii_case(available)
 }
 
 fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()> {
@@ -116,6 +137,7 @@ fn schedule_update(app: &tauri::AppHandle, target_sha: &str) -> MedusaResult<()>
     let mut last_percent = 0_u64;
     let restart = Restart {
         detached: true,
+        previous_revision: option_env!("MEDUSA_BUILD_COMMIT").map(str::to_owned),
         ..Restart::default()
     };
     updater.schedule_main_desktop_install(
@@ -205,6 +227,19 @@ mod tests {
         assert!(validate_target_sha("main").is_err());
         assert!(validate_target_sha("0123456789abcdef0123456789abcdef0123456z").is_err());
         assert!(validate_target_sha("01234567;rm -rf /").is_err());
+    }
+
+    #[test]
+    fn installed_revision_controls_update_availability() {
+        assert!(revisions_match(
+            "0123456789abcdef0123456789abcdef01234567",
+            "0123456789ABCDEF0123456789ABCDEF01234567"
+        ));
+        assert!(!revisions_match("unknown", TARGET_SHA));
+        assert!(!revisions_match(
+            "0123456789abcdef0123456789abcdef01234567",
+            "fedcba9876543210fedcba9876543210fedcba98"
+        ));
     }
 
     #[test]
