@@ -11,8 +11,6 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 
 #[cfg(not(windows))]
 use medusa_core::hidden_command;
@@ -80,7 +78,7 @@ impl DaemonLaunch {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        #[cfg(any(unix, windows))]
+        #[cfg(unix)]
         configure_detached(&mut command);
         command.spawn().map(|_| ()).map_err(|error| {
             MedusaError::new(
@@ -398,15 +396,6 @@ impl Drop for StartupLock {
 #[cfg(unix)]
 fn configure_detached(command: &mut Command) {
     command.process_group(0);
-}
-
-#[cfg(windows)]
-fn configure_detached(command: &mut Command) {
-    // CREATE_NO_WINDOW prevents the daemon from publishing its loopback
-    // endpoint on affected Windows builds, but the process still needs its
-    // own console group so Ctrl+C in the frontend cannot terminate it.
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
 #[cfg(unix)]
