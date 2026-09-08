@@ -13,12 +13,9 @@ import "./desktop-timeline.css";
 import "./structured-timeline.css";
 import "./desktop-update.css";
 import "./codex-experience.css";
-import "./neutral-light.css";
 import "./mobile-navigation.css";
 import "./desktop-tools.css";
 import "./permission-mode.css";
-import "./neumorphism.css";
-import "./neumorphism-a11y.css";
 import "./medusa-codex-dark.css";
 import { toUserError } from "./errorPresentation";
 

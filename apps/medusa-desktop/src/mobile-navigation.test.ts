@@ -27,10 +27,13 @@ describe("narrow-window desktop acceptance", () => {
     expect(mobileCss).not.toMatch(/\.sidebar\s*\{[^}]*display:\s*none;/);
   });
 
-  it("loads the mobile acceptance layer after the other desktop themes", () => {
-    const neutralTheme = mainSource.indexOf('import "./neutral-light.css";');
-    const mobileTheme = mainSource.indexOf('import "./mobile-navigation.css";');
-    expect(neutralTheme).toBeGreaterThanOrEqual(0);
-    expect(mobileTheme).toBeGreaterThan(neutralTheme);
+  it("loads the canonical dark system after the responsive acceptance layer", () => {
+    const mobileLayer = mainSource.indexOf('import "./mobile-navigation.css";');
+    const darkTheme = mainSource.indexOf('import "./medusa-codex-dark.css";');
+    expect(mobileLayer).toBeGreaterThanOrEqual(0);
+    expect(darkTheme).toBeGreaterThan(mobileLayer);
+    expect(mainSource).not.toContain('import "./neutral-light.css";');
+    expect(mainSource).not.toContain('import "./neumorphism.css";');
+    expect(mainSource).not.toContain('import "./neumorphism-a11y.css";');
   });
 });
