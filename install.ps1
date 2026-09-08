@@ -305,17 +305,16 @@ function Invoke-BootstrapSelfTest {
     $staged = Join-Path $root 'medusa.bootstrap-new.exe'
     $process = $null
     try {
-        $powershell = Join-Path $PSHOME 'powershell.exe'
-        if (-not (Test-Path -LiteralPath $powershell)) {
-            throw "PowerShell executable is missing at $powershell"
+        $ping = Join-Path $env:SystemRoot 'System32\PING.EXE'
+        if (-not (Test-Path -LiteralPath $ping)) {
+            throw "Windows ping executable is missing at $ping"
         }
-        Copy-Item -LiteralPath $powershell -Destination $target -Force
+        Copy-Item -LiteralPath $ping -Destination $target -Force
         Copy-Item -LiteralPath $env:ComSpec -Destination $staged -Force
         $replacementHash = (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash
         $process = Start-Process -FilePath $target -ArgumentList @(
-            '-NoProfile',
-            '-Command',
-            'Start-Sleep -Seconds 30'
+            '127.0.0.1',
+            '-t'
         ) -PassThru
         Start-Sleep -Milliseconds 300
 
@@ -330,7 +329,7 @@ function Invoke-BootstrapSelfTest {
             throw 'self-test target process was not stopped before replacement'
         }
 
-        Copy-Item -LiteralPath $powershell -Destination $target -Force
+        Copy-Item -LiteralPath $ping -Destination $target -Force
         Copy-Item -LiteralPath $env:ComSpec -Destination $staged -Force
         $originalHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
         $rollbackObserved = $false
