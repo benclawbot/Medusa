@@ -571,6 +571,7 @@ fn is_internal_notice(title: &str) -> bool {
         "recovery available"
             | "recovery completed"
             | "background daemon recovered"
+            | "background daemon degraded"
             | "checkpoint created"
             | "background daemon started"
             | "background daemon connected"
@@ -585,6 +586,7 @@ fn is_internal_activity_title(title: &str) -> bool {
     normalized == "provider execution"
         || normalized == "checkpoint created"
         || normalized == "model response received"
+        || normalized == "provider attempt classified"
         || normalized.starts_with("requesting ")
         || normalized.starts_with("waiting for ")
         || normalized.starts_with("codex ")
@@ -970,12 +972,14 @@ mod tests {
             "Waiting for model or tool response",
             "Configuration revision 4 applied",
             "Background daemon connected",
+            "Background daemon degraded",
         ] {
             assert!(is_internal_notice(title), "{title}");
         }
         for title in [
             "Requesting openai-oauth/gpt-5.6-luna",
             "Waiting for model or tool response",
+            "Provider attempt classified",
         ] {
             assert!(is_internal_activity_title(title), "{title}");
         }
