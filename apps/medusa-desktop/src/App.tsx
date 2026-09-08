@@ -1,6 +1,7 @@
 import { App as DesktopShell } from "./AppLegacy";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect } from "react";
+import { ComposerProjectBadge } from "./ComposerProjectBadge";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
@@ -25,7 +26,7 @@ export function App() {
     <>
       <DesktopShell
         settingsSlot={<DesktopUpdateControl />}
-        composerSlot={<DesktopTimelineBridge />}
+        composerSlot={<><ComposerProjectBadge /><DesktopTimelineBridge /></>}
         composerToolsSlot={<PermissionModeControl />}
       />
       <DiffDock />
