@@ -1,0 +1,62 @@
+name: Desktop Screenshot Proof
+
+on:
+  push:
+    branches:
+      - proof/desktop-screenshot
+
+permissions:
+  contents: read
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/medusa-desktop
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Start production preview
+        run: |
+          nohup npx vite preview --host 127.0.0.1 --port 4173 > /tmp/medusa-vite.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:4173 >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/medusa-vite.log
+          exit 1
+      - name: Capture Medusa Desktop screenshot
+        run: |
+          node --input-type=module <<'NODE'
+          import { chromium } from 'playwright';
+          const browser = await chromium.launch({headless:true});
+          const page = await browser.newPage({ viewport: { width: 1600, height: 960 }, deviceScaleFactor: 1 });
+          const errors = [];
+          page.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
+          page.on('console', m => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+          await page.goto('http://127.0.0.1:4173', { waitUntil: 'networkidle' });
+          await page.waitForTimeout(5000);
+          await page.screenshot({ path: 'medusa-desktop-main.png', fullPage: true });
+          await browser.close();
+          await import('node:fs').then(fs => fs.writeFileSync('browser-errors.txt', errors.join('\n')));
+          NODE
+      - name: Upload screenshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: medusa-desktop-screenshot-proof
+          path: |
+            apps/medusa-desktop/medusa-desktop-main.png
+            apps/medusa-desktop/browser-errors.txt
+          if-no-files-found: error
+          retention-days: 3
