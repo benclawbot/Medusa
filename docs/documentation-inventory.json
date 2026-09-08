@@ -171,7 +171,7 @@
     {
       "path": "docs/DESKTOP-UX.md",
       "disposition": "current",
-      "sha256": "7978cb5c8bec5a655ec81e93ded9bf10dc61b4f64a39ade899ca5bb9431a3b75"
+      "sha256": "12ab5c56b87e3e58b06438603c05f76e6449fdc888a0b899b02aada7f41e4f40"
     },
     {
       "path": "docs/DOCUMENTATION-GOVERNANCE.md",
@@ -816,7 +816,7 @@
     {
       "path": "specs/2026-09-06-product-quality-and-updater.md",
       "disposition": "current",
-      "sha256": "b926d6bef26eff3023290c5d16b0512a8183cea28c449958e9901aa76268785d"
+      "sha256": "bfb3222ddbfbf35b7ed10a65ee8e196809585383f71b88b6e33c5ce2a24bf88c"
     },
     {
       "path": "tools/local-bridge/README.md",
