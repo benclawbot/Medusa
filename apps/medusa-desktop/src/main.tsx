@@ -17,6 +17,7 @@ import "./mobile-navigation.css";
 import "./desktop-tools.css";
 import "./permission-mode.css";
 import "./medusa-codex-dark.css";
+import "./medusa-final-polish.css";
 import { toUserError } from "./errorPresentation";
 
 interface ErrorBoundaryState {

@@ -1,0 +1,37 @@
+/* Final parity fixes for the approved Medusa desktop reference. */
+
+/* Keep the supplied Medusa artwork visually balanced with the wordmark. */
+.brand-mark {
+  width: 44px !important;
+  height: 46px !important;
+  flex: 0 0 44px !important;
+  background-size: contain !important;
+  background-position: center !important;
+}
+
+.brand-row {
+  gap: 9px !important;
+}
+
+/* The prompt starts as exactly one line, then grows only as content wraps. */
+.composer-card .composer-line {
+  min-height: 101px !important;
+  padding: 35px 10px 9px !important;
+  align-content: start !important;
+}
+
+.composer-card textarea {
+  box-sizing: border-box !important;
+  min-height: 22px !important;
+  height: auto !important;
+  max-height: 160px !important;
+  padding: 1px 4px !important;
+  line-height: 20px !important;
+  overflow-y: auto !important;
+  field-sizing: content;
+}
+
+.composer-card:has(textarea:placeholder-shown)::before {
+  top: 39px !important;
+  line-height: 20px !important;
+}
