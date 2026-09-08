@@ -1,0 +1,540 @@
+/*
+ * Medusa Desktop Soft UI contract.
+ *
+ * Neumorphism here is intentionally material-less: every application surface
+ * uses one matte color and depth comes only from paired light/dark shadows.
+ * Focus and persistent states also receive an outline/color cue so meaning is
+ * never communicated by shadow alone.
+ */
+:root {
+  color-scheme: light;
+  --neu-surface: #e0e5ec;
+  --neu-text: #253142;
+  --neu-muted: #596779;
+  --neu-subtle: #6c7888;
+  --neu-accent: #4f5ee8;
+  --neu-accent-contrast: #ffffff;
+  --neu-shadow-light: rgba(255, 255, 255, 0.85);
+  --neu-shadow-dark: rgba(163, 177, 198, 0.6);
+  --neu-shadow-raised: -6px -6px 12px var(--neu-shadow-light), 6px 6px 12px var(--neu-shadow-dark);
+  --neu-shadow-raised-soft: -3px -3px 7px rgba(255, 255, 255, 0.78), 3px 3px 7px rgba(163, 177, 198, 0.52);
+  --neu-shadow-inset: inset -6px -6px 12px var(--neu-shadow-light), inset 6px 6px 12px var(--neu-shadow-dark);
+  --neu-shadow-inset-soft: inset -3px -3px 7px rgba(255, 255, 255, 0.72), inset 3px 3px 7px rgba(163, 177, 198, 0.46);
+  --neu-radius-sm: 10px;
+  --neu-radius: 16px;
+  --neu-radius-lg: 24px;
+  --neu-focus: #3442c7;
+  --neu-state-outline: rgba(52, 66, 199, 0.48);
+
+  /* Map legacy tokens so feature styles inherit the same material. */
+  --bg: var(--neu-surface);
+  --surface: var(--neu-surface);
+  --surface-soft: var(--neu-surface);
+  --line: transparent;
+  --line-strong: transparent;
+  --text: var(--neu-text);
+  --muted: var(--neu-muted);
+  --purple: var(--neu-accent);
+  --purple-soft: var(--neu-surface);
+  --green: var(--neu-muted);
+  --green-soft: var(--neu-surface);
+  --dark: var(--neu-surface);
+  --danger: #8b3e4b;
+  --warn: #7b632a;
+  --background: var(--neu-surface);
+  --panel: var(--neu-surface);
+  --border: transparent;
+  --success: #496758;
+  --medusa-canvas: var(--neu-surface);
+  --medusa-panel: var(--neu-surface);
+  --medusa-panel-solid: var(--neu-surface);
+  --medusa-border: transparent;
+  --medusa-border-strong: transparent;
+  --medusa-ink: var(--neu-text);
+  --medusa-muted: var(--neu-muted);
+  --medusa-accent: var(--neu-accent);
+  --medusa-accent-soft: var(--neu-surface);
+  --medusa-success: #496758;
+  --medusa-warning: #7b632a;
+  --medusa-danger: #8b3e4b;
+  --medusa-blue: var(--neu-accent);
+  --medusa-shadow: var(--neu-shadow-raised);
+}
+
+html,
+body,
+#root,
+.app-shell,
+.medusa-shell,
+.workspace,
+.medusa-workspace {
+  background: var(--neu-surface) !important;
+  background-image: none !important;
+  color: var(--neu-text) !important;
+}
+
+/* There are no visible borders in the Soft UI language. Existing border
+ * widths may still participate in legacy layout, but they cannot render. */
+*,
+*::before,
+*::after {
+  border-color: transparent !important;
+  background-image: none !important;
+}
+
+body {
+  color: var(--neu-text);
+}
+
+::selection {
+  color: var(--neu-accent-contrast);
+  background: var(--neu-accent);
+}
+
+/* Core application regions remain one uninterrupted matte material. */
+.sidebar,
+.inspector,
+.topbar,
+.workspace,
+.medusa-workspace,
+.work-panel,
+.side-panel,
+.composer-wrap,
+.composer,
+.composer-bottom,
+.panel-heading,
+.memory-browser,
+.engineering-dashboard,
+.learning-shell,
+.session-dock-panel,
+.diff-dock-panel,
+.memory-dock-panel,
+.engineering-shell {
+  background: var(--neu-surface) !important;
+  backdrop-filter: none !important;
+}
+
+.sidebar,
+.inspector,
+.work-panel,
+.side-panel,
+.topbar {
+  box-shadow: none !important;
+}
+
+/* Raised containers. Keep the selector semantic rather than styling every
+ * section/article, which would turn nested content into a stack of tiles. */
+.panel,
+.standalone-panel,
+.settings-form,
+.approval-card,
+.activity-summary,
+.terminal-card,
+.harness-card,
+.desktop-update-card,
+.session-details-panel,
+.memory-detail,
+.memory-list,
+.memory-provenance-grid > div,
+.learning-privacy,
+.learning-list article,
+.engineering-kpis > div,
+.engineering-card,
+.proposal-list article,
+.friction-list > div,
+.recovery-dock-content,
+.diff-file,
+.review-file,
+[role="alert"] {
+  border: 0 !important;
+  border-radius: var(--neu-radius) !important;
+  color: var(--neu-text) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-raised) !important;
+}
+
+/* Full-screen and docked tools are larger raised pieces of the same material. */
+.memory-dock-panel,
+.learning-shell,
+.engineering-shell,
+.session-dock-panel,
+.diff-dock-panel {
+  border: 0 !important;
+  border-radius: var(--neu-radius-lg) !important;
+  color: var(--neu-text) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: -10px -10px 24px rgba(255, 255, 255, 0.82), 10px 10px 24px rgba(143, 157, 178, 0.58) !important;
+}
+
+/* Backdrops are not physical surfaces. They only separate modal context. */
+.memory-dock-backdrop,
+.learning-overlay,
+.engineering-overlay,
+[class*="backdrop"],
+[class*="overlay"] {
+  background: rgba(57, 67, 82, 0.28) !important;
+  backdrop-filter: blur(3px) !important;
+}
+
+/* Inputs are carved into the same matte surface. */
+input,
+textarea,
+select,
+.memory-search,
+.learning-filter,
+.dashboard-actions select,
+[contenteditable="true"] {
+  border: 0 !important;
+  border-radius: var(--neu-radius-sm) !important;
+  color: var(--neu-text) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+  caret-color: var(--neu-accent);
+}
+
+input,
+select,
+.memory-search,
+.learning-filter,
+.dashboard-actions select {
+  min-height: 40px;
+}
+
+textarea {
+  border-radius: var(--neu-radius) !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--neu-subtle) !important;
+  opacity: 1;
+}
+
+/* Buttons are raised by default and become inset while pressed. */
+button,
+[role="button"],
+summary {
+  border: 0 !important;
+  border-radius: var(--neu-radius-sm) !important;
+  color: var(--neu-text) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-raised-soft) !important;
+  transition: box-shadow 140ms ease, color 140ms ease, opacity 140ms ease, transform 140ms ease !important;
+}
+
+button:hover:not(:disabled),
+[role="button"]:hover,
+summary:hover {
+  color: var(--neu-accent) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: -4px -4px 9px rgba(255, 255, 255, 0.88), 4px 4px 9px rgba(153, 168, 191, 0.62) !important;
+  transform: translateY(-1px);
+}
+
+button:active:not(:disabled),
+[role="button"]:active,
+summary:active,
+button[aria-pressed="true"],
+button[aria-expanded="true"] {
+  color: var(--neu-accent) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+  transform: translateY(0);
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  color: var(--neu-subtle) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+/* Primary actions are the sole saturated surface. */
+.new-session,
+.send-button,
+.primary-action,
+.run-button,
+.session-resume,
+.proposal-actions .primary,
+button[data-variant="primary"] {
+  color: var(--neu-accent-contrast) !important;
+  background: var(--neu-accent) !important;
+  box-shadow: -4px -4px 9px rgba(255, 255, 255, 0.75), 5px 5px 11px rgba(124, 138, 161, 0.68) !important;
+}
+
+.new-session:hover:not(:disabled),
+.send-button:hover:not(:disabled),
+.primary-action:hover:not(:disabled),
+.run-button:hover:not(:disabled),
+.session-resume:hover:not(:disabled),
+.proposal-actions .primary:hover:not(:disabled),
+button[data-variant="primary"]:hover:not(:disabled) {
+  color: var(--neu-accent-contrast) !important;
+  background: var(--neu-accent) !important;
+  box-shadow: -5px -5px 11px rgba(255, 255, 255, 0.8), 6px 6px 13px rgba(124, 138, 161, 0.72) !important;
+}
+
+.new-session:active:not(:disabled),
+.send-button:active:not(:disabled),
+.primary-action:active:not(:disabled),
+.run-button:active:not(:disabled),
+.session-resume:active:not(:disabled),
+.proposal-actions .primary:active:not(:disabled),
+button[data-variant="primary"]:active:not(:disabled) {
+  color: var(--neu-accent-contrast) !important;
+  background: var(--neu-accent) !important;
+  box-shadow: inset -4px -4px 9px rgba(116, 130, 255, 0.72), inset 4px 4px 9px rgba(38, 48, 142, 0.48) !important;
+}
+
+/* Icon controls remain compact raised controls instead of becoming floating
+ * glyphs. */
+.icon-button,
+.rail-toggle,
+.composer-icon-button,
+.recent-rename,
+.recent-delete,
+.project-tab-delete,
+.memory-dock-close,
+.engineering-close,
+.session-dock-actions button {
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-raised-soft) !important;
+}
+
+.icon-button:active:not(:disabled),
+.rail-toggle:active:not(:disabled),
+.composer-icon-button:active:not(:disabled),
+.recent-rename:active:not(:disabled),
+.recent-delete:active:not(:disabled),
+.project-tab-delete:active:not(:disabled),
+.memory-dock-close:active:not(:disabled),
+.engineering-close:active:not(:disabled),
+.session-dock-actions button:active:not(:disabled) {
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+}
+
+/* Persistent selection gets both inset depth and a non-shadow outline cue. */
+.nav-item.active,
+.recent-item-row.active,
+.memory-list button.active,
+[aria-current="page"],
+[aria-current="true"],
+[aria-selected="true"],
+[aria-pressed="true"] {
+  color: var(--neu-accent) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+  outline: 2px solid var(--neu-state-outline) !important;
+  outline-offset: 1px !important;
+}
+
+/* Focus never depends on a shadow, satisfying non-text contrast guidance. */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible,
+[contenteditable="true"]:focus-visible {
+  outline: 3px solid var(--neu-focus) !important;
+  outline-offset: 3px !important;
+}
+
+/* User messages and code-like wells are inset instead of becoming a second
+ * material or color block. */
+.message.user .message-body,
+.session-history-message.user,
+pre,
+code,
+kbd,
+.terminal-output,
+.diff-content,
+.review-diff,
+.activity-row,
+.thinking-row {
+  border: 0 !important;
+  color: var(--neu-text) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+}
+
+.message.user .message-body,
+.session-history-message.user,
+pre,
+.terminal-output,
+.diff-content,
+.review-diff {
+  border-radius: var(--neu-radius) !important;
+}
+
+code,
+kbd {
+  border-radius: 8px !important;
+}
+
+/* Badges/statuses stay matte and use typography/iconography for meaning. */
+.version,
+kbd,
+.status,
+.runtime-state,
+.session-status,
+.memory-status,
+.memory-list-meta em,
+.memory-tags span,
+.active-pill {
+  border: 0 !important;
+  color: var(--neu-muted) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+}
+
+.status-dot,
+.active-pill::before,
+.window-dots .dot,
+.dot.red,
+.dot.yellow,
+.dot.green {
+  background: var(--neu-muted) !important;
+  box-shadow: none !important;
+}
+
+/* Keep readable text hierarchy across every tool without introducing another
+ * surface color. */
+small,
+.section-label,
+.panel-heading span,
+.message-heading time,
+.memory-muted,
+.memory-empty p,
+.memory-list-meta,
+.memory-list-path,
+.memory-confidence small,
+.memory-provenance-grid small,
+.learning-title span,
+.learning-list dt,
+.learning-privacy small,
+.learning-empty,
+.session-dock-meta,
+.session-history-meta,
+.session-history-message small,
+.session-dock-empty,
+.engineering-kpis span,
+.engineering-kpis small,
+.engineering-header p,
+.proposal-list small,
+.friction-list small,
+.axis-labels,
+.empty-state {
+  color: var(--neu-muted) !important;
+  opacity: 1 !important;
+}
+
+/* Menus, pickers and transient surfaces use the same raised matte piece. */
+.project-picker,
+.projectless-action,
+.details-button,
+[class*="menu"],
+[class*="popover"],
+[class*="dropdown"],
+[role="menu"],
+[role="listbox"],
+[role="dialog"] {
+  border: 0 !important;
+  border-radius: var(--neu-radius) !important;
+  color: var(--neu-text) !important;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-raised) !important;
+}
+
+[role="option"],
+[role="menuitem"] {
+  border-radius: var(--neu-radius-sm) !important;
+}
+
+[role="option"][aria-selected="true"],
+[role="menuitem"][aria-checked="true"] {
+  color: var(--neu-accent) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+  outline: 2px solid var(--neu-state-outline) !important;
+  outline-offset: 1px !important;
+}
+
+/* Tables and timeline/list separators become spacing plus shallow inset wells,
+ * never hairline rules. */
+table,
+thead,
+tbody,
+tr,
+th,
+td,
+hr {
+  border: 0 !important;
+}
+
+hr {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--neu-surface) !important;
+  box-shadow: var(--neu-shadow-inset-soft) !important;
+}
+
+/* Scrollbars stay quiet and matte. */
+* {
+  scrollbar-color: #a9b4c4 var(--neu-surface);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--neu-surface);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid var(--neu-surface) !important;
+  border-radius: 999px;
+  background: #a9b4c4 !important;
+  box-shadow: none !important;
+}
+
+/* Responsive layouts retain the same depth language; reduce exaggerated
+ * shadows when the viewport is narrow and controls are densely packed. */
+@media (max-width: 700px) {
+  :root {
+    --neu-shadow-raised: -4px -4px 9px var(--neu-shadow-light), 4px 4px 9px var(--neu-shadow-dark);
+    --neu-shadow-inset: inset -4px -4px 9px var(--neu-shadow-light), inset 4px 4px 9px var(--neu-shadow-dark);
+  }
+
+  .memory-dock-panel,
+  .learning-shell,
+  .engineering-shell,
+  .session-dock-panel,
+  .diff-dock-panel {
+    border-radius: var(--neu-radius) !important;
+  }
+}
+
+/* Motion is decorative in this theme, so honor the user's preference fully. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  button:hover:not(:disabled),
+  [role="button"]:hover,
+  summary:hover {
+    transform: none !important;
+  }
+}
