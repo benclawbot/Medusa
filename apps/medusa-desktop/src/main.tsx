@@ -19,6 +19,7 @@ import "./desktop-tools.css";
 import "./permission-mode.css";
 import "./neumorphism.css";
 import "./neumorphism-a11y.css";
+import "./medusa-codex-dark.css";
 import { toUserError } from "./errorPresentation";
 
 interface ErrorBoundaryState {
