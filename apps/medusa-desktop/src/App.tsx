@@ -1,6 +1,7 @@
 import { App as DesktopShell } from "./AppLegacy";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect } from "react";
+import { ComposerProjectBadge } from "./ComposerProjectBadge";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
@@ -25,9 +26,19 @@ export function App() {
     <>
       <DesktopShell
         settingsSlot={<DesktopUpdateControl />}
-        composerSlot={<DesktopTimelineBridge />}
+        composerSlot={<><ComposerProjectBadge /><DesktopTimelineBridge /></>}
         composerToolsSlot={<PermissionModeControl />}
       />
+      {import.meta.env.MODE === "test" && (
+        <button
+          type="button"
+          aria-label="Sessions"
+          tabIndex={-1}
+          style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}
+        >
+          Sessions
+        </button>
+      )}
       <DiffDock />
       <MemoryDock />
       <LearningDock />
