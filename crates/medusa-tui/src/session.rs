@@ -132,7 +132,7 @@ pub(super) fn run_loop(
     app: &mut AppState,
     runtime: &mut RuntimeController,
 ) -> io::Result<ExitReason> {
-    let _ = runtime.ensure_daemon();
+    // The runtime event worker owns daemon startup/recovery. Keep first paint non-blocking.
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let (mut daemon_jobs, mut daemon_status) = daemon.poll(app);
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
@@ -211,7 +211,7 @@ pub(super) fn run_loop(
 ) -> io::Result<ExitReason> {
     let mut last_frame: Option<Vec<StyledLine>> = None;
     let mut last_ctrl_c = None;
-    let _ = runtime.ensure_daemon();
+    // The runtime event worker owns daemon startup/recovery. Keep first paint non-blocking.
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let _ = daemon.poll(app);
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
@@ -571,6 +571,7 @@ fn is_internal_notice(title: &str) -> bool {
         "recovery available"
             | "recovery completed"
             | "background daemon recovered"
+            | "background daemon degraded"
             | "checkpoint created"
             | "background daemon started"
             | "background daemon connected"
@@ -971,12 +972,14 @@ mod tests {
             "Waiting for model or tool response",
             "Configuration revision 4 applied",
             "Background daemon connected",
+            "Background daemon degraded",
         ] {
             assert!(is_internal_notice(title), "{title}");
         }
         for title in [
             "Requesting openai-oauth/gpt-5.6-luna",
             "Waiting for model or tool response",
+            "Provider attempt classified",
         ] {
             assert!(is_internal_activity_title(title), "{title}");
         }

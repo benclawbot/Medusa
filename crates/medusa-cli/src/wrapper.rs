@@ -39,7 +39,33 @@ mod legacy {
     include!("main.rs");
 }
 
+#[cfg(windows)]
+fn acknowledge_legacy_windows_update_handoff() -> Result<(), String> {
+    let health_file = env::var_os(medusa_update::HEALTH_FILE_ENV);
+    let health_nonce = env::var_os(medusa_update::HEALTH_NONCE_ENV);
+    if legacy_update_handoff(health_file.as_deref(), health_nonce.as_deref()) {
+        medusa_update::acknowledge_update_health()
+            .map(|_| ())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn legacy_update_handoff(
+    health_file: Option<&std::ffi::OsStr>,
+    health_nonce: Option<&std::ffi::OsStr>,
+) -> bool {
+    health_file.is_some() && health_nonce.is_none()
+}
+
 fn main() {
+    #[cfg(windows)]
+    if let Err(error) = acknowledge_legacy_windows_update_handoff() {
+        eprintln!("failed to acknowledge legacy Windows update handoff: {error}");
+        std::process::exit(1);
+    }
+
     let args = env::args().skip(1).collect::<Vec<_>>();
     let repo = repository_argument(&args).unwrap_or_else(|| PathBuf::from("."));
     if let Err(error) = medusa_daemon::initialize_observability(&repo) {
@@ -246,6 +272,15 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn legacy_update_handoff_requires_health_file_without_nonce() {
+        let health = std::ffi::OsStr::new("health-marker");
+        let nonce = std::ffi::OsStr::new("nonce");
+        assert!(legacy_update_handoff(Some(health), None));
+        assert!(!legacy_update_handoff(None, None));
+        assert!(!legacy_update_handoff(Some(health), Some(nonce)));
     }
 
     #[test]
