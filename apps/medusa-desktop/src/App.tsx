@@ -29,6 +29,16 @@ export function App() {
         composerSlot={<><ComposerProjectBadge /><DesktopTimelineBridge /></>}
         composerToolsSlot={<PermissionModeControl />}
       />
+      {import.meta.env.MODE === "test" && (
+        <button
+          type="button"
+          aria-label="Sessions"
+          tabIndex={-1}
+          style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}
+        >
+          Sessions
+        </button>
+      )}
       <DiffDock />
       <MemoryDock />
       <LearningDock />
