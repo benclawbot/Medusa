@@ -1,0 +1,30 @@
+/* Final Soft UI guardrails: imported after neumorphism.css. */
+:root {
+  /* Both normal-size accent text and white text on the accent clear 4.5:1. */
+  --neu-subtle: #4f5e70;
+  --neu-accent: #4654d9;
+  /* Composited over #e0e5ec this clears 3:1 for persistent state outlines. */
+  --neu-state-outline: rgba(52, 66, 199, 0.7);
+}
+
+/* The design language has no visible borders, including legacy separators and
+ * pseudo-elements. Focus/state affordances use outline instead. */
+*,
+*::before,
+*::after {
+  border-style: none !important;
+}
+
+/* Modal separation is a simple tint, not glass, blur, gloss, or texture. */
+.memory-dock-backdrop,
+.learning-overlay,
+.engineering-overlay,
+[class*="backdrop"],
+[class*="overlay"] {
+  backdrop-filter: none !important;
+}
+
+/* Do not create a faux track gap with a border. */
+*::-webkit-scrollbar-thumb {
+  border: 0 !important;
+}
