@@ -194,7 +194,15 @@ fn resolve_bridge_path() -> io::Result<PathBuf> {
 fn bridge_path_candidates(executable: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(parent) = executable.parent() {
-        for ancestor in parent.ancestors().take(4) {
+        for ancestor in parent
+            .ancestors()
+            .filter(|ancestor| {
+                !ancestor
+                    .components()
+                    .any(|component| component.as_os_str() == "target")
+            })
+            .take(4)
+        {
             let candidate = ancestor.join(BROWSER_BRIDGE_RELATIVE_PATH);
             if !candidates.contains(&candidate) {
                 candidates.push(candidate);
