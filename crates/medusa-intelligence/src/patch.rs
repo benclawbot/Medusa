@@ -446,7 +446,7 @@ fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
         std::process::id()
     ));
     let temporary = destination.with_file_name(temporary_name);
-    let result: std::io::Result<()> = (|| {
+    let result: MedusaResult<()> = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -464,7 +464,7 @@ fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result.map_err(Into::into)
+    result
 }
 
 #[cfg(windows)]

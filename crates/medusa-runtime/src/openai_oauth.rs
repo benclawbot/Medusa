@@ -104,6 +104,24 @@ pub struct CodexAppServer {
     active_turn_id: Option<String>,
 }
 
+// The daemon can start and authenticate one Codex app-server while the frontend
+// is still idle. The first RuntimeController then consumes this exact process
+// instead of paying process startup, initialize, account-read, and model-list
+// latency after the user presses Enter.
+static WARM_APP_SERVER: Mutex<Option<CodexAppServer>> = Mutex::new(None);
+
+fn take_warm_app_server() -> Option<CodexAppServer> {
+    WARM_APP_SERVER.lock().ok()?.take()
+}
+
+fn keep_warm_app_server(server: CodexAppServer) {
+    if let Ok(mut slot) = WARM_APP_SERVER.lock()
+        && slot.is_none()
+    {
+        *slot = Some(server);
+    }
+}
+
 impl Drop for CodexAppServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -113,6 +131,15 @@ impl Drop for CodexAppServer {
 
 impl CodexAppServer {
     pub fn connect() -> Result<Self, String> {
+        if let Some(mut server) = take_warm_app_server()
+            && server.child.try_wait().is_ok_and(|status| status.is_none())
+        {
+            return Ok(server);
+        }
+        Self::connect_fresh()
+    }
+
+    fn connect_fresh() -> Result<Self, String> {
         let mut child = hidden_command(codex_program())
             .args(codex_app_server_args())
             .stdin(Stdio::piped())
@@ -414,6 +441,13 @@ impl CodexAppServer {
         let pending = self.pending_request.take().ok_or_else(|| {
             "there is no pending Codex app-server approval or question to answer".to_owned()
         })?;
+        if pending.method == "item/tool/requestUserInput" {
+            let result = self.respond_pending_user_input(&pending, answer);
+            if result.is_err() {
+                self.pending_request = Some(pending);
+            }
+            return result;
+        }
         let normalized = answer.trim().to_ascii_lowercase();
         if normalized.is_empty() {
             self.pending_request = Some(pending);
@@ -440,6 +474,15 @@ impl CodexAppServer {
             self.pending_request = Some(pending);
         }
         result
+    }
+
+    fn respond_pending_user_input(
+        &mut self,
+        pending: &PendingServerRequest,
+        answer: &str,
+    ) -> Result<(), String> {
+        let answers = user_input_answers(&pending.params, answer)?;
+        self.send_response(pending.id.clone(), json!({"answers": answers}))
     }
 
     fn respond_pending(
@@ -477,24 +520,7 @@ impl CodexAppServer {
                 })
             }
             "item/tool/requestUserInput" => {
-                let answers = if decision == PendingDecision::Decline
-                    || decision == PendingDecision::Cancel
-                {
-                    json!({})
-                } else {
-                    let mut answers = serde_json::Map::new();
-                    if let Some(question) = pending
-                        .params
-                        .get("questions")
-                        .and_then(Value::as_array)
-                        .and_then(|questions| questions.first())
-                        .and_then(|question| question.get("id"))
-                        .and_then(Value::as_str)
-                    {
-                        answers.insert(question.to_owned(), json!({"answers": [answer]}));
-                    }
-                    Value::Object(answers)
-                };
+                let answers = user_input_answers(&pending.params, answer)?;
                 json!({"answers": answers})
             }
             "mcpServer/elicitation/request" => json!({
@@ -693,7 +719,9 @@ pub fn discover_openai_oauth_models() -> Result<Vec<String>, String> {
                 .to_owned(),
         );
     }
-    server.list_models()
+    let models = server.list_models()?;
+    keep_warm_app_server(server);
+    Ok(models)
 }
 
 pub fn start_openai_oauth_login() -> Result<OpenAiOAuthLogin, String> {
@@ -706,7 +734,11 @@ pub fn start_openai_oauth_login() -> Result<OpenAiOAuthLogin, String> {
             let result = (|| {
                 let mut server = CodexAppServer::connect()?;
                 server.ensure_authenticated_with_cancel(Some(&worker_cancel))?;
-                server.list_models()
+                let models = server.list_models()?;
+                // Keep the authenticated connection alive for the first turn after
+                // browser sign-in, just as for a non-interactive prewarm.
+                keep_warm_app_server(server);
+                Ok(models)
             })();
             if !worker_cancel.load(Ordering::SeqCst) {
                 let _ = sender.send(result);
@@ -723,7 +755,9 @@ pub fn start_openai_oauth_login() -> Result<OpenAiOAuthLogin, String> {
 pub fn ensure_openai_oauth_connected() -> Result<Vec<String>, String> {
     let mut server = CodexAppServer::connect()?;
     server.ensure_authenticated()?;
-    server.list_models()
+    let models = server.list_models()?;
+    keep_warm_app_server(server);
+    Ok(models)
 }
 
 pub fn codex_program() -> &'static str {
@@ -883,11 +917,88 @@ fn safe_error_text(value: &Value) -> String {
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "protocol error".to_owned());
-    text.replace("Bearer ", "Bearer [redacted] ")
-        .replace("access_token", "[redacted-token]")
+    medusa_agent::redact_diagnostic_text(&text)
         .chars()
         .take(512)
         .collect()
+}
+
+fn user_input_answers(params: &Value, answer: &str) -> Result<Value, String> {
+    let questions = params
+        .get("questions")
+        .and_then(Value::as_array)
+        .filter(|questions| !questions.is_empty())
+        .ok_or_else(|| "Codex user-input request contained no questions".to_owned())?;
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Err("a Codex question response cannot be empty".to_owned());
+    }
+
+    let mut question_ids = Vec::with_capacity(questions.len());
+    let mut question_headers = Vec::with_capacity(questions.len());
+    for question in questions {
+        let id = question
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "Codex user-input question has no id".to_owned())?;
+        if question_ids.iter().any(|existing| existing == id) {
+            return Err(format!("Codex user-input question id `{id}` is duplicated"));
+        }
+        question_ids.push(id.to_owned());
+        question_headers.push(
+            question
+                .get("header")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_owned(),
+        );
+    }
+
+    let values = if questions.len() == 1 {
+        vec![answer.to_owned()]
+    } else {
+        let lines = answer
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        let mut values = vec![None; questions.len()];
+        for line in &lines {
+            let Some((header, value)) = line.split_once(':') else {
+                continue;
+            };
+            let header = header.trim();
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            if let Some(index) = question_headers
+                .iter()
+                .position(|candidate| candidate.eq_ignore_ascii_case(header))
+            {
+                values[index] = Some(value.to_owned());
+            }
+        }
+        if values.iter().all(Option::is_none) && lines.len() == questions.len() {
+            values = lines.iter().map(|line| Some((*line).to_owned())).collect();
+        }
+        if values.iter().any(Option::is_none) {
+            return Err(
+                "answer every Codex user-input question as `Header: answer` on separate lines"
+                    .to_owned(),
+            );
+        }
+        values.into_iter().map(Option::unwrap).collect()
+    };
+
+    let mut answers = serde_json::Map::new();
+    for (id, value) in question_ids.into_iter().zip(values) {
+        answers.insert(id, json!({"answers": [value]}));
+    }
+    Ok(Value::Object(answers))
 }
 
 fn open_browser_url(url: &str) -> Result<(), String> {
@@ -1019,5 +1130,53 @@ mod tests {
             Some("thread-1")
         );
         assert!(params.get("excludeTurns").is_none());
+    }
+
+    #[test]
+    fn app_server_errors_redact_credential_values_before_bounding() {
+        let values = [
+            "Authorization: Bearer bearer-secret",
+            r#"{"access_token":"access-secret","refresh_token":"refresh-secret"}"#,
+            "https://user:url-secret@example.test/?sig=query-secret",
+        ];
+        for value in values {
+            let redacted = safe_error_text(&Value::String(value.to_owned()));
+            assert!(!redacted.contains("bearer-secret"));
+            assert!(!redacted.contains("access-secret"));
+            assert!(!redacted.contains("refresh-secret"));
+            assert!(!redacted.contains("url-secret"));
+            assert!(!redacted.contains("query-secret"));
+        }
+    }
+
+    #[test]
+    fn user_input_answers_keep_every_question_id_and_free_text_value() {
+        let answers = user_input_answers(
+            &json!({
+                "questions": [
+                    {"id": "database", "header": "Database"},
+                    {"id": "scope", "header": "Scope"}
+                ]
+            }),
+            "Database: PostgreSQL\nScope: production",
+        )
+        .expect("question answers");
+        assert_eq!(
+            answers,
+            json!({
+                "database": {"answers": ["PostgreSQL"]},
+                "scope": {"answers": ["production"]}
+            })
+        );
+    }
+
+    #[test]
+    fn one_user_input_question_accepts_arbitrary_text_without_declining() {
+        let answers = user_input_answers(
+            &json!({"questions": [{"id": "database", "header": "Database"}]}),
+            "PostgreSQL",
+        )
+        .expect("question answer");
+        assert_eq!(answers, json!({"database": {"answers": ["PostgreSQL"]}}));
     }
 }

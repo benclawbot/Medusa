@@ -157,14 +157,26 @@ impl RuntimeSessionAttachment {
         occurred_at_unix_ms: i64,
         event_id: impl Into<String>,
     ) -> Result<ContinuitySession, RuntimeError> {
+        let mut attachment = self;
+        attachment.detach_durable(occurred_at_unix_ms, event_id)
+    }
+
+    /// Detaches this client from durable continuity while retaining the local handle until the
+    /// operation succeeds. Callers that own a broker entry can retry a stale revision safely.
+    pub fn detach_durable(
+        &mut self,
+        occurred_at_unix_ms: i64,
+        event_id: impl Into<String>,
+    ) -> Result<ContinuitySession, RuntimeError> {
         let outcome = continuity_store(&self.repo, &self.session.id.to_string())
             .detach(DetachRequest {
-                client_id: self.client_id,
+                client_id: self.client_id.clone(),
                 expected_revision: self.continuity.revision,
                 occurred_at_unix_ms,
                 event_id: event_id.into(),
             })
             .map_err(RuntimeError::agent)?;
+        self.continuity = outcome.session().clone();
         Ok(outcome.session().clone())
     }
 

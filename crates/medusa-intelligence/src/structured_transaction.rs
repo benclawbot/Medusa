@@ -656,7 +656,7 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), StructuredTrans
         std::process::id()
     ));
     let temporary = destination.with_file_name(temporary_name);
-    let result: std::io::Result<()> = (|| {
+    let result: Result<(), StructuredTransactionError> = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -674,7 +674,7 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), StructuredTrans
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
-    result.map_err(StructuredTransactionError::from)
+    result
 }
 
 #[cfg(windows)]

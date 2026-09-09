@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use medusa_process_containment::ExclusiveFileLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -995,22 +996,8 @@ impl ContinuityStore {
         fs::create_dir_all(parent)?;
         let lock_path = self.lock_path();
         for _ in 0..LOCK_RETRY_ATTEMPTS {
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-            {
-                Ok(mut lock_file) => {
-                    let result = (|| -> io::Result<()> {
-                        writeln!(lock_file, "pid={}", std::process::id())?;
-                        lock_file.sync_all()
-                    })();
-                    if let Err(error) = result {
-                        let _ = fs::remove_file(&lock_path);
-                        return Err(error.into());
-                    }
-                    return Ok(ContinuityLock { path: lock_path });
-                }
+            match ExclusiveFileLock::try_acquire(&lock_path) {
+                Ok(lock) => return Ok(ContinuityLock { _lock: lock }),
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -1040,13 +1027,7 @@ enum PersistMode {
 
 #[derive(Debug)]
 struct ContinuityLock {
-    path: PathBuf,
-}
-
-impl Drop for ContinuityLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
+    _lock: ExclusiveFileLock,
 }
 
 fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {

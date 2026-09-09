@@ -11,10 +11,7 @@ use time::OffsetDateTime;
 
 use crate::output_envelope::{AdaptedOutput, OutputMode};
 
-#[path = "tool_redaction.rs"]
-mod redaction;
-
-pub(crate) use redaction::{redact_args, redact_text};
+pub(crate) use crate::tool_redaction::{redact_args, redact_text};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -394,7 +394,8 @@ mod tests {
         assert!(
             !candidates
                 .iter()
-                .any(|path| path == Path::new("/work/repo/target/debug/browser/playwright_bridge.mjs"))
+                .any(|path| path
+                    == Path::new("/work/repo/target/debug/browser/playwright_bridge.mjs"))
         );
     }
 

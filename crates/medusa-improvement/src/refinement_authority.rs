@@ -880,7 +880,7 @@ fn recover_transaction(
         )
     })?;
 
-    let Some(candidate_journal) = transaction.journal else {
+    let Some(mut candidate_journal) = transaction.journal else {
         // Transactions written by the pre-recovery schema did not carry the
         // candidate authority. They can be discarded safely only while the
         // canonical journal is still at the recorded base revision.
