@@ -1744,6 +1744,7 @@ dependencies = [
 name = "medusa-session-continuity"
 version = "1.0.7"
 dependencies = [
+ "medusa-process-containment",
  "serde",
  "serde_json",
  "tempfile",

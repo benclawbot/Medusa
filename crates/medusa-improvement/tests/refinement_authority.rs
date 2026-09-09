@@ -203,6 +203,21 @@ fn projection_failure_does_not_publish_activation() {
         store.snapshot().expect("snapshot").revision,
         snapshot.revision
     );
+
+    // The durable candidate remains available for restart. Once the transient
+    // projection obstruction is repaired, reopening completes the same approved
+    // journal/projection commit instead of stranding refinement authority.
+    fs::remove_dir(&active_path).expect("remove projection obstruction");
+    let reopened = RefinementAuthorityStore::open(repo.path()).expect("recover candidate");
+    assert_eq!(
+        reopened
+            .snapshot()
+            .expect("snapshot")
+            .active
+            .first()
+            .map(|proposal| proposal.id.as_str()),
+        Some("p1")
+    );
 }
 
 #[test]

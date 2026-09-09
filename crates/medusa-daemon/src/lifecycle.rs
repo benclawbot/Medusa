@@ -14,7 +14,9 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
+#[cfg(not(windows))]
+use medusa_core::hidden_command;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 use crate::{DaemonClient, DaemonPaths, Request, Response};
 
@@ -61,6 +63,15 @@ impl DaemonLaunch {
     }
 
     fn spawn(&self, paths: &DaemonPaths) -> MedusaResult<()> {
+        // The Windows daemon must use the same process creation semantics as a
+        // foreground `medusa __daemon-serve` invocation. CREATE_NO_WINDOW was
+        // observed to leave the daemon process alive without a usable loopback
+        // endpoint on Windows, while the identical foreground command became
+        // ready immediately. Stdio is still disconnected, so no daemon output
+        // is attached to the interactive TUI.
+        #[cfg(windows)]
+        let mut command = Command::new(&self.executable);
+        #[cfg(not(windows))]
         let mut command = hidden_command(&self.executable);
         command
             .args(&self.arguments)
@@ -69,6 +80,7 @@ impl DaemonLaunch {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        #[cfg(any(unix, windows))]
         configure_detached(&mut command);
         command.spawn().map(|_| ()).map_err(|error| {
             MedusaError::new(
@@ -390,9 +402,11 @@ fn configure_detached(command: &mut Command) {
 
 #[cfg(windows)]
 fn configure_detached(command: &mut Command) {
+    // CREATE_NO_WINDOW prevents the daemon from publishing its loopback
+    // endpoint on affected Windows builds, but the process still needs its
+    // own console group so Ctrl+C in the frontend cannot terminate it.
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
 #[cfg(unix)]

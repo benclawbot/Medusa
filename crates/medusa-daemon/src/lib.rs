@@ -16,6 +16,9 @@ mod server;
 pub mod telegram;
 mod transport;
 
+use medusa_config::Config;
+use medusa_core::MedusaResult;
+
 pub use artifact_store::FrontendArtifactExport;
 pub use control_plane::{
     ControlPlaneError, RuntimeBinding, SupervisionControlPlane, SupervisionEvent,
@@ -39,6 +42,26 @@ pub use protocol::{
 };
 pub use scheduler::DaemonLimits;
 pub use server::{
-    DaemonClient, ServerHandle, serve, serve_with_config, serve_with_limits, spawn,
-    spawn_with_config, spawn_with_limits,
+    DaemonClient, ServerHandle, serve, serve_with_limits, spawn, spawn_with_config,
+    spawn_with_limits,
 };
+
+/// Starts the repository daemon and warms the reusable ChatGPT app-server in parallel.
+///
+/// Daemon readiness must not depend on provider/network readiness, so the warmup is
+/// best-effort and runs independently. When ChatGPT OAuth is already authenticated,
+/// the runtime consumes the warmed Codex app-server on the first turn instead of
+/// paying its cold process/protocol startup cost after prompt submission.
+pub fn serve_with_config(paths: DaemonPaths, config: Config) -> MedusaResult<()> {
+    if config.model.provider == "openai-oauth" {
+        let _ = std::thread::Builder::new()
+            .name("medusa-daemon-oauth-prewarm".to_owned())
+            .spawn(|| {
+                // Discovery checks the existing account without opening an OAuth browser.
+                // A successful call keeps the initialized app-server available for the
+                // first RuntimeController in this daemon process.
+                let _ = medusa_runtime::discover_openai_oauth_models();
+            });
+    }
+    server::serve_with_config(paths, config)
+}

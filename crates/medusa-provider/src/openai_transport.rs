@@ -51,18 +51,29 @@ pub(crate) fn complete_blocking(
             break;
         }
         decoder.push(&buffer[..read], |data| {
+            if completed.is_some() {
+                return Ok(());
+            }
+            if let Some(response) = accumulator.push_sse_data(data, sink)? {
+                completed = Some(response);
+            }
+            Ok(())
+        })?;
+        if completed.is_some() {
+            break;
+        }
+    }
+    if completed.is_none() {
+        decoder.finish(|data| {
+            if completed.is_some() {
+                return Ok(());
+            }
             if let Some(response) = accumulator.push_sse_data(data, sink)? {
                 completed = Some(response);
             }
             Ok(())
         })?;
     }
-    decoder.finish(|data| {
-        if let Some(response) = accumulator.push_sse_data(data, sink)? {
-            completed = Some(response);
-        }
-        Ok(())
-    })?;
     if completed.is_none() {
         completed = accumulator.finish_at_eof(sink)?;
     }
@@ -98,6 +109,30 @@ pub(crate) fn complete_cancellable(
                 let mut completed = None;
                 while let Some(chunk) = response.chunk().await.map_err(provider_error)? {
                     decoder.push(&chunk, |data| {
+                        if completed.is_some() {
+                            return Ok(());
+                        }
+                        let mut channel_sink = |event| {
+                            worker_sender
+                                .send(event)
+                                .map_err(|_| stream_error("OpenAI stream consumer disconnected"))
+                        };
+                        if let Some(response) =
+                            accumulator.push_sse_data(data, &mut channel_sink)?
+                        {
+                            completed = Some(response);
+                        }
+                        Ok(())
+                    })?;
+                    if completed.is_some() {
+                        break;
+                    }
+                }
+                if completed.is_none() {
+                    decoder.finish(|data| {
+                        if completed.is_some() {
+                            return Ok(());
+                        }
                         let mut channel_sink = |event| {
                             worker_sender
                                 .send(event)
@@ -111,17 +146,6 @@ pub(crate) fn complete_cancellable(
                         Ok(())
                     })?;
                 }
-                decoder.finish(|data| {
-                    let mut channel_sink = |event| {
-                        worker_sender
-                            .send(event)
-                            .map_err(|_| stream_error("OpenAI stream consumer disconnected"))
-                    };
-                    if let Some(response) = accumulator.push_sse_data(data, &mut channel_sink)? {
-                        completed = Some(response);
-                    }
-                    Ok(())
-                })?;
                 if completed.is_none() {
                     let mut channel_sink = |event| {
                         worker_sender
@@ -278,11 +302,12 @@ mod tests {
             );
             write!(
                 stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\n{body}"
             )
             .expect("response");
+            stream.flush().expect("flush response");
+            // A proxy may keep the HTTP connection open after the protocol-level [DONE].
+            thread::sleep(Duration::from_secs(2));
         });
 
         let client = AsyncClient::builder().http1_only().build().expect("client");
@@ -307,7 +332,7 @@ mod tests {
         });
 
         let (response, events) = done_receiver
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(1))
             .expect("stream completion should not wait on the sender")
             .expect("stream request");
         assert_eq!(response.blocks.len(), 1);

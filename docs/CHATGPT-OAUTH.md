@@ -4,7 +4,7 @@ Medusa's ChatGPT OAuth route uses the installed Codex CLI app-server over stdio.
 
 ## Setup
 
-Run `medusa config` and choose **ChatGPT OAuth via Codex app-server**. Medusa starts `codex app-server --stdio` when it needs account setup or a model turn. If Codex is not installed or is not on `PATH`, install the Codex CLI and retry.
+Run `medusa config` and choose **ChatGPT OAuth via Codex app-server**. Medusa starts `codex app-server --stdio` when it needs account setup or a model turn. When the repository daemon is configured for ChatGPT OAuth, it also makes a best-effort, non-interactive prewarm attempt during daemon startup so an already-authenticated first turn can reuse the initialized app-server. The prewarm never opens a browser; an account that is not signed in remains an explicit setup requirement. If Codex is not installed or is not on `PATH`, install the Codex CLI and retry.
 
 Before an interactive, `run`, or `resume` coding session starts, Medusa performs a bounded Codex app-server account/model preflight. The default fast preflight checks the authenticated ChatGPT account and configured model. For a full compatibility check, set `MEDUSA_OAUTH_PREFLIGHT=full`; live turn behavior is then exercised by the first actual request and:
 
