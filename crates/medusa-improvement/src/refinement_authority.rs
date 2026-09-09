@@ -726,9 +726,7 @@ impl RefinementAuthorityStore {
         // Approval bindings are durable before the journal event that references
         // them becomes visible. An interrupted write therefore leaves either the
         // old journal or a journal whose authority can be revalidated on restart.
-        if let Err(error) = persist_approvals(&self.root, approvals) {
-            return Err(error);
-        }
+        persist_approvals(&self.root, approvals)?;
         let journal_result =
             atomic_write(&self.journal_path(), &serde_json::to_vec_pretty(journal)?);
         if let Err(error) = journal_result {
@@ -872,6 +870,41 @@ fn recover_transaction(
     transaction: TransactionDocument,
 ) -> Result<(), RefinementAuthorityError> {
     let path = root.join("transactions/active.json");
+    let mut candidate_approvals = approvals.clone();
+    for binding in &transaction.approvals {
+        let key = (
+            binding.proposal_id.clone(),
+            binding.proposal_version,
+            binding.decision_id.clone(),
+        );
+        if let Some(existing) = candidate_approvals.get(&key)
+            && existing != binding
+        {
+            return Err(authority_corrupt(
+                root,
+                &path,
+                format!("conflicting approval binding for {}", binding.decision_id),
+            ));
+        }
+        candidate_approvals.insert(key, binding.clone());
+    }
+    // The serialized journal does not carry its in-memory authorization index.
+    // Rebuild that index before deriving the current projection; otherwise an
+    // interrupted publication containing an already-approved event is mistaken
+    // for an unapproved journal and quarantined before transaction recovery can
+    // finish.
+    let authority = DurableApprovalAuthority {
+        approvals: &candidate_approvals,
+    };
+    journal
+        .revalidate_approvals(&authority)
+        .map_err(|error| {
+            authority_corrupt(
+                root,
+                &root.join("journal.json"),
+                format!("journal recovery failed: {error}"),
+            )
+        })?;
     let current_snapshot = snapshot_from_journal(journal).map_err(|error| {
         authority_corrupt(
             root,
@@ -954,24 +987,6 @@ fn recover_transaction(
         ));
     }
 
-    let mut candidate_approvals = approvals.clone();
-    for binding in transaction.approvals {
-        let key = (
-            binding.proposal_id.clone(),
-            binding.proposal_version,
-            binding.decision_id.clone(),
-        );
-        if let Some(existing) = candidate_approvals.get(&key)
-            && existing != &binding
-        {
-            return Err(authority_corrupt(
-                root,
-                &path,
-                format!("conflicting approval binding for {}", binding.decision_id),
-            ));
-        }
-        candidate_approvals.insert(key, binding);
-    }
     let authority = DurableApprovalAuthority {
         approvals: &candidate_approvals,
     };

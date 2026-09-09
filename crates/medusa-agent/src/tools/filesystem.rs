@@ -425,25 +425,65 @@ fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
             "an approved external path must be absolute and narrower than a filesystem root",
         ));
     }
+    // Resolve against an existing real directory. A regular-file target is a
+    // valid replacement destination, so it must be treated as a suffix rather
+    // than as the canonicalization root; canonicalizing the file itself can
+    // make its parent appear to be a file and produce ENOTDIR during writes.
+    // Symlink ancestors are rejected while walking so an approved path cannot
+    // escape through a directory link between approval and publication.
     let mut existing = path;
-    while !existing.exists() {
-        existing = existing.parent().ok_or_else(|| {
-            MedusaError::new(
-                ErrorCode::PolicyDenied,
-                ErrorCategory::Policy,
-                "approved path has no existing confined ancestor",
-            )
-        })?;
+    let mut suffix = Vec::new();
+    loop {
+        match fs::symlink_metadata(existing) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(MedusaError::new(
+                    ErrorCode::PolicyDenied,
+                    ErrorCategory::Policy,
+                    "approved path traverses a symbolic link",
+                ));
+            }
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => {
+                let name = existing.file_name().ok_or_else(|| {
+                    MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        "approved path has no existing confined ancestor",
+                    )
+                })?;
+                suffix.push(name.to_os_string());
+                existing = existing.parent().ok_or_else(|| {
+                    MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        "approved path has no existing confined ancestor",
+                    )
+                })?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = existing.file_name().ok_or_else(|| {
+                    MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        "approved path has no existing confined ancestor",
+                    )
+                })?;
+                suffix.push(name.to_os_string());
+                existing = existing.parent().ok_or_else(|| {
+                    MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        "approved path has no existing confined ancestor",
+                    )
+                })?;
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
-    let canonical_existing = existing.canonicalize()?;
-    let suffix = path.strip_prefix(existing).map_err(|error| {
-        MedusaError::new(
-            ErrorCode::PolicyDenied,
-            ErrorCategory::Policy,
-            format!("approved path could not be confined: {error}"),
-        )
-    })?;
-    let resolved = canonical_existing.join(suffix);
+    let mut resolved = existing.canonicalize()?;
+    for component in suffix.iter().rev() {
+        resolved.push(component);
+    }
     reject_sensitive_approved_path(&resolved)?;
     if resolved.exists() && fs::symlink_metadata(&resolved)?.file_type().is_symlink() {
         return Err(MedusaError::new(

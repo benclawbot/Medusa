@@ -37,6 +37,7 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
         .open(path)
 }
@@ -47,6 +48,7 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(path)
 }
 
@@ -56,6 +58,7 @@ fn open_lock_file(path: &Path) -> io::Result<File> {
         .create(true)
         .read(true)
         .write(true)
+        .truncate(false)
         .open(path)
 }
 

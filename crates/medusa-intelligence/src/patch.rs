@@ -692,7 +692,7 @@ mod tests {
         fs::create_dir_all(&journal_directory).expect("journal directory");
         write_synced(&journal_directory.join("0.before"), b"aaa").expect("backup");
         write_synced(&journal_directory.join("0.after"), b"bbb").expect("staged");
-        let mut journal = PatchJournal {
+        let journal = PatchJournal {
             schema: JOURNAL_SCHEMA,
             transaction_id: transaction_id.to_owned(),
             state: JournalState::Applying,
