@@ -177,8 +177,18 @@ struct ProjectionDocument {
 struct TransactionDocument {
     schema_version: u32,
     base_revision: u64,
+    #[serde(default)]
+    base_head_hash: String,
     target_revision: u64,
     target_head_hash: String,
+    /// A transaction carries the candidate authority state so restart can finish a
+    /// publication after any individual file has become durable.
+    #[serde(default)]
+    journal: Option<RefinementJournal>,
+    #[serde(default)]
+    approvals: Vec<ApprovalBinding>,
+    #[serde(default)]
+    projection: Option<ProjectionDocument>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -214,7 +224,11 @@ impl RefinementAuthorityStore {
             Some(bytes) => serde_json::from_slice(bytes)
                 .map_err(|error| quarantine_corrupt(&root, "journal", bytes, error.to_string()))?,
         };
-        let approvals = load_approvals(&root)?;
+        let mut approvals = load_approvals(&root)?;
+        let transaction = load_transaction(&root)?;
+        if let Some(transaction) = transaction {
+            recover_transaction(&root, &mut journal, &mut approvals, transaction)?;
+        }
         let authority = DurableApprovalAuthority {
             approvals: &approvals,
         };
@@ -693,11 +707,32 @@ impl RefinementAuthorityStore {
         let transaction = TransactionDocument {
             schema_version: SCHEMA_VERSION,
             base_revision,
+            base_head_hash: self.journal.projection()?.head_hash().to_owned(),
             target_revision: snapshot.revision,
             target_head_hash: snapshot.journal_head_hash.clone(),
+            journal: Some(journal.clone()),
+            approvals: approvals.values().cloned().collect(),
+            projection: Some(ProjectionDocument {
+                schema_version: SCHEMA_VERSION,
+                revision: snapshot.revision,
+                journal_head_hash: snapshot.journal_head_hash.clone(),
+                active: snapshot.active.clone(),
+                records: snapshot.records.clone(),
+                conflict_keys: snapshot.conflict_keys.clone(),
+            }),
         };
         let transaction_path = self.transaction_path();
         atomic_write(&transaction_path, &serde_json::to_vec_pretty(&transaction)?)?;
+        // Approval bindings are durable before the journal event that references
+        // them becomes visible. An interrupted write therefore leaves either the
+        // old journal or a journal whose authority can be revalidated on restart.
+        if let Err(error) = persist_approvals(&self.root, approvals) {
+            return Err(error);
+        }
+        let journal_result = atomic_write(&self.journal_path(), &serde_json::to_vec_pretty(journal)?);
+        if let Err(error) = journal_result {
+            return Err(RefinementAuthorityError::Io(error));
+        }
         let projection = ProjectionDocument {
             schema_version: SCHEMA_VERSION,
             revision: snapshot.revision,
@@ -710,27 +745,9 @@ impl RefinementAuthorityStore {
             &self.projection_path(),
             &serde_json::to_vec_pretty(&projection)?,
         ) {
-            let _ = remove_file_if_present(&transaction_path);
             return Err(RefinementAuthorityError::ProjectionFailure {
                 reason: error.to_string(),
             });
-        }
-        let journal_result =
-            atomic_write(&self.journal_path(), &serde_json::to_vec_pretty(journal)?);
-        if let Err(error) = journal_result {
-            let _ = remove_file_if_present(&transaction_path);
-            return Err(RefinementAuthorityError::Io(error));
-        }
-        let approval_document = ApprovalDocument {
-            schema_version: SCHEMA_VERSION,
-            bindings: approvals.values().cloned().collect(),
-        };
-        if let Err(error) = atomic_write(
-            &self.approvals_path(),
-            &serde_json::to_vec_pretty(&approval_document)?,
-        ) {
-            let _ = remove_file_if_present(&transaction_path);
-            return Err(RefinementAuthorityError::Io(error));
         }
         let _ = remove_file_if_present(&transaction_path);
         Ok(())
@@ -793,10 +810,6 @@ impl RefinementAuthorityStore {
         self.root.join("journal.json")
     }
 
-    fn approvals_path(&self) -> PathBuf {
-        self.root.join("approvals.json")
-    }
-
     fn projection_path(&self) -> PathBuf {
         self.root.join("active.json")
     }
@@ -823,6 +836,198 @@ fn persisted_revision(path: &Path, root: &Path) -> Result<u64, RefinementAuthori
         )
     })?;
     Ok(journal.entries().len() as u64)
+}
+
+fn load_transaction(
+    root: &Path,
+) -> Result<Option<TransactionDocument>, RefinementAuthorityError> {
+    let path = root.join("transactions/active.json");
+    let Some(bytes) = read_optional(&path)? else {
+        return Ok(None);
+    };
+    let transaction = serde_json::from_slice(&bytes).map_err(|error| {
+        quarantine_corrupt(
+            root,
+            "transaction",
+            &bytes,
+            format!("transaction is invalid: {error}"),
+        )
+    })?;
+    if transaction.schema_version != SCHEMA_VERSION {
+        return Err(authority_corrupt(
+            root,
+            &path,
+            format!("unsupported transaction schema {}", transaction.schema_version),
+        ));
+    }
+    Ok(Some(transaction))
+}
+
+fn recover_transaction(
+    root: &Path,
+    journal: &mut RefinementJournal,
+    approvals: &mut BTreeMap<ApprovalKey, ApprovalBinding>,
+    transaction: TransactionDocument,
+) -> Result<(), RefinementAuthorityError> {
+    let path = root.join("transactions/active.json");
+    let current_snapshot = snapshot_from_journal(journal).map_err(|error| {
+        authority_corrupt(
+            root,
+            &root.join("journal.json"),
+            format!("journal recovery failed: {error}"),
+        )
+    })?;
+
+    let Some(candidate_journal) = transaction.journal else {
+        // Transactions written by the pre-recovery schema did not carry the
+        // candidate authority. They can be discarded safely only while the
+        // canonical journal is still at the recorded base revision.
+        if current_snapshot.revision == transaction.base_revision
+            && (transaction.base_head_hash.is_empty()
+                || current_snapshot.journal_head_hash == transaction.base_head_hash)
+        {
+            remove_file_if_present(&path)?;
+            return Ok(());
+        }
+        return Err(authority_corrupt(
+            root,
+            &path,
+            "interrupted transaction has no recoverable candidate journal".to_owned(),
+        ));
+    };
+    let candidate_snapshot = snapshot_from_journal(&candidate_journal).map_err(|error| {
+        authority_corrupt(
+            root,
+            &path,
+            format!("transaction candidate journal is invalid: {error}"),
+        )
+    })?;
+    if candidate_snapshot.revision != transaction.target_revision
+        || candidate_snapshot.journal_head_hash != transaction.target_head_hash
+    {
+        return Err(authority_corrupt(
+            root,
+            &path,
+            "transaction target does not match its candidate journal".to_owned(),
+        ));
+    }
+    if let Some(projection) = &transaction.projection {
+        if projection.schema_version != SCHEMA_VERSION
+            || projection.revision != candidate_snapshot.revision
+            || projection.journal_head_hash != candidate_snapshot.journal_head_hash
+            || projection.active != candidate_snapshot.active
+            || projection.records != candidate_snapshot.records
+            || projection.conflict_keys != candidate_snapshot.conflict_keys
+        {
+            return Err(authority_corrupt(
+                root,
+                &path,
+                "transaction projection does not match its candidate journal".to_owned(),
+            ));
+        }
+    }
+    let canonical_is_base = transaction.base_revision <= journal.entries().len()
+        && transaction.base_revision <= candidate_journal.entries().len()
+        && journal.entries()
+            == &candidate_journal.entries()[..transaction.base_revision as usize];
+    let canonical_is_target = journal == &candidate_journal;
+    if !canonical_is_base && !canonical_is_target {
+        return Err(authority_corrupt(
+            root,
+            &path,
+            "transaction base does not match the canonical journal".to_owned(),
+        ));
+    }
+    if !transaction.base_head_hash.is_empty()
+        && (current_snapshot.revision != transaction.base_revision
+            || current_snapshot.journal_head_hash != transaction.base_head_hash)
+        && (current_snapshot.revision != transaction.target_revision
+            || current_snapshot.journal_head_hash != transaction.target_head_hash)
+    {
+        return Err(authority_corrupt(
+            root,
+            &path,
+            "transaction base hash does not match the canonical journal".to_owned(),
+        ));
+    }
+
+    let mut candidate_approvals = approvals.clone();
+    for binding in transaction.approvals {
+        let key = (
+            binding.proposal_id.clone(),
+            binding.proposal_version,
+            binding.decision_id.clone(),
+        );
+        if let Some(existing) = candidate_approvals.get(&key)
+            && existing != &binding
+        {
+            return Err(authority_corrupt(
+                root,
+                &path,
+                format!("conflicting approval binding for {}", binding.decision_id),
+            ));
+        }
+        candidate_approvals.insert(key, binding);
+    }
+    let authority = DurableApprovalAuthority {
+        approvals: &candidate_approvals,
+    };
+    candidate_journal.revalidate_approvals(&authority)?;
+
+    let at_target = current_snapshot.revision == transaction.target_revision
+        && current_snapshot.journal_head_hash == transaction.target_head_hash;
+    if !at_target {
+        // Approval bindings are published first. A restart after this point can
+        // safely publish the candidate journal and projection from the same
+        // durable transaction record without ever exposing an unapproved event.
+        persist_approvals(root, &candidate_approvals)?;
+        atomic_write(
+            &root.join("journal.json"),
+            &serde_json::to_vec_pretty(&candidate_journal)?,
+        )?;
+        persist_projection(root, &candidate_snapshot)?;
+        *journal = candidate_journal;
+    } else if candidate_approvals != *approvals {
+        // The journal was already published before the interruption; finish the
+        // approval side of the same commit before revalidation.
+        persist_approvals(root, &candidate_approvals)?;
+    }
+    *approvals = candidate_approvals;
+    Ok(())
+}
+
+fn persist_approvals(
+    root: &Path,
+    approvals: &BTreeMap<ApprovalKey, ApprovalBinding>,
+) -> Result<(), RefinementAuthorityError> {
+    let document = ApprovalDocument {
+        schema_version: SCHEMA_VERSION,
+        bindings: approvals.values().cloned().collect(),
+    };
+    atomic_write(
+        &root.join("approvals.json"),
+        &serde_json::to_vec_pretty(&document)?,
+    )?;
+    Ok(())
+}
+
+fn persist_projection(
+    root: &Path,
+    snapshot: &RefinementAuthoritySnapshot,
+) -> Result<(), RefinementAuthorityError> {
+    let projection = ProjectionDocument {
+        schema_version: SCHEMA_VERSION,
+        revision: snapshot.revision,
+        journal_head_hash: snapshot.journal_head_hash.clone(),
+        active: snapshot.active.clone(),
+        records: snapshot.records.clone(),
+        conflict_keys: snapshot.conflict_keys.clone(),
+    };
+    atomic_write(
+        &root.join("active.json"),
+        &serde_json::to_vec_pretty(&projection)?,
+    )?;
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]

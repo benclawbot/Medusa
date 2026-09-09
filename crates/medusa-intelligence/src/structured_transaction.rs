@@ -1,8 +1,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,7 @@ use crate::{
 
 const JOURNAL_SCHEMA: u32 = 1;
 const JOURNAL_ROOT: &str = ".medusa/structured-transactions";
+static REPLACEMENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Durable transaction lifecycle persisted before and after each mutation phase.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -64,6 +66,12 @@ struct StructuredTransactionJournal {
     plan: StructuredEditPlan,
     audit: StructuredEditAudit,
     paths: Vec<JournalPath>,
+    /// Paths for which publication is durably intended. This is written before each
+    /// destructive operation so recovery can identify a mutation even if the process
+    /// stops before `applied_paths` is persisted.
+    #[serde(default)]
+    intent_paths: BTreeSet<PathBuf>,
+    #[serde(default)]
     applied_paths: BTreeSet<PathBuf>,
 }
 
@@ -372,17 +380,33 @@ fn prepare_journal(
     let mut paths = Vec::new();
     for (index, (path, final_content)) in final_files.into_iter().enumerate() {
         let absolute = repo.join(&path);
-        let before = absolute
-            .is_file()
-            .then(|| fs::read(&absolute))
+        let before_metadata = match fs::metadata(&absolute) {
+            Ok(metadata) if metadata.is_file() => Some(metadata),
+            Ok(_) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        let before = before_metadata
+            .as_ref()
+            .map(|_| fs::read(&absolute))
             .transpose()?;
         let backup_file = before.as_ref().map(|_| format!("{index}.before"));
         let staged_file = final_content.as_ref().map(|_| format!("{index}.after"));
         if let (Some(name), Some(bytes)) = (&backup_file, &before) {
-            write_synced(&directory.join(name), bytes)?;
+            let backup_path = directory.join(name);
+            write_synced(&backup_path, bytes)?;
+            if let Some(metadata) = &before_metadata {
+                fs::set_permissions(backup_path, metadata.permissions())?;
+            }
         }
         if let (Some(name), Some(bytes)) = (&staged_file, &final_content) {
-            write_synced(&directory.join(name), bytes)?;
+            let staged_path = directory.join(name);
+            write_synced(&staged_path, bytes)?;
+            if let Some(metadata) = &before_metadata {
+                // Replacing an existing file must retain its mode/read-only state.
+                // The staged file carries that metadata into both apply and recovery.
+                fs::set_permissions(staged_path, metadata.permissions())?;
+            }
         }
         paths.push(JournalPath {
             path,
@@ -400,6 +424,7 @@ fn prepare_journal(
         plan,
         audit,
         paths,
+        intent_paths: BTreeSet::new(),
         applied_paths: BTreeSet::new(),
     })
 }
@@ -442,6 +467,19 @@ fn apply_staged(
 ) -> Result<(), StructuredTransactionError> {
     for (index, entry) in journal.paths.clone().into_iter().enumerate() {
         let destination = repo.join(&entry.path);
+        let actual = file_hash(&destination)?;
+        if actual != entry.before_hash {
+            return Err(StructuredTransactionError::StaleWorkspace {
+                path: entry.path.clone(),
+                expected: entry
+                    .before_hash
+                    .clone()
+                    .unwrap_or_else(|| "<missing>".to_owned()),
+                actual,
+            });
+        }
+        journal.intent_paths.insert(entry.path.clone());
+        persist_journal(directory, journal)?;
         if let Some(staged) = &entry.staged_file {
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
@@ -487,10 +525,25 @@ fn rollback(
     journal.state = StructuredTransactionState::RollingBack;
     persist_journal(directory, journal)?;
     for entry in journal.paths.iter().rev() {
-        if !journal.applied_paths.contains(&entry.path) {
+        if !journal.intent_paths.contains(&entry.path)
+            && !journal.applied_paths.contains(&entry.path)
+        {
             continue;
         }
         let destination = repo.join(&entry.path);
+        let actual = file_hash(&destination)?;
+        if actual == entry.before_hash {
+            // The durable intent may have been written before publication. There is
+            // nothing to restore in this case.
+            continue;
+        }
+        if actual != entry.after_hash {
+            return Err(StructuredTransactionError::VerificationMismatch {
+                path: entry.path.clone(),
+                expected: entry.after_hash.clone(),
+                actual,
+            });
+        }
         if let Some(backup) = &entry.backup_file {
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent)?;
@@ -499,12 +552,12 @@ fn rollback(
         } else if destination.exists() {
             fs::remove_file(&destination)?;
         }
-        let actual = file_hash(&destination)?;
-        if actual != entry.before_hash {
+        let restored = file_hash(&destination)?;
+        if restored != entry.before_hash {
             return Err(StructuredTransactionError::VerificationMismatch {
                 path: entry.path.clone(),
                 expected: entry.before_hash.clone(),
-                actual,
+                actual: restored,
             });
         }
     }
@@ -585,14 +638,122 @@ fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), StructuredTransactionEr
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn replace_file(source: &Path, destination: &Path) -> Result<(), StructuredTransactionError> {
-    let temporary = destination.with_extension("medusa-structured-replace");
-    write_synced(&temporary, &fs::read(source)?)?;
-    fs::rename(&temporary, destination)?;
-    if let Some(parent) = destination.parent() {
-        sync_directory(parent)?;
+    let bytes = fs::read(source)?;
+    let permissions = fs::metadata(source)?.permissions();
+    let nonce = REPLACEMENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut temporary_name = destination
+        .file_name()
+        .ok_or_else(|| {
+            StructuredTransactionError::InvalidPlan(
+                "transaction destination has no file name".to_owned(),
+            )
+        })?
+        .to_os_string();
+    temporary_name.push(format!(
+        ".medusa-structured-replace-{}-{nonce}",
+        std::process::id()
+    ));
+    let temporary = destination.with_file_name(temporary_name);
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::set_permissions(&temporary, permissions)?;
+        fs::rename(&temporary, destination)?;
+        if let Some(parent) = destination.parent() {
+            sync_directory(parent)?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    Ok(())
+    result.map_err(StructuredTransactionError::from)
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> Result<(), StructuredTransactionError> {
+    let bytes = fs::read(source)?;
+    let permissions = fs::metadata(source)?.permissions();
+    let nonce = REPLACEMENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut temporary_name = destination
+        .file_name()
+        .ok_or_else(|| {
+            StructuredTransactionError::InvalidPlan(
+                "transaction destination has no file name".to_owned(),
+            )
+        })?
+        .to_os_string();
+    temporary_name.push(format!(
+        ".medusa-structured-replace-{}-{nonce}",
+        std::process::id()
+    ));
+    let temporary = destination.with_file_name(temporary_name);
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::set_permissions(&temporary, permissions)?;
+
+        if fs::symlink_metadata(destination).is_err() {
+            fs::rename(&temporary, destination)?;
+            return Ok(());
+        }
+
+        let parent = destination.parent().ok_or_else(|| {
+            StructuredTransactionError::InvalidPlan(
+                "transaction destination has no parent".to_owned(),
+            )
+        })?;
+        let mut backup = None;
+        for backup_index in 0..16_u32 {
+            let candidate = parent.join(format!(
+                ".{}.medusa-structured-backup-{}-{backup_index}",
+                destination
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("target"),
+                std::process::id()
+            ));
+            match fs::rename(destination, &candidate) {
+                Ok(()) => {
+                    backup = Some(candidate);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let backup = backup.ok_or_else(|| {
+            StructuredTransactionError::InvalidPlan(
+                "could not allocate a structured replacement backup path".to_owned(),
+            )
+        })?;
+        match fs::rename(&temporary, destination) {
+            Ok(()) => {
+                let _ = fs::remove_file(backup);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = fs::rename(backup, destination);
+                Err(error.into())
+            }
+        }
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 fn sync_directory(path: &Path) -> Result<(), StructuredTransactionError> {
@@ -648,6 +809,30 @@ mod tests {
         .into_iter()
         .collect();
         (plan, snapshots)
+    }
+
+    fn one_file_plan(id: &str) -> (StructuredEditPlan, BTreeMap<PathBuf, FileSnapshot>) {
+        let mut plan = StructuredEditPlan::new(id);
+        plan.add_text_edit(StructuredTextEdit {
+            path: "a.txt".into(),
+            file_hash: Some(hash(b"old")),
+            file_version: Some(1),
+            range: EditRange {
+                start_byte: 0,
+                end_byte: 3,
+            },
+            replacement: "new".to_owned(),
+            metadata: EditMetadata {
+                intent: "test".to_owned(),
+                provenance: "unit".to_owned(),
+                annotation: None,
+            },
+            preconditions: EditPreconditions {
+                expected_content: Some("old".to_owned()),
+                ..EditPreconditions::default()
+            },
+        });
+        (plan, BTreeMap::from([(PathBuf::from("a.txt"), snapshot("old"))]))
     }
 
     #[test]
@@ -738,5 +923,90 @@ mod tests {
                 "old"
             );
         }
+    }
+
+    #[test]
+    fn recovery_restores_path_when_process_stops_before_applied_journal() {
+        let repo = tempfile::tempdir().expect("repo");
+        fs::write(repo.path().join("a.txt"), "old").expect("a");
+        let (plan, snapshots) = one_file_plan("recovery-window");
+        let directory = repo
+            .path()
+            .join(JOURNAL_ROOT)
+            .join(plan.id.clone());
+        fs::create_dir_all(&directory).expect("journal directory");
+        let audit = plan.validate(&snapshots).expect("audit");
+        let mut journal = prepare_journal(
+            repo.path(),
+            plan,
+            audit,
+            BTreeMap::from([(PathBuf::from("a.txt"), Some(b"new".to_vec()))]),
+            &directory,
+        )
+        .expect("prepare");
+        journal.state = StructuredTransactionState::Applying;
+        persist_journal(&directory, &journal).expect("applying journal");
+        journal.intent_paths.insert(PathBuf::from("a.txt"));
+        persist_journal(&directory, &journal).expect("intent journal");
+        replace_file(&directory.join("0.after"), &repo.path().join("a.txt"))
+            .expect("publish without applied journal");
+
+        let recovered = recover_structured_transactions(repo.path()).expect("recover");
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).expect("a"), "old");
+    }
+
+    #[test]
+    fn recovery_refuses_to_overwrite_external_edit() {
+        let repo = tempfile::tempdir().expect("repo");
+        fs::write(repo.path().join("a.txt"), "old").expect("a");
+        let (plan, snapshots) = one_file_plan("recovery-conflict");
+        let directory = repo
+            .path()
+            .join(JOURNAL_ROOT)
+            .join(plan.id.clone());
+        fs::create_dir_all(&directory).expect("journal directory");
+        let audit = plan.validate(&snapshots).expect("audit");
+        let mut journal = prepare_journal(
+            repo.path(),
+            plan,
+            audit,
+            BTreeMap::from([(PathBuf::from("a.txt"), Some(b"new".to_vec()))]),
+            &directory,
+        )
+        .expect("prepare");
+        journal.state = StructuredTransactionState::Applying;
+        journal.intent_paths.insert(PathBuf::from("a.txt"));
+        persist_journal(&directory, &journal).expect("intent journal");
+        fs::write(repo.path().join("a.txt"), "external").expect("external edit");
+
+        let error = recover_structured_transactions(repo.path()).expect_err("conflict");
+        assert!(matches!(
+            error,
+            StructuredTransactionError::VerificationMismatch { .. }
+        ));
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).expect("a"),
+            "external"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacement_preserves_mode_and_sibling_canary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = tempfile::tempdir().expect("repo");
+        let path = repo.path().join("script.sh");
+        fs::write(&path, "old").expect("script");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("mode");
+        let sibling = path.with_extension("medusa-structured-replace");
+        fs::write(&sibling, "canary").expect("sibling");
+        let (mut plan, _) = one_file_plan("metadata");
+        plan.text_edits[0].path = "script.sh".into();
+        let snapshots = BTreeMap::from([(PathBuf::from("script.sh"), snapshot("old"))]);
+        apply_structured_transaction(repo.path(), plan, &snapshots, None).expect("commit");
+        assert_eq!(fs::read(&sibling).expect("sibling"), b"canary");
+        assert_eq!(fs::metadata(&path).expect("metadata").permissions().mode() & 0o777, 0o755);
     }
 }

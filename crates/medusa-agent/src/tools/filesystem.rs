@@ -1,4 +1,9 @@
-use std::{fs, path::Path};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use walkdir::WalkDir;
@@ -12,6 +17,7 @@ use crate::{
 
 const MAX_SEARCH_FILES: usize = 10_000;
 const MAX_SEARCH_BYTES: u64 = 32 * 1024 * 1024;
+static APPROVED_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const IGNORED_DIRECTORY_NAMES: &[&str] = &[
     ".git",
     ".medusa",
@@ -142,24 +148,140 @@ pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
 
 pub(crate) fn write_approved(path: &str, content: &str) -> MedusaResult<String> {
     let path = approved_absolute_path(path)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let original_permissions = fs::metadata(&path)
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "approved path has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+    let original_permissions = fs::symlink_metadata(&path)
         .ok()
+        .filter(|metadata| !metadata.file_type().is_symlink())
         .map(|metadata| metadata.permissions());
-    let temporary = path.with_extension("medusa-approved-tmp");
-    fs::write(&temporary, content)?;
-    if let Some(permissions) = original_permissions {
-        fs::set_permissions(&temporary, permissions)?;
+    let (temporary, mut file) = create_approved_temporary(parent, &path)?;
+    let result = (|| {
+        file.write_all(content.as_bytes())?;
+        if let Some(permissions) = original_permissions {
+            fs::set_permissions(&temporary, permissions)?;
+        }
+        file.sync_all()?;
+        drop(file);
+        // Recheck immediately before publication. A destination that became a
+        // symlink after approval must never be followed or replaced.
+        if fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "approved destination became a symbolic link",
+            ));
+        }
+        replace_approved_file(&temporary, &path)?;
+        sync_parent_directory(parent);
+        Ok::<(), std::io::Error>(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    fs::rename(&temporary, &path)?;
+    result?;
     Ok(format!(
         "wrote {} bytes to {}",
         content.len(),
         path.display()
     ))
 }
+
+fn create_approved_temporary(parent: &Path, destination: &Path) -> MedusaResult<(PathBuf, File)> {
+    let name = destination
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_else(|| std::borrow::Cow::Borrowed("medusa"));
+    for _ in 0..16 {
+        let sequence = APPROVED_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".{name}.{sequence}.medusa-approved-tmp"));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => return Ok((candidate, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(medusa_core::MedusaError::new(
+        ErrorCode::PersistenceFailed,
+        ErrorCategory::Persistence,
+        "could not allocate a unique approved-write temporary path",
+    ))
+}
+
+#[cfg(not(windows))]
+fn replace_approved_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, destination)
+}
+
+#[cfg(windows)]
+fn replace_approved_file(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::rename(temporary, destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Windows std::fs::rename cannot replace an existing file. Move the
+            // old inode aside first, then publish the staged inode. If publish
+            // fails, restore the old inode before returning the error.
+            let parent = destination.parent().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "destination has no parent")
+            })?;
+            let name = destination
+                .file_name()
+                .map(|value| value.to_string_lossy())
+                .unwrap_or_else(|| std::borrow::Cow::Borrowed("medusa"));
+            let mut backup = None;
+            for sequence in 0..16_u32 {
+                let candidate = parent.join(format!(".{name}.{sequence}.medusa-approved-backup"));
+                match fs::rename(destination, &candidate) {
+                    Ok(()) => {
+                        backup = Some(candidate);
+                        break;
+                    }
+                    Err(rename_error) if rename_error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        continue
+                    }
+                    Err(rename_error) => return Err(rename_error),
+                }
+            }
+            let backup = backup.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    "could not allocate an approved-write backup path",
+                )
+            })?;
+            match fs::rename(temporary, destination) {
+                Ok(()) => {
+                    let _ = fs::remove_file(backup);
+                    Ok(())
+                }
+                Err(publish_error) => {
+                    let _ = fs::rename(&backup, destination);
+                    Err(publish_error)
+                }
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(parent: &Path) {
+    if let Ok(directory) = fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &Path) {}
 
 pub(crate) fn create_dir_approved(path: &str) -> MedusaResult<String> {
     let path = approved_absolute_path(path)?;
@@ -384,7 +506,7 @@ mod tests {
 
     use super::{
         approved_absolute_path, create_dir, normalized_policy_path, read,
-        reject_sensitive_approved_path, search, write,
+        reject_sensitive_approved_path, search, write, write_approved,
     };
 
     #[test]
@@ -411,6 +533,47 @@ mod tests {
         let matches = search(directory.path(), "beta").expect("search");
         assert!(matches.contains("nested/value.txt:2:beta"));
         assert!(!matches.contains("hidden.txt"));
+    }
+
+    #[test]
+    fn approved_write_uses_an_exclusive_unique_temporary_and_preserves_canaries() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("approved.txt");
+        let fixed_name = target.with_extension("medusa-approved-tmp");
+        let canary = directory.path().join("canary.txt");
+        fs::write(&canary, "canary").expect("canary");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&canary, &fixed_name).expect("temporary symlink canary");
+        #[cfg(not(unix))]
+        fs::write(&fixed_name, "temporary canary").expect("temporary canary");
+
+        write_approved(&target.to_string_lossy(), "approved").expect("approved write");
+
+        assert_eq!(fs::read_to_string(&target).expect("target"), "approved");
+        assert_eq!(fs::read_to_string(&canary).expect("canary"), "canary");
+        #[cfg(unix)]
+        assert!(fs::symlink_metadata(&fixed_name)
+            .expect("temporary path")
+            .file_type()
+            .is_symlink());
+        #[cfg(not(unix))]
+        assert_eq!(fs::read_to_string(&fixed_name).expect("temporary canary"), "temporary canary");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approved_write_preserves_existing_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("executable");
+        fs::write(&target, "old").expect("target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o751)).expect("mode");
+
+        write_approved(&target.to_string_lossy(), "new").expect("approved write");
+
+        assert_eq!(fs::read_to_string(&target).expect("target"), "new");
+        assert_eq!(fs::metadata(&target).expect("metadata").permissions().mode() & 0o777, 0o751);
     }
 
     #[test]

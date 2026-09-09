@@ -14,9 +14,11 @@ fill execution gaps in remote connectors without exposing an arbitrary shell.
 - Runs every action from one resolved repository root.
 - Starts read-only unless `--allow-mutation` is supplied.
 - Removes secrets and most inherited environment variables.
-- Rejects Git configuration and executable override arguments.
+- Validates extra arguments separately for each action. Read-only actions reject
+  output redirection, executable overrides and repository-escaping paths.
 - Serializes commands to avoid concurrent repository mutation.
-- Limits request and command-output sizes.
+- Limits request and command-output sizes while draining both streams
+  incrementally, and terminates the complete child process tree on timeout.
 - Records every accepted or rejected request in `.git/medusa-bridge-audit.jsonl`.
 
 The service rejects non-loopback `--host` values before server startup. The

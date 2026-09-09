@@ -189,6 +189,37 @@ it("resumes a saved session in place without reloading the window", async () => 
   expect(screen.getByRole("heading", { name: "repo" })).toBeInTheDocument();
 });
 
+it("keeps polling the original runtime after a resume transition fails", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "/repo" });
+  vi.mocked(resumeRuntime).mockResolvedValue({ runtimeId: "runtime-resumed", repo: "/repo" });
+  vi.mocked(configureRuntime)
+    .mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(new Error("resume configuration rejected"));
+  let transitionFailed = false;
+  let delivered = false;
+  vi.mocked(pollRuntime).mockImplementation(async (runtimeId) => {
+    if (runtimeId === "runtime-general" && transitionFailed && !delivered) {
+      delivered = true;
+      return [{ type: "notice", title: "Original runtime still connected" }];
+    }
+    return [];
+  });
+  render(<App />);
+
+  await waitFor(() => expect(startRuntime).toHaveBeenCalledWith(undefined));
+  await waitFor(() => expect(configureRuntime).toHaveBeenCalledWith(
+    "runtime-general",
+    expect.objectContaining({ provider: "minimax" }),
+  ));
+  requestRuntimeResume("session-fails-to-configure");
+  await waitFor(() => expect(closeRuntime).toHaveBeenCalledWith("runtime-resumed"));
+  transitionFailed = true;
+
+  expect(await screen.findByText("Original runtime still connected", {}, { timeout: 2_000 })).toBeInTheDocument();
+  expect(pollRuntime).toHaveBeenCalledWith("runtime-general");
+  expect(pollRuntime).not.toHaveBeenCalledWith("runtime-resumed");
+});
+
 it("starts the desktop before OAuth preflight completes", async () => {
   vi.mocked(loadSharedConfiguration).mockResolvedValue({
     revision: 0,
@@ -490,6 +521,42 @@ it("ignores duplicate submit events while the first request is in flight", async
 
   expect(submitRuntime).toHaveBeenCalledTimes(1);
   resolveSubmit("started");
+});
+
+it("preserves a newer composer draft when an earlier send resolves", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  let resolveSubmit: (value: "started" | "queued") => void = () => undefined;
+  vi.mocked(submitRuntime).mockReturnValue(new Promise((resolve) => { resolveSubmit = resolve; }));
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "First request" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(composer).toHaveValue("");
+
+  fireEvent.change(composer, { target: { value: "Next request" } });
+  resolveSubmit("started");
+
+  await waitFor(() => expect(composer).toHaveValue("Next request"));
+  await waitFor(() => expect(JSON.parse(window.localStorage.getItem("medusa.desktop.draft.v1:__general__") ?? "{}"))
+    .toMatchObject({ text: "Next request", attachments: [] }));
+  expect(submitRuntime).toHaveBeenCalledTimes(1);
+});
+
+it("does not clear edited composer text when a slash command resolves", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  let resolveCommand: () => void = () => undefined;
+  vi.mocked(runRuntimeCommand).mockReturnValue(new Promise<void>((resolve) => { resolveCommand = resolve; }));
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "/status" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  fireEvent.change(composer, { target: { value: "Guidance for the next turn" } });
+  resolveCommand();
+
+  await waitFor(() => expect(composer).toHaveValue("Guidance for the next turn"));
+  expect(runRuntimeCommand).toHaveBeenCalledWith("runtime-general", "/status");
 });
 
 it("uses a stop square while working and re-enables send for steering input", async () => {
@@ -888,6 +955,44 @@ it("adds a fallback summary when a turn finishes without assistant text", async 
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
   expect(await screen.findByText("The turn finished successfully, but Medusa did not return a chat summary. Check Work for the execution details.")).toBeInTheDocument();
+});
+
+it("flushes a batched assistant delta before deciding that completion lacks a summary", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([
+      { type: "started" },
+      { type: "assistantText", text: "The real answer arrived." },
+      { type: "completed", sessionId: "session-batched" },
+    ])
+    .mockResolvedValue([]);
+  const requestAnimationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Answer this" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  expect(await screen.findByText("The real answer arrived.")).toBeInTheDocument();
+  expect(screen.queryByText("The request completed successfully, but Medusa did not return a chat summary. Check Work for the execution details.")).not.toBeInTheDocument();
+  requestAnimationFrame.mockRestore();
+});
+
+it("handles duplicate terminal events without duplicating the fallback summary", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{ type: "started" }, { type: "completed", sessionId: "session-duplicate" }, { type: "turnFinished" }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Finish without text" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  const fallback = await screen.findByText("The request completed successfully, but Medusa did not return a chat summary. Check Work for the execution details.");
+  expect(screen.getAllByText(fallback.textContent ?? "")).toHaveLength(1);
 });
 
 it("shows a rendered result in the shared side panel when a turn reports a failed step", async () => {

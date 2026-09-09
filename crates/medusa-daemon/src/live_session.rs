@@ -209,13 +209,33 @@ impl LiveSessionBroker {
         occurred_at_unix_ms: i64,
         event_id: impl Into<String>,
     ) -> Result<ContinuitySession, LiveSessionBrokerError> {
-        let attachment = self
+        let event_id = event_id.into();
+        let mut attachment = self
             .attachments
             .remove(client_id)
             .ok_or_else(|| LiveSessionBrokerError::ClientNotAttached(client_id.to_owned()))?;
-        attachment
-            .detach(occurred_at_unix_ms, event_id)
-            .map_err(Into::into)
+        let result = (|| {
+            // Refresh before detaching so an update from a sibling client does not turn a local
+            // cached revision into an avoidable conflict. A race after this refresh is handled by
+            // one bounded retry below.
+            attachment.refresh_continuity()?;
+            match attachment.detach_durable(occurred_at_unix_ms, event_id.clone()) {
+                Ok(session) => Ok(session),
+                Err(error) if error.to_string().contains("session revision is stale") => {
+                    attachment.refresh_continuity()?;
+                    attachment
+                        .detach_durable(occurred_at_unix_ms, event_id.clone())
+                }
+                Err(error) => Err(error),
+            }
+        })();
+        match result {
+            Ok(session) => Ok(session),
+            Err(error) => {
+                self.attachments.insert(client_id.to_owned(), attachment);
+                Err(error.into())
+            }
+        }
     }
 
     /// Transfers an owner attachment into the production runtime controller.
@@ -597,6 +617,65 @@ mod tests {
             ))
             .expect_err("session switch must fail");
         assert!(error.to_string().contains("already bound"));
+    }
+
+    #[test]
+    fn detach_refreshes_stale_broker_revision_before_removing_handle() {
+        let repository = tempfile::tempdir().expect("repository");
+        let session = AgentEngine::new(UnusedProvider, Config::default())
+            .create_session(repository.path(), "Detach after sibling update".to_owned())
+            .expect("session");
+        let session_id = session.id.to_string();
+        let mut broker = LiveSessionBroker::new(repository.path().to_path_buf());
+        let first = broker
+            .attach(request(
+                &session_id,
+                "desktop-a",
+                ClientKind::Desktop,
+                AttachmentMode::Owner,
+                0,
+                0,
+                "attach-a",
+            ))
+            .expect("first attach");
+        broker
+            .attach(request(
+                &session_id,
+                "telegram-b",
+                ClientKind::Telegram,
+                AttachmentMode::ReadOnly,
+                first.continuity_revision,
+                0,
+                "attach-b",
+            ))
+            .expect("second attach");
+        // Advance continuity using the sibling, leaving desktop-a's cached revision stale.
+        broker
+            .acknowledge_cursor("telegram-b", 1, 40_001, "ack-b")
+            .expect("sibling update");
+
+        let detached = broker
+            .detach("desktop-a", 40_002, "detach-a")
+            .expect("stale detach should refresh and succeed");
+        assert!(detached
+            .attachments
+            .iter()
+            .all(|attachment| attachment.client_id != "desktop-a"));
+        assert!(broker.attachments.get("desktop-a").is_none());
+        assert!(broker.attachments.contains_key("telegram-b"));
+        let durable = ContinuityStore::new(
+            repository
+                .path()
+                .join(".medusa/continuity")
+                .join(format!("{session_id}.json")),
+        )
+        .load()
+        .expect("durable continuity");
+        assert!(durable
+            .attachments
+            .iter()
+            .all(|attachment| attachment.client_id != "desktop-a"));
+        assert_eq!(durable.attachments.len(), 1);
     }
 
     #[test]

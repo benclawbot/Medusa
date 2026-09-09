@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -71,6 +71,12 @@ struct PatchJournal {
     transaction_id: String,
     state: JournalState,
     entries: Vec<JournalEntry>,
+    /// Paths for which publication is durably intended. This is written before each
+    /// destructive operation so recovery can identify a mutation even if the process
+    /// stops before `applied_paths` is persisted.
+    #[serde(default)]
+    intent_paths: BTreeSet<PathBuf>,
+    #[serde(default)]
     applied_paths: BTreeSet<PathBuf>,
 }
 
@@ -250,6 +256,7 @@ impl PatchTransaction {
             transaction_id: transaction_id.clone(),
             state: JournalState::Prepared,
             entries,
+            intent_paths: BTreeSet::new(),
             applied_paths: BTreeSet::new(),
         };
         persist_journal(&directory, &journal)?;
@@ -269,6 +276,8 @@ impl PatchTransaction {
                     relative.display()
                 )));
             }
+            journal.intent_paths.insert(relative.clone());
+            persist_journal(&directory, &journal)?;
             replace_file(&directory.join(&entry.staged), destination)?;
             journal.applied_paths.insert(relative.clone());
             persist_journal(&directory, &journal)?;
@@ -332,13 +341,27 @@ fn rollback(repo: &Path, directory: &Path, journal: &mut PatchJournal) -> Medusa
     journal.state = JournalState::RollingBack;
     persist_journal(directory, journal)?;
     for entry in journal.entries.iter().rev() {
-        if !journal.applied_paths.contains(&entry.path) {
+        if !journal.intent_paths.contains(&entry.path)
+            && !journal.applied_paths.contains(&entry.path)
+        {
             continue;
         }
         let destination = repo.join(&entry.path);
+        let actual = file_hash(&destination)?;
+        if actual.as_deref() == Some(entry.before_hash.as_str()) {
+            // The durable intent may have been written before publication. There is
+            // nothing to restore in this case.
+            continue;
+        }
+        if actual.as_deref() != Some(entry.after_hash.as_str()) {
+            return Err(invalid(format!(
+                "rollback conflict for {}: expected pre- or post-transaction content, found {actual:?}",
+                entry.path.display()
+            )));
+        }
         replace_file(&directory.join(&entry.backup), &destination)?;
-        let restored = fs::read(&destination)?;
-        if hash(&restored) != entry.before_hash {
+        let restored = file_hash(&destination)?;
+        if restored.as_deref() != Some(entry.before_hash.as_str()) {
             return Err(invalid(format!(
                 "rollback hash mismatch for {}",
                 entry.path.display()
@@ -409,21 +432,118 @@ fn write_synced(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
     let bytes = fs::read(source)?;
     let permissions = fs::metadata(source)?.permissions();
     let nonce = REPLACEMENT_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary = destination.with_extension(format!(
-        "medusa-transaction-replace-{}-{nonce}",
+    let mut temporary_name = destination
+        .file_name()
+        .ok_or_else(|| invalid("transaction destination has no file name"))?
+        .to_os_string();
+    temporary_name.push(format!(
+        ".medusa-transaction-replace-{}-{nonce}",
         std::process::id()
     ));
-    write_synced(&temporary, &bytes)?;
-    fs::set_permissions(&temporary, permissions)?;
-    fs::rename(&temporary, destination)?;
-    if let Some(parent) = destination.parent() {
-        sync_directory(parent)?;
+    let temporary = destination.with_file_name(temporary_name);
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::set_permissions(&temporary, permissions)?;
+        fs::rename(&temporary, destination)?;
+        if let Some(parent) = destination.parent() {
+            sync_directory(parent)?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    Ok(())
+    result.map_err(Into::into)
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
+    let bytes = fs::read(source)?;
+    let permissions = fs::metadata(source)?.permissions();
+    let nonce = REPLACEMENT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut temporary_name = destination
+        .file_name()
+        .ok_or_else(|| invalid("transaction destination has no file name"))?
+        .to_os_string();
+    temporary_name.push(format!(
+        ".medusa-transaction-replace-{}-{nonce}",
+        std::process::id()
+    ));
+    let temporary = destination.with_file_name(temporary_name);
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::set_permissions(&temporary, permissions)?;
+
+        if fs::symlink_metadata(destination).is_err() {
+            fs::rename(&temporary, destination)?;
+            return Ok(());
+        }
+
+        let parent = destination
+            .parent()
+            .ok_or_else(|| invalid("transaction destination has no parent"))?;
+        let mut backup = None;
+        for backup_index in 0..16_u32 {
+            let candidate = parent.join(format!(
+                ".{}.medusa-transaction-backup-{}-{backup_index}",
+                destination
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("target"),
+                std::process::id()
+            ));
+            match fs::rename(destination, &candidate) {
+                Ok(()) => {
+                    backup = Some(candidate);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let backup = backup.ok_or_else(|| {
+            invalid("could not allocate a transaction replacement backup path")
+        })?;
+        match fs::rename(&temporary, destination) {
+            Ok(()) => {
+                let _ = fs::remove_file(backup);
+                Ok(())
+            }
+            Err(error) => {
+                let _ = fs::rename(backup, destination);
+                Err(error.into())
+            }
+        }
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn file_hash(path: &Path) -> MedusaResult<Option<String>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(hash(&bytes))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn sync_directory(path: &Path) -> MedusaResult<()> {
@@ -561,5 +681,69 @@ mod tests {
         assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
         let final_content = fs::read_to_string(directory.path().join("file.rs")).expect("file");
         assert!(matches!(final_content.as_str(), "bbb" | "ccc"));
+    }
+
+    #[test]
+    fn recovery_restores_path_when_process_stops_before_applied_journal() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("file.rs");
+        fs::write(&destination, "aaa").expect("file");
+        let transaction_id = "recovery-window";
+        let journal_directory = journal_directory(directory.path(), transaction_id);
+        fs::create_dir_all(&journal_directory).expect("journal directory");
+        write_synced(&journal_directory.join("0.before"), b"aaa").expect("backup");
+        write_synced(&journal_directory.join("0.after"), b"bbb").expect("staged");
+        let mut journal = PatchJournal {
+            schema: JOURNAL_SCHEMA,
+            transaction_id: transaction_id.to_owned(),
+            state: JournalState::Applying,
+            entries: vec![JournalEntry {
+                path: PathBuf::from("file.rs"),
+                before_hash: hash(b"aaa"),
+                after_hash: hash(b"bbb"),
+                backup: "0.before".to_owned(),
+                staged: "0.after".to_owned(),
+            }],
+            intent_paths: BTreeSet::from([PathBuf::from("file.rs")]),
+            applied_paths: BTreeSet::new(),
+        };
+        persist_journal(&journal_directory, &journal).expect("intent journal");
+        replace_file(&journal_directory.join("0.after"), &destination).expect("publish");
+
+        let recovered = recover_patch_transactions(directory.path()).expect("recover");
+        assert_eq!(recovered, vec![transaction_id.to_owned()]);
+        assert_eq!(fs::read_to_string(destination).expect("file"), "aaa");
+    }
+
+    #[test]
+    fn recovery_refuses_to_overwrite_external_edit() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("file.rs");
+        fs::write(&destination, "aaa").expect("file");
+        let transaction_id = "recovery-conflict";
+        let journal_directory = journal_directory(directory.path(), transaction_id);
+        fs::create_dir_all(&journal_directory).expect("journal directory");
+        write_synced(&journal_directory.join("0.before"), b"aaa").expect("backup");
+        write_synced(&journal_directory.join("0.after"), b"bbb").expect("staged");
+        let journal = PatchJournal {
+            schema: JOURNAL_SCHEMA,
+            transaction_id: transaction_id.to_owned(),
+            state: JournalState::Applying,
+            entries: vec![JournalEntry {
+                path: PathBuf::from("file.rs"),
+                before_hash: hash(b"aaa"),
+                after_hash: hash(b"bbb"),
+                backup: "0.before".to_owned(),
+                staged: "0.after".to_owned(),
+            }],
+            intent_paths: BTreeSet::from([PathBuf::from("file.rs")]),
+            applied_paths: BTreeSet::new(),
+        };
+        persist_journal(&journal_directory, &journal).expect("intent journal");
+        fs::write(&destination, "external").expect("external edit");
+
+        let error = recover_patch_transactions(directory.path()).expect_err("conflict");
+        assert!(error.to_string().contains("rollback conflict"));
+        assert_eq!(fs::read_to_string(destination).expect("file"), "external");
     }
 }

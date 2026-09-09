@@ -176,9 +176,8 @@ fn resolve_bridge_path() -> io::Result<PathBuf> {
         ));
     }
 
-    let current_dir = std::env::current_dir()?;
     let executable = std::env::current_exe()?;
-    for candidate in bridge_path_candidates(&current_dir, &executable) {
+    for candidate in bridge_path_candidates(&executable) {
         if candidate.is_file() {
             return Ok(candidate);
         }
@@ -192,8 +191,8 @@ fn resolve_bridge_path() -> io::Result<PathBuf> {
     ))
 }
 
-fn bridge_path_candidates(current_dir: &Path, executable: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![current_dir.join(BROWSER_BRIDGE_RELATIVE_PATH)];
+fn bridge_path_candidates(executable: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
     if let Some(parent) = executable.parent() {
         for ancestor in parent.ancestors().take(4) {
             let candidate = ancestor.join(BROWSER_BRIDGE_RELATIVE_PATH);
@@ -379,15 +378,20 @@ mod tests {
 
     #[test]
     fn bridge_candidates_include_repo_root_from_target_binary() {
-        let candidates = bridge_path_candidates(
-            Path::new("/work/repo/crates/medusa-agent"),
-            Path::new("/work/repo/target/debug/medusa-browserd"),
-        );
+        let candidates = bridge_path_candidates(Path::new("/work/repo/target/debug/medusa-browserd"));
         assert!(
             candidates
                 .iter()
                 .any(|path| path == Path::new("/work/repo/browser/playwright_bridge.mjs"))
         );
+    }
+
+    #[test]
+    fn bridge_candidates_never_include_the_working_directory() {
+        let candidates = bridge_path_candidates(Path::new("/work/repo/target/debug/medusa-browserd"));
+        assert!(!candidates
+            .iter()
+            .any(|path| path == Path::new("/work/repo/target/debug/browser/playwright_bridge.mjs")));
     }
 
     #[test]
