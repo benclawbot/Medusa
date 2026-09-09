@@ -11,6 +11,10 @@ use crate::{
 
 /// Removes provider-emitted private reasoning wrappers from visible text.
 pub(crate) fn strip_hidden_reasoning(text: &str) -> String {
+    strip_hidden_reasoning_untrimmed(text).trim().to_owned()
+}
+
+fn strip_hidden_reasoning_untrimmed(text: &str) -> String {
     const OPEN_TAGS: [&str; 2] = ["<think", "<analysis"];
     const CLOSE_TAGS: [&str; 2] = ["</think", "</analysis"];
 
@@ -48,7 +52,66 @@ pub(crate) fn strip_hidden_reasoning(text: &str) -> String {
         };
         cursor = close_end;
     }
-    output.trim().to_owned()
+    output
+}
+
+/// Incrementally exposes only text outside provider-private reasoning tags.
+#[derive(Debug, Default)]
+pub(crate) struct IncrementalVisibleText {
+    raw: String,
+    emitted_bytes: usize,
+}
+
+impl IncrementalVisibleText {
+    pub(crate) fn push(&mut self, chunk: &str) -> String {
+        self.raw.push_str(chunk);
+        let visible = visible_without_partial_open_tag(
+            strip_hidden_reasoning_untrimmed(&self.raw),
+            &self.raw,
+        );
+        let Some(delta) = visible.get(self.emitted_bytes..) else {
+            self.emitted_bytes = visible.len();
+            return String::new();
+        };
+        let delta = delta.to_owned();
+        self.emitted_bytes = visible.len();
+        delta
+    }
+
+    /// Returns any visible suffix held back while it could still become a private opening tag.
+    pub(crate) fn flush(&mut self) -> String {
+        let visible = strip_hidden_reasoning_untrimmed(&self.raw);
+        let Some(delta) = visible.get(self.emitted_bytes..) else {
+            self.emitted_bytes = visible.len();
+            return String::new();
+        };
+        let delta = delta.to_owned();
+        self.emitted_bytes = visible.len();
+        delta
+    }
+}
+
+fn visible_without_partial_open_tag(mut visible: String, raw: &str) -> String {
+    const OPEN_TAGS: [&str; 2] = ["<think", "<analysis"];
+    let lower = raw.to_ascii_lowercase();
+    let max_suffix = OPEN_TAGS.iter().map(|tag| tag.len()).max().unwrap_or(0);
+    let mut held = 0;
+    for length in 1..max_suffix {
+        let Some(suffix) = lower.get(lower.len().saturating_sub(length)..) else {
+            continue;
+        };
+        if OPEN_TAGS.iter().any(|tag| tag.starts_with(suffix)) {
+            held = length;
+        }
+    }
+    if held > 0
+        && visible.len() >= held
+        && let Some(raw_suffix) = raw.get(raw.len().saturating_sub(held)..)
+        && visible.ends_with(raw_suffix)
+    {
+        visible.truncate(visible.len() - held);
+    }
+    visible
 }
 
 /// Strict tool definition sent to the model.

@@ -108,24 +108,35 @@ impl TelegramMiniAppHttpServer {
                     // BSD-family kernels can propagate O_NONBLOCK from the listener to the
                     // accepted socket. Request handling is deliberately bounded by timeouts, so
                     // normalize the connection to blocking mode before reading headers or bodies.
-                    stream.set_nonblocking(false)?;
-                    if !peer.ip().is_loopback() {
-                        write_response(&mut stream, 403, "text/plain", b"forbidden")?;
+                    if let Err(error) = stream.set_nonblocking(false) {
+                        tracing::warn!(%error, "Telegram Mini App connection setup failed");
                         continue;
                     }
-                    stream.set_read_timeout(Some(CONNECTION_TIMEOUT))?;
-                    stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
+                    if !peer.ip().is_loopback() {
+                        let _ = write_response(&mut stream, 403, "text/plain", b"forbidden");
+                        continue;
+                    }
+                    if let Err(error) = stream.set_read_timeout(Some(CONNECTION_TIMEOUT)) {
+                        tracing::warn!(%error, "Telegram Mini App read timeout setup failed");
+                        continue;
+                    }
+                    if let Err(error) = stream.set_write_timeout(Some(CONNECTION_TIMEOUT)) {
+                        tracing::warn!(%error, "Telegram Mini App write timeout setup failed");
+                        continue;
+                    }
                     let response = match read_request(&mut stream) {
                         Ok(request) => self.handle(request, OffsetDateTime::now_utc()),
                         Err(RequestRejection::TooLarge) => Response::text(413, "payload too large"),
                         Err(RequestRejection::Malformed) => Response::text(400, "bad request"),
                     };
-                    write_response(
+                    if let Err(error) = write_response(
                         &mut stream,
                         response.status,
                         response.content_type,
                         &response.body,
-                    )?;
+                    ) {
+                        tracing::debug!(%error, "Telegram Mini App client disconnected before response");
+                    }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(ACCEPT_POLL_INTERVAL);

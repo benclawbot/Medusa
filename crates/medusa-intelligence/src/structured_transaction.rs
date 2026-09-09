@@ -166,9 +166,9 @@ pub fn apply_structured_transaction(
     failure: Option<TransactionFailurePoint>,
 ) -> Result<StructuredTransactionReceipt, StructuredTransactionError> {
     plan.normalize();
-    if plan.id.trim().is_empty() {
+    if !valid_transaction_id(&plan.id) {
         return Err(StructuredTransactionError::InvalidPlan(
-            "structured transaction plan id cannot be empty".to_owned(),
+            "structured transaction plan id must be one safe path component".to_owned(),
         ));
     }
     let audit = plan
@@ -222,6 +222,16 @@ pub fn apply_structured_transaction(
     journal.state = StructuredTransactionState::Committed;
     persist_journal(&directory, &journal)?;
     Ok(receipt(&journal))
+}
+
+fn valid_transaction_id(id: &str) -> bool {
+    if id.trim().is_empty() || id.contains(['/', '\\']) || id.contains('\0') {
+        return false;
+    }
+    matches!(
+        Path::new(id).components().collect::<Vec<_>>().as_slice(),
+        [std::path::Component::Normal(_)]
+    )
 }
 
 /// Recovers interrupted transactions deterministically to committed or rolled-back state.
@@ -1011,5 +1021,20 @@ mod tests {
             fs::metadata(&path).expect("metadata").permissions().mode() & 0o777,
             0o755
         );
+    }
+
+    #[test]
+    fn plan_id_cannot_escape_transaction_journal_root() {
+        let repo = tempfile::tempdir().expect("repo");
+        fs::write(repo.path().join("a.txt"), "old").expect("a");
+        for id in ["../escape", "/tmp/escape", "nested/id", "..", "."] {
+            let (plan, snapshots) = one_file_plan(id);
+            let error = apply_structured_transaction(repo.path(), plan, &snapshots, None)
+                .expect_err("unsafe plan id must be rejected");
+            assert!(
+                matches!(error, StructuredTransactionError::InvalidPlan(_)),
+                "{id}"
+            );
+        }
     }
 }

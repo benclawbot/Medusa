@@ -14,6 +14,7 @@ use medusa_provider::{
 enum Behavior {
     Success,
     FailAfterDelta,
+    ResponseStartedThenFail,
 }
 
 #[derive(Clone)]
@@ -34,6 +35,16 @@ impl ModelProvider for StreamingStub {
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
     ) -> MedusaResult<ModelResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if matches!(self.behavior, Behavior::ResponseStartedThenFail) {
+            sink(ProviderStreamEvent::ResponseStarted {
+                response_id: Some("response-started".to_owned()),
+            })?;
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Transient,
+                "stream failed before output",
+            ));
+        }
         sink(ProviderStreamEvent::OutputStarted)?;
         sink(ProviderStreamEvent::TextDelta {
             text: self.text.to_owned(),
@@ -51,6 +62,7 @@ impl ModelProvider for StreamingStub {
                 ErrorCategory::Transient,
                 "stream failed after output",
             )),
+            Behavior::ResponseStartedThenFail => unreachable!("handled before output"),
         }
     }
 
@@ -199,4 +211,31 @@ fn streaming_cache_hit_emits_one_terminal_event_without_requerying_provider() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], ProviderStreamEvent::Completed { .. }));
+}
+
+#[test]
+fn manager_fails_over_after_metadata_only_stream_failure() {
+    let first_calls = Arc::new(AtomicUsize::new(0));
+    let second_calls = Arc::new(AtomicUsize::new(0));
+    let manager = ProviderManager::new_with_profiles(
+        vec![
+            StreamingStub {
+                calls: Arc::clone(&first_calls),
+                behavior: Behavior::ResponseStartedThenFail,
+                text: "unused",
+            },
+            StreamingStub {
+                calls: Arc::clone(&second_calls),
+                behavior: Behavior::Success,
+                text: "fallback",
+            },
+        ],
+        vec![profile("primary"), profile("fallback")],
+    );
+    let result = manager
+        .complete_streaming(&request(), &mut |_| Ok(()))
+        .expect("metadata-only failure should fail over");
+    assert_eq!(result, response("fallback"));
+    assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(second_calls.load(Ordering::SeqCst), 1);
 }

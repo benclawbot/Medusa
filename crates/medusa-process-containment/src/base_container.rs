@@ -441,8 +441,6 @@ fn read_only_paths(executable: &Path) -> Vec<PathBuf> {
         "ProgramFiles",
         "ProgramFiles(x86)",
         "ProgramData",
-        "CARGO_HOME",
-        "RUSTUP_HOME",
     ] {
         if let Some(path) = std::env::var_os(variable).map(PathBuf::from)
             && path.is_dir()
@@ -450,11 +448,29 @@ fn read_only_paths(executable: &Path) -> Vec<PathBuf> {
             paths.insert(path);
         }
     }
+    for (variable, names) in [
+        ("CARGO_HOME", &["bin", "registry", "git"][..]),
+        ("RUSTUP_HOME", &["toolchains", "downloads"][..]),
+    ] {
+        if let Some(root) = std::env::var_os(variable).map(PathBuf::from) {
+            for name in names {
+                let path = root.join(name);
+                if path.is_dir() {
+                    paths.insert(path);
+                }
+            }
+        }
+    }
     if let Some(profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
-        for relative in [".cargo", ".rustup"] {
-            let path = profile.join(relative);
-            if path.is_dir() {
-                paths.insert(path);
+        for (relative, names) in [
+            (".cargo", &["bin", "registry", "git"][..]),
+            (".rustup", &["toolchains", "downloads"][..]),
+        ] {
+            for name in names {
+                let path = profile.join(relative).join(name);
+                if path.is_dir() {
+                    paths.insert(path);
+                }
             }
         }
     }

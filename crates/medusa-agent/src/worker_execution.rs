@@ -531,7 +531,9 @@ impl WorkerExecutionController {
             .completed_epochs
             .insert(task_id.to_owned(), lease_epoch);
         if let Some(worker) = self.state.workers.get_mut(worker_id) {
-            worker.state = WorkerState::Succeeded;
+            // Task completion is terminal, but the worker remains available for a later
+            // independent task. Completed task evidence is tracked separately above.
+            worker.state = WorkerState::Ready;
         }
         self.state.summary.active = self.state.summary.active.saturating_sub(1);
         self.state.summary.completed = self.state.summary.completed.saturating_add(1);
@@ -854,5 +856,42 @@ mod tests {
         let restored = WorkerExecutionController::load(path).unwrap();
         assert_eq!(restored.summary().cancelled, 1);
         assert_eq!(restored.summary().active, 0);
+    }
+
+    #[test]
+    fn successful_worker_can_be_reused_for_a_later_task() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut controller = WorkerExecutionController::create(
+            directory.path().join("workers.json"),
+            "exec-reuse",
+            vec![
+                Task {
+                    id: "task-a".into(),
+                    dependencies: vec![],
+                    capabilities: vec!["rust".into()],
+                    write_paths: vec!["a.rs".into()],
+                    speculative: false,
+                },
+                Task {
+                    id: "task-b".into(),
+                    dependencies: vec!["task-a".into()],
+                    capabilities: vec!["rust".into()],
+                    write_paths: vec!["b.rs".into()],
+                    speculative: false,
+                },
+            ],
+            vec![scheduler_worker("a")],
+            vec![execution_worker("a")],
+            2,
+        )
+        .unwrap();
+        let first = controller.dispatch(0, 100).unwrap().remove(0);
+        controller
+            .complete_without_mutation(&first.task_id, &first.worker_id, first.lease_epoch, 1)
+            .unwrap();
+        let second = controller
+            .dispatch(2, 100)
+            .expect("completed worker should be available");
+        assert_eq!(second[0].worker_id, "a");
     }
 }

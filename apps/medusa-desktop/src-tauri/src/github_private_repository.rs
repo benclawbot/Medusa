@@ -75,6 +75,8 @@ pub fn runtime_clone_github_repository(
             "clone",
             repository.as_str(),
             destination.to_string_lossy().as_ref(),
+            "--hostname",
+            hostname.as_str(),
             "--",
             "--origin",
             "origin",

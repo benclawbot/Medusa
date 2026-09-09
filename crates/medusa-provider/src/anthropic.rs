@@ -17,10 +17,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    MessageBlock, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
-    ProviderStreamEvent, ResponseBlock, Usage, async_response_error, async_response_json,
-    blocking_response_error, blocking_response_json, provider_error, run_cancellable_request,
-    shared_async_http_client, shared_blocking_http_client, split_dynamic_system_context,
+    IncrementalVisibleText, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
+    ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Usage, async_response_error,
+    async_response_json, blocking_response_error, blocking_response_json, provider_error,
+    run_cancellable_request, shared_async_http_client, shared_blocking_http_client,
+    split_dynamic_system_context,
 };
 
 type WireHistory = Arc<Mutex<HashMap<String, Arc<Vec<Value>>>>>;
@@ -616,6 +617,7 @@ impl AnthropicSseDecoder {
 struct AnthropicStreamAccumulator {
     response_id: Option<String>,
     blocks: Vec<Option<WireBlock>>,
+    visible_text: HashMap<usize, IncrementalVisibleText>,
     tool_fragments: HashMap<usize, String>,
     stop_reason: Option<String>,
     usage: WireUsage,
@@ -714,10 +716,6 @@ impl AnthropicStreamAccumulator {
                             .and_then(Value::as_str)
                             .unwrap_or_default();
                         if !text.is_empty() {
-                            if !self.output_started {
-                                self.output_started = true;
-                                sink(ProviderStreamEvent::OutputStarted)?;
-                            }
                             if let Some(Some(WireBlock::Text { text: output })) =
                                 self.blocks.get_mut(index)
                             {
@@ -729,9 +727,14 @@ impl AnthropicStreamAccumulator {
                                 }
                                 output.push_str(text);
                             }
-                            sink(ProviderStreamEvent::TextDelta {
-                                text: text.to_owned(),
-                            })?;
+                            let visible = self.visible_text.entry(index).or_default().push(text);
+                            if !visible.is_empty() {
+                                if !self.output_started {
+                                    self.output_started = true;
+                                    sink(ProviderStreamEvent::OutputStarted)?;
+                                }
+                                sink(ProviderStreamEvent::TextDelta { text: visible })?;
+                            }
                         }
                     }
                     Some("thinking_delta") => {
@@ -810,6 +813,7 @@ impl AnthropicStreamAccumulator {
                 }
             }
             "message_stop" => {
+                self.flush_visible_text(sink)?;
                 self.completed = true;
                 return Ok(Some(self.finish_wire()));
             }
@@ -822,6 +826,26 @@ impl AnthropicStreamAccumulator {
         if self.blocks.len() <= index {
             self.blocks.resize_with(index + 1, || None);
         }
+    }
+
+    fn flush_visible_text(
+        &mut self,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<()> {
+        let pending = self
+            .visible_text
+            .values_mut()
+            .map(IncrementalVisibleText::flush)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>();
+        for text in pending {
+            if !self.output_started {
+                self.output_started = true;
+                sink(ProviderStreamEvent::OutputStarted)?;
+            }
+            sink(ProviderStreamEvent::TextDelta { text })?;
+        }
+        Ok(())
     }
 
     fn apply_usage(&mut self, usage: &Value) {
