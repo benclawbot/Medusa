@@ -618,17 +618,6 @@ export async function closeRuntime(runtimeId: string): Promise<void> {
   }
 }
 
-/**
- * Restore the last active runtime after a candidate transition was rejected.
- * Starting/resuming a candidate activates it before the desktop can verify its
- * configuration; a failed candidate is closed by the caller, so the previous
- * runtime must be made active again for timeline and recovery subscribers.
- */
-export function restoreRuntime(runtimeId: string): void {
-  if (!timelineSnapshots.has(runtimeId)) return;
-  activateRuntime(runtimeId);
-}
-
 export async function submitRuntime(
   runtimeId: string,
   draft: DesktopPromptDraft,

@@ -91,10 +91,8 @@ fn unlock_exclusive(file: &File) -> io::Result<()> {
 fn try_lock_exclusive(file: &File) -> io::Result<()> {
     use std::{mem::zeroed, os::windows::io::AsRawHandle};
     use windows_sys::Win32::{
-        Foundation::HANDLE,
-        Storage::FileSystem::{
-            LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
-        },
+        Foundation::{ERROR_LOCK_VIOLATION, HANDLE},
+        Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx},
         System::IO::OVERLAPPED,
     };
 
@@ -114,7 +112,12 @@ fn try_lock_exclusive(file: &File) -> io::Result<()> {
     if result != 0 {
         Ok(())
     } else {
-        Err(io::Error::last_os_error())
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_LOCK_VIOLATION as i32) {
+            Err(io::Error::new(io::ErrorKind::WouldBlock, error))
+        } else {
+            Err(error)
+        }
     }
 }
 
@@ -122,22 +125,12 @@ fn try_lock_exclusive(file: &File) -> io::Result<()> {
 fn unlock_exclusive(file: &File) -> io::Result<()> {
     use std::{mem::zeroed, os::windows::io::AsRawHandle};
     use windows_sys::Win32::{
-        Foundation::HANDLE,
-        Storage::FileSystem::UnlockFileEx,
-        System::IO::OVERLAPPED,
+        Foundation::HANDLE, Storage::FileSystem::UnlockFileEx, System::IO::OVERLAPPED,
     };
 
     let mut overlapped: OVERLAPPED = unsafe { zeroed() };
     // SAFETY: the file handle and OVERLAPPED range match the successful lock acquired above.
-    let result = unsafe {
-        UnlockFileEx(
-            file.as_raw_handle() as HANDLE,
-            0,
-            1,
-            0,
-            &mut overlapped,
-        )
-    };
+    let result = unsafe { UnlockFileEx(file.as_raw_handle() as HANDLE, 0, 1, 0, &mut overlapped) };
     if result != 0 {
         Ok(())
     } else {

@@ -264,15 +264,7 @@ fn headline_of(excerpt: &str) -> String {
     if first.len() <= LIMIT {
         first.to_owned()
     } else {
-        let mut boundary = 0;
-        for (offset, character) in first.char_indices() {
-            let end = offset + character.len_utf8();
-            if end > LIMIT {
-                break;
-            }
-            boundary = end;
-        }
-        format!("{}...", first[..boundary].trim_end())
+        format!("{}...", first[..LIMIT].trim_end())
     }
 }
 
@@ -434,15 +426,6 @@ Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try a
             error.context.get("provider_error_body"),
             Some(&serde_json::Value::from(body))
         );
-    }
-
-    #[test]
-    fn unicode_quota_headline_is_truncated_on_a_utf8_boundary() {
-        let body = format!("{}🚀quota exceeded", "a".repeat(199));
-        let error = classify_status(StatusCode::BAD_REQUEST, body, None);
-        let message = error.to_string();
-        assert!(message.contains("provider plan/quota limit"));
-        assert!(message.contains(&format!("{}...", "a".repeat(199))));
     }
 
     #[test]

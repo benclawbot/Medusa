@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import io
-import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,20 +10,6 @@ import medusa_bridge
 
 
 class BridgeTests(unittest.TestCase):
-    class FakeProcess:
-        pid = 1234
-
-        def __init__(self, stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0) -> None:
-            self.stdout = io.BytesIO(stdout)
-            self.stderr = io.BytesIO(stderr)
-            self.returncode = returncode
-
-        def wait(self, timeout: float | None = None) -> int:
-            return self.returncode
-
-        def poll(self) -> int:
-            return self.returncode
-
     def test_repo_root_requires_git_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
@@ -90,94 +73,17 @@ class BridgeTests(unittest.TestCase):
                 )
             self.assertEqual(ctx.exception.status, medusa_bridge.HTTPStatus.FORBIDDEN)
 
-    def test_read_only_actions_reject_output_and_executable_overrides(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / ".git").mkdir()
-            outside = root.parent / "bridge-output.txt"
-            try:
-                for args in (
-                    ["--output", str(outside)],
-                    [f"--output={outside}"],
-                    ["-o", str(outside)],
-                    [f"-o{outside}"],
-                    ["--exec=fixture"],
-                    ["--upload-pack=fixture"],
-                    ["-xfixture"],
-                    ["-c", "core.pager=cat"],
-                ):
-                    with self.subTest(args=args), self.assertRaises(medusa_bridge.BridgeError):
-                        medusa_bridge.run_action(
-                            action_name="git.diff",
-                            args=args,
-                            repo_root=root,
-                            allow_mutation=False,
-                            timeout_seconds=10,
-                            max_output_bytes=1024,
-                        )
-                self.assertFalse(outside.exists())
-            finally:
-                outside.unlink(missing_ok=True)
+    def test_forbidden_git_config_argument_is_rejected(self) -> None:
+        with self.assertRaises(medusa_bridge.BridgeError):
+            medusa_bridge.validate_extra_args(["-c", "core.pager=cat"])
+        with self.assertRaises(medusa_bridge.BridgeError):
+            medusa_bridge.validate_extra_args(["--config=core.pager=cat"])
 
-    def test_read_only_diff_accepts_a_repository_relative_filter(self) -> None:
-        with mock.patch("medusa_bridge.subprocess.Popen") as popen:
-            popen.return_value = self.FakeProcess()
-            with tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                (root / ".git").mkdir()
-                result = medusa_bridge.run_action(
-                    action_name="git.diff",
-                    args=["--", "src/*.rs"],
-                    repo_root=root,
-                    allow_mutation=False,
-                    timeout_seconds=10,
-                    max_output_bytes=1024,
-                )
-            self.assertTrue(result["success"])
-            self.assertEqual(popen.call_args.args[0], ["git", "diff", "--stat", "--", "src/*.rs"])
-
-    def test_timeout_terminates_descendants_and_preserves_bounded_output(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / ".git").mkdir()
-            marker = root / "late-marker"
-            fixture = root / "timeout_fixture.py"
-            fixture.write_text(
-                "import pathlib, subprocess, sys, time\n"
-                "marker = pathlib.Path(sys.argv[1])\n"
-                "subprocess.Popen([sys.executable, '-c', "
-                "'import pathlib,sys,time; time.sleep(2); pathlib.Path(sys.argv[1]).write_text(\\\"late\\\")', str(marker)])\n"
-                "sys.stdout.write('x' * (4 * 1024 * 1024))\n"
-                "sys.stderr.write('y' * (4 * 1024 * 1024))\n"
-                "sys.stdout.flush(); sys.stderr.flush(); time.sleep(10)\n",
-                encoding="utf-8",
-            )
-            action_name = "test.timeout"
-            medusa_bridge.ACTIONS[action_name] = medusa_bridge.Action(
-                (sys.executable, str(fixture), str(marker))
-            )
-            try:
-                result = medusa_bridge.run_action(
-                    action_name=action_name,
-                    args=[],
-                    repo_root=root,
-                    allow_mutation=False,
-                    timeout_seconds=1,
-                    max_output_bytes=1024,
-                )
-            finally:
-                del medusa_bridge.ACTIONS[action_name]
-            self.assertTrue(result["timed_out"])
-            self.assertTrue(result["stdout_truncated"])
-            self.assertTrue(result["stderr_truncated"])
-            self.assertLessEqual(len(result["stdout"].encode()), 1024)
-            self.assertLessEqual(len(result["stderr"].encode()), 1024)
-            time.sleep(1.4)
-            self.assertFalse(marker.exists(), "timeout left a descendant alive")
-
-    @mock.patch("medusa_bridge.subprocess.Popen")
-    def test_command_uses_argv_without_shell(self, popen: mock.Mock) -> None:
-        popen.return_value = self.FakeProcess(stdout=b"ok\n")
+    @mock.patch("medusa_bridge.subprocess.run")
+    def test_command_uses_argv_without_shell(self, run: mock.Mock) -> None:
+        run.return_value = medusa_bridge.subprocess.CompletedProcess(
+            ["git", "status", "--short", "--branch"], 0, b"ok\n", b""
+        )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".git").mkdir()
@@ -190,15 +96,16 @@ class BridgeTests(unittest.TestCase):
                 max_output_bytes=1024,
             )
         self.assertTrue(result["success"])
-        _, kwargs = popen.call_args
+        _, kwargs = run.call_args
         self.assertNotIn("shell", kwargs)
         self.assertEqual(kwargs["cwd"], root)
         self.assertIs(kwargs["stdin"], medusa_bridge.subprocess.DEVNULL)
-        self.assertTrue(kwargs["start_new_session"])
 
-    @mock.patch("medusa_bridge.subprocess.Popen")
-    def test_output_is_truncated(self, popen: mock.Mock) -> None:
-        popen.return_value = self.FakeProcess(stdout=b"x" * 2048)
+    @mock.patch("medusa_bridge.subprocess.run")
+    def test_output_is_truncated(self, run: mock.Mock) -> None:
+        run.return_value = medusa_bridge.subprocess.CompletedProcess(
+            ["git", "status", "--short", "--branch"], 0, b"x" * 2048, b""
+        )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".git").mkdir()

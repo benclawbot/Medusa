@@ -14,9 +14,9 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 #[cfg(not(windows))]
 use medusa_core::hidden_command;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 use crate::{DaemonClient, DaemonPaths, Request, Response};
 

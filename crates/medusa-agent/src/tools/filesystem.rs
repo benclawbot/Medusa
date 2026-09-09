@@ -232,7 +232,10 @@ fn replace_approved_file(temporary: &Path, destination: &Path) -> std::io::Resul
             // old inode aside first, then publish the staged inode. If publish
             // fails, restore the old inode before returning the error.
             let parent = destination.parent().ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "destination has no parent")
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "destination has no parent",
+                )
             })?;
             let name = destination
                 .file_name()
@@ -246,8 +249,10 @@ fn replace_approved_file(temporary: &Path, destination: &Path) -> std::io::Resul
                         backup = Some(candidate);
                         break;
                     }
-                    Err(rename_error) if rename_error.kind() == std::io::ErrorKind::AlreadyExists => {
-                        continue
+                    Err(rename_error)
+                        if rename_error.kind() == std::io::ErrorKind::AlreadyExists =>
+                    {
+                        continue;
                     }
                     Err(rename_error) => return Err(rename_error),
                 }
@@ -552,12 +557,17 @@ mod tests {
         assert_eq!(fs::read_to_string(&target).expect("target"), "approved");
         assert_eq!(fs::read_to_string(&canary).expect("canary"), "canary");
         #[cfg(unix)]
-        assert!(fs::symlink_metadata(&fixed_name)
-            .expect("temporary path")
-            .file_type()
-            .is_symlink());
+        assert!(
+            fs::symlink_metadata(&fixed_name)
+                .expect("temporary path")
+                .file_type()
+                .is_symlink()
+        );
         #[cfg(not(unix))]
-        assert_eq!(fs::read_to_string(&fixed_name).expect("temporary canary"), "temporary canary");
+        assert_eq!(
+            fs::read_to_string(&fixed_name).expect("temporary canary"),
+            "temporary canary"
+        );
     }
 
     #[cfg(unix)]
@@ -573,7 +583,14 @@ mod tests {
         write_approved(&target.to_string_lossy(), "new").expect("approved write");
 
         assert_eq!(fs::read_to_string(&target).expect("target"), "new");
-        assert_eq!(fs::metadata(&target).expect("metadata").permissions().mode() & 0o777, 0o751);
+        assert_eq!(
+            fs::metadata(&target)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o751
+        );
     }
 
     #[test]

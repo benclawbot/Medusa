@@ -29,17 +29,6 @@ pub mod verification_dag;
 mod worker_execution;
 pub mod world_model_session;
 
-#[path = "tool_redaction.rs"]
-mod tool_redaction;
-
-/// Redacts credential values from diagnostics crossing the agent/runtime boundary.
-///
-/// This reuses the sanitizer applied to shell traces so provider and app-server failures cannot
-/// expose a secret through a differently formatted error message.
-pub fn redact_diagnostic_text(input: &str) -> String {
-    tool_redaction::redact_text(input)
-}
-
 pub use agent_scope::{
     AGENT_SCOPE_SCHEMA_VERSION, AgentRuntimeHandle, AgentScopeContract, AgentScopeLifecycle,
     AgentScopeOwnedResource, AgentScopePreparation, AgentScopeRef, AgentScopeResourceKind,

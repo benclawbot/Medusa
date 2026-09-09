@@ -42,12 +42,6 @@
         "reason": "Uses Unix kill(2) only to signal Medusa-owned dedicated process groups and delegates Windows descendant ownership to the reviewed Job Object boundary; all unsafe operations retain local safety rationale."
       },
       {
-        "path": "crates/medusa-process-containment/src/file_lock.rs",
-        "module": "file_lock",
-        "classification": "unsafe-ffi",
-        "reason": "Uses reviewed OS file-lock APIs to provide an RAII lock whose ownership is released by the kernel when the file handle closes; the lock path itself is never used as stale PID authority."
-      },
-      {
         "path": "crates/medusa-process-containment/src/windows.rs",
         "module": "windows",
         "classification": "unsafe-ffi",

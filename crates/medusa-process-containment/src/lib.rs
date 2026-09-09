@@ -23,10 +23,6 @@ mod process_identity;
 // SAFETY: reviewed process-group signal FFI is isolated in this low-level crate.
 #[allow(unsafe_code)]
 mod process_tree;
-// SAFETY: platform file-lock FFI is isolated in this low-level crate and exposed through an RAII
-// guard that releases the kernel lock when the owning handle is dropped.
-#[allow(unsafe_code)]
-mod file_lock;
 #[cfg(windows)]
 // SAFETY: reviewed Windows Job Object/process FFI; see the checked allowlist.
 #[allow(unsafe_code)]
@@ -42,7 +38,6 @@ pub use base_container::{
     run_appcontainer_cancellable, run_appcontainer_cancellable_observed,
 };
 pub use confined_file::{ConfinedDir, ConfinedReadError};
-pub use file_lock::ExclusiveFileLock;
 #[cfg(windows)]
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
 pub use process_identity::{

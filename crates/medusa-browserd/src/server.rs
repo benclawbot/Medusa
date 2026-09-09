@@ -378,7 +378,8 @@ mod tests {
 
     #[test]
     fn bridge_candidates_include_repo_root_from_target_binary() {
-        let candidates = bridge_path_candidates(Path::new("/work/repo/target/debug/medusa-browserd"));
+        let candidates =
+            bridge_path_candidates(Path::new("/work/repo/target/debug/medusa-browserd"));
         assert!(
             candidates
                 .iter()
@@ -388,10 +389,13 @@ mod tests {
 
     #[test]
     fn bridge_candidates_never_include_the_working_directory() {
-        let candidates = bridge_path_candidates(Path::new("/work/repo/target/debug/medusa-browserd"));
-        assert!(!candidates
-            .iter()
-            .any(|path| path == Path::new("/work/repo/target/debug/browser/playwright_bridge.mjs")));
+        let candidates =
+            bridge_path_candidates(Path::new("/work/repo/target/debug/medusa-browserd"));
+        assert!(
+            !candidates
+                .iter()
+                .any(|path| path == Path::new("/work/repo/target/debug/browser/playwright_bridge.mjs"))
+        );
     }
 
     #[test]

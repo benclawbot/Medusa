@@ -446,7 +446,7 @@ fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
         std::process::id()
     ));
     let temporary = destination.with_file_name(temporary_name);
-    let result = (|| {
+    let result: std::io::Result<()> = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -481,7 +481,7 @@ fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
         std::process::id()
     ));
     let temporary = destination.with_file_name(temporary_name);
-    let result = (|| {
+    let result: MedusaResult<()> = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -518,9 +518,8 @@ fn replace_file(source: &Path, destination: &Path) -> MedusaResult<()> {
                 Err(error) => return Err(error.into()),
             }
         }
-        let backup = backup.ok_or_else(|| {
-            invalid("could not allocate a transaction replacement backup path")
-        })?;
+        let backup = backup
+            .ok_or_else(|| invalid("could not allocate a transaction replacement backup path"))?;
         match fs::rename(&temporary, destination) {
             Ok(()) => {
                 let _ = fs::remove_file(backup);

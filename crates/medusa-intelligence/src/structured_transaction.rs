@@ -656,7 +656,7 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), StructuredTrans
         std::process::id()
     ));
     let temporary = destination.with_file_name(temporary_name);
-    let result = (|| {
+    let result: std::io::Result<()> = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -695,7 +695,7 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), StructuredTrans
         std::process::id()
     ));
     let temporary = destination.with_file_name(temporary_name);
-    let result = (|| {
+    let result: Result<(), StructuredTransactionError> = (|| {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -832,7 +832,10 @@ mod tests {
                 ..EditPreconditions::default()
             },
         });
-        (plan, BTreeMap::from([(PathBuf::from("a.txt"), snapshot("old"))]))
+        (
+            plan,
+            BTreeMap::from([(PathBuf::from("a.txt"), snapshot("old"))]),
+        )
     }
 
     #[test]
@@ -930,10 +933,7 @@ mod tests {
         let repo = tempfile::tempdir().expect("repo");
         fs::write(repo.path().join("a.txt"), "old").expect("a");
         let (plan, snapshots) = one_file_plan("recovery-window");
-        let directory = repo
-            .path()
-            .join(JOURNAL_ROOT)
-            .join(plan.id.clone());
+        let directory = repo.path().join(JOURNAL_ROOT).join(plan.id.clone());
         fs::create_dir_all(&directory).expect("journal directory");
         let audit = plan.validate(&snapshots).expect("audit");
         let mut journal = prepare_journal(
@@ -953,7 +953,10 @@ mod tests {
 
         let recovered = recover_structured_transactions(repo.path()).expect("recover");
         assert_eq!(recovered.len(), 1);
-        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).expect("a"), "old");
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).expect("a"),
+            "old"
+        );
     }
 
     #[test]
@@ -961,10 +964,7 @@ mod tests {
         let repo = tempfile::tempdir().expect("repo");
         fs::write(repo.path().join("a.txt"), "old").expect("a");
         let (plan, snapshots) = one_file_plan("recovery-conflict");
-        let directory = repo
-            .path()
-            .join(JOURNAL_ROOT)
-            .join(plan.id.clone());
+        let directory = repo.path().join(JOURNAL_ROOT).join(plan.id.clone());
         fs::create_dir_all(&directory).expect("journal directory");
         let audit = plan.validate(&snapshots).expect("audit");
         let mut journal = prepare_journal(
@@ -1007,6 +1007,9 @@ mod tests {
         let snapshots = BTreeMap::from([(PathBuf::from("script.sh"), snapshot("old"))]);
         apply_structured_transaction(repo.path(), plan, &snapshots, None).expect("commit");
         assert_eq!(fs::read(&sibling).expect("sibling"), b"canary");
-        assert_eq!(fs::metadata(&path).expect("metadata").permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            fs::metadata(&path).expect("metadata").permissions().mode() & 0o777,
+            0o755
+        );
     }
 }

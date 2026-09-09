@@ -15,7 +15,7 @@ import ipaddress
 import json
 import os
 import secrets
-import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -37,64 +37,41 @@ class Action:
     argv: tuple[str, ...]
     mutating: bool = False
     allow_extra: bool = False
-    argument_policy: str = "none"
 
 
 ACTIONS: Final[dict[str, Action]] = {
     "cargo.fmt": Action(("cargo", "fmt", "--all"), mutating=True),
     "cargo.fmt-check": Action(("cargo", "fmt", "--all", "--", "--check")),
     "cargo.generate-lockfile": Action(("cargo", "generate-lockfile"), mutating=True),
-    "cargo.check": Action(
-        ("cargo", "check", "--workspace", "--all-targets"),
-        allow_extra=True,
-        argument_policy="cargo",
-    ),
+    "cargo.check": Action(("cargo", "check", "--workspace", "--all-targets"), allow_extra=True),
     "cargo.clippy": Action(
         ("cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"),
         allow_extra=False,
     ),
-    "cargo.test": Action(
-        ("cargo", "test", "--workspace", "--all-features"),
-        allow_extra=True,
-        argument_policy="cargo",
-    ),
-    "cargo.doc": Action(
-        ("cargo", "doc", "--workspace", "--no-deps"),
-        allow_extra=True,
-        argument_policy="cargo",
-    ),
+    "cargo.test": Action(("cargo", "test", "--workspace", "--all-features"), allow_extra=True),
+    "cargo.doc": Action(("cargo", "doc", "--workspace", "--no-deps"), allow_extra=True),
     "git.status": Action(("git", "status", "--short", "--branch")),
-    "git.diff": Action(("git", "diff", "--stat"), allow_extra=True, argument_policy="git.diff"),
+    "git.diff": Action(("git", "diff", "--stat"), allow_extra=True),
     "git.diff-check": Action(("git", "diff", "--check")),
-    "git.add": Action(("git", "add", "--"), mutating=True, allow_extra=True, argument_policy="git.paths"),
-    "git.commit": Action(("git", "commit"), mutating=True, allow_extra=True, argument_policy="git.commit"),
-    "git.push": Action(("git", "push"), mutating=True, allow_extra=True, argument_policy="git.generic"),
-    "git.fetch": Action(("git", "fetch", "--prune"), mutating=True, allow_extra=True, argument_policy="git.generic"),
-    "git.checkout": Action(("git", "checkout"), mutating=True, allow_extra=True, argument_policy="git.generic"),
-    "git.rebase": Action(("git", "rebase"), mutating=True, allow_extra=True, argument_policy="git.generic"),
+    "git.add": Action(("git", "add", "--"), mutating=True, allow_extra=True),
+    "git.commit": Action(("git", "commit"), mutating=True, allow_extra=True),
+    "git.push": Action(("git", "push"), mutating=True, allow_extra=True),
+    "git.fetch": Action(("git", "fetch", "--prune"), mutating=True, allow_extra=True),
+    "git.checkout": Action(("git", "checkout"), mutating=True, allow_extra=True),
+    "git.rebase": Action(("git", "rebase"), mutating=True, allow_extra=True),
     "gh.auth-status": Action(("gh", "auth", "status")),
-    "gh.pr-checks": Action(("gh", "pr", "checks"), allow_extra=True, argument_policy="gh"),
-    "gh.run-view": Action(("gh", "run", "view"), allow_extra=True, argument_policy="gh"),
+    "gh.pr-checks": Action(("gh", "pr", "checks"), allow_extra=True),
+    "gh.run-view": Action(("gh", "run", "view"), allow_extra=True),
 }
 
-MAX_ARGUMENTS: Final = 64
-MAX_ARGUMENT_BYTES: Final = 8192
-PROCESS_READ_CHUNK_BYTES: Final = 64 * 1024
-PROCESS_TERMINATION_GRACE_SECONDS: Final = 2
-
-EXECUTABLE_OVERRIDE_OPTIONS: Final = {
-    "--config",
-    "--config-env",
+FORBIDDEN_EXTRA_TOKENS: Final = {
     "--exec",
-    "--receive-pack",
+    "-x",
     "--upload-pack",
-}
-OUTPUT_OVERRIDE_OPTIONS: Final = {
-    "--artifact-dir",
-    "--build-dir",
-    "--out-dir",
-    "--output",
-    "--target-dir",
+    "--receive-pack",
+    "--config-env",
+    "--config",
+    "-c",
 }
 
 
@@ -147,188 +124,20 @@ def validate_extra_args(values: Any) -> list[str]:
         return []
     if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
         raise BridgeError(HTTPStatus.BAD_REQUEST, "args must be a list of strings")
-    if len(values) > MAX_ARGUMENTS:
+    if len(values) > 64:
         raise BridgeError(HTTPStatus.BAD_REQUEST, "too many arguments")
     total = 0
     result: list[str] = []
     for value in values:
         if "\x00" in value or "\n" in value or "\r" in value:
             raise BridgeError(HTTPStatus.BAD_REQUEST, "arguments may not contain control lines")
+        if value in FORBIDDEN_EXTRA_TOKENS or value.startswith("--config="):
+            raise BridgeError(HTTPStatus.FORBIDDEN, f"argument is forbidden: {value}")
         total += len(value)
-        if total > MAX_ARGUMENT_BYTES:
+        if total > 8192:
             raise BridgeError(HTTPStatus.BAD_REQUEST, "arguments are too large")
         result.append(value)
     return result
-
-
-def _option_name(value: str) -> str:
-    """Return an option's name while retaining support for ``--name=value``."""
-    return value.split("=", 1)[0] if value.startswith("--") else value
-
-
-def _is_repo_relative_path(value: str) -> bool:
-    """Accept only plain paths that cannot escape the configured repository cwd."""
-    if not value or value.startswith(("/", "\\", "~")):
-        return False
-    if len(value) >= 2 and value[1] == ":":
-        return False
-    normalized = value.replace("\\", "/")
-    if normalized.startswith(":(") or any(part == ".." for part in normalized.split("/")):
-        return False
-    return True
-
-
-def _reject_unsafe_option(value: str) -> None:
-    name = _option_name(value)
-    if name in EXECUTABLE_OVERRIDE_OPTIONS or name in OUTPUT_OVERRIDE_OPTIONS:
-        raise BridgeError(HTTPStatus.FORBIDDEN, f"argument is forbidden: {value}")
-    # Git and Cargo accept short options with their value attached (for example
-    # ``-xcommand`` or ``-cfoo.bar=baz``), so checking exact tokens is unsafe.
-    if value in {"-x", "-o", "-c"} or value.startswith(("-x", "-o", "-c")):
-        raise BridgeError(HTTPStatus.FORBIDDEN, f"argument is forbidden: {value}")
-
-
-def _validate_git_diff_args(values: list[str]) -> None:
-    path_mode = False
-    allowed_options = {
-        "--",
-        "--cached",
-        "--check",
-        "--dirstat",
-        "--histogram",
-        "--minimal",
-        "--name-only",
-        "--name-status",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-renames",
-        "--no-textconv",
-        "--numstat",
-        "--patch",
-        "--patience",
-        "--relative",
-        "--shortstat",
-        "--stat",
-        "--staged",
-        "--submodule",
-        "--text",
-        "--word-diff",
-    }
-    for value in values:
-        _reject_unsafe_option(value)
-        if path_mode:
-            if value.startswith("-") or not _is_repo_relative_path(value):
-                raise BridgeError(HTTPStatus.FORBIDDEN, f"path argument is forbidden: {value}")
-            continue
-        if value == "--":
-            path_mode = True
-        elif value.startswith("-"):
-            if value not in allowed_options and not value.startswith(("--color=", "--relative=", "--word-diff=")):
-                raise BridgeError(HTTPStatus.BAD_REQUEST, f"unsupported git.diff argument: {value}")
-        elif not _is_repo_relative_path(value):
-            raise BridgeError(HTTPStatus.FORBIDDEN, f"path argument is forbidden: {value}")
-
-
-def _validate_cargo_args(values: list[str]) -> None:
-    # These actions are deliberately limited to Cargo's package and display
-    # selectors. In particular, a read-only check must not redirect build
-    # output or select an alternate manifest outside the repository.
-    value_for: set[str] = {"-p", "--package", "--exclude", "--features", "--target"}
-    allowed = {
-        "--all-features",
-        "--all-targets",
-        "--benches",
-        "--bins",
-        "--examples",
-        "--frozen",
-        "--ignore-rust-version",
-        "--lib",
-        "--locked",
-        "--no-default-features",
-        "--offline",
-        "--release",
-        "--tests",
-        "--workspace",
-        "--no-deps",
-        "--document-private-items",
-    }
-    index = 0
-    after_separator = False
-    while index < len(values):
-        value = values[index]
-        _reject_unsafe_option(value)
-        if value == "--":
-            after_separator = True
-            index += 1
-            continue
-        if after_separator:
-            # Test/doc filters are values, but may not be used to smuggle a
-            # path or another Cargo option into a subprocess invocation.
-            if value.startswith("-") or not _is_repo_relative_path(value):
-                raise BridgeError(HTTPStatus.FORBIDDEN, f"argument is forbidden: {value}")
-            index += 1
-            continue
-        name = _option_name(value)
-        if name in value_for:
-            inline = "=" in value
-            if inline:
-                argument = value.split("=", 1)[1]
-            else:
-                index += 1
-                if index >= len(values):
-                    raise BridgeError(HTTPStatus.BAD_REQUEST, f"missing value for {value}")
-                argument = values[index]
-            if not argument or argument.startswith("-") or not _is_repo_relative_path(argument):
-                raise BridgeError(HTTPStatus.FORBIDDEN, f"argument value is forbidden: {argument}")
-        elif name == "--manifest-path":
-            raise BridgeError(HTTPStatus.FORBIDDEN, "--manifest-path is not permitted")
-        elif value.startswith("-") and value not in allowed:
-            raise BridgeError(HTTPStatus.BAD_REQUEST, f"unsupported Cargo argument: {value}")
-        elif not _is_repo_relative_path(value):
-            raise BridgeError(HTTPStatus.FORBIDDEN, f"argument is forbidden: {value}")
-        index += 1
-
-
-def _validate_git_path_args(values: list[str]) -> None:
-    for value in values:
-        _reject_unsafe_option(value)
-        if value == "--":
-            continue
-        if value.startswith("-"):
-            if value not in {"-A", "--all", "-u", "--update", "-n", "--dry-run", "--intent-to-add", "--force"}:
-                raise BridgeError(HTTPStatus.BAD_REQUEST, f"unsupported git.add argument: {value}")
-        elif not _is_repo_relative_path(value):
-            raise BridgeError(HTTPStatus.FORBIDDEN, f"path argument is forbidden: {value}")
-
-
-def _validate_git_commit_args(values: list[str]) -> None:
-    for value in values:
-        _reject_unsafe_option(value)
-        if value in {"-F", "--file", "-C", "--cleanup", "--author", "--date"} or value.startswith(("-F", "--file=", "-C")):
-            raise BridgeError(HTTPStatus.FORBIDDEN, f"argument is forbidden: {value}")
-
-
-def validate_action_args(action_name: str, action: Action, values: list[str]) -> list[str]:
-    if not values:
-        return values
-    if not action.allow_extra:
-        raise BridgeError(HTTPStatus.BAD_REQUEST, f"action does not accept extra arguments: {action_name}")
-    if action.argument_policy == "cargo":
-        _validate_cargo_args(values)
-    elif action.argument_policy == "git.diff":
-        _validate_git_diff_args(values)
-    elif action.argument_policy == "git.paths":
-        _validate_git_path_args(values)
-    elif action.argument_policy == "git.commit":
-        _validate_git_commit_args(values)
-    elif action.argument_policy in {"git.generic", "gh"}:
-        for value in values:
-            _reject_unsafe_option(value)
-            if not value.startswith("-") and (value.startswith(("/", "\\", "~")) or ".." in value.split("/")):
-                raise BridgeError(HTTPStatus.FORBIDDEN, f"path argument is forbidden: {value}")
-    else:
-        raise BridgeError(HTTPStatus.BAD_REQUEST, f"action does not accept extra arguments: {action_name}")
-    return values
 
 
 def redact_env() -> dict[str, str]:
@@ -337,99 +146,6 @@ def redact_env() -> dict[str, str]:
     env["CARGO_TERM_COLOR"] = "never"
     env["GIT_TERMINAL_PROMPT"] = "0"
     return env
-
-
-class BoundedCapture:
-    def __init__(self, limit: int) -> None:
-        self.limit = limit
-        self.data = bytearray()
-        self.truncated = False
-        self._lock = threading.Lock()
-
-    def append(self, chunk: bytes) -> None:
-        with self._lock:
-            remaining = self.limit - len(self.data)
-            if remaining > 0:
-                self.data.extend(chunk[:remaining])
-            if len(chunk) > max(remaining, 0):
-                self.truncated = True
-
-
-def _drain_output(stream: Any, capture: BoundedCapture) -> None:
-    try:
-        while True:
-            chunk = stream.read(PROCESS_READ_CHUNK_BYTES)
-            if not chunk:
-                return
-            capture.append(chunk)
-    finally:
-        stream.close()
-
-
-def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
-    """Terminate a child and all descendants that inherited its output pipes."""
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        # taskkill /T handles descendants that do not inherit CTRL_BREAK events.
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=PROCESS_TERMINATION_GRACE_SECONDS,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            process.kill()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        else:
-            # The direct child may have exited while a descendant retained the
-            # process group and its pipes. Reap any such descendant after the
-            # parent is gone; killpg is a no-op once the group is empty.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    try:
-        process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-
-
-class ProcessRegistry:
-    """Tracks active bridge children so server shutdown can stop them."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._active: set[subprocess.Popen[bytes]] = set()
-
-    def add(self, process: subprocess.Popen[bytes]) -> None:
-        with self._lock:
-            self._active.add(process)
-
-    def remove(self, process: subprocess.Popen[bytes]) -> None:
-        with self._lock:
-            self._active.discard(process)
-
-    def terminate_all(self) -> None:
-        with self._lock:
-            active = tuple(self._active)
-        for process in active:
-            _terminate_process_tree(process)
 
 
 def append_audit(path: Path, record: dict[str, Any]) -> None:
@@ -449,7 +165,6 @@ def run_action(
     allow_mutation: bool,
     timeout_seconds: int,
     max_output_bytes: int,
-    process_registry: ProcessRegistry | None = None,
 ) -> dict[str, Any]:
     action = ACTIONS.get(action_name)
     if action is None:
@@ -457,76 +172,49 @@ def run_action(
     if action.mutating and not allow_mutation:
         raise BridgeError(HTTPStatus.FORBIDDEN, "mutating actions are disabled")
 
-    extra = validate_action_args(action_name, action, validate_extra_args(args))
+    extra = validate_extra_args(args)
+    if extra and not action.allow_extra:
+        raise BridgeError(HTTPStatus.BAD_REQUEST, f"action does not accept extra arguments: {action_name}")
 
     argv = [*action.argv, *extra]
     started = time.monotonic()
-    popen_kwargs: dict[str, Any] = {
-        "cwd": repo_root,
-        "env": redact_env(),
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-    }
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        popen_kwargs["start_new_session"] = True
     try:
-        process = subprocess.Popen(argv, **popen_kwargs)
-        if process_registry is not None:
-            process_registry.add(process)
-        stdout_capture = BoundedCapture(max_output_bytes)
-        stderr_capture = BoundedCapture(max_output_bytes)
-        stdout_thread = threading.Thread(
-            target=_drain_output,
-            args=(process.stdout, stdout_capture),
-            name="medusa-bridge-stdout",
-            daemon=True,
+        completed = subprocess.run(
+            argv,
+            cwd=repo_root,
+            env=redact_env(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout_seconds,
+            check=False,
         )
-        stderr_thread = threading.Thread(
-            target=_drain_output,
-            args=(process.stderr, stderr_capture),
-            name="medusa-bridge-stderr",
-            daemon=True,
-        )
-        stdout_thread.start()
-        stderr_thread.start()
-        try:
-            process.wait(timeout=timeout_seconds)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            _terminate_process_tree(process)
-            timed_out = True
-        stdout_thread.join(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-        stderr_thread.join(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-        if stdout_thread.is_alive() or stderr_thread.is_alive():
-            # A detached descendant may retain a pipe after its parent is gone;
-            # close our handles so a request cannot retain reader threads.
-            for stream in (process.stdout, process.stderr):
-                if stream is not None:
-                    stream.close()
-            stdout_thread.join(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-            stderr_thread.join(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        timed_out = False
     except FileNotFoundError as exc:
         raise BridgeError(HTTPStatus.FAILED_DEPENDENCY, f"executable not found: {argv[0]}") from exc
-    finally:
-        if "process" in locals() and process_registry is not None:
-            process_registry.remove(process)
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or b""
+        stderr = exc.stderr or b""
+        completed = subprocess.CompletedProcess(argv, 124, stdout, stderr)
+        timed_out = True
 
-    stdout = bytes(stdout_capture.data).decode("utf-8", errors="replace")
-    stderr = bytes(stderr_capture.data).decode("utf-8", errors="replace")
+    def decode_limited(raw: bytes) -> tuple[str, bool]:
+        truncated = len(raw) > max_output_bytes
+        return raw[:max_output_bytes].decode("utf-8", errors="replace"), truncated
+
+    stdout, stdout_truncated = decode_limited(completed.stdout)
+    stderr, stderr_truncated = decode_limited(completed.stderr)
     return {
         "action": action_name,
         "argv": argv,
-        "exit_code": 124 if timed_out else process.returncode,
-        "success": not timed_out and process.returncode == 0,
+        "exit_code": completed.returncode,
+        "success": completed.returncode == 0,
         "timed_out": timed_out,
         "duration_ms": round((time.monotonic() - started) * 1000),
         "stdout": stdout,
         "stderr": stderr,
-        "stdout_truncated": stdout_capture.truncated,
-        "stderr_truncated": stderr_capture.truncated,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
     }
 
 
@@ -548,7 +236,6 @@ class BridgeState:
         self.max_output_bytes = max_output_bytes
         self.audit_log = audit_log
         self.lock = threading.Lock()
-        self.process_registry = ProcessRegistry()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -631,7 +318,6 @@ class Handler(BaseHTTPRequestHandler):
                     allow_mutation=self.state.allow_mutation,
                     timeout_seconds=self.state.timeout_seconds,
                     max_output_bytes=self.state.max_output_bytes,
-                    process_registry=self.state.process_registry,
                 )
             result["ok"] = True
             result["request_id"] = request_id
@@ -733,19 +419,11 @@ def main() -> int:
     print(f"Repository: {repo_root}")
     print(f"Mutating actions: {'enabled' if args.allow_mutation else 'disabled'}")
     print(f"Audit log: {audit_log}")
-
-    def stop_on_signal(_signum: int, _frame: Any) -> None:
-        # Raising in the serving thread enters the finally block below, where
-        # every process group is terminated before the listening socket closes.
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, stop_on_signal)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        state.process_registry.terminate_all()
         server.server_close()
     return 0
 

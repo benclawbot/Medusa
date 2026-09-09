@@ -66,7 +66,6 @@ import {
   pollRuntime,
   publishRepoChanged,
   RUNTIME_RESUME_EVENT,
-  restoreRuntime,
   resumeRuntime,
   runRuntimeCommand,
   startRuntime,
@@ -552,10 +551,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const assistantResponseInTurn = useRef(false);
   const assistantStream = useRef<{ id: number; raw: string; text: string; createdAt: number }>();
   const assistantDeltaFrame = useRef<number>();
-  // A terminal event can be replayed or arrive in the same poll batch as the final
-  // assistant delta. Keep the decision idempotent and flush the stream before
-  // deciding whether the runtime returned a summary.
-  const terminalEventHandled = useRef(false);
   const lastTransportError = useRef<string>();
   const transportFailureCount = useRef(0);
   const transportErrorVisible = useRef(false);
@@ -567,7 +562,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const hydratedDraftRepo = useRef<string>();
   const resumeInFlight = useRef(false);
   const runtimeTransitionInFlight = useRef(false);
-  const composerRevision = useRef(0);
   const providerRequestId = useRef(0);
   const authenticationRequestId = useRef(0);
   const wakePoll = useRef<(() => void) | undefined>();
@@ -580,31 +574,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const previewDialogRef = useRef<HTMLDivElement>(null);
   const closeComposerSelector = useCallback(() => setComposerSelectorOpen(false), []);
   const closePreviewImage = useCallback(() => setPreviewImage(undefined), []);
-  const markComposerEdited = useCallback(() => {
-    composerRevision.current += 1;
-  }, []);
-  type ComposerSnapshot = { revision: number; repo: string };
-  const composerSnapshot = (): ComposerSnapshot => ({
-    revision: composerRevision.current,
-    repo,
-  });
-  const isCurrentComposerSnapshot = (snapshot: ComposerSnapshot): boolean => (
-    composerRevision.current === snapshot.revision
-  );
-  const isActiveComposerScope = (snapshot: ComposerSnapshot): boolean => (
-    activeRepoRef.current === snapshot.repo
-  );
-  const clearAcceptedComposer = (snapshot: ComposerSnapshot): void => {
-    if (!isCurrentComposerSnapshot(snapshot)) return;
-    // Clear the submitted scope even when the user has since switched projects;
-    // the key is scoped to the submitted project and cannot remove the new
-    // project's draft.
-    clearDesktopDraft(snapshot.repo);
-    if (isActiveComposerScope(snapshot)) {
-      setPrompt("");
-      setAttachments([]);
-    }
-  };
 
   useEffect(() => {
     if (hydratedDraftRepo.current !== undefined && hydratedDraftRepo.current !== repo) {
@@ -794,7 +763,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setPartialResult(false);
         turnStartedAt.current = Date.now();
         setTurnSummary(undefined);
-        terminalEventHandled.current = false;
         assistantResponseInTurn.current = false;
         assistantStream.current = undefined;
         lastTransportError.current = undefined;
@@ -897,7 +865,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         turnStartedAt.current = undefined;
         setPartialResult(false);
         setSidePanelView("work");
-        terminalEventHandled.current = false;
         assistantResponseInTurn.current = false;
         assistantStream.current = undefined;
         lastTransportError.current = undefined;
@@ -907,9 +874,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         appendWorkLog({ kind: "status", text: event.message, status: "Context updated" });
         break;
       case "completed":
-        if (terminalEventHandled.current) break;
-        terminalEventHandled.current = true;
-        flushAssistantStream();
         setBusy(false);
         setActivities((current) => finishActivities(current, "done", "Turn completed."));
         appendWorkLog({ kind: "status", text: "Final response ready", status: "Done" });
@@ -920,9 +884,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         }
         break;
       case "turnFinished":
-        if (terminalEventHandled.current) break;
-        terminalEventHandled.current = true;
-        flushAssistantStream();
         setBusy(false);
         setActivities((current) => finishActivities(current, "done", "Turn finished."));
         appendWorkLog({ kind: "status", text: "Turn finished", status: "Done" });
@@ -955,7 +916,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         appendAssistantMessage(`The request did not complete because the runtime reported an error:\n\n${event.message}\n\nRetry the request or inspect Work for the failed execution step. If Preview is available, it contains the partial result that was produced before the failure.`);
         break;
     }
-  }, [appendAssistantDelta, appendAssistantMessage, appendWorkLog, flushAssistantStream, refreshConfiguration]);
+  }, [appendAssistantDelta, appendAssistantMessage, appendWorkLog, refreshConfiguration]);
 
   useEffect(() => {
     if (!busy) {
@@ -1158,20 +1119,16 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     if (resumeInFlight.current || runtimeTransitionInFlight.current) return;
     resumeInFlight.current = true;
     runtimeTransitionInFlight.current = true;
+    runtimeGeneration.current += 1;
     setError(undefined);
-    let started: Awaited<ReturnType<typeof resumeRuntime>> | undefined;
     try {
-      started = await resumeRuntime(activeRepoRef.current, sessionId);
+      const started = await resumeRuntime(activeRepoRef.current, sessionId);
       await configureStartedRuntime(started, {
         provider,
         model,
         effort,
         expectedRevision: sharedConfiguration?.revision ?? 0,
       });
-      // Keep the existing subscription valid until the replacement runtime has
-      // passed configuration. A failed transition must leave the current runtime
-      // polling with its original generation.
-      runtimeGeneration.current += 1;
       setRuntimeId(started.runtimeId);
       setActiveRepo(started.repo);
       setMessages([]);
@@ -1186,9 +1143,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       setPartialResult(false);
       setSidePanelView("work");
     } catch (cause) {
-      // resumeRuntime activates the candidate before configuration can be
-      // verified. Restore the original runtime's subscribers after rejecting it.
-      if (started && runtimeId && started.runtimeId !== runtimeId) restoreRuntime(runtimeId);
       setError(toUserError(cause));
     } finally {
       resumeInFlight.current = false;
@@ -1216,19 +1170,11 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     const selected = await open({ directory: true, multiple: false, title: "Open a Medusa project" });
     if (typeof selected !== "string") return;
     runtimeTransitionInFlight.current = true;
+    runtimeGeneration.current += 1;
     let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
     try {
       started = await startRuntime(selected);
-      // Configure the candidate before changing the active runtime. This keeps
-      // the current project and its polling subscription usable if startup or
-      // provider verification fails.
-      await configureStartedRuntime(started, {
-        provider,
-        model,
-        effort,
-        expectedRevision: sharedConfiguration?.revision ?? 0,
-      });
-      runtimeGeneration.current += 1;
+      if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setActiveRepo(started.repo);
       setMessages([]);
@@ -1244,9 +1190,15 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       setSidePanelView("work");
       setError(undefined);
       publishRepoChanged(started.repo);
+      await configureStartedRuntime(started, {
+        provider,
+        model,
+        effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
+      });
       await refreshConfiguration();
     } catch (cause) {
-      if (started && runtimeId && started.runtimeId !== runtimeId) restoreRuntime(runtimeId);
+      if (started) setRuntimeId(undefined);
       setError(toUserError(cause));
     } finally {
       runtimeTransitionInFlight.current = false;
@@ -1256,16 +1208,11 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const openGeneralChat = async () => {
     if (runtimeTransitionInFlight.current) return;
     runtimeTransitionInFlight.current = true;
+    runtimeGeneration.current += 1;
     let started: Awaited<ReturnType<typeof startRuntime>> | undefined;
     try {
       started = await startRuntime();
-      await configureStartedRuntime(started, {
-        provider,
-        model,
-        effort,
-        expectedRevision: sharedConfiguration?.revision ?? 0,
-      });
-      runtimeGeneration.current += 1;
+      if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setActiveRepo("");
       setMessages([]);
@@ -1281,9 +1228,15 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       setSidePanelView("work");
       setError(undefined);
       publishRepoChanged("");
+      await configureStartedRuntime(started, {
+        provider,
+        model,
+        effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
+      });
       await refreshConfiguration();
     } catch (cause) {
-      if (started && runtimeId && started.runtimeId !== runtimeId) restoreRuntime(runtimeId);
+      if (started) setRuntimeId(undefined);
       setError(toUserError(cause));
     } finally {
       runtimeTransitionInFlight.current = false;
@@ -1294,8 +1247,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     if (!repo) return;
     const selected = await open({ multiple: true, directory: false, title: "Attach repository files" });
     const paths = typeof selected === "string" ? [selected] : selected ?? [];
-    if (!paths.length) return;
-    markComposerEdited();
     setAttachments((current) => [
       ...current,
       ...paths.map((path): DesktopAttachment => ({ kind: "file", path })),
@@ -1306,7 +1257,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     if (!files.length) return;
     try {
       const next = await Promise.all(files.map(readImage));
-      markComposerEdited();
       setAttachments((current) => [...current, ...next]);
       setError(undefined);
     } catch (cause) {
@@ -1377,7 +1327,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     }
     const clean = text.trim();
     const submitsTurn = !(clean.startsWith("/") && suppliedAttachments.length === 0);
-    const submittedComposer = composerSnapshot();
     if (submitsTurn && submitInFlight.current) return;
     if (submitsTurn) submitInFlight.current = true;
     setError(undefined);
@@ -1395,7 +1344,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     }
     if (submitsTurn) {
       assistantResponseInTurn.current = false;
-      terminalEventHandled.current = false;
       lastTransportError.current = undefined;
       setWebArtifact(undefined);
       setTurnSummary(undefined);
@@ -1422,22 +1370,15 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       setLastRequest({ text, attachments: suppliedAttachments });
       // Keep the durable draft while transport is pending; a failed send restores it below.
       // Clearing the visible composer immediately lets the user prepare the next turn.
-      if (isCurrentComposerSnapshot(submittedComposer) && isActiveComposerScope(submittedComposer)) {
-        setPrompt("");
-        setAttachments([]);
-      }
-    }
-    try {
-      // Keep the exact submitted snapshot recoverable if the user changes
-      // projects while the asynchronous transport is in flight.
-      persistDesktopDraft(submittedComposer.repo, text, suppliedAttachments);
-    } catch {
-      // Draft persistence is best effort and must never reject a send.
+      setPrompt("");
+      setAttachments([]);
     }
     try {
       if (clean.startsWith("/") && suppliedAttachments.length === 0) {
         await runRuntimeCommand(runtimeId, clean);
-        clearAcceptedComposer(submittedComposer);
+        clearDesktopDraft(repo);
+        setPrompt("");
+        setAttachments([]);
       } else {
         await configureSelectedModelForTurn();
         const disposition = await submitRuntime(runtimeId, {
@@ -1449,7 +1390,9 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
             ? { ...message, queued: disposition === "queued", failed: false }
             : message));
         failedMessage.current = undefined;
-        clearAcceptedComposer(submittedComposer);
+        clearDesktopDraft(repo);
+        setPrompt("");
+        setAttachments([]);
       }
     } catch (cause) {
       if (submitsTurn) {
@@ -1463,10 +1406,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setMessages((current) => current.map((entry) => entry.id === userMessageId ? { ...entry, failed: true, queued: false } : entry));
         // Keep a rejected request editable. Do not overwrite new text entered
         // while the transport was in flight.
-        if (isCurrentComposerSnapshot(submittedComposer) && isActiveComposerScope(submittedComposer)) {
-          setPrompt((current) => current || text);
-          setAttachments((current) => current.length ? current : suppliedAttachments);
-        }
+        setPrompt((current) => current || text);
+        setAttachments((current) => current.length ? current : suppliedAttachments);
         appendAssistantMessage(`Medusa could not start the request:\n\n${message}`);
       }
     } finally {
@@ -1489,7 +1430,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   };
 
   const selectSlashSuggestion = (suggestion: CommandSuggestion) => {
-    markComposerEdited();
     setPrompt(`/${suggestion.name} `);
     setSlashSuggestions([]);
     setSlashSelection(0);
@@ -1986,7 +1926,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                 plan={plan}
                 onRespond={(response) => void sendText(response, [])}
                 onEditPlan={() => {
-                  markComposerEdited();
                   setPrompt("Please modify the plan: ");
                   composerRef.current?.focus();
                 }}
@@ -2019,13 +1958,13 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                           <Maximize2 size={14} />
                         </button>
                         <div><strong>{attachment.name}</strong><small>{attachment.width && attachment.height ? `${attachment.width}×${attachment.height} · ` : ""}{attachment.mediaType?.replace("image/", "").toUpperCase()} · {formatBytes(attachment.sizeBytes)}</small></div>
-                        <button className="remove-attachment" onClick={() => { markComposerEdited(); setAttachments((current) => current.filter((_, item) => item !== index)); }} aria-label={`Remove ${attachment.name}`}><X size={14} /></button>
+                        <button className="remove-attachment" onClick={() => setAttachments((current) => current.filter((_, item) => item !== index))} aria-label={`Remove ${attachment.name}`}><X size={14} /></button>
                       </article>
                     ) : (
                       <span key={`${attachment.kind}-${index}`}>
                         <FilePlus2 size={13} />
                         {attachment.kind === "file" ? basename(attachment.path) : attachment.name}
-                        <button onClick={() => { markComposerEdited(); setAttachments((current) => current.filter((_, item) => item !== index)); }} aria-label="Remove attachment"><X size={12} /></button>
+                        <button onClick={() => setAttachments((current) => current.filter((_, item) => item !== index))} aria-label="Remove attachment"><X size={12} /></button>
                       </span>
                     ))}
                   </div>
@@ -2082,7 +2021,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                     aria-autocomplete="list"
                     aria-controls={slashSuggestions.length ? "slash-command-listbox" : undefined}
                     aria-activedescendant={slashSuggestions.length ? `slash-option-${slashSelection}` : undefined}
-                    onChange={(event) => { markComposerEdited(); setPrompt(event.target.value); }}
+                    onChange={(event) => setPrompt(event.target.value)}
                     onPaste={onPaste}
                     onKeyDown={(event) => {
                       // Browsers dispatch Enter while an IME candidate is being

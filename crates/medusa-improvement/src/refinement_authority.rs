@@ -729,7 +729,8 @@ impl RefinementAuthorityStore {
         if let Err(error) = persist_approvals(&self.root, approvals) {
             return Err(error);
         }
-        let journal_result = atomic_write(&self.journal_path(), &serde_json::to_vec_pretty(journal)?);
+        let journal_result =
+            atomic_write(&self.journal_path(), &serde_json::to_vec_pretty(journal)?);
         if let Err(error) = journal_result {
             return Err(RefinementAuthorityError::Io(error));
         }
@@ -838,14 +839,12 @@ fn persisted_revision(path: &Path, root: &Path) -> Result<u64, RefinementAuthori
     Ok(journal.entries().len() as u64)
 }
 
-fn load_transaction(
-    root: &Path,
-) -> Result<Option<TransactionDocument>, RefinementAuthorityError> {
+fn load_transaction(root: &Path) -> Result<Option<TransactionDocument>, RefinementAuthorityError> {
     let path = root.join("transactions/active.json");
     let Some(bytes) = read_optional(&path)? else {
         return Ok(None);
     };
-    let transaction = serde_json::from_slice(&bytes).map_err(|error| {
+    let transaction: TransactionDocument = serde_json::from_slice(&bytes).map_err(|error| {
         quarantine_corrupt(
             root,
             "transaction",
@@ -857,7 +856,10 @@ fn load_transaction(
         return Err(authority_corrupt(
             root,
             &path,
-            format!("unsupported transaction schema {}", transaction.schema_version),
+            format!(
+                "unsupported transaction schema {}",
+                transaction.schema_version
+            ),
         ));
     }
     Ok(Some(transaction))
@@ -926,10 +928,11 @@ fn recover_transaction(
             ));
         }
     }
-    let canonical_is_base = transaction.base_revision <= journal.entries().len()
-        && transaction.base_revision <= candidate_journal.entries().len()
-        && journal.entries()
-            == &candidate_journal.entries()[..transaction.base_revision as usize];
+    let journal_len = journal.entries().len() as u64;
+    let candidate_journal_len = candidate_journal.entries().len() as u64;
+    let canonical_is_base = transaction.base_revision <= journal_len
+        && transaction.base_revision <= candidate_journal_len
+        && journal.entries() == &candidate_journal.entries()[..transaction.base_revision as usize];
     let canonical_is_target = journal == &candidate_journal;
     if !canonical_is_base && !canonical_is_target {
         return Err(authority_corrupt(

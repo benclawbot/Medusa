@@ -223,8 +223,7 @@ impl LiveSessionBroker {
                 Ok(session) => Ok(session),
                 Err(error) if error.to_string().contains("session revision is stale") => {
                     attachment.refresh_continuity()?;
-                    attachment
-                        .detach_durable(occurred_at_unix_ms, event_id.clone())
+                    attachment.detach_durable(occurred_at_unix_ms, event_id.clone())
                 }
                 Err(error) => Err(error),
             }
@@ -657,10 +656,12 @@ mod tests {
         let detached = broker
             .detach("desktop-a", 40_002, "detach-a")
             .expect("stale detach should refresh and succeed");
-        assert!(detached
-            .attachments
-            .iter()
-            .all(|attachment| attachment.client_id != "desktop-a"));
+        assert!(
+            detached
+                .attachments
+                .iter()
+                .all(|attachment| attachment.client_id != "desktop-a")
+        );
         assert!(broker.attachments.get("desktop-a").is_none());
         assert!(broker.attachments.contains_key("telegram-b"));
         let durable = ContinuityStore::new(
@@ -671,10 +672,12 @@ mod tests {
         )
         .load()
         .expect("durable continuity");
-        assert!(durable
-            .attachments
-            .iter()
-            .all(|attachment| attachment.client_id != "desktop-a"));
+        assert!(
+            durable
+                .attachments
+                .iter()
+                .all(|attachment| attachment.client_id != "desktop-a")
+        );
         assert_eq!(durable.attachments.len(), 1);
     }
 

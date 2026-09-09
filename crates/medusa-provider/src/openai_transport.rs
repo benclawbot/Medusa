@@ -138,7 +138,8 @@ pub(crate) fn complete_cancellable(
                                 .send(event)
                                 .map_err(|_| stream_error("OpenAI stream consumer disconnected"))
                         };
-                        if let Some(response) = accumulator.push_sse_data(data, &mut channel_sink)?
+                        if let Some(response) =
+                            accumulator.push_sse_data(data, &mut channel_sink)?
                         {
                             completed = Some(response);
                         }
