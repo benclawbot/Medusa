@@ -662,7 +662,7 @@ mod tests {
                 .iter()
                 .all(|attachment| attachment.client_id != "desktop-a")
         );
-        assert!(broker.attachments.get("desktop-a").is_none());
+        assert!(!broker.attachments.contains_key("desktop-a"));
         assert!(broker.attachments.contains_key("telegram-b"));
         let durable = ContinuityStore::new(
             repository
