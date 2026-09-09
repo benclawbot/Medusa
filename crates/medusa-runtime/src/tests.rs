@@ -1096,6 +1096,66 @@ fn controller_event_dispatch_commits_before_frontend_publication() {
 }
 
 #[test]
+fn queued_session_event_keeps_emission_session_identity() {
+    let directory = tempdir().expect("temporary directory");
+    let mut session_a = durable_runtime_session(directory.path());
+    let mut session_b = durable_runtime_session(directory.path());
+    let objective_a = session_a.objective.clone();
+    medusa_agent::record_session_event(
+        &mut session_a,
+        Actor::Coordinator,
+        EventPayload::SessionCreated {
+            objective: objective_a,
+        },
+    )
+    .expect("persist session a");
+    let objective_b = session_b.objective.clone();
+    medusa_agent::record_session_event(
+        &mut session_b,
+        Actor::Coordinator,
+        EventPayload::SessionCreated {
+            objective: objective_b,
+        },
+    )
+    .expect("persist session b");
+    medusa_agent::persist_session(&session_a).expect("session a");
+    medusa_agent::persist_session(&session_b).expect("session b");
+    let session_a_id = session_a.id.to_string();
+    let session_b_id = session_b.id.to_string();
+    let submission = Arc::new(Mutex::new(SubmissionState {
+        active_session_id: Some(session_a_id.clone()),
+        ..SubmissionState::default()
+    }));
+    let (runtime_tx, runtime_rx) = mpsc::channel();
+    let (frontend_tx, frontend_rx) = mpsc::channel();
+    send_runtime_event(
+        &runtime_tx,
+        &submission,
+        RuntimeEvent::Team(TeamSnapshot::default()),
+    );
+    lock_submission(&submission).active_session_id = Some(session_b_id.clone());
+    drop(runtime_tx);
+    dispatch_runtime_events(directory.path(), &submission, runtime_rx, &frontend_tx);
+    assert!(matches!(frontend_rx.try_recv(), Ok(RuntimeEvent::Team(_))));
+    let persisted_a = medusa_agent::session_browser::load_session(directory.path(), &session_a_id)
+        .expect("load session a");
+    let persisted_b = medusa_agent::session_browser::load_session(directory.path(), &session_b_id)
+        .expect("load session b");
+    assert!(
+        persisted_a
+            .events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::TeamStateChanged { .. }))
+    );
+    assert!(
+        !persisted_b
+            .events
+            .iter()
+            .any(|event| matches!(event.payload, EventPayload::TeamStateChanged { .. }))
+    );
+}
+
+#[test]
 fn runtime_event_durability_classification_is_explicit() {
     assert!(matches!(
         RuntimeEvent::Started.durability(),

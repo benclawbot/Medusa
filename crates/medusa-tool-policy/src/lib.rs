@@ -342,7 +342,14 @@ impl CommandPolicy {
             .or_else(|| basename.strip_suffix(".bat"))
             .unwrap_or(&basename);
         if normalized_program == "git" {
-            let first = args.first().map(String::as_str).unwrap_or_default();
+            if args.iter().any(|arg| {
+                matches!(arg.as_str(), "-c" | "--config-env")
+                    || (arg.starts_with("-c") && arg.len() > 2)
+                    || arg.starts_with("--config-env=")
+            }) {
+                return Err("denied Git configuration override".to_owned());
+            }
+            let first = git_subcommand(args).unwrap_or_default();
             if matches!(first, "push" | "clean" | "reset" | "reflog" | "gc")
                 || (first == "config"
                     && args
@@ -371,6 +378,39 @@ fn normalize_program(program: &str) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or(program)
         .to_ascii_lowercase()
+}
+
+fn git_subcommand(args: &[String]) -> Option<&str> {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if arg == "--" {
+            return args.get(index + 1).map(String::as_str);
+        }
+        if matches!(
+            arg,
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--super-prefix"
+        ) {
+            index = index.saturating_add(2);
+            continue;
+        }
+        if arg.starts_with("-C")
+            || arg.starts_with("-c")
+            || arg.starts_with("--git-dir=")
+            || arg.starts_with("--work-tree=")
+            || arg.starts_with("--namespace=")
+            || arg.starts_with("--super-prefix=")
+        {
+            index = index.saturating_add(1);
+            continue;
+        }
+        if arg.starts_with('-') {
+            index = index.saturating_add(1);
+            continue;
+        }
+        return Some(arg);
+    }
+    None
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -461,6 +501,32 @@ mod tests {
                 .is_err()
         );
         assert!(policy.validate("new-safe-tool", &[]).is_ok());
+    }
+
+    #[test]
+    fn command_policy_denies_git_mutations_after_global_options() {
+        let policy = CommandPolicy::default();
+        for args in [
+            vec![
+                "-C".to_owned(),
+                ".".to_owned(),
+                "reset".to_owned(),
+                "--hard".to_owned(),
+            ],
+            vec![
+                "-c".to_owned(),
+                "core.hooksPath=/tmp".to_owned(),
+                "clean".to_owned(),
+                "-fd".to_owned(),
+            ],
+            vec![
+                "--no-pager".to_owned(),
+                "reflog".to_owned(),
+                "expire".to_owned(),
+            ],
+        ] {
+            assert!(policy.validate("git", &args).is_err(), "git {args:?}");
+        }
     }
 
     fn metadata(name: &str, latency_ms: u64, output_tokens: u64) -> ToolMetadata {

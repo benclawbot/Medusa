@@ -4,8 +4,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Deserialize;
 
 use crate::{
-    ModelResponse, OpenAiPromptTokenDetails, ProviderStreamEvent, ResponseBlock,
-    StreamingToolCallAssembler, Usage,
+    IncrementalVisibleText, ModelResponse, OpenAiPromptTokenDetails, ProviderStreamEvent,
+    ResponseBlock, StreamingToolCallAssembler, Usage,
 };
 
 const MAX_RESPONSE_TEXT_BYTES: usize = 8 * 1024 * 1024;
@@ -22,6 +22,7 @@ pub struct OpenAiStreamAccumulator {
     usage: Usage,
     output_started: bool,
     completed: bool,
+    visible_text: IncrementalVisibleText,
 }
 
 impl OpenAiStreamAccumulator {
@@ -56,24 +57,25 @@ impl OpenAiStreamAccumulator {
         }
 
         for choice in chunk.choices {
-            let has_output = choice
-                .delta
-                .content
-                .as_ref()
-                .is_some_and(|value| !value.is_empty())
-                || !choice.delta.tool_calls.is_empty();
-            if has_output && !self.output_started {
-                self.output_started = true;
-                sink(ProviderStreamEvent::OutputStarted)?;
-            }
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
                 if self.text.len().saturating_add(content.len()) > MAX_RESPONSE_TEXT_BYTES {
                     return Err(stream_error("OpenAI response text exceeds the 8 MiB limit"));
                 }
                 self.text.push_str(&content);
-                sink(ProviderStreamEvent::TextDelta { text: content })?;
+                let visible = self.visible_text.push(&content);
+                if !visible.is_empty() {
+                    if !self.output_started {
+                        self.output_started = true;
+                        sink(ProviderStreamEvent::OutputStarted)?;
+                    }
+                    sink(ProviderStreamEvent::TextDelta { text: visible })?;
+                }
             }
             for call in choice.delta.tool_calls {
+                if !self.output_started {
+                    self.output_started = true;
+                    sink(ProviderStreamEvent::OutputStarted)?;
+                }
                 let index = u32::try_from(call.index)
                     .map_err(|_| stream_error("OpenAI tool-call index exceeds u32"))?;
                 self.pending_tool_indices.insert(index);
@@ -109,6 +111,16 @@ impl OpenAiStreamAccumulator {
             return Err(stream_error(
                 "OpenAI stream ended before fragmented tool calls reached a completion boundary",
             ));
+        }
+        let pending_visible = self.visible_text.flush();
+        if !pending_visible.is_empty() {
+            if !self.output_started {
+                self.output_started = true;
+                sink(ProviderStreamEvent::OutputStarted)?;
+            }
+            sink(ProviderStreamEvent::TextDelta {
+                text: pending_visible,
+            })?;
         }
         let mut blocks = Vec::new();
         let visible_text = crate::strip_hidden_reasoning(&self.text);
@@ -323,6 +335,88 @@ mod tests {
         assert!(events.iter().any(|event| matches!(
             event,
             ProviderStreamEvent::TextDelta { text } if text == "hel"
+        )));
+    }
+
+    #[test]
+    fn streamed_hidden_reasoning_is_never_emitted_as_visible_text() {
+        let mut accumulator = OpenAiStreamAccumulator::default();
+        let mut events = Vec::new();
+        let mut sink = |event| {
+            events.push(event);
+            Ok(())
+        };
+        accumulator
+            .push_sse_data(
+                r#"{"id":"chatcmpl-hidden","choices":[{"delta":{"content":"<think>secret"},"finish_reason":null}]}"#,
+                &mut sink,
+            )
+            .expect("hidden chunk");
+        accumulator
+            .push_sse_data(
+                r#"{"id":"chatcmpl-hidden","choices":[{"delta":{"content":"</think>visible"},"finish_reason":"stop"}]}"#,
+                &mut sink,
+            )
+            .expect("visible chunk");
+        let response = accumulator
+            .push_sse_data("[DONE]", &mut sink)
+            .expect("done")
+            .expect("response");
+        assert_eq!(
+            response.blocks,
+            vec![ResponseBlock::Text {
+                text: "visible".to_owned()
+            }]
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamEvent::TextDelta { text } if text == "visible"
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            ProviderStreamEvent::TextDelta { text } if text.contains("secret") || text.contains("think")
+        )));
+    }
+
+    #[test]
+    fn split_hidden_reasoning_tags_are_not_emitted_as_visible_text() {
+        let mut accumulator = OpenAiStreamAccumulator::default();
+        let mut events = Vec::new();
+        let mut sink = |event| {
+            events.push(event);
+            Ok(())
+        };
+        accumulator
+            .push_sse_data(
+                r#"{"id":"chatcmpl-split","choices":[{"delta":{"content":"<thi"},"finish_reason":null}]}"#,
+                &mut sink,
+            )
+            .expect("partial opening tag");
+        accumulator
+            .push_sse_data(
+                r#"{"id":"chatcmpl-split","choices":[{"delta":{"content":"nk>secret</thi"},"finish_reason":null}]}"#,
+                &mut sink,
+            )
+            .expect("partial closing tag");
+        accumulator
+            .push_sse_data(
+                r#"{"id":"chatcmpl-split","choices":[{"delta":{"content":"nk>visible"},"finish_reason":"stop"}]}"#,
+                &mut sink,
+            )
+            .expect("visible suffix");
+        let response = accumulator
+            .push_sse_data("[DONE]", &mut sink)
+            .expect("done")
+            .expect("response");
+        assert_eq!(
+            response.blocks,
+            vec![ResponseBlock::Text {
+                text: "visible".to_owned()
+            }]
+        );
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            ProviderStreamEvent::TextDelta { text } if text.contains("think") || text.contains("secret")
         )));
     }
 

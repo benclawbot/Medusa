@@ -248,39 +248,59 @@ fn resumed_worker_loop(
     submission: Arc<Mutex<SubmissionState>>,
     interrupted_steps: Vec<String>,
 ) {
-    let _ = events.send(state.settings_event());
+    crate::send_runtime_event(&events, &submission, state.settings_event());
     if !interrupted_steps.is_empty() {
-        let _ = events.send(RuntimeEvent::Notice {
-            title: "Interrupted work recovered".to_owned(),
-            details: interrupted_steps
-                .into_iter()
-                .map(|title| format!("Marked failed after restart: {title}"))
-                .collect(),
-        });
+        crate::send_runtime_event(
+            &events,
+            &submission,
+            RuntimeEvent::Notice {
+                title: "Interrupted work recovered".to_owned(),
+                details: interrupted_steps
+                    .into_iter()
+                    .map(|title| format!("Marked failed after restart: {title}"))
+                    .collect(),
+            },
+        );
     }
     if let Some(session) = state.session.as_ref() {
-        let _ = events.send(RuntimeEvent::Notice {
-            title: "Session resumed".to_owned(),
-            details: vec![
-                session.objective.clone(),
-                format!("session: {}", session.id),
-                format!("turn: {}", session.turn),
-            ],
-        });
+        crate::send_runtime_event(
+            &events,
+            &submission,
+            RuntimeEvent::Notice {
+                title: "Session resumed".to_owned(),
+                details: vec![
+                    session.objective.clone(),
+                    format!("session: {}", session.id),
+                    format!("turn: {}", session.turn),
+                ],
+            },
+        );
         if !session.plan.is_empty() {
-            let _ = events.send(RuntimeEvent::Plan(session.plan.clone()));
+            crate::send_runtime_event(
+                &events,
+                &submission,
+                RuntimeEvent::Plan(session.plan.clone()),
+            );
         }
-        let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+        crate::send_runtime_event(
+            &events,
+            &submission,
+            RuntimeEvent::Progress { turn: session.turn },
+        );
         if let Some(question) = session.pending_question.clone() {
-            let _ = events.send(RuntimeEvent::Question(question));
+            crate::send_runtime_event(&events, &submission, RuntimeEvent::Question(question));
         }
     }
-    let _ = events.send(crate::capability_event(state.repo.clone()));
+    crate::send_runtime_event(
+        &events,
+        &submission,
+        crate::capability_event(state.repo.clone()),
+    );
 
     while let Ok(command) = commands.recv() {
         match command {
             RuntimeCommand::Submit { draft, accepted } => {
-                let _ = events.send(RuntimeEvent::Started);
+                crate::send_runtime_event(&events, &submission, RuntimeEvent::Started);
                 let event = match run_prompt(
                     &mut state,
                     draft,
@@ -296,12 +316,12 @@ fn resumed_worker_loop(
                         RuntimeEvent::Failed(error.to_string())
                     }
                 };
-                let _ = events.send(event);
+                crate::send_runtime_event(&events, &submission, event);
             }
             RuntimeCommand::Slash(command) => {
                 let runs_agent = command.runs_agent();
                 if runs_agent {
-                    let _ = events.send(RuntimeEvent::Started);
+                    crate::send_runtime_event(&events, &submission, RuntimeEvent::Started);
                 }
                 match execute_slash_command_with_submission(
                     &mut state,
@@ -314,7 +334,7 @@ fn resumed_worker_loop(
                         if !runs_agent {
                             mark_idle(&submission, false);
                         }
-                        let _ = events.send(event);
+                        crate::send_runtime_event(&events, &submission, event);
                     }
                     Ok(None) => {
                         if runs_agent {
@@ -333,16 +353,20 @@ fn resumed_worker_loop(
                                 details: vec![error.to_string()],
                             }
                         };
-                        let _ = events.send(event);
+                        crate::send_runtime_event(&events, &submission, event);
                     }
                 }
             }
             RuntimeCommand::ConfigureModel(configuration) => {
                 if let Err(error) = configure_model(&mut state, configuration, &events) {
-                    let _ = events.send(RuntimeEvent::Notice {
-                        title: "Model configuration failed".to_owned(),
-                        details: vec![error.to_string()],
-                    });
+                    crate::send_runtime_event(
+                        &events,
+                        &submission,
+                        RuntimeEvent::Notice {
+                            title: "Model configuration failed".to_owned(),
+                            details: vec![error.to_string()],
+                        },
+                    );
                 }
             }
             RuntimeCommand::Recovery {
@@ -351,13 +375,21 @@ fn resumed_worker_loop(
                 preflight,
             } => match super::recovery::execute_action(&state.repo, &view, &request, preflight) {
                 Ok(receipt) => {
-                    let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt));
+                    crate::send_runtime_event(
+                        &events,
+                        &submission,
+                        RuntimeEvent::RecoveryCompleted(receipt),
+                    );
                 }
                 Err(error) => {
-                    let _ = events.send(RuntimeEvent::Notice {
-                        title: "Recovery action failed closed".to_owned(),
-                        details: vec![error],
-                    });
+                    crate::send_runtime_event(
+                        &events,
+                        &submission,
+                        RuntimeEvent::Notice {
+                            title: "Recovery action failed closed".to_owned(),
+                            details: vec![error],
+                        },
+                    );
                 }
             },
             RuntimeCommand::Shutdown => break,

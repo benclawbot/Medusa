@@ -46,6 +46,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${RUNNER_OS}" == "Linux" ]]; then
+            sudo bash scripts/disable-google-chrome-apt-source.sh
+          fi
           cd browser
           npm install --ignore-scripts
           ${{ matrix.playwright_install }}

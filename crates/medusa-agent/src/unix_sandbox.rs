@@ -54,10 +54,11 @@ pub(crate) fn inputs(program: &str) -> io::Result<UnixSandboxInputs> {
             read_only_roots.insert(root.to_path_buf());
         }
     }
-    for root in [&cargo_home, &rustup_home].into_iter().flatten() {
-        if let Ok(root) = root.canonicalize() {
-            read_only_roots.insert(root);
-        }
+    if let Some(root) = cargo_home.as_ref() {
+        add_toolchain_subdirectories(root, ["bin", "registry", "git"], &mut read_only_roots);
+    }
+    if let Some(root) = rustup_home.as_ref() {
+        add_toolchain_subdirectories(root, ["toolchains", "downloads"], &mut read_only_roots);
     }
 
     if path_entries.is_empty()
@@ -77,6 +78,19 @@ pub(crate) fn inputs(program: &str) -> io::Result<UnixSandboxInputs> {
         cargo_home,
         rustup_home,
     })
+}
+
+fn add_toolchain_subdirectories<const N: usize>(
+    root: &Path,
+    names: [&str; N],
+    destination: &mut BTreeSet<PathBuf>,
+) {
+    for name in names {
+        let path = root.join(name);
+        if let Ok(path) = path.canonicalize() {
+            destination.insert(path);
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

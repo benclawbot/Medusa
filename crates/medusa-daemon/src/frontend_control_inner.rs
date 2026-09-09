@@ -328,12 +328,10 @@ impl FrontendControlPlane {
                 mode,
                 after_cursor,
             } => {
-                if *mode == FrontendAttachmentMode::Owner {
-                    if !self.controllers.contains_key(session_id) {
-                        return Err(FrontendControlError::RuntimeNotActive(session_id.clone()));
-                    }
-                    self.control_clients
-                        .insert(session_id.clone(), envelope.client_id.clone());
+                if *mode == FrontendAttachmentMode::Owner
+                    && !self.controllers.contains_key(session_id)
+                {
+                    return Err(FrontendControlError::RuntimeNotActive(session_id.clone()));
                 }
                 let attachment = self.attach_frontend(
                     session_id,
@@ -341,6 +339,10 @@ impl FrontendControlPlane {
                     after_cursor.unwrap_or_default(),
                     envelope.command_id.clone(),
                 )?;
+                if *mode == FrontendAttachmentMode::Owner {
+                    self.control_clients
+                        .insert(session_id.clone(), envelope.client_id.clone());
+                }
                 Ok(FrontendControlResult::Attached { attachment })
             }
             FrontendCommand::Detach => {
@@ -922,6 +924,7 @@ fn map_transient_event(
     event: RuntimeEvent,
 ) -> Result<Option<FrontendTransientEvent>, FrontendControlError> {
     let event = match event {
+        RuntimeEvent::SessionBound { event, .. } => return map_transient_event(*event),
         RuntimeEvent::RecoveryAvailable(recovery) => {
             Some(FrontendTransientEvent::RecoveryAvailable {
                 recovery: serde_json::to_value(recovery)?,

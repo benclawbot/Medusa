@@ -33,6 +33,22 @@ impl ProcessOwnershipVerification {
 }
 
 impl ProcessOwnershipReceipt {
+    /// Creates a fail-closed receipt when a child exits before the native marker can be sampled.
+    ///
+    /// The platform tag is intentionally distinct from every real marker. A later PID reuse can
+    /// therefore never compare equal and destructive operations remain denied unless the process
+    /// is already gone (`ProcessMissing`).
+    pub(crate) fn unavailable(pid: u32) -> Self {
+        Self {
+            pid,
+            start_marker: NativeProcessStartMarker {
+                platform: "unavailable_v1",
+                value: format!("pid-{pid}"),
+                boot_id: None,
+            },
+        }
+    }
+
     pub fn capture(pid: u32) -> io::Result<Self> {
         let start_marker = process_start_marker(pid)?.ok_or_else(|| {
             io::Error::new(

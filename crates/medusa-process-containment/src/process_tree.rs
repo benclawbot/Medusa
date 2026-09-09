@@ -55,6 +55,12 @@ impl OwnedProcessTree {
             })?;
             let ownership = match ProcessOwnershipReceipt::capture(child.id()) {
                 Ok(ownership) => ownership,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    // Very short-lived commands can exit between spawn and the /proc identity
+                    // probe. Keep a fail-closed sentinel so callers can still observe the exit
+                    // status and any later destructive action rejects PID reuse.
+                    ProcessOwnershipReceipt::unavailable(child.id())
+                }
                 Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -80,6 +86,9 @@ impl OwnedProcessTree {
             let mut child = command.spawn()?;
             let ownership = match ProcessOwnershipReceipt::capture(child.id()) {
                 Ok(ownership) => ownership,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    ProcessOwnershipReceipt::unavailable(child.id())
+                }
                 Err(error) => {
                     let _ = child.kill();
                     let _ = child.wait();

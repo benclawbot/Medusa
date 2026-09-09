@@ -129,9 +129,9 @@ pub use observer::{
 use command_router::execute_slash_command_with_submission;
 use support::{
     SUPPORTED_PROVIDERS, SelectedSkill, UpdateState, configure_model, credential_environment,
-    discover_skills, effort_for_turns, forward_update, is_supported_provider, load_selected_skill,
-    message_blocks, model_configuration_details, objective_for, protocol_for_provider,
-    should_auto_compact, turns_for_effort,
+    discover_skills, effort_for_turns, forward_update_bound, is_supported_provider,
+    load_selected_skill, message_blocks, model_configuration_details, objective_for,
+    protocol_for_provider, should_auto_compact, turns_for_effort,
 };
 
 #[cfg(test)]
@@ -155,6 +155,12 @@ pub enum RuntimeCommand {
 
 #[derive(Debug)]
 pub enum RuntimeEvent {
+    /// Internal envelope preserving the session identity at emission time while the durable
+    /// dispatcher may be lagging behind the worker. It is always unwrapped before frontend use.
+    SessionBound {
+        session_id: String,
+        event: Box<RuntimeEvent>,
+    },
     RecoveryAvailable(medusa_recovery_coordinator::RecoveryView),
     RecoveryCompleted(medusa_recovery_coordinator::RecoveryExecutionReceipt),
     Started,
@@ -218,6 +224,7 @@ impl RuntimeEvent {
     #[must_use]
     pub fn durability(&self) -> RuntimeEventDurability {
         match self {
+            Self::SessionBound { event, .. } => event.durability(),
             Self::RecoveryAvailable(_) => {
                 RuntimeEventDurability::DurableProjection("recovery coordinator record")
             }
@@ -568,7 +575,11 @@ impl RuntimeController {
                     self.team_control.stop_team().map_err(RuntimeError::agent)?
                 }
             };
-            let _ = self.event_sender.send(RuntimeEvent::Team(snapshot));
+            send_runtime_event(
+                &self.event_sender,
+                &self.submission,
+                RuntimeEvent::Team(snapshot),
+            );
             return Ok(());
         }
         let mut submission = lock_submission(&self.submission);
@@ -661,9 +672,13 @@ impl RuntimeController {
                     source: "frontend".to_owned(),
                 },
             ) {
-                let _ = self.event_sender.send(RuntimeEvent::Failed(format!(
-                    "cancellation was not requested because its durable record failed: {error}"
-                )));
+                send_runtime_event(
+                    &self.event_sender,
+                    &self.submission,
+                    RuntimeEvent::Failed(format!(
+                        "cancellation was not requested because its durable record failed: {error}"
+                    )),
+                );
                 return false;
             }
         }
@@ -708,6 +723,10 @@ fn dispatch_runtime_events(
     frontend_events: &Sender<RuntimeEvent>,
 ) {
     while let Ok(event) = runtime_events.recv() {
+        let (session_hint, event) = match event {
+            RuntimeEvent::SessionBound { session_id, event } => (Some(session_id), *event),
+            event => (None, event),
+        };
         let payload = match controller_event_payload(&event) {
             Ok(payload) => payload,
             Err(error) => {
@@ -718,10 +737,10 @@ fn dispatch_runtime_events(
             }
         };
         if let Some(payload) = payload {
-            let session_id = match &event {
+            let session_id = session_hint.or_else(|| match &event {
                 RuntimeEvent::RecoveryCompleted(receipt) => Some(receipt.record.session_id.clone()),
                 _ => lock_submission(submission).active_session_id.clone(),
-            };
+            });
             if let Some(session_id) = session_id {
                 if let Err(error) =
                     record_controller_event(repo, &session_id, Actor::Coordinator, payload)
@@ -746,8 +765,43 @@ fn dispatch_runtime_events(
     }
 }
 
+pub(crate) fn send_runtime_event(
+    events: &Sender<RuntimeEvent>,
+    submission: &Arc<Mutex<SubmissionState>>,
+    event: RuntimeEvent,
+) {
+    let event = if matches!(
+        event.durability(),
+        RuntimeEventDurability::CanonicalJournal(_)
+            | RuntimeEventDurability::SessionBoundCanonical { .. }
+    ) {
+        if let Some(session_id) = lock_submission(submission).active_session_id.clone() {
+            RuntimeEvent::SessionBound {
+                session_id,
+                event: Box::new(event),
+            }
+        } else {
+            event
+        }
+    } else {
+        event
+    };
+    let _ = events.send(event);
+}
+
+fn drain_bound_runtime_events(
+    queued: &Receiver<RuntimeEvent>,
+    events: &Sender<RuntimeEvent>,
+    submission: &Arc<Mutex<SubmissionState>>,
+) {
+    while let Ok(event) = queued.try_recv() {
+        send_runtime_event(events, submission, event);
+    }
+}
+
 fn controller_event_payload(event: &RuntimeEvent) -> Result<Option<EventPayload>, RuntimeError> {
     let payload = match event {
+        RuntimeEvent::SessionBound { event, .. } => controller_event_payload(event)?,
         RuntimeEvent::RecoveryCompleted(receipt) => Some(EventPayload::RecoveryActionCompleted {
             receipt: serde_json::json!({
                 "record": &receipt.record,
@@ -890,7 +944,7 @@ fn worker_loop_with_discovery<F>(
 ) where
     F: FnOnce(PathBuf) -> RuntimeEvent + Send + 'static,
 {
-    let _ = events.send(state.settings_event());
+    send_runtime_event(&events, &submission, state.settings_event());
     // Warm the OAuth app-server before the first user turn. Connecting and
     // authenticating lazily made an otherwise trivial prompt pay the full cold
     // startup cost (often tens of seconds).
@@ -906,10 +960,14 @@ fn worker_loop_with_discovery<F>(
                 let _ = warmup_tx.send(result);
             })
         {
-            let _ = events.send(RuntimeEvent::Notice {
-                title: "ChatGPT app-server warmup deferred".to_owned(),
-                details: vec![format!("failed to start warmup: {error}")],
-            });
+            send_runtime_event(
+                &events,
+                &submission,
+                RuntimeEvent::Notice {
+                    title: "ChatGPT app-server warmup deferred".to_owned(),
+                    details: vec![format!("failed to start warmup: {error}")],
+                },
+            );
             None
         } else {
             Some(warmup_rx)
@@ -918,20 +976,29 @@ fn worker_loop_with_discovery<F>(
         None
     };
     for recovery_event in recovery::startup_events(&state.repo) {
-        let _ = events.send(recovery_event);
+        send_runtime_event(&events, &submission, recovery_event);
     }
     let capability_repo = state.repo.clone();
     let capability_events = events.clone();
+    let capability_submission = Arc::clone(&submission);
     if let Err(error) = thread::Builder::new()
         .name("medusa-capability-discovery".to_owned())
         .spawn(move || {
-            let _ = capability_events.send(discover(capability_repo));
+            send_runtime_event(
+                &capability_events,
+                &capability_submission,
+                discover(capability_repo),
+            );
         })
     {
-        let _ = events.send(RuntimeEvent::Notice {
-            title: "Runtime capabilities unavailable".to_owned(),
-            details: vec![format!("failed to start capability discovery: {error}")],
-        });
+        send_runtime_event(
+            &events,
+            &submission,
+            RuntimeEvent::Notice {
+                title: "Runtime capabilities unavailable".to_owned(),
+                details: vec![format!("failed to start capability discovery: {error}")],
+            },
+        );
     }
     while let Ok(command) = commands.recv() {
         if state.codex_app_server.is_none()
@@ -941,16 +1008,20 @@ fn worker_loop_with_discovery<F>(
             match result {
                 Ok(server) => state.codex_app_server = Some(server),
                 Err(error) => {
-                    let _ = events.send(RuntimeEvent::Notice {
-                        title: "ChatGPT app-server warmup deferred".to_owned(),
-                        details: vec![error],
-                    });
+                    send_runtime_event(
+                        &events,
+                        &submission,
+                        RuntimeEvent::Notice {
+                            title: "ChatGPT app-server warmup deferred".to_owned(),
+                            details: vec![error],
+                        },
+                    );
                 }
             }
         }
         match command {
             RuntimeCommand::Submit { draft, accepted } => {
-                let _ = events.send(RuntimeEvent::Started);
+                send_runtime_event(&events, &submission, RuntimeEvent::Started);
                 if state.config.model.provider == medusa_config::openai_oauth::PROVIDER
                     && state.codex_app_server.is_none()
                     && let Some(warmup_rx) = oauth_warmup.take()
@@ -958,7 +1029,7 @@ fn worker_loop_with_discovery<F>(
                     match wait_for_oauth_warmup(&warmup_rx, &cancel) {
                         Ok(Some(server)) => state.codex_app_server = Some(server),
                         Ok(None) => {
-                            let _ = events.send(RuntimeEvent::Notice {
+                            send_runtime_event(&events, &submission, RuntimeEvent::Notice {
                                 title: "ChatGPT app-server warmup deferred".to_owned(),
                                 details: vec![
                                     "The warm-up process ended before producing a reusable app-server connection; retrying with a fresh connection.".to_owned(),
@@ -968,7 +1039,11 @@ fn worker_loop_with_discovery<F>(
                         Err(error) => {
                             let _ = accepted.send(Err(error.to_string()));
                             mark_idle(&submission, true);
-                            let _ = events.send(RuntimeEvent::Failed(error.to_string()));
+                            send_runtime_event(
+                                &events,
+                                &submission,
+                                RuntimeEvent::Failed(error.to_string()),
+                            );
                             continue;
                         }
                     }
@@ -989,12 +1064,12 @@ fn worker_loop_with_discovery<F>(
                         RuntimeEvent::Failed(error.to_string())
                     }
                 };
-                let _ = events.send(event);
+                send_runtime_event(&events, &submission, event);
             }
             RuntimeCommand::Slash(command) => {
                 let runs_agent = command.runs_agent();
                 if runs_agent {
-                    let _ = events.send(RuntimeEvent::Started);
+                    send_runtime_event(&events, &submission, RuntimeEvent::Started);
                 }
                 match execute_slash_command_with_submission(
                     &mut state,
@@ -1007,7 +1082,7 @@ fn worker_loop_with_discovery<F>(
                         if !runs_agent {
                             mark_idle(&submission, false);
                         }
-                        let _ = events.send(event);
+                        send_runtime_event(&events, &submission, event);
                     }
                     Ok(None) => {
                         if runs_agent {
@@ -1026,16 +1101,20 @@ fn worker_loop_with_discovery<F>(
                                 details: vec![error.to_string()],
                             }
                         };
-                        let _ = events.send(event);
+                        send_runtime_event(&events, &submission, event);
                     }
                 }
             }
             RuntimeCommand::ConfigureModel(configuration) => {
                 if let Err(error) = configure_model(&mut state, configuration, &events) {
-                    let _ = events.send(RuntimeEvent::Notice {
-                        title: "Model configuration failed".to_owned(),
-                        details: vec![error.to_string()],
-                    });
+                    send_runtime_event(
+                        &events,
+                        &submission,
+                        RuntimeEvent::Notice {
+                            title: "Model configuration failed".to_owned(),
+                            details: vec![error.to_string()],
+                        },
+                    );
                 }
             }
             RuntimeCommand::Recovery {
@@ -1044,13 +1123,21 @@ fn worker_loop_with_discovery<F>(
                 preflight,
             } => match recovery_tui::execute_view_action(&state.repo, &view, &request, preflight) {
                 Ok(receipt) => {
-                    let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt));
+                    send_runtime_event(
+                        &events,
+                        &submission,
+                        RuntimeEvent::RecoveryCompleted(receipt),
+                    );
                 }
                 Err(error) => {
-                    let _ = events.send(RuntimeEvent::Notice {
-                        title: "Recovery action failed closed".to_owned(),
-                        details: vec![error],
-                    });
+                    send_runtime_event(
+                        &events,
+                        &submission,
+                        RuntimeEvent::Notice {
+                            title: "Recovery action failed closed".to_owned(),
+                            details: vec![error],
+                        },
+                    );
                 }
             },
             RuntimeCommand::Shutdown => break,
@@ -2033,17 +2120,17 @@ fn run_openai_oauth_prompt(
         match turn_event {
             openai_oauth::CodexTurnEvent::AssistantDelta(delta) => {
                 assistant_text.push_str(&delta);
-                let _ = events.send(RuntimeEvent::AssistantText(delta));
+                send_runtime_event(events, submission, RuntimeEvent::AssistantText(delta));
             }
             event @ openai_oauth::CodexTurnEvent::Activity { .. } => {
                 if let Some(activity) = oauth_activity(&event) {
-                    let _ = events.send(RuntimeEvent::Activity(activity));
+                    send_runtime_event(events, submission, RuntimeEvent::Activity(activity));
                 }
             }
             openai_oauth::CodexTurnEvent::Plan(value) => {
                 if let Ok(plan) = serde_json::from_value::<Vec<AgentPlanStep>>(value) {
                     session.plan = plan.clone();
-                    let _ = events.send(RuntimeEvent::Plan(plan));
+                    send_runtime_event(events, submission, RuntimeEvent::Plan(plan));
                 }
             }
             openai_oauth::CodexTurnEvent::Usage(value) => reported_usage = Some(value),
@@ -2123,7 +2210,7 @@ fn run_openai_oauth_prompt(
                     )
                     .map_err(RuntimeError::agent)?;
                     if assistant_text.is_empty() {
-                        let _ = events.send(RuntimeEvent::AssistantText(text));
+                        send_runtime_event(events, submission, RuntimeEvent::AssistantText(text));
                     }
                 }
                 if completion.status == "completed" {
@@ -2150,17 +2237,21 @@ fn run_openai_oauth_prompt(
                         },
                     )
                     .map_err(RuntimeError::agent)?;
-                    let _ = events.send(RuntimeEvent::Usage {
-                        input_tokens: usage.input_tokens,
-                        output_tokens: usage.output_tokens,
-                        cache_read_input_tokens: usage.cache_read_input_tokens,
-                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
-                        total_tokens: usage.total_tokens,
-                        duration_ms: usage.duration_ms,
-                        tokens_per_second_milli: usage.tokens_per_second_milli,
-                        estimated_cost_microusd: usage.estimated_cost_microusd,
-                        provenance: usage.provenance,
-                    });
+                    send_runtime_event(
+                        events,
+                        submission,
+                        RuntimeEvent::Usage {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            cache_read_input_tokens: usage.cache_read_input_tokens,
+                            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                            total_tokens: usage.total_tokens,
+                            duration_ms: usage.duration_ms,
+                            tokens_per_second_milli: usage.tokens_per_second_milli,
+                            estimated_cost_microusd: usage.estimated_cost_microusd,
+                            provenance: usage.provenance,
+                        },
+                    );
                     if let Err(error) =
                         medusa_agent::persist_session(&session).map_err(RuntimeError::agent)
                     {
@@ -2356,6 +2447,11 @@ fn run_prompt(
     if let Some(accepted) = accepted {
         let _ = accepted.send(Ok(()));
     }
+    // Coordinators fan out work to threads and historically wrote directly to the shared event
+    // queue. Keep their events on a per-turn queue until the session id is known at emission,
+    // then bind them before publication so a lagging dispatcher cannot attribute them to a later
+    // session.
+    let (coordinator_events, coordinator_receiver) = mpsc::channel();
     let session = state.session.as_mut().ok_or_else(|| {
         RuntimeError::agent("runtime session disappeared before execution plan recording")
     })?;
@@ -2377,18 +2473,22 @@ fn run_prompt(
         .map_err(RuntimeError::agent)?;
         let projected = crate::coordination::production_orchestrator::projection(&ledger);
         session.plan = projected.clone();
-        let _ = events.send(RuntimeEvent::Plan(projected));
+        send_runtime_event(events, submission, RuntimeEvent::Plan(projected));
         Some(ledger)
     } else {
         None
     };
     if execution_plan.mode == crate::coordination::production_orchestrator::ExecutionMode::Direct {
-        let _ = events.send(RuntimeEvent::Team(state.team_control.clear()));
+        send_runtime_event(
+            events,
+            submission,
+            RuntimeEvent::Team(state.team_control.clear()),
+        );
     } else {
         state.team_control.clear();
     }
     for event in crate::coordination::production_orchestrator::events(&execution_plan) {
-        let _ = events.send(event);
+        send_runtime_event(events, submission, event);
     }
     let coordinator_evidence = if !resuming_pending_question && coordinated {
         if let Some(ledger) = execution_ledger.as_mut() {
@@ -2402,9 +2502,13 @@ fn run_prompt(
                 "preflight",
             )
             .map_err(RuntimeError::agent)?;
-            let _ = events.send(RuntimeEvent::Plan(
-                crate::coordination::production_orchestrator::projection(ledger),
-            ));
+            send_runtime_event(
+                events,
+                submission,
+                RuntimeEvent::Plan(crate::coordination::production_orchestrator::projection(
+                    ledger,
+                )),
+            );
         }
         let speculation_policy =
             medusa_multi_agent_scheduler::speculation::policy_for(&execution_plan.planning)
@@ -2418,7 +2522,7 @@ fn run_prompt(
                     &config,
                     &execution_plan,
                     &state.team_control,
-                    events,
+                    &coordinator_events,
                 )
             } else if speculation_policy.eligible {
                 let speculative_control = TeamControlPlane::default();
@@ -2430,7 +2534,7 @@ fn run_prompt(
                             state.session_api_key.clone(),
                             &execution_plan,
                             cancel,
-                            (&speculative_control, events),
+                            (&speculative_control, &coordinator_events),
                         )
                     });
                     let preflight = crate::coordination::multi_agent_coordinator::run_preflight(
@@ -2440,7 +2544,7 @@ fn run_prompt(
                         &execution_plan,
                         cancel,
                         &state.team_control,
-                        events,
+                        &coordinator_events,
                     );
                     let speculative = speculative
                         .join()
@@ -2505,9 +2609,10 @@ fn run_prompt(
                     &execution_plan,
                     cancel,
                     &state.team_control,
-                    events,
+                    &coordinator_events,
                 )
             };
+        drain_bound_runtime_events(&coordinator_receiver, events, submission);
         match preflight {
             Ok(evidence) => {
                 if let Some(ledger) = execution_ledger.as_mut() {
@@ -2527,9 +2632,13 @@ fn run_prompt(
                         },
                     )
                     .map_err(RuntimeError::agent)?;
-                    let _ = events.send(RuntimeEvent::Plan(
-                        crate::coordination::production_orchestrator::projection(ledger),
-                    ));
+                    send_runtime_event(
+                        events,
+                        submission,
+                        RuntimeEvent::Plan(
+                            crate::coordination::production_orchestrator::projection(ledger),
+                        ),
+                    );
                 }
                 Some(evidence)
             }
@@ -2544,9 +2653,13 @@ fn run_prompt(
                         ],
                         &error,
                     );
-                    let _ = events.send(RuntimeEvent::Plan(
-                        crate::coordination::production_orchestrator::projection(ledger),
-                    ));
+                    send_runtime_event(
+                        events,
+                        submission,
+                        RuntimeEvent::Plan(
+                            crate::coordination::production_orchestrator::projection(ledger),
+                        ),
+                    );
                 }
                 return Err(RuntimeError::agent(error));
             }
@@ -2581,9 +2694,13 @@ fn run_prompt(
                 "implementation",
             )
             .map_err(RuntimeError::agent)?;
-            let _ = events.send(RuntimeEvent::Plan(
-                crate::coordination::production_orchestrator::projection(ledger),
-            ));
+            send_runtime_event(
+                events,
+                submission,
+                RuntimeEvent::Plan(crate::coordination::production_orchestrator::projection(
+                    ledger,
+                )),
+            );
         }
         let first_implementation =
             crate::coordination::mutating_worker_coordinator::run_implementation(
@@ -2593,8 +2710,9 @@ fn run_prompt(
                 &execution_plan,
                 preflight,
                 cancel,
-                (&state.team_control, events),
+                (&state.team_control, &coordinator_events),
             );
+        drain_bound_runtime_events(&coordinator_receiver, events, submission);
         let implementation = match first_implementation {
                 Err(error)
                     if crate::coordination::mutating_worker_coordinator::is_speculation_invalidation(&error) =>
@@ -2613,11 +2731,12 @@ fn run_prompt(
                         &execution_plan,
                         preflight,
                         cancel,
-                        (&state.team_control, events),
+                        (&state.team_control, &coordinator_events),
                     )
                 }
                 result => result,
             };
+        drain_bound_runtime_events(&coordinator_receiver, events, submission);
         match implementation {
             Ok(evidence) => {
                 if let Some(ledger) = execution_ledger.as_mut() {
@@ -2628,9 +2747,13 @@ fn run_prompt(
                         "immutable isolated implementation prepared for parent review",
                     )
                     .map_err(RuntimeError::agent)?;
-                    let _ = events.send(RuntimeEvent::Plan(
-                        crate::coordination::production_orchestrator::projection(ledger),
-                    ));
+                    send_runtime_event(
+                        events,
+                        submission,
+                        RuntimeEvent::Plan(
+                            crate::coordination::production_orchestrator::projection(ledger),
+                        ),
+                    );
                 }
                 Some(evidence)
             }
@@ -2642,9 +2765,13 @@ fn run_prompt(
                         &[medusa_multi_agent_scheduler::TaskKind::Implementation],
                         &error,
                     );
-                    let _ = events.send(RuntimeEvent::Plan(
-                        crate::coordination::production_orchestrator::projection(ledger),
-                    ));
+                    send_runtime_event(
+                        events,
+                        submission,
+                        RuntimeEvent::Plan(
+                            crate::coordination::production_orchestrator::projection(ledger),
+                        ),
+                    );
                 }
                 return Err(RuntimeError::agent(error));
             }
@@ -2723,9 +2850,13 @@ fn run_prompt(
                 "parent-review",
             )
             .map_err(RuntimeError::agent)?;
-            let _ = events.send(RuntimeEvent::Plan(
-                crate::coordination::production_orchestrator::projection(ledger),
-            ));
+            send_runtime_event(
+                events,
+                submission,
+                RuntimeEvent::Plan(crate::coordination::production_orchestrator::projection(
+                    ledger,
+                )),
+            );
         }
     }
     let mut updates = UpdateState::new();
@@ -2733,7 +2864,7 @@ fn run_prompt(
         updates.suppress_model_plan();
     }
     if !coordinated && !session.plan.is_empty() {
-        let _ = events.send(RuntimeEvent::Plan(session.plan.clone()));
+        send_runtime_event(events, submission, RuntimeEvent::Plan(session.plan.clone()));
     }
 
     let result = if implementation_evidence.is_some() {
@@ -2747,7 +2878,7 @@ fn run_prompt(
                         let projected =
                             crate::coordination::production_orchestrator::projection(ledger);
                         session.plan = projected.clone();
-                        let _ = events.send(RuntimeEvent::Plan(projected));
+                        send_runtime_event(events, submission, RuntimeEvent::Plan(projected));
                     }
                     return Ok(RuntimeEvent::Cancelled);
                 }
@@ -2824,7 +2955,7 @@ fn run_prompt(
                         turn_instruction,
                         provider_phase,
                         |update| {
-                            forward_update(update, events, &mut updates);
+                            forward_update_bound(update, events, &mut updates, submission);
                         },
                     ) {
                         Ok(outcome) => {
@@ -2881,7 +3012,11 @@ fn run_prompt(
                         }
                     }
                 };
-                let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+                send_runtime_event(
+                    events,
+                    submission,
+                    RuntimeEvent::Progress { turn: session.turn },
+                );
                 if !general_chat {
                     let _ = crate::coding_trajectory::sync_and_render(&state.repo, &session, None)?;
                 }
@@ -2895,13 +3030,17 @@ fn run_prompt(
                 {
                     compact_session(&mut session, None).map_err(RuntimeError::agent)?;
                     updates.current_context_tokens = 0;
-                    let _ = events.send(RuntimeEvent::Compacted {
-                        message: format!(
-                            "Auto-compacted at {}% of the {}-token context window.",
-                            state.config.model.auto_compact_percent,
-                            state.config.model.context_window_tokens
-                        ),
-                    });
+                    send_runtime_event(
+                        events,
+                        submission,
+                        RuntimeEvent::Compacted {
+                            message: format!(
+                                "Auto-compacted at {}% of the {}-token context window.",
+                                state.config.model.auto_compact_percent,
+                                state.config.model.context_window_tokens
+                            ),
+                        },
+                    );
                 }
 
                 if cancel_requested(cancel, submission) {
@@ -2910,7 +3049,7 @@ fn run_prompt(
                         let projected =
                             crate::coordination::production_orchestrator::projection(ledger);
                         session.plan = projected.clone();
-                        let _ = events.send(RuntimeEvent::Plan(projected));
+                        send_runtime_event(events, submission, RuntimeEvent::Plan(projected));
                     }
                     return Ok(RuntimeEvent::Cancelled);
                 }
@@ -2974,9 +3113,13 @@ fn run_prompt(
                             "dedicated-parent-review",
                         )
                         .map_err(RuntimeError::agent)?;
-                        let _ = events.send(RuntimeEvent::Plan(
-                            crate::coordination::production_orchestrator::projection(ledger),
-                        ));
+                        send_runtime_event(
+                            events,
+                            submission,
+                            RuntimeEvent::Plan(
+                                crate::coordination::production_orchestrator::projection(ledger),
+                            ),
+                        );
                     }
                     let review_provider = LazyConfiguredProviderManager::from_config(
                         &state.config,
@@ -3057,7 +3200,11 @@ fn run_prompt(
                                 },
                             )
                             .map_err(RuntimeError::agent)?;
-                            let _ = events.send(RuntimeEvent::AssistantText(completion_text));
+                            send_runtime_event(
+                                events,
+                                submission,
+                                RuntimeEvent::AssistantText(completion_text),
+                            );
                             result = Ok(RuntimeEvent::Completed {
                                 session_id: session.id.to_string(),
                             });
@@ -3150,7 +3297,7 @@ fn run_prompt(
         if let Some(ledger) = execution_ledger.as_ref() {
             let projected = crate::coordination::production_orchestrator::projection(ledger);
             session.plan = projected.clone();
-            let _ = events.send(RuntimeEvent::Plan(projected));
+            send_runtime_event(events, submission, RuntimeEvent::Plan(projected));
         }
     }
     let failed = result.is_err();
@@ -3161,10 +3308,14 @@ fn run_prompt(
         verified,
         failed,
     ) {
-        let _ = events.send(RuntimeEvent::Notice {
-            title: "Runtime learning record unavailable".to_owned(),
-            details: vec![error.to_string()],
-        });
+        send_runtime_event(
+            events,
+            submission,
+            RuntimeEvent::Notice {
+                title: "Runtime learning record unavailable".to_owned(),
+                details: vec![error.to_string()],
+            },
+        );
     }
     if verified {
         crate::memory_retrieval::record_reuse(
@@ -3175,7 +3326,11 @@ fn run_prompt(
         );
     }
     if coordinated {
-        let _ = events.send(RuntimeEvent::Team(state.team_control.finish()));
+        send_runtime_event(
+            events,
+            submission,
+            RuntimeEvent::Team(state.team_control.finish()),
+        );
     }
     match &result {
         Ok(event) => info!(
@@ -3196,6 +3351,7 @@ fn run_prompt(
 
 fn runtime_event_kind(event: &RuntimeEvent) -> &'static str {
     match event {
+        RuntimeEvent::SessionBound { event, .. } => runtime_event_kind(event),
         RuntimeEvent::RecoveryAvailable(_) => "recovery_available",
         RuntimeEvent::RecoveryCompleted(_) => "recovery_completed",
         RuntimeEvent::Started => "started",

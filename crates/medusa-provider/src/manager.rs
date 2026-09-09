@@ -953,7 +953,15 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                     {
                         first_token_ms = Some(elapsed_ms(started));
                     }
-                    route_stream_started = true;
+                    if matches!(
+                        event,
+                        ProviderStreamEvent::OutputStarted
+                            | ProviderStreamEvent::TextDelta { .. }
+                            | ProviderStreamEvent::ToolUseReady { .. }
+                            | ProviderStreamEvent::Completed { .. }
+                    ) {
+                        route_stream_started = true;
+                    }
                     if let Some(sink) = sink.as_deref_mut() {
                         sink(event)?;
                     }

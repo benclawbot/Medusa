@@ -2,7 +2,10 @@ use std::{
     collections::{BTreeSet, VecDeque},
     env, fs,
     path::{Path, PathBuf},
-    sync::mpsc::Sender,
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Sender},
+    },
     time::Instant,
 };
 
@@ -507,6 +510,20 @@ pub(super) fn forward_update(
             let _ = events.send(RuntimeEvent::Activity(activity));
         }
         _ => {}
+    }
+}
+
+/// Forwards model updates while binding durable events to the session that emitted them.
+pub(super) fn forward_update_bound(
+    update: &AgentUpdate,
+    events: &Sender<RuntimeEvent>,
+    state: &mut UpdateState,
+    submission: &Arc<Mutex<super::SubmissionState>>,
+) {
+    let (local_events, local_receiver) = mpsc::channel();
+    forward_update(update, &local_events, state);
+    while let Ok(event) = local_receiver.try_recv() {
+        super::send_runtime_event(events, submission, event);
     }
 }
 
