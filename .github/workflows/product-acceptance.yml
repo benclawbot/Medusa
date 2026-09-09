@@ -48,6 +48,8 @@ jobs:
       - name: Install Linux sandbox backend
         shell: bash
         run: |
+          set -euo pipefail
+          sudo bash scripts/disable-google-chrome-apt-source.sh
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
@@ -97,6 +99,8 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          set -euo pipefail
+          sudo bash scripts/disable-google-chrome-apt-source.sh
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
