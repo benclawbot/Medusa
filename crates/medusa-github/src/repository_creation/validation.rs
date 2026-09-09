@@ -150,9 +150,15 @@ pub(crate) fn repository_missing(stderr: &str) -> bool {
 
 pub(crate) fn sanitize_external_error(stderr: &str) -> String {
     let value = stderr.trim();
+    // Mirror the operations-layer `looks_sensitive` token families so no
+    // GitHub credential material survives in surfaced command output.
     if value.contains("ghp_")
+        || value.contains("gho_")
+        || value.contains("ghu_")
+        || value.contains("ghs_")
+        || value.contains("ghr_")
         || value.contains("github_pat_")
-        || value.to_ascii_lowercase().contains("authorization: bearer")
+        || value.to_ascii_lowercase().contains("authorization: ***")
     {
         "external command failed with redacted credential-like output".to_owned()
     } else if value.chars().count() > 2048 {

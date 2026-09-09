@@ -152,6 +152,51 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_up_transcript_with_fresh_output_shows_follow_indicator() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "follow-indicator",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
+        for index in 0..30 {
+            app.push_transcript(TranscriptEntry::Assistant(format!("row {index}")));
+        }
+        let identity = UiIdentity::for_repo(directory.path());
+        let live = render_frame(&identity, &app, 80, 24);
+        assert!(
+            !live
+                .iter()
+                .any(|line| line.text.contains("new output below"))
+        );
+
+        app.scrollback_scroll_up(10, usize::MAX);
+        app.push_transcript(TranscriptEntry::Assistant("fresh turn output".to_owned()));
+        let scrolled = render_frame(&identity, &app, 80, 24);
+        assert!(
+            scrolled
+                .iter()
+                .any(|line| line.text.contains("new output below"))
+        );
+
+        app.set_scrollback_offset(0);
+        let followed = render_frame(&identity, &app, 80, 24);
+        assert!(
+            !followed
+                .iter()
+                .any(|line| line.text.contains("new output below"))
+        );
+        assert!(
+            followed
+                .iter()
+                .any(|line| line.text.contains("fresh turn output"))
+        );
+    }
+
+    #[test]
     fn ctrl_l_requests_a_terminal_redraw() {
         assert!(ctrl_l_redraw(&Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Char('l'),

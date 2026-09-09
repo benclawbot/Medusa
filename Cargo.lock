@@ -1823,6 +1823,7 @@ dependencies = [
  "crossterm",
  "hex",
  "image",
+ "medusa-agent",
  "medusa-config",
  "medusa-daemon",
  "medusa-protocol",

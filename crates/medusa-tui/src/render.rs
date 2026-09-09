@@ -654,8 +654,16 @@ pub(super) fn render_frame(
         .rev()
         .collect::<Vec<_>>();
     let mut content_row = usize::from(header_height);
-    for line in visible_content {
-        set_frame_line(&mut frame, content_row, line.clone());
+    let newest_visible = visible_content.len().saturating_sub(1);
+    for (index, line) in visible_content.into_iter().enumerate() {
+        // While scrolled up with fresh output below, the newest visible row
+        // becomes the follow indicator instead of silently hiding new turns.
+        let line = if app.has_new_output_below() && index == newest_visible {
+            new_output_below_line()
+        } else {
+            (*line).clone()
+        };
+        set_frame_line(&mut frame, content_row, line);
         content_row = content_row.saturating_add(1);
     }
 

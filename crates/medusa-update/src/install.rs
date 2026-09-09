@@ -375,12 +375,14 @@ fn update_owner_is_alive(lock: &Path) -> MedusaResult<bool> {
     if schema.is_some_and(|value| value != UPDATE_LOCK_SCHEMA) {
         return Ok(true);
     }
-    if schema.is_some() && lock_field(&content, "lock_ready") != Some("1") {
-        if process_matches(parent_pid, lock_field(&content, "parent_identity"))? {
-            return Ok(true);
-        }
+    if schema.is_some()
+        && lock_field(&content, "lock_ready") != Some("1")
+        && process_matches(parent_pid, lock_field(&content, "parent_identity"))?
+    {
         return Ok(true);
     }
+    // Incomplete lock whose owner is gone: fall through to the helper-pid
+    // checks below instead of treating the stale lock as live.
     if process_matches(parent_pid, lock_field(&content, "parent_identity"))? {
         return Ok(true);
     }
@@ -507,7 +509,7 @@ write_outcome() {{
   reason=$2
   rollback_result=$3
   finished=$(date +%s)
-  tmp="$outcome.tmp.$$"
+  tmp=$(mktemp "$outcome.tmp.XXXXXX") || return 1
   printf '{{"schema":1,"targetRevision":%s,"previousRevision":%s,"stage":"%s","reason":"%s","startedUnixSeconds":%s,"finishedUnixSeconds":%s,"rollbackResult":"%s"}}\n' \
     "$target_revision" "$previous_revision" "$stage" "$reason" "$started" "$finished" "$rollback_result" > "$tmp" &&
     mv -f "$tmp" "$outcome"
@@ -972,6 +974,40 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_lock_with_dead_owner_falls_through_to_helper_checks() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let lock = directory.path().join(".medusa-update.lock");
+        // Schema present but lock_ready missing and the owner PID is gone:
+        // this stale lock must clear instead of being treated as live.
+        fs::write(&lock, "schema=2\nparent_pid=4294967295\n").expect("stale lock");
+        assert!(!update_owner_is_alive(&lock).expect("inspect stale lock"));
+
+        let new_lock = acquire_update_lock(&lock, std::process::id()).expect("reclaim lock");
+        drop(new_lock);
+        let contents = fs::read_to_string(&lock).expect("read lock");
+        assert!(contents.contains("schema=2"));
+        assert!(contents.contains("lock_ready=1"));
+    }
+
+    #[test]
+    fn incomplete_lock_with_live_owner_stays_live() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let lock = directory.path().join(".medusa-update.lock");
+        let identity = process_identity(std::process::id())
+            .expect("process identity")
+            .expect("current process identity");
+        fs::write(
+            &lock,
+            format!(
+                "schema=2\nparent_pid={}\nparent_identity={identity}\n",
+                std::process::id()
+            ),
+        )
+        .expect("incomplete lock");
+        assert!(update_owner_is_alive(&lock).expect("inspect lock"));
+    }
+
+    #[test]
     fn active_update_lock_is_preserved() {
         let directory = tempfile::tempdir().expect("tempdir");
         let lock = directory.path().join(".medusa-update.lock");
@@ -1030,6 +1066,9 @@ mod tests {
         assert!(unix.contains("42"));
         assert!(unix.contains("previousRevision"));
         assert!(unix.contains("fedcba98765432"));
+        // The outcome temp file must be uniquely created, never PID-guessable.
+        assert!(unix.contains("mktemp"));
+        assert!(!unix.contains(".tmp.$$"));
 
         let windows = windows_replace_script(
             42,
