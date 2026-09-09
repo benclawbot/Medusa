@@ -928,13 +928,15 @@ fn recover_transaction(
             "interrupted transaction has no recoverable candidate journal".to_owned(),
         ));
     };
-    candidate_journal.revalidate_approvals(&authority).map_err(|error| {
-        authority_corrupt(
-            root,
-            &path,
-            format!("transaction candidate journal is invalid: {error}"),
-        )
-    })?;
+    candidate_journal
+        .revalidate_approvals(&authority)
+        .map_err(|error| {
+            authority_corrupt(
+                root,
+                &path,
+                format!("transaction candidate journal is invalid: {error}"),
+            )
+        })?;
     let candidate_snapshot = snapshot_from_journal(&candidate_journal).map_err(|error| {
         authority_corrupt(
             root,
