@@ -210,6 +210,9 @@ pub struct DesktopWebArtifact {
 impl From<RuntimeEvent> for DesktopRuntimeEvent {
     fn from(event: RuntimeEvent) -> Self {
         match event {
+            // SessionBound is an internal routing envelope. Desktop consumers see
+            // the canonical event payload, never the transport wrapper.
+            RuntimeEvent::SessionBound { event, .. } => Self::from(*event),
             RuntimeEvent::RecoveryAvailable(recovery) => Self::RecoveryAvailable {
                 recovery: serde_json::to_value(recovery).unwrap_or_else(|error| {
                     serde_json::json!({
