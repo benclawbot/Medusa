@@ -179,6 +179,11 @@ pub struct RepairAttemptCheckpoint {
     pub repository_fingerprint: String,
 }
 
+/// Failure identity. `fingerprint` is an opaque non-empty correlation tag
+/// (NOT necessarily SHA-256); it is validated for presence at intake so a
+/// missing fingerprint cannot travel downstream and fail obscurely where the
+/// canonical lowercase 64-hex SHA-256 form is required (checkpoint,
+/// coordinator, recovery verification). See `docs/PROTOCOL-VERSIONING.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureCheckpoint {
     pub fingerprint: String,
@@ -410,6 +415,54 @@ impl CodingTrajectoryCheckpoint {
         {
             return Err(ContinuityError::TrajectoryTooLarge);
         }
+        self.validate_fingerprints()?;
+        Ok(())
+    }
+
+    /// Rejects empty primary-identity fingerprints at intake with a clear
+    /// error. Only identity fingerprints are checked: `repository_fingerprint`
+    /// fields may legitimately be empty (`#[serde(default)]`), and digest
+    /// shape (canonical 64-hex SHA-256) is enforced downstream where that
+    /// form is required, never here.
+    fn validate_fingerprints(&self) -> Result<(), ContinuityError> {
+        fn present(value: &str) -> bool {
+            !value.trim().is_empty()
+        }
+        for failure in &self.failure_history {
+            if !present(&failure.fingerprint) {
+                return Err(ContinuityError::InvalidFingerprint {
+                    field: "failure_history.fingerprint",
+                });
+            }
+        }
+        for entry in &self.repair_ledger {
+            if !present(&entry.fingerprint) {
+                return Err(ContinuityError::InvalidFingerprint {
+                    field: "repair_ledger.fingerprint",
+                });
+            }
+            for repair in &entry.repairs {
+                if !present(&repair.failure_fingerprint) {
+                    return Err(ContinuityError::InvalidFingerprint {
+                        field: "repair_ledger.repairs.failure_fingerprint",
+                    });
+                }
+            }
+        }
+        for roadblock in &self.roadblocks {
+            if !present(&roadblock.fingerprint) {
+                return Err(ContinuityError::InvalidFingerprint {
+                    field: "roadblocks.fingerprint",
+                });
+            }
+        }
+        for hypothesis in &self.disproved_hypotheses {
+            if !present(&hypothesis.signature) {
+                return Err(ContinuityError::InvalidFingerprint {
+                    field: "disproved_hypotheses.signature",
+                });
+            }
+        }
         Ok(())
     }
 
@@ -608,6 +661,8 @@ pub enum ContinuityError {
     UnsupportedTrajectorySchema { found: u32, current: u32 },
     #[error("coding trajectory exceeds bounded checkpoint limits")]
     TrajectoryTooLarge,
+    #[error("coding trajectory fingerprint for {field} must be a non-empty tag")]
+    InvalidFingerprint { field: &'static str },
 }
 
 #[derive(Debug, Clone)]
@@ -1684,6 +1739,29 @@ mod coding_trajectory_tests {
             coding_trajectory: Some(value),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn empty_fingerprints_are_rejected_at_intake() {
+        let mut value = trajectory();
+        value.failure_history.push(FailureCheckpoint {
+            fingerprint: "   ".into(),
+            classification: "test".into(),
+            summary: "blank fingerprint".into(),
+            repairs: Vec::new(),
+        });
+        assert!(matches!(
+            value.validate(),
+            Err(ContinuityError::InvalidFingerprint { field })
+                if field == "failure_history.fingerprint"
+        ));
+    }
+
+    #[test]
+    fn populated_trajectory_passes_intake_validation() {
+        trajectory()
+            .validate()
+            .expect("populated trajectory validates");
     }
 
     #[test]

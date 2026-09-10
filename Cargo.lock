@@ -1791,7 +1791,9 @@ dependencies = [
 name = "medusa-tool-control"
 version = "1.0.7"
 dependencies = [
+ "medusa-core",
  "serde",
+ "serde_json",
  "sha2",
 ]
 

@@ -1332,6 +1332,13 @@ pub struct DynamicSchedule {
 }
 
 impl DynamicSchedule {
+    /// Builds a schedule allowing up to `max_attempts` total attempts per
+    /// task, counting the first attempt as attempt 1. A limit of zero is
+    /// invalid. Attempt numbering is 1-based throughout: claiming a pending
+    /// task starts attempt `attempts + 1`, and a retryable failure returns
+    /// the task to pending only while `attempt < max_attempts`. This matches
+    /// the shared contract documented on `RetryGuard::try_new` and the
+    /// provider budget (`max_retries = 0` <=> a single attempt).
     pub fn new(
         tasks: Vec<Task>,
         workers: Vec<Worker>,
@@ -1786,6 +1793,28 @@ mod tests {
             .unwrap(),
             "two"
         );
+    }
+
+    #[test]
+    fn dynamic_schedule_attempt_budget_counts_total_attempts() {
+        // Shared contract: max_attempts counts total attempts including the
+        // first, and zero is invalid (see RetryGuard::try_new).
+        assert!(
+            DynamicSchedule::new(vec![task("a", &[], "a.rs")], vec![worker("one")], 0).is_err()
+        );
+        let mut runtime =
+            DynamicSchedule::new(vec![task("a", &[], "a.rs")], vec![worker("one")], 1).unwrap();
+        assert_eq!(runtime.dispatch_ready().unwrap()[0].task_id, "a");
+        assert_eq!(
+            runtime.state("a"),
+            Some(&TaskState::Running {
+                worker_id: "one".into(),
+                attempt: 1,
+            })
+        );
+        // A retryable failure with a budget of one total attempt is terminal.
+        runtime.fail("a", "one", "flaky", true).unwrap();
+        assert!(matches!(runtime.state("a"), Some(TaskState::Failed { .. })));
     }
 
     #[test]

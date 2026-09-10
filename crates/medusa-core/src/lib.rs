@@ -155,8 +155,30 @@ impl MedusaError {
     }
 }
 
+/// I/O kinds that indicate a transient failure: retrying materially
+/// identical input may succeed.
+fn is_transient_io_kind(kind: std::io::ErrorKind) -> bool {
+    use std::io::ErrorKind as Kind;
+    matches!(
+        kind,
+        Kind::TimedOut
+            | Kind::Interrupted
+            | Kind::ConnectionReset
+            | Kind::ConnectionAborted
+            | Kind::WouldBlock
+    )
+}
+
 impl From<std::io::Error> for MedusaError {
     fn from(error: std::io::Error) -> Self {
+        if is_transient_io_kind(error.kind()) {
+            return Self::new(
+                ErrorCode::PersistenceFailed,
+                ErrorCategory::Transient,
+                error.to_string(),
+            )
+            .with_retryable(true);
+        }
         Self::new(
             ErrorCode::PersistenceFailed,
             ErrorCategory::Environment,
@@ -167,9 +189,21 @@ impl From<std::io::Error> for MedusaError {
 
 impl From<serde_json::Error> for MedusaError {
     fn from(error: serde_json::Error) -> Self {
+        // An I/O failure underneath the JSON layer is transient and
+        // retryable. A corrupt frame (syntax/data error) means the bytes
+        // violate the expected schema: it is a validation failure, and
+        // retrying the same bytes cannot succeed, so it stays non-retryable.
+        if error.is_io() {
+            return Self::new(
+                ErrorCode::PersistenceFailed,
+                ErrorCategory::Transient,
+                error.to_string(),
+            )
+            .with_retryable(true);
+        }
         Self::new(
-            ErrorCode::PersistenceFailed,
-            ErrorCategory::Persistence,
+            ErrorCode::InvalidInput,
+            ErrorCategory::Validation,
             error.to_string(),
         )
     }
@@ -209,5 +243,38 @@ mod tests {
             serde_json::from_str::<MedusaError>(&encoded).expect("deserialize"),
             original
         );
+    }
+
+    #[test]
+    fn transient_io_errors_are_retryable() {
+        for kind in [
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::WouldBlock,
+        ] {
+            let error = MedusaError::from(std::io::Error::new(kind, "transient"));
+            assert_eq!(error.category, ErrorCategory::Transient, "{kind:?}");
+            assert!(error.retryable, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn persistent_io_errors_stay_non_retryable() {
+        let error = MedusaError::from(std::io::Error::new(std::io::ErrorKind::NotFound, "gone"));
+        assert_eq!(error.category, ErrorCategory::Environment);
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn corrupt_frames_are_deterministic_not_transient() {
+        let syntax: serde_json::Error =
+            serde_json::from_str::<serde_json::Value>("{truncated").expect_err("must fail");
+        assert!(!syntax.is_io());
+        let error = MedusaError::from(syntax);
+        assert_eq!(error.code, ErrorCode::InvalidInput);
+        assert_eq!(error.category, ErrorCategory::Validation);
+        assert!(!error.retryable);
     }
 }

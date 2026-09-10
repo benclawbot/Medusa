@@ -55,6 +55,14 @@ enum RetryDisposition {
 
 type ProviderAttemptHook<'a> = &'a mut dyn FnMut(&ProviderAttemptDescriptor) -> MedusaResult<()>;
 
+/// Retry budget for one provider route.
+///
+/// Shared attempt-accounting contract: `max_retries` counts retries *after*
+/// the first attempt, so total attempts = `max_retries + 1` and
+/// `max_retries = 0` means a single attempt with no retries. Attempt indices
+/// are 0-based with index 0 = the first attempt. This aligns with the
+/// attempts-based budgets elsewhere (`max_attempts` = total attempts
+/// including the first; zero is invalid there): attempts 1 <=> retries 0.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RouteRetryPolicy {
     pub max_retries: u8,
@@ -1557,6 +1565,21 @@ mod tests {
         let status = manager.execution_status().expect("execution status");
         assert_eq!(status["provider_index"], json!(1));
         assert_eq!(status["cache_hit"], json!(false));
+    }
+
+    #[test]
+    fn zero_retries_means_a_single_attempt() {
+        let (provider, calls) = provider(Err(failure(ErrorCategory::Transient, true)));
+        let manager = ProviderManager::new(vec![provider])
+            .with_policy(RouteRetryPolicy {
+                max_retries: 0,
+                base_delay_ms: 1,
+                max_delay_ms: 5_000,
+                jitter_ms: 0,
+            })
+            .without_sleep();
+        assert!(manager.complete(&request()).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

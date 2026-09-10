@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use medusa_core::{ErrorCategory, MedusaError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -39,6 +40,11 @@ pub struct RetryGuard {
 }
 
 impl RetryGuard {
+    /// Creates a guard allowing up to `max_attempts` total attempts,
+    /// counting the first attempt as attempt 1. A limit of zero is
+    /// normalized to one (a single attempt, no retries) for backward
+    /// compatibility; prefer [`RetryGuard::try_new`] to reject zero
+    /// explicitly.
     #[must_use]
     pub fn new(max_attempts: u8) -> Self {
         Self {
@@ -46,6 +52,17 @@ impl RetryGuard {
             attempts: 0,
             signatures: BTreeMap::new(),
         }
+    }
+
+    /// Strict constructor: `max_attempts` counts total attempts including
+    /// the first, and zero is rejected. This matches `DynamicSchedule::new`
+    /// and `RetryPolicy::validate`, which both treat zero as invalid, and
+    /// the provider contract where `max_retries = 0` means a single attempt.
+    pub fn try_new(max_attempts: u8) -> Result<Self, &'static str> {
+        if max_attempts == 0 {
+            return Err("max_attempts must be greater than zero");
+        }
+        Ok(Self::new(max_attempts))
     }
 
     pub fn begin_attempt(&mut self, signature: &str) -> Result<u8, &'static str> {
@@ -59,6 +76,38 @@ impl RetryGuard {
             return Err("loop guard blocked an unchanged repeated attempt");
         }
         Ok(self.attempts)
+    }
+
+    /// Classifies a structured [`MedusaError`] and renders the retry
+    /// decision. Prefer this over [`RetryGuard::decide`] whenever the
+    /// failure already carries a category and retry flag.
+    #[must_use]
+    pub fn decide_structured(&self, error: &MedusaError) -> RetryDecision {
+        let class = classify_medusa_error(error);
+        let action = match class {
+            FailureClass::Transient if self.attempts < self.max_attempts => RetryAction::Retry,
+            FailureClass::Transient | FailureClass::Unknown => RetryAction::Replan,
+            FailureClass::Authentication
+            | FailureClass::InvalidRequest
+            | FailureClass::CapabilityUnavailable
+            | FailureClass::ResourceExhausted
+            | FailureClass::Deterministic => RetryAction::Stop,
+        };
+        RetryDecision {
+            class,
+            action,
+            attempt: self.attempts,
+            max_attempts: self.max_attempts,
+            rationale: match action {
+                RetryAction::Retry => "transient failure permits one bounded retry".to_owned(),
+                RetryAction::Replan => {
+                    "retrying unchanged would not be justified; change route or strategy".to_owned()
+                }
+                RetryAction::Stop => {
+                    "deterministic or non-retryable failure must not be repeated".to_owned()
+                }
+            },
+        }
     }
 
     #[must_use]
@@ -172,6 +221,29 @@ pub fn trace(
     }
 }
 
+/// Classifies a structured [`MedusaError`] without scraping message text.
+///
+/// Structured signals take precedence: an error marked `retryable` (or
+/// carrying the [`ErrorCategory::Transient`] category) is [`FailureClass::Transient`];
+/// [`ErrorCategory::Validation`] maps to [`FailureClass::InvalidRequest`], and
+/// [`ErrorCategory::Policy`] maps to [`FailureClass::Deterministic`] (a denial
+/// will not succeed unchanged).
+/// Every other category consults [`classify_failure`] on the message as a
+/// fallback so unmapped failures keep their historical behavior.
+#[must_use]
+pub fn classify_medusa_error(error: &MedusaError) -> FailureClass {
+    if error.retryable || error.category == ErrorCategory::Transient {
+        return FailureClass::Transient;
+    }
+    if error.category == ErrorCategory::Validation {
+        return FailureClass::InvalidRequest;
+    }
+    if error.category == ErrorCategory::Policy {
+        return FailureClass::Deterministic;
+    }
+    classify_failure(&error.message)
+}
+
 #[must_use]
 pub fn classify_failure(error: &str) -> FailureClass {
     let lower = error.to_ascii_lowercase();
@@ -254,6 +326,66 @@ mod tests {
         guard.begin_attempt("provider:request:1").unwrap();
         let decision = guard.decide("test failed: assertion mismatch");
         assert_eq!(decision.action, RetryAction::Stop);
+    }
+
+    #[test]
+    fn strict_constructor_rejects_zero_attempts() {
+        assert!(RetryGuard::try_new(0).is_err());
+        assert!(RetryGuard::try_new(1).is_ok());
+    }
+
+    #[test]
+    fn legacy_zero_limit_normalizes_to_a_single_attempt() {
+        let mut guard = RetryGuard::new(0);
+        assert_eq!(guard.begin_attempt("only"), Ok(1));
+        assert!(guard.begin_attempt("second").is_err());
+    }
+
+    #[test]
+    fn structured_transient_error_is_retried() {
+        use medusa_core::MedusaError;
+        let mut guard = RetryGuard::try_new(2).expect("valid budget");
+        guard.begin_attempt("provider:request:1").unwrap();
+        let io_error = MedusaError::from(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out",
+        ));
+        assert!(io_error.retryable);
+        let decision = guard.decide_structured(&io_error);
+        assert_eq!(decision.class, FailureClass::Transient);
+        assert_eq!(decision.action, RetryAction::Retry);
+    }
+
+    #[test]
+    fn corrupt_frame_is_retried_nowhere_across_layers() {
+        // Cross-layer contract: a corrupt frame converts to a non-retryable
+        // core error AND classifies to a non-transient tool-control class,
+        // so no layer retries it.
+        use medusa_core::MedusaError;
+        let frame: Result<serde_json::Value, serde_json::Error> =
+            serde_json::from_str("{truncated");
+        let core_error = MedusaError::from(frame.expect_err("corrupt frame"));
+        assert!(!core_error.retryable);
+        assert_eq!(
+            classify_medusa_error(&core_error),
+            FailureClass::InvalidRequest
+        );
+        let mut guard = RetryGuard::try_new(3).expect("valid budget");
+        guard.begin_attempt("frame:1").unwrap();
+        let decision = guard.decide_structured(&core_error);
+        assert_eq!(decision.action, RetryAction::Stop);
+    }
+
+    #[test]
+    fn structured_signals_win_over_message_text() {
+        use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
+        // Message mentions timeout, but the structured denial is explicit.
+        let denied = MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            "request timeout is not permitted by policy",
+        );
+        assert_eq!(classify_medusa_error(&denied), FailureClass::Deterministic);
     }
 
     #[test]

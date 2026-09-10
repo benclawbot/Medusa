@@ -25,6 +25,7 @@ use medusa_protocol::frontend::FrontendCommand;
 #[cfg(test)]
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use medusa_tool_policy::validate_shell_command;
+use serde::Deserialize;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
@@ -37,7 +38,7 @@ use crate::{
     process::ProcessRegistry,
     protocol::{
         DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
-        ResponseEnvelope,
+        ResponseEnvelope, job_protocol_compatible,
     },
     scheduler::{DaemonLimits, JobRunner, JobScheduler, SubmitError},
     transport::{LocalListener, LocalStream, connect, wake},
@@ -223,7 +224,7 @@ impl DaemonClient {
             ));
         }
         let response: ResponseEnvelope = serde_json::from_str(&line)?;
-        if response.version != DAEMON_PROTOCOL_VERSION {
+        if !job_protocol_compatible(response.version) {
             return Err(MedusaError::new(
                 ErrorCode::IncompatibleProtocol,
                 ErrorCategory::Validation,
@@ -241,7 +242,12 @@ impl DaemonClient {
     ) -> MedusaResult<FrontendCommandAcknowledgement> {
         match self.request(Request::Frontend { envelope })? {
             Response::Frontend { acknowledgement } => Ok(acknowledgement),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -255,7 +261,12 @@ impl DaemonClient {
     pub fn frontend_artifact(&self, upload: FrontendArtifactUpload) -> MedusaResult<String> {
         match self.request(Request::FrontendArtifact { upload })? {
             Response::FrontendArtifact { artifact_id } => Ok(artifact_id),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -274,7 +285,12 @@ impl DaemonClient {
             artifact_id: artifact_id.to_owned(),
         })? {
             Response::FrontendArtifactExport { artifact } => Ok(artifact),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -288,7 +304,12 @@ impl DaemonClient {
     pub fn frontend_credential(&self, update: FrontendCredentialUpdate) -> MedusaResult<()> {
         match self.request(Request::FrontendCredential { update })? {
             Response::Ack => Ok(()),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -299,12 +320,18 @@ impl DaemonClient {
 }
 
 #[cfg(test)]
-fn frontend_request_error(code: String, message: String) -> MedusaError {
+fn frontend_request_error(
+    code: String,
+    message: String,
+    category: ErrorCategory,
+    retryable: bool,
+) -> MedusaError {
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
-        ErrorCategory::Environment,
+        category,
         format!("daemon frontend request failed ({code}): {message}"),
     )
+    .with_retryable(retryable)
 }
 
 /// Starts a daemon loop with production limits and blocks until shutdown.
@@ -687,10 +714,12 @@ fn reject_busy_connection(mut stream: LocalStream) {
     let _ = stream.set_write_timeout(Some(REQUEST_IO_TIMEOUT));
     let _ = write_response(
         &mut stream,
-        Response::Error {
-            code: "daemon_busy".to_owned(),
-            message: "daemon connection queue is at capacity; retry later".to_owned(),
-        },
+        Response::error(
+            "daemon_busy",
+            "daemon connection queue is at capacity; retry later",
+            ErrorCategory::Transient,
+            true,
+        ),
     );
 }
 
@@ -771,33 +800,39 @@ fn handle_connection(mut stream: LocalStream, context: &ConnectionContext) -> Me
     if line.len() > MAX_ARTIFACT_REQUEST_BYTES {
         return write_response(
             &mut stream,
-            Response::Error {
-                code: "request_too_large".into(),
-                message: format!(
-                    "daemon artifact request exceeds {MAX_ARTIFACT_REQUEST_BYTES} bytes"
-                ),
-            },
+            Response::error(
+                "request_too_large",
+                format!("daemon artifact request exceeds {MAX_ARTIFACT_REQUEST_BYTES} bytes"),
+                ErrorCategory::Validation,
+                false,
+            ),
+        );
+    }
+    // Enforce the standard request cap before JSON parsing so oversized
+    // frames cannot reach the deserializer. Artifact uploads are exempt from
+    // the smaller cap; a minimal type probe identifies them without a full
+    // parse. Unparseable oversized frames are rejected as too large.
+    if line.len() > MAX_REQUEST_BYTES && !is_artifact_request(&line) {
+        return write_response(
+            &mut stream,
+            Response::error(
+                "request_too_large",
+                format!("daemon request exceeds {MAX_REQUEST_BYTES} bytes"),
+                ErrorCategory::Validation,
+                false,
+            ),
         );
     }
     let envelope: RequestEnvelope = serde_json::from_str(&line)?;
-    if line.len() > MAX_REQUEST_BYTES
-        && !matches!(&envelope.request, Request::FrontendArtifact { .. })
-    {
+    if !job_protocol_compatible(envelope.version) {
         return write_response(
             &mut stream,
-            Response::Error {
-                code: "request_too_large".into(),
-                message: format!("daemon request exceeds {MAX_REQUEST_BYTES} bytes"),
-            },
-        );
-    }
-    if envelope.version != DAEMON_PROTOCOL_VERSION {
-        return write_response(
-            &mut stream,
-            Response::Error {
-                code: "incompatible_protocol".into(),
-                message: format!("unsupported protocol {}", envelope.version),
-            },
+            Response::error(
+                "incompatible_protocol",
+                format!("unsupported protocol {}", envelope.version),
+                ErrorCategory::Validation,
+                false,
+            ),
         );
     }
     let request_timeout = request_io_timeout(&envelope.request);
@@ -813,11 +848,12 @@ fn handle_connection(mut stream: LocalStream, context: &ConnectionContext) -> Me
             None => {
                 return write_response(
                     &mut stream,
-                    Response::Error {
-                        code: "daemon_busy".to_owned(),
-                        message: "daemon frontend request capacity is reserved for health and control traffic; retry later"
-                            .to_owned(),
-                    },
+                    Response::error(
+                        "daemon_busy",
+                        "daemon frontend request capacity is reserved for health and control traffic; retry later",
+                        ErrorCategory::Transient,
+                        true,
+                    ),
                 );
             }
         }
@@ -847,6 +883,25 @@ fn write_response(stream: &mut LocalStream, response: Response) -> MedusaResult<
     stream.write_all(b"\n")?;
     stream.flush()?;
     Ok(())
+}
+
+/// Minimal pre-parse probe identifying artifact uploads without running the
+/// full request deserializer.
+#[derive(Deserialize)]
+struct ArtifactRequestProbe {
+    request: ArtifactInnerProbe,
+}
+
+#[derive(Deserialize)]
+struct ArtifactInnerProbe {
+    #[serde(rename = "type")]
+    request_type: String,
+}
+
+fn is_artifact_request(line: &str) -> bool {
+    serde_json::from_str::<ArtifactRequestProbe>(line)
+        .map(|probe| probe.request.request_type == "frontend_artifact")
+        .unwrap_or(false)
 }
 
 fn dispatch(
@@ -890,17 +945,21 @@ fn dispatch(
                 Ok(()) => Ok(Response::Submitted { job }),
                 Err(SubmitError::Busy) => {
                     discard_rejected_job(paths, jobs, processes, &job.id)?;
-                    Ok(Response::Error {
-                        code: "daemon_busy".into(),
-                        message: "daemon job queue is at capacity; retry later".into(),
-                    })
+                    Ok(Response::error(
+                        "daemon_busy",
+                        "daemon job queue is at capacity; retry later",
+                        ErrorCategory::Transient,
+                        true,
+                    ))
                 }
                 Err(SubmitError::Stopped) => {
                     discard_rejected_job(paths, jobs, processes, &job.id)?;
-                    Ok(Response::Error {
-                        code: "daemon_stopping".into(),
-                        message: "daemon is shutting down and no longer accepts jobs".into(),
-                    })
+                    Ok(Response::error(
+                        "daemon_stopping",
+                        "daemon is shutting down and no longer accepts jobs",
+                        ErrorCategory::Environment,
+                        false,
+                    ))
                 }
             }
         }
@@ -924,20 +983,24 @@ fn dispatch(
             let mut control = lock_frontend(frontend)?;
             Ok(match control.dispatch(envelope) {
                 Ok(acknowledgement) => Response::Frontend { acknowledgement },
-                Err(error) => Response::Error {
-                    code: "frontend_control".to_owned(),
-                    message: error.to_string(),
-                },
+                Err(error) => Response::error(
+                    "frontend_control",
+                    error.to_string(),
+                    ErrorCategory::Environment,
+                    false,
+                ),
             })
         }
         Request::FrontendArtifact { upload } => {
             let bytes = match STANDARD.decode(upload.bytes_base64.as_bytes()) {
                 Ok(bytes) => bytes,
                 Err(error) => {
-                    return Ok(Response::Error {
-                        code: "invalid_artifact_encoding".to_owned(),
-                        message: format!("frontend artifact is not valid base64: {error}"),
-                    });
+                    return Ok(Response::error(
+                        "invalid_artifact_encoding",
+                        format!("frontend artifact is not valid base64: {error}"),
+                        ErrorCategory::Validation,
+                        false,
+                    ));
                 }
             };
             let control = lock_frontend(frontend)?;
@@ -949,10 +1012,12 @@ fn dispatch(
                     bytes,
                 ) {
                     Ok(artifact_id) => Response::FrontendArtifact { artifact_id },
-                    Err(error) => Response::Error {
-                        code: "frontend_artifact".to_owned(),
-                        message: error.to_string(),
-                    },
+                    Err(error) => Response::error(
+                        "frontend_artifact",
+                        error.to_string(),
+                        ErrorCategory::Environment,
+                        false,
+                    ),
                 },
             )
         }
@@ -960,10 +1025,12 @@ fn dispatch(
             let control = lock_frontend(frontend)?;
             Ok(match control.export_attachment(&artifact_id) {
                 Ok(artifact) => Response::FrontendArtifactExport { artifact },
-                Err(error) => Response::Error {
-                    code: "frontend_artifact_export".to_owned(),
-                    message: error.to_string(),
-                },
+                Err(error) => Response::error(
+                    "frontend_artifact_export",
+                    error.to_string(),
+                    ErrorCategory::Environment,
+                    false,
+                ),
             })
         }
         Request::FrontendCredential { update } => {
@@ -971,10 +1038,12 @@ fn dispatch(
             Ok(
                 match control.update_credential(update.provider, update.credential) {
                     Ok(()) => Response::Ack,
-                    Err(error) => Response::Error {
-                        code: "frontend_credential".to_owned(),
-                        message: error.to_string(),
-                    },
+                    Err(error) => Response::error(
+                        "frontend_credential",
+                        error.to_string(),
+                        ErrorCategory::Environment,
+                        false,
+                    ),
                 },
             )
         }
@@ -1256,9 +1325,10 @@ pub(crate) fn lock_jobs(
 fn transport_error(error: impl std::fmt::Display) -> MedusaError {
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
-        ErrorCategory::Environment,
+        ErrorCategory::Transient,
         format!("daemon transport error: {error}"),
     )
+    .with_retryable(true)
 }
 
 fn is_transient_listener_error(error: &std::io::Error) -> bool {

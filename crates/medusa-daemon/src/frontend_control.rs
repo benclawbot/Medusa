@@ -48,6 +48,18 @@ impl FrontendControlPlane {
         self.inner.shutdown_handle()
     }
 
+    /// Daemon-global effort budget currently in effect.
+    #[must_use]
+    pub fn agent_max_turns(&self) -> u32 {
+        self.inner.agent_max_turns()
+    }
+
+    /// Daemon-global model provider currently in effect.
+    #[must_use]
+    pub fn model_provider(&self) -> String {
+        self.inner.model_provider().to_owned()
+    }
+
     pub fn replay_events(
         &self,
         client_id: &str,

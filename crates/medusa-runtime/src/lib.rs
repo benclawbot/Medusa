@@ -2796,7 +2796,13 @@ fn run_prompt(
         crate::coordination::production_orchestrator::runtime_context(&execution_plan);
     let tool_policy_context =
         crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;
-    let verification_plan = medusa_tool_control::verification_plan(&draft.text);
+    let keyword_plan = medusa_tool_control::verification_plan(&draft.text);
+    // Explicit tool metadata wins over the keyword-derived plan when they
+    // disagree (see tool_policy::resolve_verification).
+    let verification_plan = crate::tool_policy::resolve_verification(
+        crate::tool_policy::preferred_verification_level(&draft),
+        &keyword_plan,
+    );
     let verification_context = format!(
         "Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.",
         verification_plan.requirements, verification_plan.rationale

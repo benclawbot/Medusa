@@ -94,6 +94,47 @@ fn daemon_protocol_covers_ping_list_status_submit_and_shutdown() {
 }
 
 #[test]
+fn oversized_frame_is_rejected_before_json_parsing() {
+    use medusa_core::ErrorCategory;
+    let directory = tempfile::tempdir().expect("tempdir");
+    let paths = DaemonPaths::for_repo(directory.path());
+    let (handle, server) = spawn(paths.clone()).expect("spawn daemon");
+    wait_for_socket(&paths.socket);
+
+    // 80 KiB of non-JSON bytes: the size cap must fire before the
+    // deserializer runs. If the frame reached `serde_json`, the connection
+    // would close with a transport error instead of a structured response.
+    let mut stream = UnixStream::connect(&paths.socket).expect("connect");
+    stream
+        .write_all(&vec![b'x'; 80 * 1024])
+        .expect("write oversized frame");
+    stream.write_all(b"\n").expect("newline");
+    stream.flush().expect("flush");
+
+    let mut line = String::new();
+    BufReader::new(stream)
+        .read_line(&mut line)
+        .expect("read response");
+    let response: ResponseEnvelope = serde_json::from_str(&line).expect("decode response");
+    let Response::Error {
+        code,
+        message,
+        category,
+        retryable,
+    } = response.response
+    else {
+        panic!("oversized frame must receive a structured error");
+    };
+    assert_eq!(code, "request_too_large");
+    assert!(message.contains("65536"));
+    assert_eq!(category, ErrorCategory::Validation);
+    assert!(!retryable);
+
+    handle.shutdown();
+    server.join().expect("join daemon").expect("daemon result");
+}
+
+#[test]
 fn daemon_returns_structured_error_for_incompatible_protocol() {
     let directory = tempfile::tempdir().expect("tempdir");
     let paths = DaemonPaths::for_repo(directory.path());
@@ -120,7 +161,7 @@ fn daemon_returns_structured_error_for_incompatible_protocol() {
     assert_eq!(response.version, DAEMON_PROTOCOL_VERSION);
     assert!(matches!(
         response.response,
-        Response::Error { ref code, ref message }
+        Response::Error { ref code, ref message, .. }
             if code == "incompatible_protocol" && message.contains("unsupported protocol")
     ));
 
