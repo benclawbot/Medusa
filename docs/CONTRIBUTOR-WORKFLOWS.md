@@ -24,7 +24,6 @@ inline `actions/checkout` and don't force it through `setup-rust`.
   `with: ref:` checkout — these typically live in `ci.yml` and the
   `phase1-*.yml` family.
 - `release-recovery.yml` (pure dispatch, no Rust).
-- `snapshot-repository.yml` (uses `fetch-depth: 1` + a custom `tar`).
 
 ## Adding the action to a new workflow
 
