@@ -1,5 +1,12 @@
 name: Desktop
 
+# REQUIRED-CHECK CONTRACT (informational, path-scoped workflow): the triggers
+# above are path-filtered, so PRs that touch none of those paths produce no run
+# and no status — that absence must never be configured or read as a passing
+# required check. Every job below runs real work unconditionally when triggered;
+# there is intentionally no draft/paths skip inside a run that could report a
+# vacuous success.
+
 on:
   pull_request:
     paths:

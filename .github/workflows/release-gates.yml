@@ -13,6 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Label-gated exhaustive marker. This job is intentionally NOT a dependency of
+  # any gate below: coverage, adversarial regressions, and the remaining release
+  # gates run on every non-draft PR so normal PRs actually exercise them.
   final-issue-validation:
     name: Final issue validation requested
     if: >-
@@ -27,7 +30,6 @@ jobs:
       - run: echo 'Running exhaustive release validation for an issue-closing merge.'
 
   coverage:
-    needs: final-issue-validation
     name: Workspace coverage >= 75%
     runs-on: ubuntu-latest
     steps:
@@ -61,7 +63,6 @@ jobs:
           if-no-files-found: warn
 
   adversarial-regression:
-    needs: final-issue-validation
     name: Named adversarial regressions
     runs-on: ubuntu-latest
     steps:
@@ -107,7 +108,6 @@ jobs:
         run: cargo test -p medusa-hardening arbitrary_archive_paths_never_escape --locked -- --nocapture
 
   fuzz-smoke:
-    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - name: Bootstrap repository for local actions
@@ -119,7 +119,6 @@ jobs:
       - run: bash scripts/fuzz-smoke.sh
 
   chaos-and-migrations:
-    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - name: Bootstrap repository for local actions
@@ -132,7 +131,6 @@ jobs:
       - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact --locked -- --exact
 
   package-smoke:
-    needs: final-issue-validation
     strategy:
       fail-fast: false
       matrix:
@@ -174,7 +172,6 @@ jobs:
           & $githubOperation --help | Select-String 'interchangeable backend'
 
   security:
-    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - name: Bootstrap repository for local actions
@@ -192,7 +189,6 @@ jobs:
       - run: cargo test -p medusa-hardening operational_events_redact_credentials --locked -- --exact
 
   docs-and-schema:
-    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -211,8 +207,10 @@ jobs:
       - run: test -s docs/SECURITY-HARDENING.md
 
   live-minimax-coding-e2e:
-    needs: final-issue-validation
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Secret-gated and expensive: stays exhaustive-only via the label check below
+    # instead of the removed needs gate, so normal PRs never fail for a missing
+    # live-test secret.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'final-issue-validation')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:

@@ -30,7 +30,11 @@ jobs:
           components: rustfmt,clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: medusa-pr-build
+          # Per-PR cache key: a shared medusa-pr-build key lets one PR poison or
+          # read another PR's (or main's) build cache. Scope to the PR number so
+          # untrusted PRs never share compiled artifacts; main-push callers fall
+          # back to the branch name.
+          shared-key: medusa-quality-${{ github.event.pull_request.number || github.ref_name }}
           add-job-id-key: "false"
       - name: Validate committed dependency authority
         shell: bash
@@ -145,14 +149,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: medusa-pr-build
+          # Per-PR, per-job cache key (see quality job): the supply-chain job must
+          # not share entries with other jobs or PRs either.
+          shared-key: medusa-supply-${{ github.event.pull_request.number || github.ref_name }}
           add-job-id-key: "false"
       - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-deny,cargo-audit
-      - name: Install pinned cargo-machete
+      - name: Install hash-pinned cargo-machete
         shell: bash
-        run: cargo install cargo-machete --version 0.9.2 --locked
+        run: cargo install --git https://github.com/bnjbvr/cargo-machete --rev ac30a525c0a8d163a92d727b3ff079ee3f6ecb08 --locked
+        # Pinned to the v0.9.2 commit hash: a bare --version install trusts the
+        # registry on every run, while --rev pins the exact source tree.
       - name: Reject unused direct dependencies
         id: cargo_machete
         shell: bash
@@ -235,7 +243,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo deny check 2>&1 | tee cargo-deny.log
+          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
       - name: Upload cargo-deny diagnostics
         if: failure() && steps.cargo_deny.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

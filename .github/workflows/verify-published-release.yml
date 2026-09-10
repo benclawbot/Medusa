@@ -11,12 +11,23 @@ on:
         description: Exact release commit SHA
         required: true
         type: string
+      channel:
+        description: Release channel to verify (stable or rolling)
+        required: false
+        default: stable
+        type: string
+      rolling_alias_tag:
+        description: Legacy rolling alias tag to verify end to end
+        required: false
+        default: main-latest
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   public-updater-smoke:
+    if: ${{ inputs.channel == 'stable' }}
     name: Public updater smoke (${{ matrix.platform }})
     strategy:
       fail-fast: false
@@ -86,3 +97,68 @@ jobs:
           Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
           & $binary update --check --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  rolling-alias-smoke:
+    name: Rolling alias end to end
+    if: ${{ inputs.channel == 'rolling' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate alias and revision releases are published and bound
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          ALIAS_TAG: ${{ inputs.rolling_alias_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "false"
+          tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')
+          test "$tag_sha" = "$RELEASE_SHA"
+          test "$(gh release view "$ALIAS_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "false"
+          alias_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ALIAS_TAG" --jq '.sha')
+          test "$alias_sha" = "$RELEASE_SHA"
+      - name: Prove alias serves the exact published revision assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          ALIAS_TAG: ${{ inputs.rolling_alias_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p alias-check/revision alias-check/alias
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'medusa-main-*.json' \
+            --dir alias-check/revision
+          gh release download "$ALIAS_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'medusa-main-*.json' \
+            --dir alias-check/alias
+          for manifest in alias-check/alias/medusa-main-linux-x86_64.tar.gz.json \
+                          alias-check/alias/medusa-main-macos-aarch64.tar.gz.json \
+                          alias-check/alias/medusa-main-windows-x86_64.zip.json; do
+            base="$(basename "$manifest")"
+            test "$(jq -r '.revision' "$manifest")" = "$RELEASE_SHA"
+            test "$(jq -r '.sha256' "$manifest")" = "$(jq -r '.sha256' "alias-check/revision/$base")"
+          done
+      - name: Exercise alias CLI end to end
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALIAS_TAG: ${{ inputs.rolling_alias_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p alias-cli
+          gh release download "$ALIAS_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'medusa-main-linux-x86_64.tar.gz' \
+            --dir alias-cli
+          mkdir -p alias-cli/unpacked
+          tar -xzf alias-cli/medusa-main-linux-x86_64.tar.gz -C alias-cli/unpacked
+          test -x alias-cli/unpacked/medusa || chmod +x alias-cli/unpacked/medusa
+          alias-cli/unpacked/medusa --version
+          env -u GH_TOKEN -u GITHUB_TOKEN alias-cli/unpacked/medusa update --check

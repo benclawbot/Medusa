@@ -15,3 +15,25 @@ allow = [
     "Unlicense",
     "Zlib",
 ]
+
+[advisories]
+version = 2
+# warn (not deny): chacha20 0.10.1 is currently yanked upstream (via
+# rand 0.10.2 <- tungstenite). The lockfile is owned by another team this wave,
+# so surface it without failing the gate; escalate to deny once updated.
+yanked = "warn"
+unmaintained = "workspace"
+unsound = "workspace"
+
+[bans]
+multiple-versions = "warn"
+# warn (not deny): the workspace uses intra-workspace path dependencies that
+# cargo-deny reports as wildcards. Denying would forbid the workspace layout;
+# warn surfaces any true registry wildcard if one is ever added.
+wildcards = "warn"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
