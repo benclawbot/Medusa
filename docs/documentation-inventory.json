@@ -151,7 +151,7 @@
     {
       "path": "docs/CONTRIBUTOR-WORKFLOWS.md",
       "disposition": "current",
-      "sha256": "2c91903f03c333a693b0a38b6570e663ef3ea68de2e9fe48b71bc0eda276fe5b"
+      "sha256": "3c83a6203f031360c6fc83612224c79f3da9bf4bd8f7f00de37ddd16ddb7100e"
     },
     {
       "path": "docs/DAEMON-CONCURRENCY.md",
@@ -261,7 +261,7 @@
     {
       "path": "docs/PROTOCOL-VERSIONING.md",
       "disposition": "current",
-      "sha256": "a4093e32e94129dabb53907098e4364508b50ef8a1e2a462fe1146f3b5d915a7"
+      "sha256": "8a8018572f8ced94cf5fae13629b6e6e816470494d878a92d07ddb538a4cde46"
     },
     {
       "path": "docs/PROVIDER-DELIVERY.md",

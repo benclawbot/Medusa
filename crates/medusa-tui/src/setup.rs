@@ -691,14 +691,21 @@ pub fn run_first_run_setup_with_host(
         if oauth_session.is_some() {
             let poll_result = oauth_session
                 .as_mut()
-                .expect("oauth session")
-                .session_mut()
-                .expect("oauth guard always holds a session while armed")
+                .and_then(|guard| guard.session_mut())
+                .ok_or_else(|| {
+                    medusa_core::MedusaError::new(
+                        medusa_core::ErrorCode::DependencyUnavailable,
+                        medusa_core::ErrorCategory::Internal,
+                        "OAuth session guard disappeared between is_some() and use",
+                    )
+                })?
                 .poll()?;
             if let Some(result) = poll_result {
                 // The attempt completed: disarm the guard so Drop does not
                 // cancel a finished session.
-                oauth_session.take().expect("oauth session").disarm();
+                if let Some(guard) = oauth_session.take() {
+                    guard.disarm();
+                }
                 match result {
                     Ok(models) => {
                         let provider = state
