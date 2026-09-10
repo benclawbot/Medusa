@@ -86,7 +86,13 @@ impl OpenAiOAuthLogin {
 
 impl Drop for OpenAiOAuthLogin {
     fn drop(&mut self) {
-        self.cancel();
+        // Never block in Drop: signal cancellation and detach the worker.
+        // Shutdown paths (including runtime teardown) may drop this handle
+        // while the worker is stuck in connect/ensure_authenticated; joining
+        // here would hang teardown indefinitely. Explicit cancel() still
+        // joins for callers that want a clean shutdown.
+        self.cancel.store(true, Ordering::SeqCst);
+        let _ = self.join.take();
     }
 }
 
@@ -1034,6 +1040,26 @@ fn terminate_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_never_blocks_on_stuck_worker() {
+        let (_tx, rx) = mpsc::channel();
+        // Worker ignores cancellation and sleeps; dropping the handle must
+        // still return promptly instead of hanging teardown in join().
+        let stuck = OpenAiOAuthLogin {
+            receiver: rx,
+            cancel: Arc::new(AtomicBool::new(false)),
+            join: Some(thread::spawn(|| {
+                thread::sleep(Duration::from_secs(30));
+            })),
+        };
+        let started = Instant::now();
+        drop(stuck);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "drop blocked on worker join"
+        );
+    }
 
     #[test]
     fn discovered_models_are_sorted_deduplicated_and_accept_slugs() {

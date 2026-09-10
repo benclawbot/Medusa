@@ -104,10 +104,50 @@ where
         recorded_at_unix_ms: i64,
     ) -> Result<RecoveryExecutionReceipt, RecoveryExecutionError<E::Error>> {
         let action = view.authorize_action(request)?;
-        let result = self
-            .executor
-            .execute(repository, &action)
-            .map_err(RecoveryExecutionError::Executor)?;
+        let store = RecoveryAuditStore::for_repository(repository);
+        let key = crate::audit::idempotency_key(&action, &preflight);
+        // Idempotent retry: an identical authorization that already reached a
+        // final outcome returns its receipt without re-executing. A leftover
+        // Attempted intent (previous attempt died mid-execution) does not
+        // block a fresh attempt.
+        if let Some((audit_path, record)) = store.find_by_idempotency_key(&key)? {
+            if !matches!(record.outcome, RecoveryActionOutcome::Attempted) {
+                return Ok(RecoveryExecutionReceipt { record, audit_path });
+            }
+        }
+        // Persist execution intent before running the executor so a crash
+        // between authorization and completion still leaves evidence.
+        let intent = RecoveryAuditRecord::new(
+            recorded_at_unix_ms,
+            &action,
+            preflight.clone(),
+            RecoveryActionOutcome::Attempted,
+            None,
+            VerificationState::Incomplete,
+        );
+        match store.append(&intent) {
+            Ok(_) | Err(RecoveryAuditStoreError::AlreadyExists(_)) => {}
+            Err(error) => return Err(RecoveryExecutionError::Audit(error)),
+        }
+        let result = match self.executor.execute(repository, &action) {
+            Ok(result) => result,
+            Err(error) => {
+                // Executor failures are audited instead of vanishing: persist a
+                // FailedClosed record, then surface the original error.
+                let failure = RecoveryAuditRecord::new(
+                    recorded_at_unix_ms,
+                    &action,
+                    preflight,
+                    RecoveryActionOutcome::FailedClosed {
+                        reason: format!("recovery executor failed: {error}"),
+                    },
+                    None,
+                    VerificationState::Unknown,
+                );
+                let _ = store.append(&failure);
+                return Err(RecoveryExecutionError::Executor(error));
+            }
+        };
         let record = RecoveryAuditRecord::new(
             recorded_at_unix_ms,
             &action,
@@ -116,7 +156,7 @@ where
             result.repository_fingerprint_after,
             result.verification_outcome,
         );
-        let audit_path = RecoveryAuditStore::for_repository(repository).append(&record)?;
+        let audit_path = store.append(&record)?;
         Ok(RecoveryExecutionReceipt { record, audit_path })
     }
 
@@ -268,5 +308,94 @@ mod tests {
         let decoded: RecoveryAuditRecord = serde_json::from_slice(&raw).unwrap();
         assert_eq!(decoded, receipt.record);
         assert!(decoded.verify());
+    }
+
+    struct FailingExecutor;
+
+    impl RecoveryActionExecutor for FailingExecutor {
+        type Error = std::io::Error;
+
+        fn execute(
+            &mut self,
+            _repository: &Path,
+            _action: &AuthorizedRecoveryAction,
+        ) -> Result<RecoveryExecutionOutcome, Self::Error> {
+            Err(std::io::Error::other("disk exploded"))
+        }
+    }
+
+    fn resume_request() -> RecoveryActionRequest {
+        RecoveryActionRequest {
+            session_id: "session-1".into(),
+            operation: RecoveryOperation::Resume,
+            checkpoint_id: None,
+            confirmed_destructive_effects: false,
+        }
+    }
+
+    #[test]
+    fn executor_failures_are_audited_before_surfacing() {
+        let repo = tempdir().expect("temporary repository");
+        let mut service = RecoveryActionService::new(FailingExecutor);
+        let error = service
+            .execute_and_audit(
+                repo.path(),
+                &view(),
+                &resume_request(),
+                preflight(),
+                1_700_000_000_000,
+            )
+            .expect_err("executor fails");
+        assert!(matches!(error, RecoveryExecutionError::Executor(_)));
+        // The failure left audited evidence: intent plus a FailedClosed record.
+        let store = RecoveryAuditStore::for_repository(repo.path());
+        let dir = repo.path().join(".medusa/recovery-audit");
+        let mut outcomes = Vec::new();
+        for entry in fs::read_dir(&dir)
+            .expect("audit dir")
+            .filter_map(Result::ok)
+        {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            outcomes.push(store.read_verified(&path).expect("verified").outcome);
+        }
+        assert!(outcomes.contains(&RecoveryActionOutcome::Attempted));
+        assert!(
+            outcomes.iter().any(|outcome| matches!(
+                outcome,
+                RecoveryActionOutcome::FailedClosed { reason } if reason.contains("disk exploded")
+            )),
+            "executor failure must be audited, got {outcomes:?}"
+        );
+    }
+
+    #[test]
+    fn identical_retry_returns_prior_receipt_without_reexecuting() {
+        let repo = tempdir().expect("temporary repository");
+        let mut service = RecoveryActionService::new(RecordingExecutor::default());
+        let first = service
+            .execute_and_audit(
+                repo.path(),
+                &view(),
+                &resume_request(),
+                preflight(),
+                1_700_000_000_000,
+            )
+            .expect("first attempt");
+        assert_eq!(first.record.outcome, RecoveryActionOutcome::Succeeded);
+        let second = service
+            .execute_and_audit(
+                repo.path(),
+                &view(),
+                &resume_request(),
+                preflight(),
+                1_700_000_000_001,
+            )
+            .expect("retry");
+        assert_eq!(second.record, first.record);
+        assert_eq!(second.audit_path, first.audit_path);
+        assert_eq!(service.into_executor().calls.len(), 1);
     }
 }
