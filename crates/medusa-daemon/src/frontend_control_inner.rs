@@ -213,6 +213,18 @@ impl FrontendControlPlane {
         self.shutdown.clone()
     }
 
+    /// Daemon-global effort budget currently in effect.
+    #[must_use]
+    pub fn agent_max_turns(&self) -> u32 {
+        self.config.agent.max_turns
+    }
+
+    /// Daemon-global model provider currently in effect.
+    #[must_use]
+    pub fn model_provider(&self) -> &str {
+        &self.config.model.provider
+    }
+
     pub fn replay_events(
         &self,
         client_id: &str,
@@ -699,6 +711,10 @@ impl FrontendControlPlane {
                 model,
                 base_url,
             } => {
+                // Session-scoped authorization gates the daemon-global model
+                // configuration: only the session owner may mutate it.
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
                 let provider_changed = provider
                     .as_deref()
                     .is_some_and(|next| next != self.config.model.provider);
@@ -714,11 +730,8 @@ impl FrontendControlPlane {
                 let effort = current_effort(&self.config);
                 let configuration =
                     self.model_configuration(&provider, model, effort, next_base_url.clone());
-                if let Some(session_id) = envelope.session_id.as_deref() {
-                    self.authorize_control(session_id, &envelope.client_id)?;
-                    self.controller(session_id)?
-                        .configure_model(configuration)?;
-                }
+                self.controller(&session_id)?
+                    .configure_model(configuration)?;
                 self.config.model.provider = provider;
                 self.config.model.name = model.clone();
                 self.config.model.protocol = protocol_for_provider(&self.config.model.provider);
@@ -734,6 +747,10 @@ impl FrontendControlPlane {
                 })
             }
             FrontendCommand::SetEffort { effort } => {
+                // Session-scoped authorization gates the daemon-global effort
+                // budget: only the session owner may mutate it.
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
                 let effort = parse_effort(effort)?;
                 let configuration = self.model_configuration(
                     &self.config.model.provider,
@@ -741,11 +758,8 @@ impl FrontendControlPlane {
                     effort,
                     self.config.model.base_url.clone(),
                 );
-                if let Some(session_id) = envelope.session_id.as_deref() {
-                    self.authorize_control(session_id, &envelope.client_id)?;
-                    self.controller(session_id)?
-                        .configure_model(configuration)?;
-                }
+                self.controller(&session_id)?
+                    .configure_model(configuration)?;
                 self.config.agent.max_turns = turns_for_effort(effort);
                 Ok(FrontendControlResult::CommandAccepted {
                     session_id: envelope.session_id.clone().unwrap_or_default(),

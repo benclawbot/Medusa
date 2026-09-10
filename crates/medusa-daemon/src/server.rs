@@ -99,7 +99,12 @@ impl DaemonClient {
     ) -> MedusaResult<FrontendCommandAcknowledgement> {
         match self.request(Request::Frontend { envelope })? {
             Response::Frontend { acknowledgement } => Ok(acknowledgement),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -111,7 +116,12 @@ impl DaemonClient {
     pub fn frontend_artifact(&self, upload: FrontendArtifactUpload) -> MedusaResult<String> {
         match self.request(Request::FrontendArtifact { upload })? {
             Response::FrontendArtifact { artifact_id } => Ok(artifact_id),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -128,7 +138,12 @@ impl DaemonClient {
             artifact_id: artifact_id.to_owned(),
         })? {
             Response::FrontendArtifactExport { artifact } => Ok(artifact),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -140,7 +155,12 @@ impl DaemonClient {
     pub fn frontend_credential(&self, update: FrontendCredentialUpdate) -> MedusaResult<()> {
         match self.request(Request::FrontendCredential { update })? {
             Response::Ack => Ok(()),
-            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            Response::Error {
+                code,
+                message,
+                category,
+                retryable,
+            } => Err(frontend_request_error(code, message, category, retryable)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -165,11 +185,17 @@ fn frontend_request_is_retryable(request: &Request) -> bool {
 
 #[cfg(not(test))]
 fn is_transient_daemon_transport_error(error: &MedusaError) -> bool {
-    error.category == ErrorCategory::Environment
-        && matches!(
-            error.code,
-            ErrorCode::DependencyUnavailable | ErrorCode::PersistenceFailed
-        )
+    // Structured retry signals win over category sniffing: a response that
+    // carries `retryable` (or the Transient category) is retried. The
+    // Environment fallback preserves the pre-structured-error contract for
+    // transport failures produced before the category was carried.
+    error.retryable
+        || error.category == ErrorCategory::Transient
+        || (error.category == ErrorCategory::Environment
+            && matches!(
+                error.code,
+                ErrorCode::DependencyUnavailable | ErrorCode::PersistenceFailed
+            ))
 }
 
 #[cfg(not(test))]
@@ -187,10 +213,16 @@ fn normalize_daemon_transport_error(mut error: MedusaError) -> MedusaError {
 }
 
 #[cfg(not(test))]
-fn frontend_request_error(code: String, message: String) -> MedusaError {
+fn frontend_request_error(
+    code: String,
+    message: String,
+    category: ErrorCategory,
+    retryable: bool,
+) -> MedusaError {
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
-        ErrorCategory::Environment,
+        category,
         format!("daemon frontend request failed ({code}): {message}"),
     )
+    .with_retryable(retryable)
 }

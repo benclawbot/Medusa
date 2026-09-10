@@ -106,6 +106,12 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// Looks up registered metadata by tool name.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&ToolMetadata> {
+        self.tools.get(name)
+    }
+
     pub fn register(&mut self, metadata: ToolMetadata) -> Result<(), &'static str> {
         metadata.validate()?;
         if self.tools.insert(metadata.name.clone(), metadata).is_some() {

@@ -28,10 +28,12 @@ pub(crate) fn cancel_job(
     match current.state {
         JobState::Interrupted => return Ok(Response::Cancelled { job: Some(current) }),
         JobState::Succeeded | JobState::Failed => {
-            return Ok(Response::Error {
-                code: "job_not_cancellable".into(),
-                message: format!("daemon job {job_id} is already terminal"),
-            });
+            return Ok(Response::error(
+                "job_not_cancellable",
+                format!("daemon job {job_id} is already terminal"),
+                ErrorCategory::Validation,
+                false,
+            ));
         }
         JobState::Queued | JobState::Running => {}
     }
@@ -40,16 +42,20 @@ pub(crate) fn cancel_job(
     match processes.cancel(job_id) {
         Ok(true) => {}
         Ok(false) => {
-            return Ok(Response::Error {
-                code: "job_not_cancellable".into(),
-                message: format!("daemon job {job_id} no longer has an active process control"),
-            });
+            return Ok(Response::error(
+                "job_not_cancellable",
+                format!("daemon job {job_id} no longer has an active process control"),
+                ErrorCategory::Environment,
+                false,
+            ));
         }
         Err(error) => {
-            return Ok(Response::Error {
-                code: "cancellation_failed".into(),
-                message: error.to_string(),
-            });
+            return Ok(Response::error(
+                "cancellation_failed",
+                error.to_string(),
+                ErrorCategory::Environment,
+                false,
+            ));
         }
     }
     let updated = mark_job_interrupted(paths, jobs, job_id, "cancelled by user request")?;

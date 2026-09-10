@@ -80,6 +80,11 @@ pub struct FailureRecord {
     pub signal: FailureSignal,
 }
 
+/// Bounded retry budget. `max_attempts` counts total attempts including the
+/// first (attempt 1); zero is invalid (see `validate`). This is the shared
+/// attempts-based contract also enforced by `DynamicSchedule::new` and
+/// `RetryGuard::try_new`; the provider `max_retries` budget is retries after
+/// the first attempt, i.e. total attempts = `max_retries + 1`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RetryPolicy {
     pub max_attempts: u32,

@@ -1,4 +1,10 @@
 //! Versioned wire and append-only event contracts.
+//!
+//! Integrity-sensitive envelopes (`ProtocolVersion`, `SessionAction`,
+//! `EventEnvelope`, `FrontendCommandEnvelope`, `FrontendEventEnvelope`) use
+//! `deny_unknown_fields` and are therefore major-only: any shape change
+//! requires a major protocol bump. Additive minor-bump surfaces must not
+//! deny unknown fields. See `docs/PROTOCOL-VERSIONING.md`.
 
 use medusa_core::{
     CorrelationId, ErrorCategory, ErrorCode, EventId, MedusaError, MedusaResult, SessionId,
@@ -688,6 +694,24 @@ mod tests {
             event.validate().expect_err("tamper").code,
             ErrorCode::ChecksumMismatch
         );
+    }
+
+    #[test]
+    fn integrity_envelopes_reject_unknown_fields() {
+        // Pinned by docs/PROTOCOL-VERSIONING.md: `ProtocolVersion`,
+        // `SessionAction`, `EventEnvelope`, `FrontendCommandEnvelope`, and
+        // `FrontendEventEnvelope` are integrity-sensitive and major-only.
+        // Additive minor-bump surfaces must NOT use `deny_unknown_fields`;
+        // these types keep it, so any shape change here requires a major
+        // protocol bump instead of silently evolving.
+        let mut version =
+            serde_json::to_value(CURRENT_PROTOCOL_VERSION).expect("serialize version");
+        version["unexpected"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<ProtocolVersion>(version).is_err());
+
+        let mut event = serde_json::to_value(sample("objective".into())).expect("serialize");
+        event["unexpected"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<EventEnvelope>(event).is_err());
     }
 
     #[test]
