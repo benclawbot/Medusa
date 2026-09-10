@@ -94,7 +94,7 @@ impl WorkerLease {
 
     pub fn expired(&self, now_ms: u64) -> Result<bool, &'static str> {
         self.validate()?;
-        Ok(now_ms.saturating_sub(self.heartbeat_at_ms) > self.timeout_ms)
+        Ok(now_ms.saturating_sub(self.heartbeat_at_ms) >= self.timeout_ms)
     }
 }
 
@@ -138,17 +138,14 @@ impl LeaseRegistry {
 
     pub fn expired_tasks(&self, now_ms: u64) -> Result<Vec<String>, &'static str> {
         self.validate()?;
-        let mut tasks = self
-            .leases
-            .iter()
-            .filter_map(|lease| {
-                lease
-                    .expired(now_ms)
-                    .ok()
-                    .filter(|expired| *expired)
-                    .map(|_| lease.task_id.clone())
-            })
-            .collect::<Vec<_>>();
+        let mut tasks = Vec::new();
+        for lease in &self.leases {
+            // Surface corrupt leases instead of silently dropping them: an
+            // unreadable lease must fail closed so it can be reassigned.
+            if lease.expired(now_ms)? {
+                tasks.push(lease.task_id.clone());
+            }
+        }
         tasks.sort();
         Ok(tasks)
     }
@@ -222,5 +219,27 @@ mod tests {
         let mut lease = WorkerLease::acquire("a", "t", 1, 0, 10).unwrap();
         lease.timeout_ms = 99;
         assert!(lease.validate().is_err());
+    }
+
+    #[test]
+    fn expiry_boundary_is_inclusive() {
+        let lease = WorkerLease::acquire("worker-a", "task-1", 1, 100, 50).unwrap();
+        assert!(!lease.expired(149).unwrap());
+        assert!(lease.expired(150).unwrap());
+    }
+
+    #[test]
+    fn expired_tasks_surface_corrupt_leases_instead_of_dropping_them() {
+        let mut corrupt = WorkerLease::acquire("a", "task-1", 1, 0, 10).unwrap();
+        corrupt.timeout_ms = 99;
+        let mut registry =
+            LeaseRegistry::record([WorkerLease::acquire("b", "task-2", 1, 0, 10).unwrap()])
+                .unwrap();
+        registry.leases.push(corrupt);
+        // Registry validation rejects the corruption before per-lease
+        // iteration; either way the corruption must fail closed (error) rather
+        // than silently dropping the lease from the expired set.
+        registry.fingerprint = hash(&registry.leases).expect("fingerprint");
+        assert!(registry.expired_tasks(1_000).is_err());
     }
 }

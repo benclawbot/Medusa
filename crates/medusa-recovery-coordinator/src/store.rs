@@ -6,7 +6,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::RecoveryAuditRecord;
+use crate::{RecoveryActionOutcome, RecoveryAuditRecord};
 
 const AUDIT_DIRECTORY: &str = ".medusa/recovery-audit";
 
@@ -90,6 +90,47 @@ impl RecoveryAuditStore {
         } else {
             Err(RecoveryAuditStoreError::InvalidRecord)
         }
+    }
+
+    /// Returns the latest verified record persisted for an idempotency key, if
+    /// any. Crash-recovery temp files are skipped; a corrupt `*.json` record
+    /// fails closed rather than being silently ignored.
+    pub fn find_by_idempotency_key(
+        &self,
+        key: &str,
+    ) -> Result<Option<(PathBuf, RecoveryAuditRecord)>, RecoveryAuditStoreError> {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Ok(None);
+        };
+        let mut best_final: Option<(PathBuf, RecoveryAuditRecord)> = None;
+        let mut best_intent: Option<(PathBuf, RecoveryAuditRecord)> = None;
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if !name.ends_with(".json") || name.starts_with('.') {
+                continue;
+            }
+            let record = self.read_verified(&path)?;
+            if record.idempotency_key != key {
+                continue;
+            }
+            // A final outcome always outranks a leftover Attempted intent, even
+            // when both share a timestamp; within a class the latest wins.
+            let slot = if matches!(record.outcome, RecoveryActionOutcome::Attempted) {
+                &mut best_intent
+            } else {
+                &mut best_final
+            };
+            if slot.as_ref().is_none_or(|(_, current)| {
+                record.recorded_at_unix_ms >= current.recorded_at_unix_ms
+            }) {
+                *slot = Some((path, record));
+            }
+        }
+        Ok(best_final.or(best_intent))
     }
 }
 

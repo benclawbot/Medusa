@@ -31,8 +31,8 @@ use crate::{
         production_orchestrator::{AgentRole, ProductionExecutionPlan},
     },
     mutation_transaction::{
-        MutationLifecycle, MutationTransaction, ParentReviewAuthorization, PreparedMutationInput,
-        cancel_transaction,
+        MutationLifecycle, MutationTransaction, MutationTransactionSnapshot,
+        ParentReviewAuthorization, PreparedMutationInput, cancel_transaction,
     },
     parent_reviewer::authorize,
 };
@@ -69,6 +69,7 @@ pub fn prepare_combined(
     events: &Sender<RuntimeEvent>,
 ) -> Result<ImplementationEvidence, String> {
     dag.validate().map_err(str::to_owned)?;
+    check_cancel(cancel)?;
     let batch_root = batch_root(
         preflight
             .state_path
@@ -189,6 +190,8 @@ pub fn prepare_combined(
         base_head,
         changed_scope_fingerprint(&changed_components)
     );
+    // Long verification phase: poll cancellation before starting it.
+    check_cancel(cancel)?;
     let verification = authoritative_verification_for_components_at(
         &staging.worktree,
         &batch_root.join("evidence/staging"),
@@ -334,6 +337,9 @@ fn authorize_children<P: medusa_provider::ModelProvider>(
     let mut accepted = Vec::with_capacity(parallel.children.len());
     let mut prepared_trees = BTreeMap::new();
     for child in &parallel.children {
+        // Cooperative cancellation in this long authorization phase: each child
+        // review can take minutes, so poll before starting the next one.
+        check_cancel(cancel)?;
         let task = dag
             .tasks
             .iter()
@@ -394,6 +400,26 @@ fn authorize_children<P: medusa_provider::ModelProvider>(
             child.task_id.clone(),
             transaction.snapshot().prepared_tree.clone(),
         );
+    }
+    // Freshness re-check: the authorization loop above is long, so re-open
+    // every child transaction before establishing the barrier. A child whose
+    // authorization was superseded (new revision, new commit, base drift)
+    // while its siblings were reviewed must not enter the aggregate.
+    for evidence in &accepted {
+        let child = parallel
+            .children
+            .iter()
+            .find(|child| child.task_id == evidence.task_id)
+            .ok_or_else(|| format!("parallel staging lost child {}", evidence.task_id))?;
+        check_cancel(cancel)?;
+        let transaction = MutationTransaction::open(&child.evidence.transaction_path)?;
+        if !child_authorization_is_fresh(evidence, transaction.snapshot(), &dag.repository_revision)
+        {
+            return Err(format!(
+                "parallel child {} authorization went stale during review; re-run the batch",
+                evidence.task_id
+            ));
+        }
     }
     IntegrationBarrier::establish(dag, accepted).map_err(str::to_owned)
 }
@@ -568,15 +594,61 @@ fn cherry_pick_without_commit(worktree: &Path, commit: &str) -> Result<(), Strin
 }
 
 fn cleanup_staging(manager: &WorkerManager, worker: &Worker, base_head: &str) {
-    let _ = hidden_command("git")
+    if let Err(error) = cleanup_git_state(&worker.worktree, base_head) {
+        tracing::warn!(error = %error, worktree = %worker.worktree.display(), "parallel staging git cleanup failed");
+    }
+    if let Err(error) = manager.cleanup(std::slice::from_ref(worker)) {
+        tracing::warn!(error = %error, worker = %worker.id, "parallel staging worker cleanup failed");
+    }
+}
+
+fn cleanup_git_state(worktree: &Path, base_head: &str) -> Result<(), String> {
+    let abort = hidden_command("git")
         .args(["cherry-pick", "--abort"])
-        .current_dir(&worker.worktree)
-        .output();
-    let _ = hidden_command("git")
+        .current_dir(worktree)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !abort.status.success() {
+        let stderr = String::from_utf8_lossy(&abort.stderr).trim().to_owned();
+        // No in-progress cherry-pick is the common case, not a failure.
+        if !stderr.is_empty() && !stderr.contains("no cherry-pick in progress") {
+            return Err(format!("cherry-pick abort failed: {stderr}"));
+        }
+    }
+    let reset = hidden_command("git")
         .args(["reset", "--hard", base_head])
-        .current_dir(&worker.worktree)
-        .output();
-    let _ = manager.cleanup(std::slice::from_ref(worker));
+        .current_dir(worktree)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !reset.status.success() {
+        return Err(format!(
+            "staging reset failed: {}",
+            String::from_utf8_lossy(&reset.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::SeqCst) {
+        return Err("parallel batch was cancelled".to_owned());
+    }
+    Ok(())
+}
+
+/// Re-validates an accepted child authorization against the child's current
+/// durable transaction: the authorization is fresh only if the transaction is
+/// still integration-authorized, still pinned to the batch base revision, and
+/// still points at the same prepared commit and tree.
+fn child_authorization_is_fresh(
+    accepted: &AcceptedTaskEvidence,
+    snapshot: &MutationTransactionSnapshot,
+    repository_revision: &str,
+) -> bool {
+    snapshot.lifecycle == MutationLifecycle::IntegrationAuthorized
+        && snapshot.base_head == repository_revision
+        && snapshot.prepared_commit == accepted.prepared_commit
+        && snapshot.prepared_tree == accepted.prepared_tree
 }
 
 fn component_paths(components: &[ChangedComponent]) -> Vec<String> {

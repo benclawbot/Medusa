@@ -194,6 +194,15 @@ impl ExecutionLog {
             .last()
             .is_some_and(|last| checkpoint.sequence <= last.sequence)
         {
+            // Crash-retry idempotency: re-recording the identical checkpoint
+            // (same sequence and fingerprint) succeeds instead of failing, so
+            // a retry after a crash between persist and ack can complete. Any
+            // other non-advancing checkpoint is still rejected.
+            if self.checkpoints.last().is_some_and(|last| {
+                last.sequence == checkpoint.sequence && last.fingerprint == checkpoint.fingerprint
+            }) {
+                return Ok(());
+            }
             return Err(CheckpointError::NonMonotonicCheckpoint);
         }
         self.checkpoints.push(checkpoint);
@@ -689,10 +698,30 @@ mod tests {
         let mut log = ExecutionLog::new("run-1").unwrap();
         log.append_event("scheduled", digest("schedule")).unwrap();
         log.add_checkpoint(checkpoint(&log, 1)).unwrap();
+        // Same sequence with a different fingerprint is a conflict.
+        let conflicting = ExecutionCheckpoint::new(
+            log.execution_id.clone(),
+            1,
+            digest("supervisor"),
+            digest("snapshot"),
+            Some(log.events[0].fingerprint.clone()),
+            BTreeMap::from([("leases".into(), digest("other-leases"))]),
+        )
+        .unwrap();
         assert_eq!(
-            log.add_checkpoint(checkpoint(&log, 1)),
+            log.add_checkpoint(conflicting),
             Err(CheckpointError::NonMonotonicCheckpoint)
         );
+    }
+
+    #[test]
+    fn readding_identical_checkpoint_is_idempotent() {
+        let mut log = ExecutionLog::new("run-1").unwrap();
+        log.append_event("scheduled", digest("schedule")).unwrap();
+        // Crash-retry: recording the exact same checkpoint twice succeeds.
+        log.add_checkpoint(checkpoint(&log, 1)).unwrap();
+        assert_eq!(log.add_checkpoint(checkpoint(&log, 1)), Ok(()));
+        assert_eq!(log.checkpoints.len(), 1);
     }
 
     #[test]

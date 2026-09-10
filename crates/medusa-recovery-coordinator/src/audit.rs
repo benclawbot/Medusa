@@ -14,9 +14,14 @@ pub struct RecoveryPreflightEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RecoveryActionOutcome {
+    /// Persisted before the executor runs: proves an attempt started even if
+    /// the process dies before the final outcome is recorded.
+    Attempted,
     Succeeded,
     Cancelled,
-    FailedClosed { reason: String },
+    FailedClosed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +38,12 @@ pub struct RecoveryAuditRecord {
     pub repository_fingerprint_after: Option<String>,
     pub verification_outcome: VerificationState,
     pub evidence_fingerprint: String,
+    /// Stable retry key derived from the authorized action and preflight
+    /// evidence (not the timestamp or outcome). Deliberately excluded from the
+    /// evidence fingerprint so records written before the key existed still
+    /// verify; the key is a lookup aid, not evidence.
+    #[serde(default)]
+    pub idempotency_key: String,
 }
 
 impl RecoveryAuditRecord {
@@ -46,6 +57,7 @@ impl RecoveryAuditRecord {
         repository_fingerprint_after: Option<String>,
         verification_outcome: VerificationState,
     ) -> Self {
+        let idempotency = idempotency_key(action, &preflight);
         let mut record = Self {
             schema_version: Self::SCHEMA_VERSION,
             recorded_at_unix_ms,
@@ -59,6 +71,7 @@ impl RecoveryAuditRecord {
             repository_fingerprint_after,
             verification_outcome,
             evidence_fingerprint: String::new(),
+            idempotency_key: idempotency,
         };
         record.evidence_fingerprint = record.compute_fingerprint();
         record
@@ -98,6 +111,33 @@ impl RecoveryAuditRecord {
     }
 }
 
+/// Stable retry key for an authorized recovery action: identical authorizations
+/// (same session, operation, checkpoint, confirmation, reason, and preflight
+/// evidence) share a key across retries, while differing attempts do not.
+pub fn idempotency_key(
+    action: &AuthorizedRecoveryAction,
+    preflight: &RecoveryPreflightEvidence,
+) -> String {
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, &action.session_id);
+    hash_field(&mut hasher, recovery_operation_id(action.operation));
+    hash_optional(&mut hasher, action.checkpoint_id.as_deref());
+    hasher.update([u8::from(action.confirmation_recorded)]);
+    hash_field(&mut hasher, &action.authorization_reason);
+    hash_field(&mut hasher, &preflight.repository_fingerprint_before);
+    hasher.update([u8::from(preflight.checkpoint_integrity_verified)]);
+    hasher.update([u8::from(preflight.repository_preconditions_verified)]);
+    for path in &preflight.conflicting_uncommitted_paths {
+        hash_field(&mut hasher, path);
+    }
+    hasher.update([0xff]);
+    for risk in &preflight.unresolved_risks {
+        hash_field(&mut hasher, risk);
+    }
+    hasher.update([0xff]);
+    hex::encode(hasher.finalize())
+}
+
 fn recovery_operation_id(operation: RecoveryOperation) -> &'static str {
     match operation {
         RecoveryOperation::Inspect => "recovery-operation/inspect/v1",
@@ -119,6 +159,9 @@ fn verification_state_id(state: VerificationState) -> &'static str {
 
 fn hash_recovery_outcome(hasher: &mut Sha256, outcome: &RecoveryActionOutcome) {
     match outcome {
+        RecoveryActionOutcome::Attempted => {
+            hash_field(hasher, "recovery-outcome/attempted/v1");
+        }
         RecoveryActionOutcome::Succeeded => {
             hash_field(hasher, "recovery-outcome/succeeded/v1");
         }

@@ -67,6 +67,8 @@ pub enum CoordinatorError {
     EmptyExecutionId,
     #[error("invalid fingerprint")]
     InvalidFingerprint,
+    #[error("duplicate transaction: {0}")]
+    DuplicateTransaction(String),
     #[error("duplicate participant: {0}")]
     DuplicateParticipant(String),
     #[error("unknown participant: {0}")]
@@ -113,6 +115,9 @@ impl TransactionCoordinator {
             return Err(CoordinatorError::EmptyExecutionId);
         }
         validate_fingerprint(&conflict_resolution_fingerprint)?;
+        if self.records.contains_key(&transaction_id) {
+            return Err(CoordinatorError::DuplicateTransaction(transaction_id));
+        }
         let mut seen = BTreeSet::new();
         for participant in &participants {
             validate_fingerprint(&participant.intent_fingerprint)?;
@@ -148,6 +153,16 @@ impl TransactionCoordinator {
         transaction_id: &str,
         next: TransactionPhase,
     ) -> Result<&TransactionRecord, CoordinatorError> {
+        // Prepared -> Committing moves durable commit intent: require a unanimous
+        // commit decision first so missing or rejecting votes cannot be committed.
+        if matches!(
+            self.records.get(transaction_id).map(|record| &record.phase),
+            Some(TransactionPhase::Prepared)
+        ) && matches!(next, TransactionPhase::Committing)
+            && !matches!(self.decide(transaction_id)?, Decision::Commit)
+        {
+            return Err(CoordinatorError::InvalidTransition);
+        }
         let record = self
             .records
             .get_mut(transaction_id)
@@ -519,6 +534,87 @@ mod tests {
         assert_eq!(
             coordinator.verify(&id),
             Err(CoordinatorError::FingerprintMismatch)
+        );
+    }
+
+    #[test]
+    fn create_rejects_duplicate_transaction_id() {
+        let (mut coordinator, _) = created();
+        assert!(matches!(
+            coordinator.create("tx-1", "exec-1", 0, two_participants(), fp(9)),
+            Err(CoordinatorError::DuplicateTransaction(id)) if id == "tx-1"
+        ));
+        // Original record is preserved, not overwritten.
+        let record = coordinator.record("tx-1").expect("record");
+        assert_eq!(record.phase, TransactionPhase::Created);
+    }
+
+    #[test]
+    fn prepared_to_committing_requires_unanimous_commit_decision() {
+        let (mut coordinator, id) = created();
+        drive(
+            &mut coordinator,
+            &id,
+            &[
+                TransactionPhase::Resolving,
+                TransactionPhase::Preparing,
+                TransactionPhase::Prepared,
+            ],
+        );
+        // No votes yet: decide() aborts, so Committing must be refused.
+        assert_eq!(
+            coordinator.transition(&id, TransactionPhase::Committing),
+            Err(CoordinatorError::InvalidTransition)
+        );
+        // A rejection also refuses the transition; abort path stays open.
+        coordinator
+            .vote(
+                &id,
+                Vote::Reject {
+                    worker_id: "a".to_owned(),
+                    lease_epoch: 2,
+                    reason: "no".to_owned(),
+                },
+            )
+            .expect("vote");
+        assert_eq!(
+            coordinator.transition(&id, TransactionPhase::Committing),
+            Err(CoordinatorError::InvalidTransition)
+        );
+        coordinator
+            .transition(&id, TransactionPhase::Aborting)
+            .expect("abort");
+    }
+
+    #[test]
+    fn prepared_to_committing_succeeds_after_unanimous_prepared_votes() {
+        let (mut coordinator, id) = created();
+        drive(
+            &mut coordinator,
+            &id,
+            &[
+                TransactionPhase::Resolving,
+                TransactionPhase::Preparing,
+                TransactionPhase::Prepared,
+            ],
+        );
+        for (worker, epoch) in [("a", 2), ("b", 1)] {
+            coordinator
+                .vote(
+                    &id,
+                    Vote::Prepared {
+                        worker_id: worker.to_owned(),
+                        lease_epoch: epoch,
+                    },
+                )
+                .expect("vote");
+        }
+        coordinator
+            .transition(&id, TransactionPhase::Committing)
+            .expect("commit");
+        assert_eq!(
+            coordinator.record(&id).expect("record").phase,
+            TransactionPhase::Committing
         );
     }
 }
