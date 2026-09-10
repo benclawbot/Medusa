@@ -43,6 +43,13 @@ pub struct WritebackPolicy {
     #[serde(default)]
     pub paths_by_kind: BTreeMap<MemoryKind, String>,
     pub include_provenance: bool,
+    /// Whether unresolved conflicts are rendered into the default-path
+    /// document under "Unresolved conflicts".
+    ///
+    /// Default: `true`. With `false` the conflicts are left out of every
+    /// patch, but they are still reported through
+    /// `WritebackPlan::unresolved_conflict_fingerprints` so callers cannot
+    /// mistake a clean patch set for a conflict-free consolidation.
     pub include_conflicts: bool,
 }
 
@@ -93,13 +100,24 @@ pub struct DocumentPatch {
 pub struct WritebackPlan {
     pub patches: Vec<DocumentPatch>,
     pub unresolved_conflict_fingerprints: Vec<String>,
+    /// Observation ids that consolidation deferred (too weak or unsupported).
+    /// Returned — not rendered — so a caller that persists only `patches`
+    /// cannot silently lose them: they stay available for retry, review, or
+    /// explicit discard.
+    pub deferred_observation_ids: Vec<String>,
     pub source_fingerprint: String,
     pub plan_fingerprint: String,
 }
 
+/// Plans deterministic Markdown patches for consolidated memories.
+///
+/// `deferred_observation_ids` (typically `ConsolidationResult::deferred_observation_ids`)
+/// is carried into the plan verbatim (sorted, deduplicated) and covered by the
+/// fingerprints, so dropping it is a visible plan change rather than silent loss.
 pub fn plan_writeback(
     memories: &[ConsolidatedMemory],
     conflicts: &[MemoryConflict],
+    deferred_observation_ids: &[String],
     documents: &[MemoryDocument],
     policy: &WritebackPolicy,
 ) -> Result<WritebackPlan, &'static str> {
@@ -197,20 +215,31 @@ pub fn plan_writeback(
         .iter()
         .map(|item| item.fingerprint.clone())
         .collect::<Vec<_>>();
+    let mut canonical_deferred = deferred_observation_ids.to_vec();
+    canonical_deferred.sort();
+    canonical_deferred.dedup();
+    for id in &canonical_deferred {
+        if id.trim().is_empty() {
+            return Err("deferred observation ids cannot be empty");
+        }
+    }
     let source_fingerprint = fingerprint(&(
         &canonical_memories,
         &canonical_conflicts,
+        &canonical_deferred,
         &canonical_documents,
         policy,
     ))?;
     let plan_fingerprint = fingerprint(&(
         &patches,
         &unresolved_conflict_fingerprints,
+        &canonical_deferred,
         &source_fingerprint,
     ))?;
     Ok(WritebackPlan {
         patches,
         unresolved_conflict_fingerprints,
+        deferred_observation_ids: canonical_deferred,
         source_fingerprint,
         plan_fingerprint,
     })
@@ -341,6 +370,7 @@ mod tests {
         let plan = plan_writeback(
             &[memory("Rust")],
             &[],
+            &[],
             &[document],
             &WritebackPolicy::default(),
         )
@@ -351,8 +381,14 @@ mod tests {
     }
     #[test]
     fn identical_render_is_no_change() {
-        let first =
-            plan_writeback(&[memory("Rust")], &[], &[], &WritebackPolicy::default()).unwrap();
+        let first = plan_writeback(
+            &[memory("Rust")],
+            &[],
+            &[],
+            &[],
+            &WritebackPolicy::default(),
+        )
+        .unwrap();
         let document = MemoryDocument {
             path: first.patches[0].path.clone(),
             content: first.patches[0].content.clone(),
@@ -360,6 +396,7 @@ mod tests {
         };
         let second = plan_writeback(
             &[memory("Rust")],
+            &[],
             &[],
             &[document],
             &WritebackPolicy::default(),
@@ -378,6 +415,7 @@ mod tests {
             plan_writeback(
                 &[memory("Rust")],
                 &[],
+                &[],
                 &[document],
                 &WritebackPolicy::default()
             )
@@ -393,6 +431,7 @@ mod tests {
             &[memory("Rust"), second.clone()],
             &[],
             &[],
+            &[],
             &WritebackPolicy::default(),
         )
         .unwrap();
@@ -400,9 +439,51 @@ mod tests {
             &[second, memory("Rust")],
             &[],
             &[],
+            &[],
             &WritebackPolicy::default(),
         )
         .unwrap();
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn deferred_ids_and_conflicts_survive_a_memories_only_handoff() {
+        // Regression: callers that persist only `plan.patches` used to lose
+        // `ConsolidationResult::deferred_observation_ids` and conflicts. Both
+        // are now returned on the plan (and covered by its fingerprints).
+        let conflict = MemoryConflict {
+            key: "project\u{1f}shell\u{1f}Preference".into(),
+            candidate_values: vec!["bash".into(), "zsh".into()],
+            supporting_observation_ids: vec!["obs-9".into()],
+            fingerprint: "conflict-fingerprint".into(),
+        };
+        let deferred = vec!["obs-weak".to_owned(), "obs-young".to_owned()];
+        let plan = plan_writeback(
+            &[memory("Rust")],
+            &[conflict.clone()],
+            &deferred,
+            &[],
+            &WritebackPolicy::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.deferred_observation_ids, deferred);
+        assert_eq!(
+            plan.unresolved_conflict_fingerprints,
+            vec![conflict.fingerprint.clone()]
+        );
+        assert!(
+            plan.patches[0].content.contains("Unresolved conflicts"),
+            "default policy renders conflicts"
+        );
+
+        // Opting out of conflict rendering still reports them: a clean patch
+        // set must never read as conflict-free.
+        let quiet = WritebackPolicy {
+            include_conflicts: false,
+            ..WritebackPolicy::default()
+        };
+        let plan = plan_writeback(&[memory("Rust")], &[conflict], &[], &[], &quiet).unwrap();
+        assert!(!plan.patches[0].content.contains("Unresolved conflicts"));
+        assert_eq!(plan.unresolved_conflict_fingerprints.len(), 1);
     }
 }

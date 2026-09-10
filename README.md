@@ -200,7 +200,11 @@ For development or source-only installation, use Cargo explicitly:
 cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli --quiet
 ```
 
-`medusa update` downloads the platform-specific CLI archive, verifies the GitHub/Sigstore attestation for the release manifest and the archive SHA-256, then performs an atomic replacement with a rollback binary. It restarts itself after a successful update; Windows uses a short-lived helper process so the running executable is never locked. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
+`medusa update` downloads the platform-specific CLI archive, verifies the GitHub/Sigstore attestation for the release manifest and the archive SHA-256, then performs an atomic replacement with a rollback binary. On Unix the staged update requires a manual relaunch; Windows exits through a short-lived helper process so the running executable is never locked. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
+
+The Unix installer verifies the download against the published SHA256SUMS, records the install channel beside the binary, and launches Medusa unless `--no-launch` is passed. `medusa update` warns loudly when the requested channel (`--release` vs the default main channel) differs from the installed one.
+
+To remove an installation, run `medusa uninstall` from the repository: it shuts down the repository daemon, deletes the installed binary (Unix only; Windows reports the path to delete after exit), the repository `.medusa` state directory, the installer channel marker, and installer/update locks.
 
 Set `MEDUSA_UPDATE_POLICY=check` to make a normal `medusa update` report availability only, or `MEDUSA_UPDATE_POLICY=automatic` to permit verified unattended replacement. The command-line `--check` and `--automatic` flags take precedence for a single invocation.
 

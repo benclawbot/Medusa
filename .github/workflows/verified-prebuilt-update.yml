@@ -1,5 +1,11 @@
 name: Verified Prebuilt Update
 
+# REQUIRED-CHECK CONTRACT (informational, path-scoped workflow): the pull_request
+# trigger above is path-filtered, so PRs that touch none of those paths produce
+# no run and no status — that absence must never be configured or read as a
+# passing required check. The cannot-skip-updater-gate job below additionally
+# fails closed when the updater job itself is skipped (draft PRs).
+
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
@@ -74,3 +80,21 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint update crates
         run: cargo clippy -p medusa-update -p medusa-cli --all-targets --locked -- -D warnings
+
+  cannot-skip-updater-gate:
+    name: Updater gate cannot be skipped
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: updater
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail closed when updater verification was skipped
+        shell: bash
+        env:
+          UPDATER_RESULT: ${{ needs.updater.result }}
+        run: |
+          if [[ "$UPDATER_RESULT" == "skipped" ]]; then
+            echo 'cannot-skip: verified updater produced no result for this PR (draft); a skipped run must not satisfy required checks' >&2
+            exit 1
+          fi
+          test "$UPDATER_RESULT" = "success"

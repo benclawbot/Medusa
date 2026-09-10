@@ -23,6 +23,23 @@ describe("DesktopUpdateControl", () => {
     document.body.innerHTML = '<div class="settings-form"></div>';
   });
 
+  it("never offers rolling main builds to release-channel installs", async () => {
+    mocks.invoke.mockResolvedValueOnce({
+      currentVersion: "1.0.1",
+      latestMainSha: "0123456789abcdef0123456789abcdef01234567",
+      executable: "C:\\\\Medusa\\\\medusa-desktop.exe",
+      ready: false,
+      artifactPublished: true,
+      channel: "release",
+    });
+
+    render(<DesktopUpdateControl />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check main" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Check main" }));
+    await waitFor(() => expect(screen.getByText(/Release-channel install/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Update and restart" })).toBeDisabled();
+  });
+
   it("renders installer progress events instead of exposing a terminal build", async () => {
     mocks.invoke.mockResolvedValueOnce({
       currentVersion: "1.0.1",

@@ -80,6 +80,30 @@ pub enum FrontendTransientEvent {
     Progress {
         turn: u32,
     },
+    Activity {
+        kind: String,
+        title: String,
+        details: Vec<String>,
+    },
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        total_tokens: u64,
+        duration_ms: u64,
+        estimated_cost_microusd: u64,
+        provenance: String,
+    },
+    Plan {
+        steps: serde_json::Value,
+    },
+    Question {
+        question: serde_json::Value,
+    },
+    Completed {
+        session_id: String,
+    },
+    TurnFinished,
+    Cancelled,
     Failed {
         message: String,
     },
@@ -211,6 +235,18 @@ impl FrontendControlPlane {
     #[must_use]
     pub fn shutdown_handle(&self) -> FrontendShutdownHandle {
         self.shutdown.clone()
+    }
+
+    /// Daemon-global effort budget currently in effect.
+    #[must_use]
+    pub fn agent_max_turns(&self) -> u32 {
+        self.config.agent.max_turns
+    }
+
+    /// Daemon-global model provider currently in effect.
+    #[must_use]
+    pub fn model_provider(&self) -> &str {
+        &self.config.model.provider
     }
 
     pub fn replay_events(
@@ -699,6 +735,10 @@ impl FrontendControlPlane {
                 model,
                 base_url,
             } => {
+                // Session-scoped authorization gates the daemon-global model
+                // configuration: only the session owner may mutate it.
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
                 let provider_changed = provider
                     .as_deref()
                     .is_some_and(|next| next != self.config.model.provider);
@@ -714,11 +754,8 @@ impl FrontendControlPlane {
                 let effort = current_effort(&self.config);
                 let configuration =
                     self.model_configuration(&provider, model, effort, next_base_url.clone());
-                if let Some(session_id) = envelope.session_id.as_deref() {
-                    self.authorize_control(session_id, &envelope.client_id)?;
-                    self.controller(session_id)?
-                        .configure_model(configuration)?;
-                }
+                self.controller(&session_id)?
+                    .configure_model(configuration)?;
                 self.config.model.provider = provider;
                 self.config.model.name = model.clone();
                 self.config.model.protocol = protocol_for_provider(&self.config.model.provider);
@@ -734,6 +771,10 @@ impl FrontendControlPlane {
                 })
             }
             FrontendCommand::SetEffort { effort } => {
+                // Session-scoped authorization gates the daemon-global effort
+                // budget: only the session owner may mutate it.
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
                 let effort = parse_effort(effort)?;
                 let configuration = self.model_configuration(
                     &self.config.model.provider,
@@ -741,11 +782,8 @@ impl FrontendControlPlane {
                     effort,
                     self.config.model.base_url.clone(),
                 );
-                if let Some(session_id) = envelope.session_id.as_deref() {
-                    self.authorize_control(session_id, &envelope.client_id)?;
-                    self.controller(session_id)?
-                        .configure_model(configuration)?;
-                }
+                self.controller(&session_id)?
+                    .configure_model(configuration)?;
                 self.config.agent.max_turns = turns_for_effort(effort);
                 Ok(FrontendControlResult::CommandAccepted {
                     session_id: envelope.session_id.clone().unwrap_or_default(),
@@ -958,9 +996,39 @@ fn map_transient_event(
         }
         RuntimeEvent::NewSession => Some(FrontendTransientEvent::NewSession),
         RuntimeEvent::Progress { turn } => Some(FrontendTransientEvent::Progress { turn }),
-        RuntimeEvent::Failed(message) if is_unjournaled_publication_failure(&message) => {
-            Some(FrontendTransientEvent::Failed { message })
+        RuntimeEvent::Activity(activity) => Some(FrontendTransientEvent::Activity {
+            kind: format!("{:?}", activity.kind),
+            title: activity.title,
+            details: activity.details,
+        }),
+        RuntimeEvent::Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            duration_ms,
+            estimated_cost_microusd,
+            provenance,
+            ..
+        } => Some(FrontendTransientEvent::Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            duration_ms,
+            estimated_cost_microusd,
+            provenance: format!("{provenance:?}"),
+        }),
+        RuntimeEvent::Plan(steps) => Some(FrontendTransientEvent::Plan {
+            steps: serde_json::to_value(steps)?,
+        }),
+        RuntimeEvent::Question(question) => Some(FrontendTransientEvent::Question {
+            question: serde_json::to_value(question)?,
+        }),
+        RuntimeEvent::Completed { session_id } => {
+            Some(FrontendTransientEvent::Completed { session_id })
         }
+        RuntimeEvent::TurnFinished => Some(FrontendTransientEvent::TurnFinished),
+        RuntimeEvent::Cancelled => Some(FrontendTransientEvent::Cancelled),
+        RuntimeEvent::Failed(message) => Some(FrontendTransientEvent::Failed { message }),
         RuntimeEvent::RecoveryCompleted(receipt) => {
             Some(FrontendTransientEvent::RecoveryCompleted {
                 record: serde_json::to_value(receipt.record)?,
@@ -969,26 +1037,10 @@ fn map_transient_event(
         }
         RuntimeEvent::Started
         | RuntimeEvent::AssistantText(_)
-        | RuntimeEvent::Activity(_)
         | RuntimeEvent::Team(_)
-        | RuntimeEvent::Plan(_)
-        | RuntimeEvent::Question(_)
-        | RuntimeEvent::Usage { .. }
-        | RuntimeEvent::Compacted { .. }
-        | RuntimeEvent::Completed { .. }
-        | RuntimeEvent::TurnFinished
-        | RuntimeEvent::Cancelled
-        | RuntimeEvent::Failed(_) => None,
+        | RuntimeEvent::Compacted { .. } => None,
     };
     Ok(event)
-}
-
-fn is_unjournaled_publication_failure(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("journal")
-        && (message.contains("publish")
-            || message.contains("persist")
-            || message.contains("commit"))
 }
 
 fn command_is_cacheable(command: &FrontendCommand) -> bool {
@@ -1226,19 +1278,69 @@ mod tests {
     }
 
     #[test]
-    fn transient_terminal_projection_suppresses_canonical_state() {
+    fn transient_projection_surfaces_cost_plans_and_outcomes() {
+        // Outcomes stay visible to poll consumers instead of mapping to None.
+        assert!(matches!(
+            map_transient_event(RuntimeEvent::TurnFinished).expect("map"),
+            Some(FrontendTransientEvent::TurnFinished)
+        ));
+        assert!(matches!(
+            map_transient_event(RuntimeEvent::Cancelled).expect("map"),
+            Some(FrontendTransientEvent::Cancelled)
+        ));
+        assert!(matches!(
+            map_transient_event(RuntimeEvent::Completed {
+                session_id: "session-1".to_owned(),
+            })
+            .expect("map"),
+            Some(FrontendTransientEvent::Completed { .. })
+        ));
+        assert!(matches!(
+            map_transient_event(RuntimeEvent::Failed("boom".to_owned())).expect("map"),
+            Some(FrontendTransientEvent::Failed { .. })
+        ));
+        let activity = medusa_runtime::RuntimeActivity {
+            id: None,
+            kind: medusa_runtime::RuntimeActivityKind::Tool,
+            title: "tool ran".to_owned(),
+            details: vec!["detail".to_owned()],
+        };
+        match map_transient_event(RuntimeEvent::Activity(activity)).expect("map") {
+            Some(FrontendTransientEvent::Activity { kind, title, .. }) => {
+                assert_eq!(kind, "Tool");
+                assert_eq!(title, "tool ran");
+            }
+            other => panic!("activity must project, got {other:?}"),
+        }
+        match map_transient_event(RuntimeEvent::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            total_tokens: 15,
+            duration_ms: 100,
+            tokens_per_second_milli: 150_000,
+            estimated_cost_microusd: 7,
+            provenance: medusa_agent::UsageProvenance::Estimated,
+        })
+        .expect("map")
+        {
+            Some(FrontendTransientEvent::Usage {
+                total_tokens,
+                estimated_cost_microusd,
+                ..
+            }) => {
+                assert_eq!(total_tokens, 15);
+                assert_eq!(estimated_cost_microusd, 7);
+            }
+            other => panic!("usage must project, got {other:?}"),
+        }
+        // Canonical transcript state still stays out of the transient stream.
         assert!(
-            map_transient_event(RuntimeEvent::TurnFinished)
+            map_transient_event(RuntimeEvent::AssistantText("hi".to_owned()))
                 .expect("map")
                 .is_none()
         );
-        assert!(matches!(
-            map_transient_event(RuntimeEvent::Failed(
-                "journal publication failed after commit".to_owned()
-            ))
-            .expect("map"),
-            Some(FrontendTransientEvent::Failed { .. })
-        ));
     }
 
     #[test]

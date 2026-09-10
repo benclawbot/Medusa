@@ -383,3 +383,55 @@ fn artifacts_and_read_only_frontends_fail_closed_without_provider_calls() {
         Err(FrontendControlError::InvalidEnvelope(_))
     ));
 }
+
+#[test]
+fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
+    let repo = tempdir().expect("temporary repository");
+    let mut control = FrontendControlPlane::new(repo.path().to_path_buf(), Config::default());
+    let baseline_turns = control.agent_max_turns();
+    let baseline_provider = control.model_provider();
+
+    // No session: the global mutation must be gated, not applied.
+    assert!(matches!(
+        control.dispatch(envelope(
+            101,
+            "anonymous-client",
+            None,
+            FrontendCommand::SetEffort {
+                effort: "low".to_owned(),
+            },
+        )),
+        Err(FrontendControlError::SessionRequired)
+    ));
+    assert_eq!(control.agent_max_turns(), baseline_turns);
+
+    assert!(matches!(
+        control.dispatch(envelope(
+            102,
+            "anonymous-client",
+            None,
+            FrontendCommand::ConfigureModel {
+                provider: Some("other-provider".to_owned()),
+                model: "other-model".to_owned(),
+                base_url: None,
+            },
+        )),
+        Err(FrontendControlError::SessionRequired)
+    ));
+    assert_eq!(control.model_provider(), baseline_provider);
+
+    // Unknown session / non-owner client: authorization fails before any
+    // daemon-global state changes.
+    assert!(matches!(
+        control.dispatch(envelope(
+            103,
+            "intruder-client",
+            Some("missing-session"),
+            FrontendCommand::SetEffort {
+                effort: "low".to_owned(),
+            },
+        )),
+        Err(FrontendControlError::ReadOnlyClient(_))
+    ));
+    assert_eq!(control.agent_max_turns(), baseline_turns);
+}

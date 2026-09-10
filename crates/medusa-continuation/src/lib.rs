@@ -138,8 +138,24 @@ pub struct ContinuationContext<'a> {
     pub checkpoint_available: bool,
 }
 
+/// Schema version of [`ContinuationAction`] / [`ContinuationDecision`].
+///
+/// Bump this whenever a variant is added, removed, or reshaped; persisted or
+/// transmitted decisions carrying any other version must be rejected, never
+/// coerced.
+pub const CONTINUATION_ACTION_VERSION: u32 = 1;
+
+/// A single deterministic continuation step selected for an incomplete plan.
+///
+/// Unknown-field policy (fail-closed): the `action` tag must be a known
+/// variant and `details` must contain exactly that variant's fields —
+/// enforced by `deny_unknown_fields`. A provider or peer that invents a new
+/// action (or a new field) gets a deserialization error instead of a silently
+/// reinterpreted decision. Adding a variant or field requires bumping
+/// [`CONTINUATION_ACTION_VERSION`].
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "action", content = "details")]
+#[serde(deny_unknown_fields)]
 pub enum ContinuationAction {
     Complete,
     Resume {
@@ -164,9 +180,48 @@ pub enum ContinuationAction {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ContinuationDecision {
+    /// Schema version; always [`CONTINUATION_ACTION_VERSION`] for decisions
+    /// produced by [`ContinuationController::decide`].
+    pub version: u32,
     pub action: ContinuationAction,
     pub plan_revision: u64,
     pub reason: String,
+}
+
+impl ContinuationDecision {
+    /// Renders the stable single-line audit record for this decision.
+    ///
+    /// Callers must emit this whenever a plain `InProgress` resume is taken
+    /// (the highest-volume, lowest-signal branch): without it, resume loops
+    /// are invisible in operator logs. Format is `key=value` pairs so it
+    /// greps cleanly: `continuation_decision version=.. plan_revision=..
+    /// action=.. reason=..`.
+    #[must_use]
+    pub fn audit_line(&self) -> String {
+        let action = match &self.action {
+            ContinuationAction::Complete => "complete".to_owned(),
+            ContinuationAction::Resume {
+                todo_id,
+                from_checkpoint,
+            } => format!("resume:{}:checkpoint={}", todo_id.as_str(), from_checkpoint),
+            ContinuationAction::Retry {
+                todo_id,
+                backoff_ms,
+            } => format!(
+                "retry:{}:backoff_ms={}",
+                todo_id.as_str(),
+                backoff_ms.map_or("none".to_owned(), |ms| ms.to_string())
+            ),
+            ContinuationAction::Replan { .. } => "replan".to_owned(),
+            ContinuationAction::Spike(_) => "spike".to_owned(),
+            ContinuationAction::Block { .. } => "block".to_owned(),
+            ContinuationAction::Stop { .. } => "stop".to_owned(),
+        };
+        format!(
+            "continuation_decision version={} plan_revision={} action={} reason={}",
+            self.version, self.plan_revision, action, self.reason
+        )
+    }
 }
 
 pub struct ContinuationController {
@@ -235,6 +290,18 @@ impl ContinuationController {
                     ));
                 }
                 FailureDisposition::RetryImmediately | FailureDisposition::RetryWithBackoff => {
+                    // Retries are resumes too: an exhausted stall budget must
+                    // force a replan here exactly as on the checkpoint path
+                    // below, or a failing todo spins forever.
+                    if context.stalled_resumes >= self.policy.max_stalled_resumes {
+                        return Ok(self.decision(
+                            context.plan,
+                            ContinuationAction::Replan {
+                                reason: "resume made no durable progress".to_owned(),
+                            },
+                            "stalled resume budget exhausted",
+                        ));
+                    }
                     let todo = context
                         .plan
                         .next_runnable()
@@ -298,6 +365,7 @@ impl ContinuationController {
         reason: impl Into<String>,
     ) -> ContinuationDecision {
         ContinuationDecision {
+            version: CONTINUATION_ACTION_VERSION,
             action,
             plan_revision: plan.revision,
             reason: reason.into(),
@@ -456,5 +524,93 @@ mod tests {
             .decide(context(&plan, &confidence))
             .expect("decision");
         assert!(matches!(decision.action, ContinuationAction::Block { .. }));
+    }
+
+    #[test]
+    fn decisions_carry_a_version_and_reject_unknown_actions_or_fields() {
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let plan = plan(TodoState::InProgress);
+        let confidence = confidence(8_000);
+        let decision = controller
+            .decide(context(&plan, &confidence))
+            .expect("decision");
+        assert_eq!(decision.version, CONTINUATION_ACTION_VERSION);
+
+        // Unknown action tags fail closed.
+        let unknown_action = serde_json::json!({
+            "version": CONTINUATION_ACTION_VERSION,
+            "action": "teleport",
+            "details": {},
+            "plan_revision": 1,
+            "reason": "nope"
+        });
+        assert!(serde_json::from_value::<ContinuationDecision>(unknown_action).is_err());
+
+        // Unknown fields inside a known action's details fail closed too.
+        let unknown_field = serde_json::json!({
+            "version": CONTINUATION_ACTION_VERSION,
+            "action": "resume",
+            "details": {
+                "todo_id": "implement",
+                "from_checkpoint": true,
+                "future_provider_field": 1
+            },
+            "plan_revision": 1,
+            "reason": "nope"
+        });
+        assert!(serde_json::from_value::<ContinuationDecision>(unknown_field).is_err());
+
+        // The documented shape still round-trips.
+        let round_tripped: ContinuationDecision =
+            serde_json::from_value(serde_json::to_value(&decision).expect("serialize"))
+                .expect("round trip");
+        assert_eq!(round_tripped, decision);
+    }
+
+    #[test]
+    fn exhausted_stall_budget_forces_replan_on_retry_branches() {
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let plan = plan(TodoState::InProgress);
+        let confidence = confidence(8_000);
+        for disposition in [
+            FailureDisposition::RetryImmediately,
+            FailureDisposition::RetryWithBackoff,
+        ] {
+            let failure = FailureDecision {
+                disposition,
+                reason: "transient".to_owned(),
+                attempt: 3,
+                remaining_attempts: 0,
+                backoff_ms: Some(500),
+            };
+            let mut stalled = context(&plan, &confidence);
+            stalled.latest_failure = Some(&failure);
+            stalled.stalled_resumes = 2;
+            let decision = controller.decide(stalled).expect("decision");
+            assert!(
+                matches!(decision.action, ContinuationAction::Replan { .. }),
+                "exhausted stall budget must replan, not retry"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_in_progress_resume_emits_a_decision_audit_line() {
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let plan = plan(TodoState::InProgress);
+        let confidence = confidence(8_000);
+        let decision = controller
+            .decide(context(&plan, &confidence))
+            .expect("decision");
+        assert!(matches!(decision.action, ContinuationAction::Resume { .. }));
+        let audit = decision.audit_line();
+        assert!(audit.starts_with("continuation_decision "));
+        assert!(audit.contains("version=1"));
+        assert!(audit.contains("plan_revision=1"));
+        assert!(audit.contains("action=resume:implement:checkpoint=true"));
+        assert!(audit.contains("reason="));
     }
 }

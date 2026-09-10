@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{env, fs, path::Path, time::Duration};
 
 use medusa_protocol::EventPayload;
 use medusa_provider::{ModelRequest, ModelResponse, ResponseBlock, Usage};
@@ -159,23 +159,149 @@ fn estimate_bytes(bytes: usize) -> u64 {
     bytes.saturating_add(3) / 4
 }
 
-fn estimated_cost_microusd(usage: &Usage) -> u64 {
-    cost_component(
-        usage.input_tokens,
-        rate("MEDUSA_INPUT_COST_MICROUSD_PER_MILLION"),
+/// Typed per-turn cost estimate. The estimator stays heuristic (byte/4 tokens and
+/// `MEDUSA_*_COST_MICROUSD_PER_MILLION` rates); the newtype keeps untyped
+/// micro-USD integers from crossing trust boundaries unnoticed.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EstimatedCost(pub u64);
+
+pub fn estimated_cost(usage: &Usage) -> EstimatedCost {
+    EstimatedCost(
+        cost_component(
+            usage.input_tokens,
+            rate("MEDUSA_INPUT_COST_MICROUSD_PER_MILLION"),
+        )
+        .saturating_add(cost_component(
+            usage.output_tokens,
+            rate("MEDUSA_OUTPUT_COST_MICROUSD_PER_MILLION"),
+        ))
+        .saturating_add(cost_component(
+            usage.cache_read_input_tokens,
+            rate("MEDUSA_CACHE_READ_COST_MICROUSD_PER_MILLION"),
+        ))
+        .saturating_add(cost_component(
+            usage.cache_creation_input_tokens,
+            rate("MEDUSA_CACHE_WRITE_COST_MICROUSD_PER_MILLION"),
+        )),
     )
-    .saturating_add(cost_component(
-        usage.output_tokens,
-        rate("MEDUSA_OUTPUT_COST_MICROUSD_PER_MILLION"),
-    ))
-    .saturating_add(cost_component(
-        usage.cache_read_input_tokens,
-        rate("MEDUSA_CACHE_READ_COST_MICROUSD_PER_MILLION"),
-    ))
-    .saturating_add(cost_component(
-        usage.cache_creation_input_tokens,
-        rate("MEDUSA_CACHE_WRITE_COST_MICROUSD_PER_MILLION"),
-    ))
+}
+
+/// Durable per-turn cost record: restart-durable, queryable, and linked to the
+/// originating operation so journal, telemetry, and cost views can be joined.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TurnCost {
+    pub schema_version: u16,
+    pub session_id: String,
+    pub turn: u32,
+    #[serde(default)]
+    pub operation_id: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub total_tokens: u64,
+    pub duration_ms: u64,
+    pub estimated_cost_microusd: u64,
+    pub provenance: UsageProvenance,
+    pub recorded_unix_ms: i128,
+}
+
+impl TurnCost {
+    #[must_use]
+    pub fn from_turn(session_id: &str, turn: &TurnUsage, operation_id: &str) -> Self {
+        Self {
+            schema_version: 1,
+            session_id: session_id.to_owned(),
+            turn: turn.turn,
+            operation_id: operation_id.to_owned(),
+            input_tokens: turn.input_tokens,
+            output_tokens: turn.output_tokens,
+            cache_read_input_tokens: turn.cache_read_input_tokens,
+            cache_creation_input_tokens: turn.cache_creation_input_tokens,
+            total_tokens: turn.total_tokens,
+            duration_ms: turn.duration_ms,
+            estimated_cost_microusd: turn.estimated_cost_microusd,
+            provenance: turn.provenance,
+            recorded_unix_ms: time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
+        }
+    }
+}
+
+pub const MAX_COST_LINES: usize = 5_000;
+
+fn cost_ledger_path(repo: &Path) -> std::path::PathBuf {
+    repo.join(".medusa").join("turn-costs.jsonl")
+}
+
+/// Appends one cost record to the restart-durable ledger and rotates old lines.
+pub fn append_turn_cost(repo: &Path, cost: &TurnCost) -> medusa_core::MedusaResult<()> {
+    use std::io::Write as _;
+    let path = cost_ledger_path(repo);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    serde_json::to_writer(&mut file, cost).map_err(std::io::Error::other)?;
+    file.write_all(b"\n")?;
+    file.sync_data()?;
+    drop(file);
+    let _ = prune_cost_ledger(repo);
+    Ok(())
+}
+
+/// Loads every cost record; missing ledger reads as empty so fresh checkouts work.
+pub fn load_turn_costs(repo: &Path) -> medusa_core::MedusaResult<Vec<TurnCost>> {
+    let body = match fs::read_to_string(cost_ledger_path(repo)) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut costs = Vec::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        costs.push(serde_json::from_str::<TurnCost>(line).map_err(std::io::Error::other)?);
+    }
+    Ok(costs)
+}
+
+/// Queries the ledger for one session turn.
+pub fn query_turn_cost(
+    repo: &Path,
+    session_id: &str,
+    turn: u32,
+) -> medusa_core::MedusaResult<Option<TurnCost>> {
+    Ok(load_turn_costs(repo)?
+        .into_iter()
+        .find(|cost| cost.session_id == session_id && cost.turn == turn))
+}
+
+/// Retention: keeps only the newest cost lines.
+pub fn prune_cost_ledger(repo: &Path) -> medusa_core::MedusaResult<usize> {
+    let path = cost_ledger_path(repo);
+    let body = match fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.len() <= MAX_COST_LINES {
+        return Ok(0);
+    }
+    fs::write(
+        &path,
+        lines[lines.len() - MAX_COST_LINES..].join("\n") + "\n",
+    )?;
+    Ok(lines.len() - MAX_COST_LINES)
+}
+
+fn estimated_cost_microusd(usage: &Usage) -> u64 {
+    estimated_cost(usage).0
 }
 
 fn rate(name: &str) -> u64 {
@@ -253,6 +379,52 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.output_tokens, 2);
         assert_eq!(provenance, UsageProvenance::Estimated);
+    }
+
+    #[test]
+    fn typed_cost_ledger_survives_restart_and_is_queryable() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        assert!(load_turn_costs(directory.path()).expect("load").is_empty());
+        let usage = TurnUsage {
+            turn: 2,
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            duration_ms: 100,
+            tokens_per_second_milli: 150_000,
+            estimated_cost_microusd: 7,
+            provenance: UsageProvenance::ProviderReported,
+            ..TurnUsage::default()
+        };
+        let cost = TurnCost::from_turn("session-fixture", &usage, "op-cost-1");
+        assert_eq!(cost.estimated_cost_microusd, 7);
+        append_turn_cost(directory.path(), &cost).expect("append");
+        let loaded = load_turn_costs(directory.path()).expect("reload");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].operation_id, "op-cost-1");
+        let queried = query_turn_cost(directory.path(), "session-fixture", 2)
+            .expect("query")
+            .expect("found");
+        assert_eq!(queried.total_tokens, 15);
+        assert!(
+            query_turn_cost(directory.path(), "session-fixture", 3)
+                .expect("query")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn cost_estimator_output_is_typed() {
+        let usage = medusa_provider::Usage {
+            input_tokens: 8,
+            output_tokens: 4,
+            ..medusa_provider::Usage::default()
+        };
+        let typed = estimated_cost(&usage);
+        assert_eq!(typed.0, estimated_cost_microusd(&usage));
+        assert_eq!(typed, EstimatedCost(estimated_cost_microusd(&usage)));
+        let zero = estimated_cost(&medusa_provider::Usage::default());
+        assert_eq!(zero, EstimatedCost(0));
     }
 
     #[test]

@@ -613,6 +613,17 @@ fn browser_capability_state(
             };
         }
     };
+    // Re-resolve the admitted route now: a hostname that was public at
+    // admission may rebind to private space by probe time. This is defense in
+    // depth only -- `medusa-browserd --check` below remains the authoritative
+    // readiness gate, and DNS can still change between this check and use
+    // (documented TOCTOU in verification_route).
+    if let Err(error) = route.resolve_probe_targets() {
+        return CapabilityState {
+            available: false,
+            detail: format!("browser verification route failed DNS re-validation: {error}"),
+        };
+    }
     if !probe.available(program, &["--check"]) {
         return CapabilityState {
             available: false,
@@ -1479,6 +1490,21 @@ mod tests {
             )
             .available
         );
+    }
+
+    #[test]
+    fn unresolvable_verification_hostnames_fail_closed_at_probe_time() {
+        // Admitted at parse time (public shape) but refused once probe-time
+        // DNS resolution fails; `.invalid` never resolves, so this is
+        // hermetic. `medusa-browserd --check` stays authoritative for the
+        // success path.
+        let state = browser_capability_state(
+            &configured_browser(),
+            Some("https://medusa-unresolvable.invalid/verify"),
+            &browser_probe(),
+        );
+        assert!(!state.available);
+        assert!(state.detail.contains("DNS re-validation"));
     }
 
     #[test]

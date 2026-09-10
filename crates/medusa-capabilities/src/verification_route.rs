@@ -3,10 +3,22 @@
 //! `medusa-browserd --check` remains authoritative for DNS resolution and
 //! production network policy. These checks reject malformed or obviously unsafe
 //! routes before capability discovery attempts that readiness probe.
+//!
+//! DNS re-validation at probe time is defense in depth: an admitted hostname
+//! may rebind to private space between admission and use. Call
+//! [`VerificationRoute::resolve_probe_targets`] after [`VerificationRoute::parse`]
+//! and treat failures as unavailable.
+//!
+//! Residual TOCTOU: DNS can change again between this re-validation and the
+//! actual connection. The browserd proxy narrows the window by re-resolving
+//! per connection (`resolve_public_target`), but a hostile DNS operator can
+//! still race the check. The authoritative mitigation is the browserd
+//! sidecar's per-connection resolution plus its `--check` readiness gate, not
+//! this admission-time snapshot.
 
 use std::{
     fmt,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
 };
 
 use sha2::{Digest, Sha256};
@@ -16,6 +28,8 @@ pub const VERIFY_URL_ENV: &str = "MEDUSA_BROWSER_VERIFY_URL";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationRoute {
     normalized: String,
+    host: String,
+    port: u16,
 }
 
 impl VerificationRoute {
@@ -78,7 +92,12 @@ impl VerificationRoute {
         } else {
             normalized.push_str(suffix);
         }
-        Ok(Self { normalized })
+        let default_port = if scheme == "http" { 80 } else { 443 };
+        Ok(Self {
+            normalized,
+            host: authority.host,
+            port: port.unwrap_or(default_port),
+        })
     }
 
     #[must_use]
@@ -91,6 +110,79 @@ impl VerificationRoute {
         let digest = Sha256::digest(self.normalized().as_bytes());
         format!("sha256:{}", hex::encode(digest))
     }
+
+    /// Admitted host plus the port a probe-time connection would use.
+    #[must_use]
+    pub fn host_and_port(&self) -> (&str, u16) {
+        (&self.host, self.port)
+    }
+
+    /// Resolves the admitted route at probe time and re-validates the result.
+    ///
+    /// Hostnames admitted by [`VerificationRoute::parse`] are not resolved at
+    /// admission, so a name that was public then may rebind to private space
+    /// by probe time. Loopback admissions and IP literals carry no DNS risk
+    /// and resolve trivially. `medusa-browserd --check` remains the
+    /// authoritative readiness gate; see the module docs for the residual
+    /// TOCTOU.
+    pub fn resolve_probe_targets(&self) -> Result<Vec<SocketAddr>, VerificationRouteError> {
+        self.resolve_probe_targets_with(|host, port| {
+            (host, port)
+                .to_socket_addrs()
+                .map(|addresses| addresses.collect::<Vec<_>>())
+                .map_err(|error| {
+                    format!("could not resolve verification route host {host}: {error}")
+                })
+        })
+    }
+
+    pub(crate) fn resolve_probe_targets_with(
+        &self,
+        resolver: impl FnOnce(&str, u16) -> Result<Vec<SocketAddr>, String>,
+    ) -> Result<Vec<SocketAddr>, VerificationRouteError> {
+        if self.host.eq_ignore_ascii_case("localhost") {
+            return Ok(Vec::new());
+        }
+        let addresses = if let Ok(address) = self.host.parse::<IpAddr>() {
+            let normalized = normalize_ip(address);
+            if normalized.is_loopback() {
+                // Loopback literals are pinned to loopback per connection by
+                // the browserd proxy; there is no DNS to rebind.
+                return Ok(vec![SocketAddr::new(normalized, self.port)]);
+            }
+            vec![SocketAddr::new(normalized, self.port)]
+        } else {
+            let (host, port) = self.host_and_port();
+            resolver(host, port).map_err(VerificationRouteError::Resolution)?
+        };
+        validate_probe_time_addresses(&addresses)?;
+        Ok(addresses)
+    }
+}
+
+/// Rejects probe-time resolutions that no longer land in public space.
+///
+/// Every resolved address must be public; a single private/loopback/link-local
+/// address fails the whole route closed because DNS rebinding typically poisons
+/// only a subset of answers.
+pub fn validate_probe_time_addresses(
+    addresses: &[SocketAddr],
+) -> Result<(), VerificationRouteError> {
+    if addresses.is_empty() {
+        return Err(VerificationRouteError::Resolution(
+            "verification route resolved to no addresses".to_owned(),
+        ));
+    }
+    if addresses
+        .iter()
+        .any(|address| !is_public_ip(normalize_ip(address.ip())))
+    {
+        return Err(VerificationRouteError::Resolution(
+            "verification route DNS currently resolves to non-public space; refusing possible rebinding"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +196,8 @@ pub enum VerificationRouteError {
     InvalidPort,
     DisallowedPort,
     DisallowedOrigin,
+    /// Probe-time DNS resolution failed or no longer lands in public space.
+    Resolution(String),
 }
 
 impl fmt::Display for VerificationRouteError {
@@ -135,6 +229,10 @@ impl fmt::Display for VerificationRouteError {
             Self::DisallowedOrigin => write!(
                 formatter,
                 "{VERIFY_URL_ENV} targets a disallowed local or private origin"
+            ),
+            Self::Resolution(reason) => write!(
+                formatter,
+                "{VERIFY_URL_ENV} failed probe-time DNS re-validation: {reason}"
             ),
         }
     }
@@ -291,5 +389,67 @@ mod tests {
             VerificationRoute::parse("http://localhost:4173/app?token=secret").expect("route");
         assert_eq!(route.safe_fingerprint(), route.safe_fingerprint());
         assert!(!route.safe_fingerprint().contains("secret"));
+    }
+
+    #[test]
+    fn probe_time_revalidation_rejects_private_rebinding() {
+        use std::net::SocketAddr;
+
+        let public: SocketAddr = "8.8.8.8:443".parse().expect("public");
+        assert!(validate_probe_time_addresses(&[public]).is_ok());
+        for bad in [
+            "127.0.0.1:443",
+            "10.0.0.1:443",
+            "169.254.1.1:443",
+            "[::1]:443",
+            "[fc00::1]:443",
+        ] {
+            let address: SocketAddr = bad.parse().expect("test address");
+            assert!(
+                validate_probe_time_addresses(&[public, address]).is_err(),
+                "{bad} must fail a mixed resolution closed"
+            );
+        }
+        assert!(validate_probe_time_addresses(&[]).is_err());
+    }
+
+    #[test]
+    fn admitted_hostnames_are_resolved_and_revalidated_at_probe_time() {
+        let route = VerificationRoute::parse("https://example.com/verify").expect("route");
+        assert_eq!(route.host_and_port(), ("example.com", 443));
+        // Public resolution stays admitted.
+        let admitted = route
+            .resolve_probe_targets_with(|host, port| {
+                assert_eq!(host, "example.com");
+                assert_eq!(port, 443);
+                Ok(vec!["8.8.8.8:443".parse().expect("public")])
+            })
+            .expect("public resolution");
+        assert_eq!(admitted.len(), 1);
+        // Rebinding to private space is refused.
+        let error = route
+            .resolve_probe_targets_with(|_, port| {
+                Ok(vec![
+                    "8.8.8.8:443".parse().expect("public"),
+                    SocketAddr::new("10.0.0.1".parse().expect("private"), port),
+                ])
+            })
+            .expect_err("private rebinding must be refused");
+        assert!(matches!(error, VerificationRouteError::Resolution(_)));
+        // Resolution failure fails closed.
+        assert!(matches!(
+            route.resolve_probe_targets_with(|_, _| Err("dns down".to_owned())),
+            Err(VerificationRouteError::Resolution(_))
+        ));
+        // Loopback admissions carry no DNS risk.
+        let loopback = VerificationRoute::parse("http://localhost:4173/app").expect("loopback");
+        assert!(
+            loopback
+                .resolve_probe_targets_with(|_, _| Err("must not resolve".to_owned()))
+                .expect("loopback")
+                .is_empty()
+        );
+        let literal = VerificationRoute::parse("http://127.0.0.1:4173/app").expect("literal");
+        assert_eq!(literal.resolve_probe_targets().expect("literal").len(), 1);
     }
 }

@@ -12,7 +12,9 @@ pub mod service;
 pub mod store;
 
 pub use action::{AuthorizedRecoveryAction, RecoveryActionRejection, RecoveryActionRequest};
-pub use audit::{RecoveryActionOutcome, RecoveryAuditRecord, RecoveryPreflightEvidence};
+pub use audit::{
+    RecoveryActionOutcome, RecoveryAuditRecord, RecoveryPreflightEvidence, idempotency_key,
+};
 pub use legacy::*;
 pub use preflight::{
     RecoveryPreflightError, RecoveryPreflightReport, RepositoryFileState, RepositorySnapshot,

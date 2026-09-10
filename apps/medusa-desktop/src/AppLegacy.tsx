@@ -1882,7 +1882,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                     key={webArtifact.path}
                     title={webArtifact.title}
                     src={webArtifactPreviewUrl(webArtifact.path)}
-                    sandbox="allow-forms allow-modals allow-popups allow-presentation allow-scripts"
+                    sandbox="allow-forms allow-presentation allow-scripts"
                   />
                 </div>
               </div>

@@ -535,6 +535,9 @@ fn adapt_event(
             None,
         ),
         EventPayload::FileTransactionCommitted { .. }
+        | EventPayload::FileTransactionStarted { .. }
+        | EventPayload::FileTransactionProgress { .. }
+        | EventPayload::FileTransactionRolledBack { .. }
         | EventPayload::CheckpointCreated { .. }
         | EventPayload::CheckpointRestoreRequested { .. } => (
             ProvenanceSource::Artifact,

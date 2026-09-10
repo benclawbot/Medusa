@@ -168,6 +168,10 @@ impl TimeTravelStore {
             .entry(snapshot.execution_id.clone())
             .or_default()
             .entry(snapshot.sequence)
+            .and_modify(|entry| {
+                entry.sequence = snapshot.sequence;
+                entry.snapshot_fingerprint = fingerprint.clone();
+            })
             .or_insert_with(|| SnapshotIndexEntry {
                 sequence: snapshot.sequence,
                 snapshot_fingerprint: fingerprint.clone(),
@@ -259,20 +263,25 @@ impl TimeTravelStore {
             .copied()
             .filter(|sequence| *sequence < retain_from_sequence)
             .collect();
-        let retained_snapshots: BTreeSet<String> = entries
-            .iter()
-            .filter(|(sequence, _)| **sequence >= retain_from_sequence)
-            .map(|(_, entry)| entry.snapshot_fingerprint.clone())
-            .collect();
-        let retained_deltas: BTreeSet<String> = entries
-            .iter()
-            .filter(|(sequence, _)| **sequence >= retain_from_sequence)
-            .flat_map(|(_, entry)| entry.delta_fingerprints.iter().cloned())
-            .collect();
         let removed = removable.len();
         for sequence in removable {
             entries.remove(&sequence);
         }
+        // Retained fingerprints must be unioned across ALL executions: the
+        // snapshots/deltas maps are global, so retaining only the target
+        // execution's fingerprints would delete other executions' history.
+        let retained_snapshots: BTreeSet<String> = self
+            .index
+            .values()
+            .flat_map(|entries| entries.values())
+            .map(|entry| entry.snapshot_fingerprint.clone())
+            .collect();
+        let retained_deltas: BTreeSet<String> = self
+            .index
+            .values()
+            .flat_map(|entries| entries.values())
+            .flat_map(|entry| entry.delta_fingerprints.iter().cloned())
+            .collect();
         self.snapshots
             .retain(|fingerprint, _| retained_snapshots.contains(fingerprint));
         self.deltas
@@ -403,5 +412,56 @@ mod tests {
         assert_eq!(store.garbage_collect("exec-1", 5).unwrap(), 1);
         assert!(store.restore("exec-1", 1).is_err());
         assert_eq!(store.restore("exec-1", 5).unwrap().sequence, 5);
+    }
+
+    #[test]
+    fn garbage_collection_unions_retained_fingerprints_across_executions() {
+        fn other_state(sequence: u64, pairs: &[(&str, &str)]) -> ExecutionState {
+            ExecutionState {
+                execution_id: "exec-2".into(),
+                sequence,
+                values: pairs
+                    .iter()
+                    .map(|(key, value)| ((*key).into(), (*value).into()))
+                    .collect(),
+            }
+        }
+
+        let mut store = TimeTravelStore::default();
+        store
+            .insert_snapshot(FullSnapshot::new(state(1, &[("phase", "created")])).unwrap())
+            .unwrap();
+        store
+            .insert_snapshot(FullSnapshot::new(other_state(1, &[("phase", "other")])).unwrap())
+            .unwrap();
+        // Collecting exec-1 must not delete exec-2 history: the snapshot and
+        // delta maps are global across executions.
+        assert_eq!(store.garbage_collect("exec-1", 2).unwrap(), 1);
+        assert_eq!(
+            store.restore("exec-2", 1).unwrap().values.get("phase"),
+            Some(&"other".to_owned())
+        );
+    }
+
+    #[test]
+    fn reinserted_snapshot_overwrites_index_entry() {
+        let mut store = TimeTravelStore::default();
+        store
+            .insert_snapshot(FullSnapshot::new(state(1, &[("phase", "created")])).unwrap())
+            .unwrap();
+        let updated =
+            FullSnapshot::new(state(1, &[("phase", "executing"), ("worker", "a")])).unwrap();
+        let fingerprint = store.insert_snapshot(updated).unwrap();
+        let entry = store
+            .index
+            .get("exec-1")
+            .expect("index")
+            .get(&1)
+            .expect("entry");
+        assert_eq!(entry.snapshot_fingerprint, fingerprint);
+        assert_eq!(
+            store.restore("exec-1", 1).unwrap().values.get("phase"),
+            Some(&"executing".to_owned())
+        );
     }
 }

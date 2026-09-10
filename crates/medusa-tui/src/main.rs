@@ -21,6 +21,9 @@ struct Args {
     resume: Option<String>,
     #[arg(long)]
     r#continue: bool,
+    /// Start a fresh interactive session, ignoring all durable session state.
+    #[arg(long, conflicts_with_all = ["continue", "resume"])]
+    fresh: bool,
     #[command(subcommand)]
     command: Option<CommandKind>,
 }
@@ -45,6 +48,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     options.initial_prompt = args.prompt;
     options.resume_session = args.resume;
     options.continue_latest = args.r#continue;
+    options.fresh = args.fresh;
     let _ = run(options)?;
     Ok(())
 }

@@ -5,6 +5,11 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -96,6 +101,18 @@ impl WorkerManager {
     /// Returns the primary repository HEAD used as a worktree integration boundary.
     pub fn repository_head(&self) -> MedusaResult<String> {
         git_stdout(&self.repo, &["rev-parse", "HEAD"])
+    }
+
+    /// Inter-process lock file serializing cherry-pick batches into the primary
+    /// repository. Lives under `.git/` (or the worktree root for linked
+    /// checkouts) so the lock itself never dirties the worktree.
+    fn integration_lock_path(&self) -> PathBuf {
+        let git_dir = self.repo.join(".git");
+        if git_dir.is_dir() {
+            git_dir.join("medusa-integrate.lock")
+        } else {
+            self.worktree_root.join(".medusa-integrate.lock")
+        }
     }
 
     /// Fails closed unless the primary repository has no tracked or untracked edits.
@@ -296,22 +313,111 @@ impl WorkerManager {
         &self,
         assignments: Vec<(Worker, DelegatedTask)>,
     ) -> MedusaResult<Vec<Worker>> {
-        let handles = assignments
+        self.delegate_parallel_bounded(assignments, ParallelDelegateOptions::default())
+    }
+
+    /// Bounded variant: at most `max_parallel` worker threads run at once, each
+    /// task is subject to `task_timeout`, and `cancel` aborts waiting early.
+    /// Every spawned handle is joined (no detached worker threads) and all
+    /// per-worker failures are aggregated into the returned error.
+    pub fn delegate_parallel_bounded(
+        &self,
+        assignments: Vec<(Worker, DelegatedTask)>,
+        options: ParallelDelegateOptions,
+    ) -> MedusaResult<Vec<Worker>> {
+        const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+        let max_parallel = options.max_parallel.max(1);
+        let total = assignments.len();
+        let mut ordered: Vec<Option<Worker>> = (0..total).map(|_| None).collect();
+        let mut failures: Vec<String> = Vec::new();
+        let mut handles: Vec<(usize, String, thread::JoinHandle<()>)> = Vec::new();
+
+        for wave in assignments
             .into_iter()
-            .map(|(worker, task)| thread::spawn(move || execute_worker(worker, task)))
-            .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .map(|handle| {
-                handle.join().map_err(|_| {
-                    MedusaError::new(
-                        ErrorCode::InternalInvariant,
-                        ErrorCategory::Internal,
-                        "worker thread panicked",
-                    )
-                })?
-            })
-            .collect()
+            .enumerate()
+            .collect::<Vec<_>>()
+            .chunks(max_parallel)
+        {
+            if options.cancelled() {
+                for (_index, (worker, _)) in wave {
+                    failures.push(format!("worker {} cancelled before start", worker.id));
+                }
+                continue;
+            }
+            // Spawn the wave; results travel over a channel so one hung worker
+            // cannot block collection of the rest.
+            let mut waiting: Vec<(
+                usize,
+                String,
+                std::time::Instant,
+                mpsc::Receiver<MedusaResult<Worker>>,
+            )> = Vec::with_capacity(wave.len());
+            for (index, (worker, task)) in wave {
+                let worker_id = worker.id.clone();
+                let (sender, receiver) = mpsc::channel();
+                let started = std::time::Instant::now();
+                let thread_worker = worker.clone();
+                let thread_task = task.clone();
+                let handle = thread::spawn(move || {
+                    let result = execute_worker(thread_worker, thread_task);
+                    let _ = sender.send(result);
+                });
+                handles.push((*index, worker_id.clone(), handle));
+                waiting.push((*index, worker_id, started, receiver));
+            }
+            for (index, worker_id, started, receiver) in waiting {
+                loop {
+                    if options.cancelled() {
+                        failures.push(format!("worker {worker_id} cancelled while waiting"));
+                        break;
+                    }
+                    let elapsed = started.elapsed();
+                    if elapsed >= options.task_timeout {
+                        failures.push(format!(
+                            "worker {worker_id} timed out after {}ms",
+                            options.task_timeout.as_millis()
+                        ));
+                        break;
+                    }
+                    let remaining = options.task_timeout - elapsed;
+                    match receiver.recv_timeout(remaining.min(POLL_INTERVAL)) {
+                        Ok(Ok(worker)) => {
+                            ordered[index] = Some(worker);
+                            break;
+                        }
+                        Ok(Err(error)) => {
+                            failures.push(format!("worker {worker_id} failed: {error}"));
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            failures.push(format!(
+                                "worker {worker_id} thread exited without reporting"
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Join every handle, including timed-out or cancelled stragglers, so no
+        // worker thread is ever detached; panics aggregate as failures.
+        for (_index, worker_id, handle) in handles {
+            if handle.join().is_err() {
+                failures.push(format!("worker {worker_id} thread panicked"));
+            }
+        }
+
+        if !failures.is_empty() {
+            return Err(MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!("parallel delegation failed: {}", failures.join("; ")),
+            ));
+        }
+        Ok(ordered.into_iter().map(Option::unwrap).collect())
     }
 
     /// Cherry-picks successful worker commits in stable worker-ID order.
@@ -323,6 +429,10 @@ impl WorkerManager {
         workers: &[Worker],
     ) -> MedusaResult<Vec<IntegrationReceipt>> {
         ensure_clean(&self.repo)?;
+        // Serialize cherry-pick batches across processes: without an
+        // inter-process lock, two managers integrating into the same primary
+        // repository interleave cherry-picks and corrupt the batch.
+        let _integration_lock = IntegrationLock::acquire(self.integration_lock_path())?;
         let mut ordered = workers
             .iter()
             .filter(|worker| worker.state == WorkerState::Succeeded)
@@ -366,18 +476,16 @@ impl WorkerManager {
         let mut receipts = Vec::with_capacity(prepared.len());
         for (worker, commit, changed_paths, changed_components) in prepared {
             if let Err(error) = run_git(&self.repo, &["cherry-pick", &commit]) {
-                let _ = run_git(&self.repo, &["cherry-pick", "--abort"]);
-                let rollback = run_git(&self.repo, &["reset", "--hard", &base_head]);
-                return match rollback {
-                    Ok(()) => Err(error),
-                    Err(rollback_error) => Err(MedusaError::new(
-                        ErrorCode::InternalInvariant,
-                        ErrorCategory::Internal,
-                        format!(
-                            "integration failed and rollback also failed: {error}; rollback={rollback_error}"
-                        ),
-                    )),
-                };
+                // Surface abort/rollback failures instead of dropping them: a
+                // failed abort leaves the sequencer dirty and must be reported.
+                let abort_error = run_git(&self.repo, &["cherry-pick", "--abort"]).err();
+                let rollback_error = run_git(&self.repo, &["reset", "--hard", &base_head]).err();
+                return Err(integration_failure(
+                    &worker.id,
+                    error,
+                    abort_error,
+                    rollback_error,
+                ));
             }
             receipts.push(IntegrationReceipt {
                 worker_id: worker.id.clone(),
@@ -653,6 +761,35 @@ impl WorkerManager {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+}
+
+/// Bounds, timeout, and cooperative cancellation for parallel delegation.
+#[derive(Clone, Debug)]
+pub struct ParallelDelegateOptions {
+    pub max_parallel: usize,
+    pub task_timeout: Duration,
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Default for ParallelDelegateOptions {
+    fn default() -> Self {
+        Self {
+            max_parallel: thread::available_parallelism()
+                .map(|cores| cores.get())
+                .unwrap_or(4)
+                .max(1),
+            task_timeout: Duration::from_secs(30 * 60),
+            cancel: None,
+        }
+    }
+}
+
+impl ParallelDelegateOptions {
+    fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
     }
 }
 
@@ -948,6 +1085,97 @@ fn invalid(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Validation,
         message,
     )
+}
+
+/// Combines a cherry-pick failure with its cleanup outcomes so abort and
+/// rollback errors are surfaced instead of silently dropped.
+fn integration_failure(
+    worker_id: &str,
+    cherry_pick_error: MedusaError,
+    abort_error: Option<MedusaError>,
+    rollback_error: Option<MedusaError>,
+) -> MedusaError {
+    let mut message = format!("integration of worker {worker_id} failed: {cherry_pick_error}");
+    if let Some(abort_error) = abort_error {
+        message.push_str(&format!("; cherry-pick abort also failed: {abort_error}"));
+    }
+    match rollback_error {
+        Some(rollback_error) => MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("{message}; rollback also failed: {rollback_error}"),
+        ),
+        None => MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            message,
+        ),
+    }
+}
+
+/// Inter-process mutual exclusion for cherry-pick batches, implemented as an
+/// atomically created lock file. Released (file removed) on drop.
+struct IntegrationLock {
+    path: PathBuf,
+}
+
+impl IntegrationLock {
+    fn acquire(path: PathBuf) -> MedusaResult<Self> {
+        for _ in 0..300 {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    use std::io::Write as _;
+                    let _ = writeln!(file, "pid={}", std::process::id());
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!(
+                "another worker integration is in progress (locked at {})",
+                path.display()
+            ),
+        ))
+    }
+
+    #[cfg(test)]
+    fn try_acquire_once(path: PathBuf) -> MedusaResult<Self> {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write as _;
+                let _ = writeln!(file, "pid={}", std::process::id());
+                Ok(Self { path })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(MedusaError::new(
+                    ErrorCode::PolicyDenied,
+                    ErrorCategory::Policy,
+                    format!("integration lock held at {}", path.display()),
+                ))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+impl Drop for IntegrationLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn path_text(path: &Path) -> MedusaResult<&str> {
@@ -1439,5 +1667,133 @@ mod tests {
         manager.cleanup(&[worker]).expect("cleanup");
         assert!(!worktree.exists());
         assert!(!branch_exists(&repo, &branch).expect("branch removed"));
+    }
+
+    fn failing_task(program: &str) -> DelegatedTask {
+        DelegatedTask {
+            program: program.to_owned(),
+            args: Vec::new(),
+            commit_message: "never commits".to_owned(),
+        }
+    }
+
+    #[test]
+    fn parallel_delegation_aggregates_every_worker_error() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let worker_a = manager.create_worker("agg-a").expect("worker a");
+        let worker_b = manager.create_worker("agg-b").expect("worker b");
+        let id_a = worker_a.id.clone();
+        let id_b = worker_b.id.clone();
+        let error = manager
+            .delegate_parallel_bounded(
+                vec![
+                    (worker_a, failing_task("/nonexistent-medusa-program-a")),
+                    (worker_b, failing_task("/nonexistent-medusa-program-b")),
+                ],
+                ParallelDelegateOptions {
+                    max_parallel: 2,
+                    task_timeout: Duration::from_secs(60),
+                    cancel: None,
+                },
+            )
+            .expect_err("both workers fail");
+        // Old short-circuiting collect() reported only the first error; all
+        // worker failures must be aggregated.
+        let message = error.to_string();
+        assert!(message.contains(&id_a), "missing {id_a} in: {message}");
+        assert!(message.contains(&id_b), "missing {id_b} in: {message}");
+    }
+
+    #[test]
+    fn parallel_delegation_cancel_stops_tasks_before_start() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let worker = manager.create_worker("cancel").expect("worker");
+        let cancel = Arc::new(AtomicBool::new(true));
+        let error = manager
+            .delegate_parallel_bounded(
+                vec![(worker, failing_task("sh"))],
+                ParallelDelegateOptions {
+                    max_parallel: 2,
+                    task_timeout: Duration::from_secs(60),
+                    cancel: Some(cancel),
+                },
+            )
+            .expect_err("cancelled");
+        assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn parallel_delegation_times_out_hung_worker() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let worker = manager.create_worker("slow").expect("worker");
+        let id = worker.id.clone();
+        let error = manager
+            .delegate_parallel_bounded(
+                vec![(
+                    worker,
+                    DelegatedTask {
+                        program: "sh".to_owned(),
+                        args: vec!["-c".to_owned(), "sleep 3".to_owned()],
+                        commit_message: "slow".to_owned(),
+                    },
+                )],
+                ParallelDelegateOptions {
+                    max_parallel: 1,
+                    task_timeout: Duration::from_millis(200),
+                    cancel: None,
+                },
+            )
+            .expect_err("hung worker times out");
+        let message = error.to_string();
+        assert!(message.contains(&id), "missing {id} in: {message}");
+        assert!(
+            message.contains("timed out"),
+            "missing timeout in: {message}"
+        );
+    }
+
+    #[test]
+    fn integration_lock_is_exclusive_and_released_on_drop() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("medusa-integrate.lock");
+        let held = IntegrationLock::try_acquire_once(path.clone()).expect("acquire");
+        assert!(IntegrationLock::try_acquire_once(path.clone()).is_err());
+        drop(held);
+        assert!(!path.exists());
+        IntegrationLock::try_acquire_once(path.clone()).expect("reacquire after drop");
+    }
+
+    #[test]
+    fn integration_failure_surfaces_abort_and_rollback_errors() {
+        let cherry_pick = invalid("cherry-pick conflict");
+        let combined = integration_failure(
+            "w-1",
+            cherry_pick,
+            Some(invalid("no cherry-pick in progress")),
+            Some(invalid("reset refused")),
+        );
+        let message = combined.to_string();
+        assert!(message.contains("w-1"), "missing worker in: {message}");
+        assert!(
+            message.contains("cherry-pick conflict"),
+            "missing cause in: {message}"
+        );
+        assert!(
+            message.contains("abort also failed"),
+            "missing abort in: {message}"
+        );
+        assert!(
+            message.contains("rollback also failed"),
+            "missing rollback in: {message}"
+        );
+
+        let simple = integration_failure("w-2", invalid("conflict"), None, None);
+        let simple_message = simple.to_string();
+        assert!(simple_message.contains("conflict"));
+        assert!(!simple_message.contains("abort also failed"));
     }
 }

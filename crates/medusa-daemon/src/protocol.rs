@@ -1,3 +1,4 @@
+use medusa_core::ErrorCategory;
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -7,6 +8,19 @@ use crate::{
 };
 
 pub const DAEMON_PROTOCOL_VERSION: u16 = 2;
+
+/// Compatibility rule for the daemon job channel.
+///
+/// The job channel negotiates with a single flat `u16` version, so it
+/// requires an exact match. This differs deliberately from the frontend
+/// command/event channel, where [`medusa_protocol::ProtocolVersion::accepts`]
+/// implements the same-major, older-minor policy documented in
+/// `docs/PROTOCOL-VERSIONING.md`. The flat job version has no minor component
+/// to negotiate, so any bump is treated as incompatible.
+#[must_use]
+pub const fn job_protocol_compatible(peer: u16) -> bool {
+    peer == DAEMON_PROTOCOL_VERSION
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -142,7 +156,38 @@ pub enum Response {
     Error {
         code: String,
         message: String,
+        /// Machine-readable failure category carried across the socket so
+        /// callers can classify without scraping message text. Defaults to
+        /// `Internal` when talking to a daemon that predates this field.
+        #[serde(default = "default_response_error_category")]
+        category: ErrorCategory,
+        /// Whether retrying materially identical input may succeed. Defaults
+        /// to `false` for responses written before this field existed.
+        #[serde(default)]
+        retryable: bool,
     },
+}
+
+fn default_response_error_category() -> ErrorCategory {
+    ErrorCategory::Internal
+}
+
+impl Response {
+    /// Builds a categorized daemon error response.
+    #[must_use]
+    pub fn error(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        category: ErrorCategory,
+        retryable: bool,
+    ) -> Self {
+        Self::Error {
+            code: code.into(),
+            message: message.into(),
+            category,
+            retryable,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -170,5 +215,53 @@ mod tests {
         };
         let debug = format!("{upload:?}");
         assert!(!debug.contains("dG9wLXNlY3JldA=="));
+    }
+
+    #[test]
+    fn job_channel_requires_an_exact_version_match() {
+        // The flat u16 job channel has no minor component to negotiate, so
+        // any bump is incompatible. This intentionally differs from the
+        // frontend same-major policy enforced by
+        // `ProtocolVersion::accepts`.
+        assert!(job_protocol_compatible(DAEMON_PROTOCOL_VERSION));
+        assert!(!job_protocol_compatible(DAEMON_PROTOCOL_VERSION + 1));
+        assert!(!job_protocol_compatible(
+            DAEMON_PROTOCOL_VERSION.saturating_sub(1)
+        ));
+    }
+
+    #[test]
+    fn error_response_carries_category_and_retryable() {
+        let response =
+            Response::error("daemon_busy", "retry later", ErrorCategory::Transient, true);
+        let encoded = serde_json::to_string(&response).expect("serialize");
+        let decoded: Response = serde_json::from_str(&encoded).expect("deserialize");
+        assert_eq!(decoded, response);
+        assert!(matches!(
+            decoded,
+            Response::Error {
+                category: ErrorCategory::Transient,
+                retryable: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn legacy_error_response_without_category_defaults_safely() {
+        let legacy = serde_json::json!({
+            "type": "error",
+            "code": "daemon_busy",
+            "message": "retry later",
+        });
+        let decoded: Response = serde_json::from_value(legacy).expect("legacy error decodes");
+        assert!(matches!(
+            decoded,
+            Response::Error {
+                category: ErrorCategory::Internal,
+                retryable: false,
+                ..
+            }
+        ));
     }
 }

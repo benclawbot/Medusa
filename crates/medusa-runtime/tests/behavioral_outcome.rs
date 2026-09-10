@@ -83,6 +83,7 @@ fn verified_success_uses_durable_route_and_receipt_authority() {
         EventPayload::FileTransactionCommitted {
             paths: vec!["src/lib.rs".to_owned()],
             rollback_ref: "rollback-1".to_owned(),
+            operation_id: None,
         },
         EventPayload::VerificationStarted {
             commands: vec!["cargo test".to_owned()],
@@ -147,6 +148,7 @@ fn task_aware_cohorts_keep_unknown_cost_and_detect_sustained_success_drift() {
         EventPayload::FileTransactionCommitted {
             paths: vec!["src/lib.rs".to_owned()],
             rollback_ref: "rollback".to_owned(),
+            operation_id: None,
         },
         EventPayload::VerificationCompleted {
             passed: true,
@@ -163,6 +165,7 @@ fn task_aware_cohorts_keep_unknown_cost_and_detect_sustained_success_drift() {
         EventPayload::FileTransactionCommitted {
             paths: vec!["src/lib.rs".to_owned()],
             rollback_ref: "rollback".to_owned(),
+            operation_id: None,
         },
         EventPayload::VerificationCompleted {
             passed: false,
@@ -246,6 +249,7 @@ fn only_the_execution_preceding_mutation_gets_correctness_contribution() {
         EventPayload::FileTransactionCommitted {
             paths: vec!["src/lib.rs".to_owned()],
             rollback_ref: "rollback".to_owned(),
+            operation_id: None,
         },
         EventPayload::VerificationCompleted {
             passed: true,
@@ -313,6 +317,7 @@ fn failed_verification_then_repair_preserves_first_pass_failure() {
         EventPayload::FileTransactionCommitted {
             paths: vec!["src/a.txt".to_owned()],
             rollback_ref: "rollback-1".to_owned(),
+            operation_id: None,
         },
         EventPayload::VerificationStarted {
             commands: vec!["verify".to_owned()],
@@ -324,6 +329,7 @@ fn failed_verification_then_repair_preserves_first_pass_failure() {
         EventPayload::FileTransactionCommitted {
             paths: vec!["src/b.txt".to_owned(), "src/c.txt".to_owned()],
             rollback_ref: "rollback-2".to_owned(),
+            operation_id: None,
         },
         EventPayload::VerificationStarted {
             commands: vec!["verify".to_owned()],

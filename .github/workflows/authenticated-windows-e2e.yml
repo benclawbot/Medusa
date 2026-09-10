@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       prompt:
-        description: Safe read-only prompt sent through the existing ChatGPT OAuth session
+        description: Fixed read-only prompt sent through the existing ChatGPT OAuth session
         required: false
+        type: choice
         default: Reply with the exact text MEDUSA_OAUTH_E2E_OK and do not modify files.
+        options:
+          - Reply with the exact text MEDUSA_OAUTH_E2E_OK and do not modify files.
+          - List the files in the current directory and reply with the exact text MEDUSA_OAUTH_E2E_OK. Do not modify files.
       skip_desktop_launch:
         description: Build and test desktop without launching the native window
         required: false
@@ -23,6 +27,13 @@ concurrency:
 jobs:
   windows-oauth-e2e:
     name: TUI and Windows app with ChatGPT OAuth
+    # RISK: this job drives an authenticated OAuth session on a PERSISTENT
+    # self-hosted Windows runner. A malicious or compromised prompt would execute
+    # with the runner's credentials and persist across runs, so the prompt input
+    # above is a fixed choice allowlist (never free-form), and dispatch is gated
+    # by the chatgpt-oauth-e2e environment approvers. Prefer ephemeral
+    # self-hosted runners here; until then, keep this runner dedicated to this
+    # workflow and review dispatched prompts in the run history.
     runs-on: [self-hosted, Windows, X64, medusa-oauth]
     environment: chatgpt-oauth-e2e
     timeout-minutes: 90

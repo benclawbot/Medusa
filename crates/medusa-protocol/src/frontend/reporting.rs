@@ -231,6 +231,7 @@ fn apply_event(
         EventPayload::FileTransactionCommitted {
             paths,
             rollback_ref,
+            ..
         } => {
             upsert(
                 snapshot,
@@ -691,6 +692,7 @@ mod tests {
                 EventPayload::FileTransactionCommitted {
                     paths: vec!["src/lib.rs".to_owned()],
                     rollback_ref: "rollback-1".to_owned(),
+                    operation_id: None,
                 },
                 EventPayload::VerificationStarted {
                     commands: vec!["cargo test".to_owned()],
@@ -779,6 +781,7 @@ mod tests {
             EventPayload::FileTransactionCommitted {
                 paths: vec!["src/main.rs".to_owned()],
                 rollback_ref: "rollback-1".to_owned(),
+                operation_id: None,
             },
             EventPayload::VerificationCompleted {
                 passed: true,

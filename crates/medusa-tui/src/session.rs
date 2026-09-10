@@ -27,6 +27,11 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         ));
     }
 
+    if options.fresh {
+        // A fresh session ignores all durable session state, including any
+        // saved composer draft for the default key.
+        let _ = crate::draft_store::DraftStore::for_repo(&options.repo).delete("current");
+    }
     let clipboard: Arc<dyn ClipboardService> = NativeClipboard::new()
         .map(|service| Arc::new(service) as Arc<dyn ClipboardService>)
         .unwrap_or_else(|_| Arc::new(UnsupportedClipboard));
@@ -175,7 +180,7 @@ pub(super) fn run_loop(
             if let Some(action) =
                 session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
             {
-                if handle_action(app, runtime, action)? {
+                if handle_action(app, runtime, action, options.fresh)? {
                     return Ok(ExitReason::UserQuit);
                 }
                 continue;
@@ -194,7 +199,7 @@ pub(super) fn run_loop(
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
-            if handle_app_action(app, runtime, terminal_event)? {
+            if handle_app_action(app, runtime, terminal_event, options.fresh)? {
                 return Ok(ExitReason::UserQuit);
             }
         }
@@ -258,7 +263,7 @@ pub(super) fn run_loop(
             if let Some(action) =
                 session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
             {
-                if handle_action(app, runtime, action)? {
+                if handle_action(app, runtime, action, options.fresh)? {
                     return Ok(ExitReason::UserQuit);
                 }
                 continue;
@@ -283,7 +288,7 @@ pub(super) fn run_loop(
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
-            if handle_app_action(app, runtime, terminal_event)? {
+            if handle_app_action(app, runtime, terminal_event, options.fresh)? {
                 return Ok(ExitReason::UserQuit);
             }
         }
@@ -418,15 +423,17 @@ pub(super) fn handle_app_action(
     app: &mut AppState,
     runtime: &mut RuntimeController,
     terminal_event: Event,
+    fresh: bool,
 ) -> io::Result<bool> {
     let action = app.handle_event(terminal_event).map_err(app_error)?;
-    handle_action(app, runtime, action)
+    handle_action(app, runtime, action, fresh)
 }
 
 fn handle_action(
     app: &mut AppState,
     runtime: &mut RuntimeController,
     action: AppAction,
+    fresh: bool,
 ) -> io::Result<bool> {
     match action {
         AppAction::Quit => Ok(true),
@@ -443,7 +450,7 @@ fn handle_action(
             Ok(false)
         }
         AppAction::Submit(draft) => {
-            if should_resume_latest(app, &draft) {
+            if should_auto_resume(fresh, app, &draft) {
                 match RuntimeController::start_continue_latest(app.repository().to_path_buf()) {
                     Ok(resumed) => {
                         *runtime = resumed;
@@ -533,6 +540,10 @@ fn handle_action(
         }
         AppAction::None | AppAction::Redraw => Ok(false),
     }
+}
+
+fn should_auto_resume(fresh: bool, app: &AppState, draft: &PromptDraft) -> bool {
+    !fresh && should_resume_latest(app, draft)
 }
 
 fn should_resume_latest(app: &AppState, draft: &PromptDraft) -> bool {
@@ -951,6 +962,27 @@ mod tests {
         app.transcript
             .push(TranscriptEntry::Assistant("done".to_owned()));
         assert!(!should_resume_latest(&app, &draft));
+    }
+
+    #[test]
+    fn fresh_session_defaults_off_and_disables_auto_resume() {
+        let options = TuiOptions::for_repo("/tmp/example");
+        assert!(!options.fresh);
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "fresh-intent",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        let draft = PromptDraft {
+            text: "go".to_owned(),
+            ..PromptDraft::default()
+        };
+        app.transcript.push(TranscriptEntry::User(draft.clone()));
+        assert!(should_auto_resume(false, &app, &draft));
+        assert!(!should_auto_resume(true, &app, &draft));
     }
 
     #[test]

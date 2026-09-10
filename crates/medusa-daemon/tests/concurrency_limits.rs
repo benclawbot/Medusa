@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use medusa_core::ErrorCategory;
 use medusa_daemon::{
     DaemonClient, DaemonLimits, DaemonPaths, JobRecord, JobState, Request, Response,
     spawn_with_limits,
@@ -132,12 +133,24 @@ fn bounded_workers_apply_backpressure_and_shutdown_drains_accepted_jobs() {
     );
 
     let (program, args) = delayed_command("rejected", 100);
-    let Response::Error { code, message } = client
+    let Response::Error {
+        code,
+        message,
+        category,
+        retryable,
+    } = client
         .request(Request::Submit { program, args })
         .expect("busy response")
     else {
         panic!("third submission must be rejected");
     };
+    assert_eq!(code, "daemon_busy");
+    assert!(retryable, "busy rejection must permit retry");
+    assert_eq!(
+        category,
+        ErrorCategory::Transient,
+        "busy rejection must carry the transient category"
+    );
     assert_eq!(code, "daemon_busy");
     assert!(message.contains("capacity"));
 

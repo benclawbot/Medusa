@@ -12,6 +12,7 @@ interface DesktopUpdateStatus {
   ready: boolean;
   artifactPublished: boolean;
   upToDate?: boolean;
+  channel?: string | null;
   lastOutcome?: {
     stage: string;
     reason: string;
@@ -139,6 +140,12 @@ export function DesktopUpdateControl() {
         </div>
       )}
 
+      {status?.channel === "release" && (
+        <div className="desktop-update-status" role="status">
+          <span><CheckCircle2 size={14} /> Release-channel install: rolling <code>main</code> builds are not offered here. Update with the verified release installer or <code>medusa update --release</code>.</span>
+        </div>
+      )}
+
       {status?.upToDate && (
         <div className="desktop-update-status" role="status">
           <span><CheckCircle2 size={14} /> Up to date on the checked main revision.</span>
@@ -172,7 +179,7 @@ export function DesktopUpdateControl() {
           <RefreshCw size={14} className={checking ? "spin" : ""} />
           {checking ? "Checking…" : "Check main"}
         </button>
-        <button className="primary-action" onClick={update} disabled={!status?.ready || checking || updating}>
+        <button className="primary-action" onClick={update} disabled={!status?.ready || status?.channel === "release" || checking || updating}>
           <Download size={14} />
           {updating
             ? progress?.phase === "replacing" ? "Closing to update…" : "Updating…"

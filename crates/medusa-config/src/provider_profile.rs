@@ -18,6 +18,13 @@ pub const PROVIDER_PROFILE_KEYS: [&str; 8] = [
     "configured",
 ];
 
+/// Migration marker stamped when `load` normalizes a legacy route.
+///
+/// The marker is persisted into the file on the next `save` (a versioned
+/// record of what was rewritten) and an audit entry is appended to the
+/// sidecar `provider.migrations.jsonl` log.
+pub const LEGACY_ROUTE_MIGRATION_MARKER: &str = "legacy-chatgpt-oauth-minimax-route-v1";
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProviderProfile {
@@ -29,6 +36,12 @@ pub struct ProviderProfile {
     pub auth: String,
     pub base_url: Option<String>,
     pub configured: bool,
+    /// Automatic migration applied at load time, if any. `None` means the
+    /// persisted file already matches the current schema. Managed internally:
+    /// `set_value`/`unset_value` reject this key so operators cannot forge or
+    /// clear it by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration_marker: Option<String>,
 }
 
 impl Default for ProviderProfile {
@@ -42,6 +55,7 @@ impl Default for ProviderProfile {
             auth: "api-key".into(),
             base_url: None,
             configured: false,
+            migration_marker: None,
         }
     }
 }
@@ -151,6 +165,7 @@ impl ProviderProfile {
     }
 
     fn normalize_legacy_route(mut self) -> Self {
+        let before = self.clone();
         if self.connection == "chatgpt-oauth" && self.provider == "openai-oauth" {
             self.base_url = None;
             if self.model == "MiniMax-M3" {
@@ -159,6 +174,9 @@ impl ProviderProfile {
                 self.auth = "api-key".into();
                 self.configured = true;
             }
+        }
+        if self != before {
+            self.migration_marker = Some(LEGACY_ROUTE_MIGRATION_MARKER.to_owned());
         }
         self
     }
@@ -263,6 +281,9 @@ impl ProviderProfileStore {
         fs::rename(&temporary, &self.path)
             .map_err(|error| store_error(format!("replace {}: {error}", self.path.display())))?;
         sync_parent(&self.path);
+        if let Some(marker) = profile.migration_marker.as_deref() {
+            append_migration_audit(&self.path, marker);
+        }
         Ok(())
     }
 
@@ -301,6 +322,38 @@ fn store_error(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Environment,
         message,
     )
+}
+
+/// Appends a migration audit entry to the sidecar `<profile>.migrations.jsonl`
+/// log. Best-effort by design: the profile itself is already durably saved at
+/// this point, so an audit failure is reported on stderr rather than failing
+/// the save or being silently dropped.
+fn append_migration_audit(profile_path: &Path, marker: &str) {
+    use std::io::Write as _;
+
+    let log_path = profile_path.with_extension("migrations.jsonl");
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let entry = format!(
+        "{{\"marker\":\"{marker}\",\"profile\":\"{}\",\"saved_unix_secs\":{timestamp}}}\n",
+        profile_path.display(),
+    );
+    let result = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut file| {
+            file.write_all(entry.as_bytes())?;
+            file.sync_all()
+        });
+    if let Err(error) = result {
+        eprintln!(
+            "medusa: could not append provider migration audit to {}: {error}",
+            log_path.display()
+        );
+    }
 }
 
 fn sync_parent(path: &Path) {
@@ -364,6 +417,36 @@ mod tests {
         assert_eq!(profile.auth, "api-key");
         assert!(profile.base_url.is_none());
         assert!(profile.configured);
+        // The silent normalization must leave a migration record behind.
+        assert_eq!(
+            profile.migration_marker.as_deref(),
+            Some(LEGACY_ROUTE_MIGRATION_MARKER)
+        );
+    }
+
+    #[test]
+    fn save_after_normalize_persists_marker_and_audit_entry() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("provider.toml");
+        fs::write(
+            &path,
+            "connection = 'chatgpt-oauth'\nprovider = 'openai-oauth'\nmodel = 'MiniMax-M3'\nspeed = 'balanced'\nreasoning = 'medium'\nauth = 'none'\nbase_url = 'http://127.0.0.1:10531/v1'\nconfigured = true\n",
+        )
+        .expect("legacy route");
+        let store = ProviderProfileStore::at(&path);
+        let profile = store.load().expect("normalized profile");
+        store.save(&profile).expect("save after normalize");
+
+        let reloaded = store.load().expect("reload");
+        assert_eq!(
+            reloaded.migration_marker.as_deref(),
+            Some(LEGACY_ROUTE_MIGRATION_MARKER)
+        );
+        let saved = fs::read_to_string(&path).expect("read saved profile");
+        assert!(saved.contains(LEGACY_ROUTE_MIGRATION_MARKER));
+        let audit = fs::read_to_string(path.with_extension("migrations.jsonl"))
+            .expect("migration audit log");
+        assert!(audit.contains(LEGACY_ROUTE_MIGRATION_MARKER));
     }
 
     #[test]

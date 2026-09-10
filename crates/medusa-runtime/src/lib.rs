@@ -117,8 +117,8 @@ pub use execution_history::{
     RuntimeContinuityHealth, RuntimeExecutionHealth, RuntimeHistoricalState,
 };
 pub use medusa_agent::{
-    AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
-    UsageProvenance,
+    AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestion as RuntimeQuestion,
+    AgentQuestionItem, AgentQuestionOption, UsageProvenance,
 };
 pub use observer::{
     ObservationMessage, ObservationStage, ObservationVerification, ObservedPlanStep,
@@ -730,8 +730,10 @@ fn dispatch_runtime_events(
         let payload = match controller_event_payload(&event) {
             Ok(payload) => payload,
             Err(error) => {
+                let summary = bounded_summary(&event, repo);
+                write_dead_letter(repo, "serialization", None, &summary, &error.to_string());
                 let _ = frontend_events.send(RuntimeEvent::Failed(format!(
-                    "runtime event was not published because durable serialization failed: {error}"
+                    "runtime event was not published because durable serialization failed: {error}; event={summary}"
                 )));
                 continue;
             }
@@ -745,8 +747,16 @@ fn dispatch_runtime_events(
                 if let Err(error) =
                     record_controller_event(repo, &session_id, Actor::Coordinator, payload)
                 {
+                    let summary = bounded_summary(&event, repo);
+                    write_dead_letter(
+                        repo,
+                        "journal",
+                        Some(session_id.as_str()),
+                        &summary,
+                        &error.to_string(),
+                    );
                     let _ = frontend_events.send(RuntimeEvent::Failed(format!(
-                        "runtime event was not published because its durable record failed: {error}"
+                        "runtime event was not published because its durable record failed: {error}; event={summary}"
                     )));
                     continue;
                 }
@@ -754,9 +764,12 @@ fn dispatch_runtime_events(
                 event.durability(),
                 RuntimeEventDurability::SessionBoundCanonical { .. }
             ) {
+                let summary = bounded_summary(&event, repo);
+                write_dead_letter(repo, "no-session", None, &summary, "no session identity");
                 let _ = frontend_events.send(RuntimeEvent::Failed(
-                    "runtime event was not published because no durable session identity was available"
-                        .to_owned(),
+                    format!(
+                        "runtime event was not published because no durable session identity was available; event={summary}"
+                    ),
                 ));
                 continue;
             }
@@ -840,6 +853,126 @@ fn next_followup_command_id() -> String {
         "followup-{}-{sequence}",
         time::OffsetDateTime::now_utc().unix_timestamp_nanos()
     )
+}
+
+/// Maximum retained dead-letter records before rotation.
+pub const MAX_DEAD_LETTERS: usize = 1_000;
+/// Summary budget for preserved event payloads inside failure records.
+const DEAD_LETTER_SUMMARY_BYTES: usize = 2_000;
+
+/// Path-redacted, length-bounded debug summary of an event. Used inside
+/// synthetic failure records so the original payload survives instead of being
+/// replaced by a bare error string.
+fn bounded_summary(value: &impl std::fmt::Debug, repo: &std::path::Path) -> String {
+    let redacted = medusa_agent::redact_local_paths(&format!("{value:?}"), repo);
+    redacted.chars().take(DEAD_LETTER_SUMMARY_BYTES).collect()
+}
+
+fn dead_letter_path(repo: &std::path::Path) -> std::path::PathBuf {
+    repo.join(".medusa").join("dead-letters.jsonl")
+}
+
+/// Appends one dead-letter record for an unpublished event. Best-effort: I/O
+/// failures are swallowed so the dead-letter journal can never break dispatch.
+fn write_dead_letter(
+    repo: &std::path::Path,
+    kind: &str,
+    session_id: Option<&str>,
+    summary: &str,
+    error: &str,
+) {
+    use std::io::Write as _;
+    let path = dead_letter_path(repo);
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    let record = serde_json::json!({
+        "schema_version": 1,
+        "recorded_unix_ms": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
+        "kind": kind,
+        "session_id": session_id,
+        "event": summary,
+        "error": error,
+    });
+    if serde_json::to_writer(&mut file, &record).is_err() {
+        return;
+    }
+    let _ = file.write_all(b"\n");
+    let _ = file.sync_data();
+    drop(file);
+    let _ = prune_dead_letters(repo);
+}
+
+/// Retention: keeps only the newest dead-letter records.
+fn prune_dead_letters(repo: &std::path::Path) -> Result<usize, RuntimeError> {
+    let path = dead_letter_path(repo);
+    let body = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(RuntimeError::agent(error)),
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.len() <= MAX_DEAD_LETTERS {
+        return Ok(0);
+    }
+    std::fs::write(
+        &path,
+        lines[lines.len() - MAX_DEAD_LETTERS..].join("\n") + "\n",
+    )
+    .map_err(RuntimeError::agent)?;
+    Ok(lines.len() - MAX_DEAD_LETTERS)
+}
+
+/// Projects durable worker-execution progress into frontend runtime events,
+/// carrying the execution/sequence identity so daemon consumers can order and
+/// join them with the session journal.
+pub fn project_worker_progress(
+    repo: &std::path::Path,
+    controller: &medusa_agent::WorkerExecutionController,
+    cursor: &mut u64,
+) -> Vec<RuntimeEvent> {
+    controller
+        .drain_progress(cursor)
+        .into_iter()
+        .map(|event| {
+            let class = event.kind.durable_event_class();
+            let message = medusa_agent::redact_local_paths(&event.message, repo);
+            RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(format!("{}#{}", controller.execution_id(), event.sequence)),
+                kind: RuntimeActivityKind::Progress,
+                title: format!("[{}] {message}", class.label()),
+                details: event.step_id.clone().into_iter().collect(),
+            })
+        })
+        .collect()
+}
+
+/// Records drained worker-execution progress into the session journal.
+/// Returns the number of journal events appended.
+pub fn record_worker_progress(
+    repo: &std::path::Path,
+    session_id: &str,
+    controller: &medusa_agent::WorkerExecutionController,
+    cursor: &mut u64,
+) -> Result<usize, RuntimeError> {
+    let payloads = controller.progress_journal_payloads(*cursor);
+    let count = payloads.len();
+    for payload in payloads {
+        record_controller_event(repo, session_id, Actor::Coordinator, payload)?;
+    }
+    if let Some(last) = controller.progress().last() {
+        *cursor = last.sequence.saturating_add(1);
+    }
+    Ok(count)
 }
 
 fn record_controller_event(
@@ -2796,7 +2929,13 @@ fn run_prompt(
         crate::coordination::production_orchestrator::runtime_context(&execution_plan);
     let tool_policy_context =
         crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;
-    let verification_plan = medusa_tool_control::verification_plan(&draft.text);
+    let keyword_plan = medusa_tool_control::verification_plan(&draft.text);
+    // Explicit tool metadata wins over the keyword-derived plan when they
+    // disagree (see tool_policy::resolve_verification).
+    let verification_plan = crate::tool_policy::resolve_verification(
+        crate::tool_policy::preferred_verification_level(&draft),
+        &keyword_plan,
+    );
     let verification_context = format!(
         "Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.",
         verification_plan.requirements, verification_plan.rationale

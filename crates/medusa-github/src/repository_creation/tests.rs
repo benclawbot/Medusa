@@ -358,6 +358,30 @@ fn credential_like_external_errors_are_redacted() {
 }
 
 #[test]
+fn all_github_token_families_in_external_errors_are_redacted() {
+    for token in [
+        "ghp_0123456789abcdef0123456789abcdef0123",
+        "gho_0123456789abcdef0123456789abcdef0123",
+        "ghu_0123456789abcdef0123456789abcdef0123",
+        "ghs_0123456789abcdef0123456789abcdef0123",
+        "ghr_0123456789abcdef0123456789abcdef0123",
+        "github_pat_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ] {
+        let redacted = sanitize_external_error(&format!("gh: request failed: {token}"));
+        assert!(
+            !redacted.contains(token),
+            "{token} must not survive sanitization"
+        );
+        assert_eq!(
+            redacted,
+            "external command failed with redacted credential-like output"
+        );
+    }
+    // Non-credential errors still pass through.
+    assert_eq!(sanitize_external_error("gh: Not Found"), "gh: Not Found");
+}
+
+#[test]
 fn recorded_directory_is_preserved_for_git_commands() {
     let executor = ScriptedExecutor::new([ScriptedExecutor::successful()]);
     let directory = PathBuf::from("checkout");

@@ -39,6 +39,10 @@ enum ActivityDetailKey {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Scrollback {
     pub offset: usize,
+    /// Set when transcript entries arrive while the user is scrolled up; the
+    /// renderer overlays a "new output below" indicator until the user
+    /// follows the transcript back to the bottom.
+    pub new_output_below: bool,
 }
 
 impl Scrollback {
@@ -50,6 +54,9 @@ impl Scrollback {
     /// Decrease the offset by `step`, clamped at 0.
     pub fn scroll_down(&mut self, step: usize) {
         self.offset = self.offset.saturating_sub(step);
+        if self.offset == 0 {
+            self.new_output_below = false;
+        }
     }
 }
 
@@ -122,6 +129,9 @@ impl AppState {
 
     pub fn set_scrollback_offset(&mut self, offset: usize) {
         self.scrollback.offset = offset;
+        if offset == 0 {
+            self.scrollback.new_output_below = false;
+        }
     }
 
     pub fn scrollback_scroll_up(&mut self, step: usize, max_offset: usize) {
@@ -917,7 +927,15 @@ impl AppState {
             let excess = self.transcript.len() - MAX_TRANSCRIPT_ENTRIES + 1;
             self.transcript.drain(..excess);
         }
+        if self.scrollback.offset > 0 {
+            self.scrollback.new_output_below = true;
+        }
         self.transcript.push(entry);
+    }
+
+    #[must_use]
+    pub fn has_new_output_below(&self) -> bool {
+        self.scrollback.new_output_below && self.scrollback.offset > 0
     }
 
     fn persist_draft(&self) -> io::Result<()> {

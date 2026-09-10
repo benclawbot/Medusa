@@ -31,6 +31,7 @@ pub struct FrontendControlPlane {
     inner: base::FrontendControlPlane,
     control_clients: BTreeMap<String, String>,
     applied_control_transitions: BTreeSet<String>,
+    alert_dispatcher: Option<crate::operational_alerts::OperationalAlertDispatcher>,
 }
 
 impl FrontendControlPlane {
@@ -40,12 +41,25 @@ impl FrontendControlPlane {
             inner: base::FrontendControlPlane::new(repo, config),
             control_clients: BTreeMap::new(),
             applied_control_transitions: BTreeSet::new(),
+            alert_dispatcher: None,
         }
     }
 
     #[must_use]
     pub fn shutdown_handle(&self) -> FrontendShutdownHandle {
         self.inner.shutdown_handle()
+    }
+
+    /// Daemon-global effort budget currently in effect.
+    #[must_use]
+    pub fn agent_max_turns(&self) -> u32 {
+        self.inner.agent_max_turns()
+    }
+
+    /// Daemon-global model provider currently in effect.
+    #[must_use]
+    pub fn model_provider(&self) -> String {
+        self.inner.model_provider().to_owned()
     }
 
     pub fn replay_events(
@@ -89,6 +103,20 @@ impl FrontendControlPlane {
         artifact_id: &str,
     ) -> Result<FrontendArtifactExport, FrontendControlError> {
         self.inner.export_attachment(artifact_id)
+    }
+
+    /// Evaluates operational health plus capacity pressure against thresholds
+    /// and returns newly-firing alerts as Telegram-ready message text. Repeats
+    /// are suppressed until the alert clears and re-fires.
+    pub fn check_operational_alerts(
+        &mut self,
+        report: &medusa_hardening::HealthReport,
+        resources: &[medusa_hardening::ResourceSnapshot],
+    ) -> Vec<String> {
+        let dispatcher = self.alert_dispatcher.get_or_insert_with(
+            crate::operational_alerts::OperationalAlertDispatcher::with_env_thresholds,
+        );
+        dispatcher.poll_telegram(report, resources)
     }
 
     pub fn dispatch(

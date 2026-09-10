@@ -314,6 +314,7 @@ pub fn project_event(
         EventPayload::FileTransactionCommitted {
             paths,
             rollback_ref,
+            ..
         } => FrontendEvent::Activity(PresentationActivity {
             activity_id: event.event_id.to_string(),
             kind: PresentationActivityKind::Edit,
@@ -321,6 +322,43 @@ pub fn project_event(
             title: format!("Committed {} changed path(s)", paths.len()),
             details: Vec::new(),
             affected_paths: paths.clone(),
+            evidence_ref: Some(rollback_ref.clone()),
+        }),
+        EventPayload::FileTransactionStarted {
+            operation_id,
+            paths,
+        } => FrontendEvent::Activity(PresentationActivity {
+            activity_id: event.event_id.to_string(),
+            kind: PresentationActivityKind::Edit,
+            lifecycle: PresentationLifecycle::Active,
+            title: format!("Mutation transaction {operation_id} started"),
+            details: Vec::new(),
+            affected_paths: paths.clone(),
+            evidence_ref: None,
+        }),
+        EventPayload::FileTransactionProgress {
+            operation_id,
+            message,
+        } => FrontendEvent::Activity(PresentationActivity {
+            activity_id: event.event_id.to_string(),
+            kind: PresentationActivityKind::Edit,
+            lifecycle: PresentationLifecycle::Active,
+            title: format!("Mutation transaction {operation_id}: {message}"),
+            details: Vec::new(),
+            affected_paths: Vec::new(),
+            evidence_ref: None,
+        }),
+        EventPayload::FileTransactionRolledBack {
+            operation_id,
+            rollback_ref,
+            reason,
+        } => FrontendEvent::Activity(PresentationActivity {
+            activity_id: event.event_id.to_string(),
+            kind: PresentationActivityKind::Edit,
+            lifecycle: PresentationLifecycle::Failed,
+            title: format!("Mutation transaction {operation_id} rolled back: {reason}"),
+            details: Vec::new(),
+            affected_paths: Vec::new(),
             evidence_ref: Some(rollback_ref.clone()),
         }),
         EventPayload::CheckpointCreated { checkpoint_id } => FrontendEvent::Activity(activity(

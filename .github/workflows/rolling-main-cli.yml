@@ -72,6 +72,33 @@ jobs:
           pattern: rolling-main-cli-*
           path: release-assets
           merge-multiple: true
+      - name: Re-verify checksums before signing
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Mirror sign-release-manifest.yml: never sign whatever arrived over the
+          # artifact handoff. Recompute byte counts and SHA-256 digests and bind
+          # every manifest to this exact revision before the signing key is used.
+          shopt -s nullglob
+          manifests=(release-assets/*.json)
+          if [[ ${#manifests[@]} -eq 0 ]]; then
+            echo 'no rolling CLI manifests to sign' >&2
+            exit 1
+          fi
+          for manifest in "${manifests[@]}"; do
+            [[ "$manifest" == *.sig.json ]] && continue
+            name="$(jq -r '.name' "$manifest")"
+            revision="$(jq -r '.revision' "$manifest")"
+            bytes="$(jq -r '.bytes' "$manifest")"
+            digest="$(jq -r '.sha256' "$manifest")"
+            test "$revision" = "$EXPECTED_REVISION"
+            file="release-assets/$name"
+            test -f "$file"
+            test "$(wc -c < "$file" | tr -d ' ')" = "$bytes"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done
       - name: Sign exact-revision CLI manifests
         shell: bash
         run: |
@@ -111,7 +138,7 @@ jobs:
           retention-days: 7
 
   publish-cli:
-    name: Publish rolling CLI early
+    name: Stage rolling CLI revision as draft
     if: github.ref == 'refs/heads/main'
     needs: [build-cli, sign-cli]
     runs-on: ubuntu-latest
@@ -143,7 +170,7 @@ jobs:
           --bundle release-assets
           --revision "$EXPECTED_REVISION"
           --kind cli
-      - name: Publish the immutable CLI revision release
+      - name: Stage the immutable CLI revision release as a draft
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -163,36 +190,39 @@ jobs:
               --draft \
               --prerelease \
               --title "Medusa rolling main $GITHUB_SHA" \
-              --notes "Immutable prebuilt CLI transport for main commit $GITHUB_SHA. Desktop assets are appended after their slower builds complete; stable releases remain separately signed."
+              --notes "Immutable prebuilt CLI transport for main commit $GITHUB_SHA. This release stays a draft until the slower desktop assets are appended, so no partial revision is ever published; stable releases remain separately signed."
           fi
           gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
-          gh release edit "$release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
-      - name: Refresh the legacy rolling CLI alias
+          # Stay a draft: publish-desktop flips this release public only after the
+          # complete desktop bundle is appended.
+          test "$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true"
+      - name: Rotate the legacy rolling CLI alias
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! gh release view main-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create main-latest \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --prerelease \
-              --title "Medusa rolling main (legacy alias)" \
-              --notes "Compatibility alias for clients older than the immutable main-<sha> updater protocol."
+          # Rotate (never mutate) the legacy alias: delete the previous alias
+          # release so mixed-revision assets can never coexist under one tag.
+          # Legacy clients either resolve the complete new alias or fail closed.
+          if gh release view main-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete main-latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
           fi
+          gh release create main-latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Medusa rolling main (legacy alias)" \
+            --notes "Compatibility alias for clients older than the immutable main-<sha> updater protocol."
           for archive in release-assets/*.tar.gz release-assets/*.zip; do
-            gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY"
           done
           for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do
-            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY"
           done
           for signature in release-assets/*.tar.gz.json.sig.json release-assets/*.zip.json.sig.json; do
-            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY"
           done
-          if [[ "$(gh release view main-latest --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
-            gh release edit main-latest --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
-          fi
 
   build-desktop:
     name: Build rolling desktop (${{ matrix.os }})
@@ -317,6 +347,33 @@ jobs:
           pattern: rolling-main-desktop-*
           path: release-assets
           merge-multiple: true
+      - name: Re-verify checksums before signing
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Mirror sign-release-manifest.yml: never sign whatever arrived over the
+          # artifact handoff. Recompute byte counts and SHA-256 digests and bind
+          # every manifest to this exact revision before the signing key is used.
+          shopt -s nullglob
+          manifests=(release-assets/*.json)
+          if [[ ${#manifests[@]} -eq 0 ]]; then
+            echo 'no rolling desktop manifests to sign' >&2
+            exit 1
+          fi
+          for manifest in "${manifests[@]}"; do
+            [[ "$manifest" == *.sig.json ]] && continue
+            name="$(jq -r '.name' "$manifest")"
+            revision="$(jq -r '.revision' "$manifest")"
+            bytes="$(jq -r '.bytes' "$manifest")"
+            digest="$(jq -r '.sha256' "$manifest")"
+            test "$revision" = "$EXPECTED_REVISION"
+            file="release-assets/$name"
+            test -f "$file"
+            test "$(wc -c < "$file" | tr -d ' ')" = "$bytes"
+            test "$(sha256sum "$file" | awk '{print $1}')" = "$digest"
+          done
       - name: Sign exact-revision desktop manifests
         shell: bash
         run: |
@@ -388,7 +445,7 @@ jobs:
           --bundle release-assets
           --revision "$EXPECTED_REVISION"
           --kind desktop
-      - name: Append desktop assets to the published revision release
+      - name: Append desktop assets and publish the complete revision release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -404,7 +461,9 @@ jobs:
             exit 1
           fi
           gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
-      - name: Refresh the legacy rolling desktop alias
+          gh release edit "$release_tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          test "$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "false"
+      - name: Append desktop assets to the rotated rolling alias
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -416,12 +475,23 @@ jobs:
           fi
           for artifact in release-assets/medusa-desktop-main-*; do
             if [[ "$artifact" != *.json ]]; then
-              gh release upload main-latest "$artifact" --repo "$GITHUB_REPOSITORY" --clobber
+              gh release upload main-latest "$artifact" --repo "$GITHUB_REPOSITORY"
             fi
           done
           for manifest in release-assets/medusa-desktop-main-*.json; do
-            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY"
           done
           for signature in release-assets/medusa-desktop-main-*.json.sig.json; do
-            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY"
           done
+
+  verify-rolling-alias:
+    name: Verify rolling alias end to end
+    if: github.ref == 'refs/heads/main'
+    needs: publish-desktop
+    uses: ./.github/workflows/verify-published-release.yml
+    with:
+      release_tag: main-${{ github.sha }}
+      release_sha: ${{ github.sha }}
+      channel: rolling
+      rolling_alias_tag: main-latest

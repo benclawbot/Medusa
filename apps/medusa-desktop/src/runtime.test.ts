@@ -108,6 +108,37 @@ describe("desktop runtime adapter", () => {
     now.mockRestore();
   });
 
+  it("records wakeup-install and drain failures as observable error state", async () => {
+    const errors: unknown[][] = [];
+    const consoleError = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args);
+    });
+    try {
+      mockedListen.mockResolvedValue((() => undefined) as unknown as Awaited<ReturnType<typeof listen>>);
+      mockedInvoke.mockResolvedValueOnce({ runtimeId: "runtime-err", repo: "/repo" });
+      mockedInvoke.mockRejectedValueOnce(new Error("wakeup backend offline"));
+      await startRuntime("/repo");
+      // Flush the background wakeup-install rejection.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(getRuntimeWakeupMetrics("runtime-err")).toMatchObject({
+        wakeupInstallFailures: 1,
+        lastWakeupInstallError: "wakeup backend offline",
+      });
+      expect(errors.some((args) => args[0] === "[medusa-runtime-wakeup] wakeup install failed")).toBe(true);
+
+      mockedInvoke.mockRejectedValueOnce(new Error("replay cursor unreadable"));
+      await expect(pollRuntime("runtime-err")).rejects.toThrow("replay cursor unreadable");
+      expect(getRuntimeWakeupMetrics("runtime-err")).toMatchObject({
+        drainFailures: 1,
+        lastDrainError: "replay cursor unreadable",
+      });
+      expect(errors.some((args) => args[0] === "[medusa-runtime-wakeup] replay drain failed")).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("does not resurrect a listener when the runtime closes during setup", async () => {
     let resolveListen: ((unlisten: () => void) => void) | undefined;
     mockedListen.mockImplementation((() =>

@@ -1383,6 +1383,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                     &response,
                     request_started.elapsed(),
                 );
+                let turn_cost = crate::session::TurnCost::from_turn(
+                    session.id.as_str(),
+                    &turn_usage,
+                    response.response_id.as_deref().unwrap_or("model-turn"),
+                );
+                let _ = crate::session::append_turn_cost(&session.repo, &turn_cost);
                 append_event(
                     session,
                     Actor::Coordinator,
@@ -1921,6 +1927,12 @@ impl<P: ModelProvider> AgentEngine<P> {
             &response,
             request_started.elapsed(),
         );
+        let turn_cost = crate::session::TurnCost::from_turn(
+            session.id.as_str(),
+            &turn_usage,
+            response.response_id.as_deref().unwrap_or("model-turn"),
+        );
+        let _ = crate::session::append_turn_cost(&session.repo, &turn_cost);
         append_observed(
             session,
             effective_request::response_event(

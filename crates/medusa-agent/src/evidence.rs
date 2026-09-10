@@ -4,6 +4,10 @@ use std::{
 };
 
 use crate::session::{AgentSession, journal};
+#[cfg(test)]
+use crate::transaction::{
+    FileMutation, TransactionOutcome, apply_atomic_with_tracker, begin_file_transaction,
+};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::desktop_commander_tool_is_mutating;
 use medusa_protocol::{
@@ -47,6 +51,56 @@ pub(crate) fn append_event(
     actor: Actor,
     payload: EventPayload,
 ) -> MedusaResult<()> {
+    append_event_with_correlation(session, actor, payload, None)
+}
+
+/// Applies mutations while journaling the full lifecycle (`Started`, per-phase
+/// `Progress`, then `Committed` or `RolledBack`) under one operation id, so
+/// hung or crashed mutations stay visible next to `FileTransactionCommitted`.
+#[cfg(test)]
+pub(crate) fn apply_atomic_with_events(
+    repo: &std::path::Path,
+    session: &mut AgentSession,
+    actor: Actor,
+    mutations: &[FileMutation],
+) -> MedusaResult<TransactionOutcome> {
+    let paths = mutations
+        .iter()
+        .map(|mutation| mutation.path.clone())
+        .collect::<Vec<_>>();
+    let tracker = begin_file_transaction(repo, &paths)?;
+    crate::record_session_event(session, actor.clone(), tracker.started_payload())?;
+    match apply_atomic_with_tracker(repo, mutations, Some(&tracker)) {
+        Ok(outcome) => {
+            let rollback_ref = outcome
+                .mutation_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "provenance-unavailable".to_owned());
+            let _ = tracker.committed(&rollback_ref);
+            crate::record_session_event(
+                session,
+                actor,
+                tracker.committed_payload(&outcome.affected_files, &rollback_ref),
+            )?;
+            Ok(outcome)
+        }
+        Err(error) => {
+            let reason: String = error.to_string().chars().take(512).collect();
+            let _ = tracker.rolled_back(&reason);
+            let _ =
+                crate::record_session_event(session, actor, tracker.rolled_back_payload(&reason));
+            Err(error)
+        }
+    }
+}
+
+pub(crate) fn append_event_with_correlation(
+    session: &mut AgentSession,
+    actor: Actor,
+    payload: EventPayload,
+    correlation: Option<medusa_core::CorrelationId>,
+) -> MedusaResult<()> {
     if let EventPayload::UserFollowupDequeued { command_id, .. } = &payload {
         refresh_committed_events(session)?;
         if let Some(action) = accepted_action(session, command_id).cloned() {
@@ -65,7 +119,7 @@ pub(crate) fn append_event(
     let runtime_failed = matches!(payload, EventPayload::RuntimeFailed { .. });
     let session_id = session.id.as_str().to_owned();
 
-    journal::append_payload_committed(session, actor, payload)?;
+    journal::append_payload_with_correlation(session, actor, payload, correlation)?;
 
     if cancellation_completed {
         complete_running_cancel_actions(session)?;
@@ -461,6 +515,64 @@ pub(crate) fn verify_chain(events: &[EventEnvelope]) -> MedusaResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use medusa_core::SessionId;
+
+    #[test]
+    fn atomic_with_events_journals_full_lifecycle() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut session = AgentSession {
+            id: SessionId::new(),
+            objective: "lifecycle test".to_owned(),
+            repo: directory.path().to_path_buf(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+            completed: false,
+            turn: 0,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: Vec::new(),
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+            codex_thread_id: None,
+        };
+        let outcome = apply_atomic_with_events(
+            directory.path(),
+            &mut session,
+            Actor::Coordinator,
+            &[FileMutation {
+                path: "src/new.rs".to_owned(),
+                content: "new\n".to_owned(),
+            }],
+        )
+        .expect("apply with events");
+        assert!(!outcome.rolled_back);
+        assert!(directory.path().join("src/new.rs").exists());
+        let mut saw_started = false;
+        let mut saw_committed = false;
+        for event in &session.events {
+            match &event.payload {
+                EventPayload::FileTransactionStarted {
+                    operation_id,
+                    paths,
+                } => {
+                    saw_started = true;
+                    assert_eq!(paths, &vec!["src/new.rs".to_owned()]);
+                    assert!(!operation_id.is_empty());
+                }
+                EventPayload::FileTransactionCommitted { operation_id, .. } => {
+                    saw_committed = true;
+                    assert!(operation_id.is_some());
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_started && saw_committed);
+    }
 
     #[test]
     fn incremental_verify_skips_prefix_and_catches_tampering() {

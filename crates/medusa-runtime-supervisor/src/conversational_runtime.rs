@@ -129,13 +129,19 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
         task_id: &str,
         disposition: CancellationDisposition,
     ) -> Result<Vec<CoordinatorEvent>, RuntimeControlError<W::Error>> {
-        self.worker_mut(task_id)?
-            .terminate_process_tree()
-            .map_err(RuntimeControlError::Worker)?;
+        // Transition before kill: record the cancellation intent first so a
+        // process-tree termination failure cannot lose it. The task stays
+        // Cancelling (retryable/reconcilable) even when the kill fails.
         let update = self
             .supervisor
             .cancel_task(task_id, disposition)
             .map_err(RuntimeControlError::Supervisor)?;
+        // Supervisor transition above is retained on purpose: worker lookup and
+        // kill failures must not roll back the recorded cancellation intent.
+        let worker = self.worker_mut(task_id)?;
+        worker
+            .terminate_process_tree()
+            .map_err(RuntimeControlError::Worker)?;
         Ok(vec![
             CoordinatorEvent::WorkerProcessTreeTerminated {
                 task_id: task_id.to_owned(),
@@ -154,11 +160,21 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
             .filter(|task| !task.status.terminal())
             .map(|task| task.id.clone())
             .collect();
+        // Continue past individual failures and aggregate them: one stuck task
+        // must not leave the rest running.
         let mut events = Vec::new();
+        let mut failures = Vec::new();
         for task_id in task_ids {
-            events.extend(self.cancel_task(&task_id, disposition.clone())?);
+            match self.cancel_task(&task_id, disposition.clone()) {
+                Ok(mut task_events) => events.append(&mut task_events),
+                Err(error) => failures.push(format!("{task_id}: {}", cancel_error(&error))),
+            }
         }
-        Ok(events)
+        if failures.is_empty() {
+            Ok(events)
+        } else {
+            Err(RuntimeControlError::Multiple(failures))
+        }
     }
 
     fn worker_mut(&mut self, task_id: &str) -> Result<&mut W, RuntimeControlError<W::Error>> {
@@ -173,6 +189,18 @@ pub enum RuntimeControlError<E> {
     MissingWorker,
     Supervisor(&'static str),
     Worker(E),
+    /// One entry per failed task from `cancel_all`, which continues past
+    /// individual failures instead of stopping at the first one.
+    Multiple(Vec<String>),
+}
+
+fn cancel_error<E>(error: &RuntimeControlError<E>) -> String {
+    match error {
+        RuntimeControlError::MissingWorker => "missing worker handle".to_owned(),
+        RuntimeControlError::Supervisor(reason) => (*reason).to_owned(),
+        RuntimeControlError::Worker(_) => "worker process-tree termination failed".to_owned(),
+        RuntimeControlError::Multiple(failures) => failures.join("; "),
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +215,7 @@ mod tests {
         paused: bool,
         responses_cancelled: u32,
         process_tree_terminated: bool,
+        fail_terminate: bool,
     }
 
     impl WorkerHandle for MockWorker {
@@ -208,6 +237,9 @@ mod tests {
         }
 
         fn terminate_process_tree(&mut self) -> Result<(), Self::Error> {
+            if self.fail_terminate {
+                return Err("kill failed");
+            }
             self.process_tree_terminated = true;
             Ok(())
         }
@@ -317,5 +349,66 @@ mod tests {
             restored.pause_task("a"),
             Err(RuntimeControlError::MissingWorker)
         );
+    }
+
+    #[test]
+    fn failed_kill_still_records_cancelling_transition() {
+        let mut runtime = ConversationalRuntime::new("conversation").unwrap();
+        runtime
+            .register_task(
+                task("a"),
+                MockWorker {
+                    fail_terminate: true,
+                    ..MockWorker::default()
+                },
+            )
+            .unwrap();
+        // Old kill-then-transition order lost the cancellation intent when the
+        // kill failed; transition-before-kill keeps the task Cancelling.
+        assert_eq!(
+            runtime.cancel_task("a", CancellationDisposition::ArchiveChanges),
+            Err(RuntimeControlError::Worker("kill failed"))
+        );
+        assert_eq!(
+            runtime.supervisor().task("a").unwrap().status,
+            TaskStatus::Cancelling
+        );
+    }
+
+    #[test]
+    fn cancel_all_continues_past_failures_and_aggregates_them() {
+        let mut runtime = ConversationalRuntime::new("conversation").unwrap();
+        runtime
+            .register_task(task("a"), MockWorker::default())
+            .unwrap();
+        runtime
+            .register_task(
+                task("b"),
+                MockWorker {
+                    fail_terminate: true,
+                    ..MockWorker::default()
+                },
+            )
+            .unwrap();
+        let error = runtime
+            .cancel_all(CancellationDisposition::RevertChanges)
+            .expect_err("one task fails");
+        // The healthy task was still cancelled despite the sibling failure.
+        assert_eq!(
+            runtime.supervisor().task("a").unwrap().status,
+            TaskStatus::Cancelling
+        );
+        assert!(runtime.workers.get("a").unwrap().process_tree_terminated);
+        assert_eq!(
+            runtime.supervisor().task("b").unwrap().status,
+            TaskStatus::Cancelling
+        );
+        match error {
+            RuntimeControlError::Multiple(failures) => {
+                assert_eq!(failures.len(), 1);
+                assert!(failures[0].contains('b'), "unexpected: {failures:?}");
+            }
+            other => panic!("expected aggregated failures, got {other:?}"),
+        }
     }
 }

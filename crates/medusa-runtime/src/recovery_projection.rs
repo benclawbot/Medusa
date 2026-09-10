@@ -261,6 +261,7 @@ mod tests {
             EventPayload::FileTransactionCommitted {
                 paths: vec!["src/lib.rs".to_owned()],
                 rollback_ref: "rollback".to_owned(),
+                operation_id: None,
             },
         )
         .expect("file event");
@@ -342,6 +343,7 @@ mod tests {
             EventPayload::FileTransactionCommitted {
                 paths: vec!["src/extra.rs".to_owned()],
                 rollback_ref: "rollback-extra".to_owned(),
+                operation_id: None,
             },
         )
         .expect("extra file event");

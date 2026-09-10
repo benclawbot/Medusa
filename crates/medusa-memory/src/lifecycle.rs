@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Component, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use medusa_core::MedusaResult;
@@ -15,7 +15,6 @@ use crate::{
         LifecycleLock, atomic_write, deduplicate, durable_remove, first_claim, internal, invalid,
     },
 };
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct SupersedeJournal {
     old_path: PathBuf,
@@ -147,6 +146,27 @@ impl MemoryEngine {
         self.root.join("lifecycle-journal.json")
     }
 
+    /// Renames an unparseable journal to a unique quarantine name next to the
+    /// original so engine start can proceed without losing the evidence.
+    fn quarantine_lifecycle_journal(&self, path: &Path) -> MedusaResult<()> {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis())
+            .unwrap_or(0);
+        for attempt in 0..16 {
+            let mut quarantined = path.as_os_str().to_owned();
+            quarantined.push(format!(".quarantined-{stamp}-{attempt}"));
+            let quarantined = PathBuf::from(quarantined);
+            match fs::rename(path, &quarantined) {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(internal("could not quarantine corrupt lifecycle journal"))
+    }
+
     pub(crate) fn recover_lifecycle_journal(&self) -> MedusaResult<()> {
         let path = self.lifecycle_journal_path();
         let raw = match fs::read(&path) {
@@ -154,8 +174,25 @@ impl MemoryEngine {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         };
-        let journal = serde_json::from_slice::<LifecycleJournal>(&raw)
-            .map_err(|error| internal(format!("invalid lifecycle recovery journal: {error}")))?;
+        let journal = match serde_json::from_slice::<LifecycleJournal>(&raw) {
+            Ok(journal) => journal,
+            Err(error) => {
+                // An unparseable journal (e.g. a torn write from a crash, or an
+                // unknown shape) must not wedge engine start. Quarantine it
+                // aside for operator inspection and continue with a rebuilt
+                // index. Journals that parse but fail validation still return
+                // hard errors below so path-escape attempts never get swept
+                // aside.
+                self.quarantine_lifecycle_journal(&path)?;
+                tracing::warn!(
+                    journal = %path.display(),
+                    %error,
+                    "quarantined corrupt lifecycle journal"
+                );
+                self.rebuild_index()?;
+                return Ok(());
+            }
+        };
         match &journal {
             LifecycleJournal::Supersede(journal) => self.apply_supersede_journal(journal)?,
             LifecycleJournal::Delete(journal) => self.apply_delete_journal(journal)?,
@@ -339,5 +376,39 @@ mod tests {
             "must survive"
         );
         assert!(engine.lifecycle_journal_path().exists());
+    }
+
+    #[test]
+    fn corrupt_journal_is_quarantined_instead_of_blocking_engine_start() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engine = MemoryEngine::new(directory.path()).expect("engine");
+        let document = engine
+            .commit_proposal(&proposal(
+                "Quarantine probe",
+                "Engine must survive a torn journal.",
+            ))
+            .expect("document");
+        std::fs::write(engine.lifecycle_journal_path(), b"{torn journal write")
+            .expect("corrupt journal");
+
+        // A fresh engine (initialize_layout -> recover) must start despite the
+        // corrupt journal, with the evidence preserved aside.
+        let reopened = MemoryEngine::new(directory.path()).expect("engine reopens");
+        assert!(!reopened.lifecycle_journal_path().exists());
+        let quarantined: Vec<_> = std::fs::read_dir(&reopened.root)
+            .expect("read memory root")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("lifecycle-journal.json.quarantined-"))
+            })
+            .collect();
+        assert_eq!(quarantined.len(), 1);
+        assert!(
+            reopened.read_by_id(&document.id).is_ok(),
+            "canonical memory survives journal quarantine"
+        );
     }
 }

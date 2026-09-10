@@ -113,6 +113,9 @@ pub struct MemoryConflict {
 pub struct ConsolidationResult {
     pub memories: Vec<ConsolidatedMemory>,
     pub conflicts: Vec<MemoryConflict>,
+    /// Observations too weak or unsupported to consolidate yet. Not disposable:
+    /// hand them to `medusa_memory_writeback::plan_writeback` (which returns
+    /// them on the plan) instead of persisting only `memories`.
     pub deferred_observation_ids: Vec<String>,
     pub source_fingerprint: String,
     pub result_fingerprint: String,

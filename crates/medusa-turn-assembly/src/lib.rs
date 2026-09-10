@@ -108,13 +108,21 @@ impl TurnAssemblyInput {
     /// Drop tool schemas the current plan cannot reach. Call this with the
     /// tool names referenced by the active plan DAG before `assemble` to keep
     /// every-turn tool JSON proportional to the work at hand instead of the
-    /// whole registry. `None` (unknown reachability) keeps everything.
+    /// whole registry. `None` (unknown reachability) keeps everything and
+    /// logs a warning: prefer computing an explicit (possibly empty) list so
+    /// budget protection is a deliberate choice, not an accident.
     #[must_use]
     pub fn retain_reachable_tools(mut self, reachable: Option<&[String]>) -> Self {
-        if let Some(names) = reachable {
-            self.tool_schemas
-                .retain(|tool| names.iter().any(|name| name == &tool.name));
-        }
+        let Some(names) = reachable else {
+            tracing::warn!(
+                schema_count = self.tool_schemas.len(),
+                "retain_reachable_tools called with unknown reachability; \
+                 keeping every tool schema with no budget protection"
+            );
+            return self;
+        };
+        self.tool_schemas
+            .retain(|tool| names.iter().any(|name| name == &tool.name));
         self
     }
 
@@ -305,6 +313,18 @@ mod tests {
                 reserved_output_tokens: 128,
             },
         }
+    }
+
+    #[test]
+    fn unknown_reachability_keeps_everything_explicit_list_filters() {
+        let unreachable_none = input("task").retain_reachable_tools(None);
+        assert_eq!(unreachable_none.tool_schemas.len(), 1);
+
+        let filtered = input("task").retain_reachable_tools(Some(&["missing".to_owned()]));
+        assert!(filtered.tool_schemas.is_empty());
+
+        let kept = input("task").retain_reachable_tools(Some(&["read".to_owned()]));
+        assert_eq!(kept.tool_schemas.len(), 1);
     }
 
     #[test]

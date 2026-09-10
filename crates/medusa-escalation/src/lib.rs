@@ -85,6 +85,11 @@ pub enum EscalationDecision {
     },
     Blocked {
         reasons: BTreeSet<EscalationBlockReason>,
+        /// The original escalation reasons that were suppressed by the block.
+        /// Callers reporting a blocked escalation should surface these so the
+        /// underlying trigger is not lost.
+        #[serde(default)]
+        suppressed: BTreeSet<EscalationReason>,
     },
 }
 
@@ -150,7 +155,10 @@ impl EscalationPolicy {
         if blocked.is_empty() {
             EscalationDecision::Escalate { reasons }
         } else {
-            EscalationDecision::Blocked { reasons: blocked }
+            EscalationDecision::Blocked {
+                reasons: blocked,
+                suppressed: reasons,
+            }
         }
     }
 }
@@ -340,7 +348,8 @@ mod tests {
         assert_eq!(
             EscalationPolicy::default().evaluate(&input),
             EscalationDecision::Blocked {
-                reasons: BTreeSet::from([EscalationBlockReason::LocalSpikeRequired])
+                reasons: BTreeSet::from([EscalationBlockReason::LocalSpikeRequired]),
+                suppressed: BTreeSet::from([EscalationReason::LowConfidence]),
             }
         );
     }
@@ -359,9 +368,29 @@ mod tests {
         assert_eq!(
             EscalationPolicy::default().evaluate(&input),
             EscalationDecision::Blocked {
-                reasons: BTreeSet::from([EscalationBlockReason::TaskLimitReached])
+                reasons: BTreeSet::from([EscalationBlockReason::TaskLimitReached]),
+                suppressed: BTreeSet::from([EscalationReason::ExplicitUserRequest]),
             }
         );
+    }
+
+    #[test]
+    fn blocked_decision_preserves_the_suppressed_trigger_reasons() {
+        let mut input = context();
+        input.confidence_basis_points = Some(5_000);
+        input.consecutive_retryable_failures =
+            EscalationPolicy::default().retryable_failure_threshold;
+        input.local_spike_completed = false;
+        let EscalationDecision::Blocked {
+            reasons,
+            suppressed,
+        } = EscalationPolicy::default().evaluate(&input)
+        else {
+            panic!("expected a blocked escalation");
+        };
+        assert!(reasons.contains(&EscalationBlockReason::LocalSpikeRequired));
+        assert!(suppressed.contains(&EscalationReason::LowConfidence));
+        assert!(suppressed.contains(&EscalationReason::RepeatedRetryableFailure));
     }
 
     #[test]

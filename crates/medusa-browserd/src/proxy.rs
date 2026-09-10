@@ -28,6 +28,22 @@ impl Proxy {
     pub fn server(&self) -> String {
         format!("http://{}", self.address)
     }
+
+    #[must_use]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.address
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(address: SocketAddr) -> Self {
+        Self {
+            address,
+            shutdown: Arc::new(AtomicBool::new(true)),
+            active_connections: Arc::new(Mutex::new(Vec::new())),
+            connection_threads: Arc::new(Mutex::new(Vec::new())),
+            listener_thread: None,
+        }
+    }
 }
 
 pub fn spawn() -> io::Result<Proxy> {

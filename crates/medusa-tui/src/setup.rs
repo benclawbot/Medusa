@@ -60,6 +60,44 @@ pub trait FirstRunSetupHost {
     ) -> Result<Box<dyn BrowserOAuthSession>, String>;
 }
 
+/// Owns an in-flight browser OAuth attempt and guarantees [`BrowserOAuthSession::cancel`]
+/// runs when the attempt is abandoned for any reason: explicit Esc/Ctrl-C,
+/// early return, or error propagation. A completed attempt must call
+/// [`OAuthSessionGuard::disarm`] (or [`OAuthSessionGuard::take`]) so the
+/// finished session is not cancelled.
+struct OAuthSessionGuard {
+    session: Option<Box<dyn BrowserOAuthSession>>,
+}
+
+impl OAuthSessionGuard {
+    fn new(session: Box<dyn BrowserOAuthSession>) -> Self {
+        Self {
+            session: Some(session),
+        }
+    }
+
+    fn session_mut(&mut self) -> Option<&mut Box<dyn BrowserOAuthSession>> {
+        self.session.as_mut()
+    }
+
+    /// Releases the completed session without cancelling it.
+    fn take(mut self) -> Option<Box<dyn BrowserOAuthSession>> {
+        self.session.take()
+    }
+
+    fn disarm(&mut self) {
+        self.session = None;
+    }
+}
+
+impl Drop for OAuthSessionGuard {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.as_mut() {
+            session.cancel();
+        }
+    }
+}
+
 struct UnsupportedSetupHost;
 
 impl FirstRunSetupHost for UnsupportedSetupHost {
@@ -646,13 +684,21 @@ pub fn run_first_run_setup_with_host(
 
     let mut terminal = SetupTerminal::enter()?;
     let mut state = SetupState::new(request);
-    let mut oauth_session: Option<Box<dyn BrowserOAuthSession>> = None;
+    let mut oauth_session: Option<OAuthSessionGuard> = None;
     loop {
         terminal.render(&state)?;
 
-        if let Some(session) = oauth_session.as_mut() {
-            if let Some(result) = session.poll()? {
-                oauth_session = None;
+        if oauth_session.is_some() {
+            let poll_result = oauth_session
+                .as_mut()
+                .expect("oauth session")
+                .session_mut()
+                .expect("oauth guard always holds a session while armed")
+                .poll()?;
+            if let Some(result) = poll_result {
+                // The attempt completed: disarm the guard so Drop does not
+                // cancel a finished session.
+                oauth_session.take().expect("oauth session").disarm();
                 match result {
                     Ok(models) => {
                         let provider = state
@@ -678,7 +724,8 @@ pub fn run_first_run_setup_with_host(
             if key.code == KeyCode::Esc
                 || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
             {
-                session.cancel();
+                // Dropping the guard cancels the attempt via its Drop impl,
+                // which also covers early returns and error propagation.
                 oauth_session = None;
                 state.status =
                     Some("Browser sign-in cancelled; configuration unchanged.".to_owned());
@@ -759,7 +806,7 @@ pub fn run_first_run_setup_with_host(
             }
             SetupTransition::StartBrowserOAuth(provider_id) => {
                 match host.start_browser_oauth(&provider_id) {
-                    Ok(session) => oauth_session = Some(session),
+                    Ok(session) => oauth_session = Some(OAuthSessionGuard::new(session)),
                     Err(message) => state.oauth_failed(message),
                 }
             }
@@ -911,6 +958,59 @@ mod tests {
         fn cancel(&mut self) {
             self.cancelled = true;
         }
+    }
+
+    struct FlagOAuth {
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl BrowserOAuthSession for FlagOAuth {
+        fn poll(&mut self) -> io::Result<Option<Result<Vec<String>, String>>> {
+            Ok(None)
+        }
+
+        fn cancel(&mut self) {
+            self.cancelled
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn oauth_guard_cancels_on_drop_and_not_after_disarm() {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let _guard = OAuthSessionGuard::new(Box::new(FlagOAuth {
+                cancelled: std::sync::Arc::clone(&flag),
+            }));
+        }
+        assert!(
+            flag.load(std::sync::atomic::Ordering::SeqCst),
+            "dropping an armed guard must cancel the session"
+        );
+
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let mut guard = OAuthSessionGuard::new(Box::new(FlagOAuth {
+                cancelled: std::sync::Arc::clone(&flag),
+            }));
+            guard.disarm();
+        }
+        assert!(
+            !flag.load(std::sync::atomic::Ordering::SeqCst),
+            "a disarmed guard must not cancel"
+        );
+
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let taken = OAuthSessionGuard::new(Box::new(FlagOAuth {
+            cancelled: std::sync::Arc::clone(&flag),
+        }))
+        .take();
+        assert!(taken.is_some());
+        drop(taken);
+        assert!(
+            !flag.load(std::sync::atomic::Ordering::SeqCst),
+            "a taken session must not be cancelled by the guard"
+        );
     }
 
     fn enter(state: &mut SetupState) -> SetupTransition {

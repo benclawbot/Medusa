@@ -7,7 +7,7 @@ use std::{
     time::SystemTime,
 };
 
-use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::{
     Actor, EventEnvelope, EventPayload, SessionAction, SessionActionKind, SessionActionLifecycle,
 };
@@ -67,6 +67,18 @@ pub(crate) fn append_payload_committed(
     actor: Actor,
     payload: EventPayload,
 ) -> MedusaResult<EventEnvelope> {
+    append_payload_with_correlation(session, actor, payload, None)
+}
+
+/// Appends one event carrying an explicit operation correlation instead of
+/// minting a fresh id, so journal, RuntimeEvent, telemetry, and daemon views
+/// join on a single operation id.
+pub(crate) fn append_payload_with_correlation(
+    session: &mut AgentSession,
+    actor: Actor,
+    payload: EventPayload,
+    correlation: Option<medusa_core::CorrelationId>,
+) -> MedusaResult<EventEnvelope> {
     let lock = session_lock(&session.repo, &session.id);
     let _guard = lock_mutex(&lock);
     verify_chain_incremental(&session.id.to_string(), &session.events)?;
@@ -87,7 +99,7 @@ pub(crate) fn append_payload_committed(
             .saturating_add(1),
         session.id.clone(),
         actor,
-        CorrelationId::new(),
+        correlation.unwrap_or_default(),
         payload,
         session.events.last().map(|event| event.checksum.clone()),
         OffsetDateTime::now_utc(),
@@ -534,6 +546,85 @@ fn append_record(path: &Path, record: &JournalRecord) -> MedusaResult<()> {
     append_records(path, std::slice::from_ref(record))
 }
 
+/// Retention bound: journals above this size shed superseded snapshots on append.
+/// Event frames are never dropped; the hash chain stays verifiable.
+const JOURNAL_COMPACT_BYTES: u64 = 8 * 1024 * 1024;
+
+fn maybe_compact_journal(path: &Path) {
+    let size = fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if size > JOURNAL_COMPACT_BYTES {
+        let _ = compact_journal_snapshots(path);
+    }
+}
+
+/// Retention: drops superseded snapshot frames while keeping every event frame
+/// and the latest snapshot, so the journal stays bounded without breaking the
+/// verifiable event chain. Returns the number of dropped snapshot frames.
+pub(crate) fn compact_journal_snapshots(path: &Path) -> MedusaResult<usize> {
+    let bytes = fs::read(path)?;
+    if bytes.len() < JOURNAL_MAGIC.len() || &bytes[..JOURNAL_MAGIC.len()] != JOURNAL_MAGIC {
+        return Err(persistence_error(
+            "journal header is missing or unsupported",
+        ));
+    }
+    let mut frames: Vec<(bool, Vec<u8>)> = Vec::new();
+    let mut offset = JOURNAL_MAGIC.len();
+    while offset < bytes.len() {
+        if bytes.len() - offset < FRAME_HEADER_BYTES {
+            break;
+        }
+        let length = usize::try_from(u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .map_err(|_| persistence_error("journal frame header is invalid"))?,
+        ))
+        .map_err(|_| persistence_error("journal frame length is unsupported"))?;
+        if length == 0 || length > MAX_FRAME_BYTES {
+            break;
+        }
+        let payload_start = offset + FRAME_HEADER_BYTES;
+        let payload_end = payload_start
+            .checked_add(length)
+            .ok_or_else(|| persistence_error("journal frame length overflowed"))?;
+        if payload_end > bytes.len() {
+            break;
+        }
+        let payload = bytes[payload_start..payload_end].to_vec();
+        let is_snapshot = matches!(
+            serde_json::from_slice::<JournalRecord>(&payload),
+            Ok(JournalRecord::Snapshot { .. })
+        );
+        frames.push((is_snapshot, payload));
+        offset = payload_end;
+    }
+    let last_snapshot = frames.iter().rposition(|(is_snapshot, _)| *is_snapshot);
+    let mut dropped = 0_usize;
+    let mut output = Vec::with_capacity(bytes.len());
+    output.extend_from_slice(JOURNAL_MAGIC);
+    for (index, (is_snapshot, payload)) in frames.iter().enumerate() {
+        if *is_snapshot && Some(index) != last_snapshot {
+            dropped = dropped.saturating_add(1);
+            continue;
+        }
+        let length = u32::try_from(payload.len())
+            .map_err(|_| persistence_error("journal frame length is unsupported"))?;
+        output.extend_from_slice(&length.to_be_bytes());
+        output.extend_from_slice(&Sha256::digest(payload));
+        output.extend_from_slice(payload);
+    }
+    if dropped == 0 {
+        return Ok(0);
+    }
+    let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
+    file.write_all(&output)?;
+    file.sync_data()?;
+    drop(file);
+    invalidate_journal_cache(path);
+    Ok(dropped)
+}
+
 fn append_records(path: &Path, records: &[JournalRecord]) -> MedusaResult<()> {
     create_parent(path)?;
     let cached_state = JOURNAL_CACHE.get().and_then(|cache| {
@@ -574,6 +665,7 @@ fn append_records(path: &Path, records: &[JournalRecord]) -> MedusaResult<()> {
     } else {
         invalidate_journal_cache(path);
     }
+    maybe_compact_journal(path);
     Ok(())
 }
 
@@ -938,6 +1030,54 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::*;
+
+    #[test]
+    fn correlated_append_preserves_operation_id() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut current = session(directory.path());
+        let correlation = CorrelationId::new();
+        let event = append_payload_with_correlation(
+            &mut current,
+            Actor::Coordinator,
+            EventPayload::SessionCreated {
+                objective: "correlated".to_owned(),
+            },
+            Some(correlation.clone()),
+        )
+        .expect("correlated append");
+        assert_eq!(event.correlation_id, correlation);
+        let fresh = append_payload_committed(
+            &mut current,
+            Actor::Coordinator,
+            EventPayload::GoalUpdated {
+                objective: "fresh".to_owned(),
+            },
+        )
+        .expect("fresh append");
+        assert_ne!(fresh.correlation_id, correlation);
+    }
+
+    #[test]
+    fn snapshot_compaction_keeps_events_and_latest_snapshot() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut current = session(directory.path());
+        for index in 0..3 {
+            append_payload_committed(
+                &mut current,
+                Actor::Coordinator,
+                EventPayload::GoalUpdated {
+                    objective: format!("goal-{index}"),
+                },
+            )
+            .expect("append");
+        }
+        let path = journal_path(directory.path(), &current.id).expect("journal path");
+        let dropped = compact_journal_snapshots(&path).expect("compact");
+        assert!(dropped >= 2, "superseded snapshots must be dropped");
+        let reloaded = read_journal(&path, &current.id, true, true).expect("reload");
+        assert_eq!(reloaded.events.len(), 3);
+        assert_eq!(compact_journal_snapshots(&path).expect("compact"), 0);
+    }
 
     fn session(repo: &Path) -> AgentSession {
         AgentSession {

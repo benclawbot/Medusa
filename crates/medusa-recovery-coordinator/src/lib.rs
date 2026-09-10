@@ -39,6 +39,14 @@ pub struct RecoveryLock {
     pub transaction_id: String,
     pub owner_id: String,
     pub epoch: u64,
+    #[serde(default)]
+    pub acquired_at_ms: u64,
+    #[serde(default = "never_expires")]
+    pub ttl_ms: u64,
+}
+
+fn never_expires() -> u64 {
+    u64::MAX
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +90,18 @@ pub enum RecoveryError {
     DecisionFingerprintMismatch,
 }
 
+impl RecoveryLock {
+    /// Locks expire inclusively: a lock is expired once `now_ms` is at least
+    /// `ttl_ms` past acquisition, matching lease-expiry boundary semantics.
+    #[must_use]
+    pub fn expired(&self, now_ms: u64) -> bool {
+        if self.ttl_ms == u64::MAX {
+            return false;
+        }
+        now_ms.saturating_sub(self.acquired_at_ms) >= self.ttl_ms
+    }
+}
+
 impl RecoveryCoordinator {
     pub fn discover(
         candidates: impl IntoIterator<Item = RecoveryCandidate>,
@@ -106,18 +126,37 @@ impl RecoveryCoordinator {
         owner_id: impl Into<String>,
         epoch: u64,
     ) -> Result<RecoveryLock, RecoveryError> {
+        self.acquire_lock_with_expiry(transaction_id, owner_id, epoch, 0, u64::MAX)
+    }
+
+    /// Acquires a time-bounded lock. A live (unexpired) lock still rejects
+    /// steal attempts with `LockHeld`; an expired lock may be stolen only by a
+    /// strictly newer epoch so a stale owner can never reclaim. Release keeps
+    /// exact-equality matching: only the identical lock releases.
+    pub fn acquire_lock_with_expiry(
+        &mut self,
+        transaction_id: impl Into<String>,
+        owner_id: impl Into<String>,
+        epoch: u64,
+        now_ms: u64,
+        ttl_ms: u64,
+    ) -> Result<RecoveryLock, RecoveryError> {
         let transaction_id = transaction_id.into();
         let owner_id = owner_id.into();
         if let Some(existing) = self.locks.get(&transaction_id) {
             if epoch <= existing.epoch {
                 return Err(RecoveryError::StaleLock(transaction_id));
             }
-            return Err(RecoveryError::LockHeld(transaction_id));
+            if !existing.expired(now_ms) {
+                return Err(RecoveryError::LockHeld(transaction_id));
+            }
         }
         let lock = RecoveryLock {
             transaction_id: transaction_id.clone(),
             owner_id,
             epoch,
+            acquired_at_ms: now_ms,
+            ttl_ms,
         };
         self.locks.insert(transaction_id, lock.clone());
         Ok(lock)
@@ -399,6 +438,49 @@ mod tests {
             coordinator.decide(&candidate("tx", TransactionPhase::Committing), &wrong),
             Err(RecoveryError::LockOwnerMismatch("tx".into()))
         );
+    }
+
+    #[test]
+    fn expired_lock_can_be_stolen_only_by_newer_epoch() {
+        let mut coordinator = RecoveryCoordinator::default();
+        let lock = coordinator
+            .acquire_lock_with_expiry("tx", "node-a", 2, 1_000, 500)
+            .unwrap();
+        assert!(!lock.expired(1_499));
+        assert!(lock.expired(1_500));
+        // Live lock rejects even a newer epoch.
+        assert_eq!(
+            coordinator.acquire_lock_with_expiry("tx", "node-b", 3, 1_499, 500),
+            Err(RecoveryError::LockHeld("tx".into()))
+        );
+        // Expired lock still rejects stale epochs.
+        assert_eq!(
+            coordinator.acquire_lock_with_expiry("tx", "node-b", 2, 1_500, 500),
+            Err(RecoveryError::StaleLock("tx".into()))
+        );
+        // Newer epoch steals after timeout.
+        let stolen = coordinator
+            .acquire_lock_with_expiry("tx", "node-b", 3, 1_500, 500)
+            .unwrap();
+        assert_eq!(stolen.owner_id, "node-b");
+        // Exact-equality release: the displaced lock no longer releases.
+        assert_eq!(
+            coordinator.release_lock(&lock),
+            Err(RecoveryError::LockOwnerMismatch("tx".into()))
+        );
+        coordinator.release_lock(&stolen).unwrap();
+    }
+
+    #[test]
+    fn legacy_locks_without_expiry_never_expire() {
+        let mut coordinator = RecoveryCoordinator::default();
+        let lock = coordinator.acquire_lock("tx", "node-a", 1).unwrap();
+        assert!(!lock.expired(u64::MAX));
+        // Serialized locks from before expiry existed deserialize with defaults.
+        let legacy: RecoveryLock =
+            serde_json::from_str(r#"{"transaction_id":"tx","owner_id":"n","epoch":1}"#).unwrap();
+        assert_eq!(legacy.ttl_ms, u64::MAX);
+        assert!(!legacy.expired(u64::MAX));
     }
 
     #[test]

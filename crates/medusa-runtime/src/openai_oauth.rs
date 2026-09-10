@@ -70,9 +70,11 @@ impl OpenAiOAuthLogin {
         match self.receiver.try_recv() {
             Ok(result) => Some(result),
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err(
-                "Codex browser sign-in task exited before reporting a result".to_owned(),
-            )),
+            Err(TryRecvError::Disconnected) => Some(Err(if self.cancel.load(Ordering::SeqCst) {
+                "Codex browser sign-in was cancelled before reporting a result".to_owned()
+            } else {
+                "Codex browser sign-in task exited before reporting a result".to_owned()
+            })),
         }
     }
 
@@ -86,7 +88,13 @@ impl OpenAiOAuthLogin {
 
 impl Drop for OpenAiOAuthLogin {
     fn drop(&mut self) {
-        self.cancel();
+        // Never block in Drop: signal cancellation and detach the worker.
+        // Shutdown paths (including runtime teardown) may drop this handle
+        // while the worker is stuck in connect/ensure_authenticated; joining
+        // here would hang teardown indefinitely. Explicit cancel() still
+        // joins for callers that want a clean shutdown.
+        self.cancel.store(true, Ordering::SeqCst);
+        let _ = self.join.take();
     }
 }
 
@@ -1034,6 +1042,56 @@ fn terminate_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn abandoned_login(cancelled: bool) -> OpenAiOAuthLogin {
+        // Drop the sender so the receiver is disconnected, as when the worker
+        // exits without reporting a result.
+        let (sender, receiver) = mpsc::channel::<Result<Vec<String>, String>>();
+        drop(sender);
+        OpenAiOAuthLogin {
+            receiver,
+            cancel: Arc::new(AtomicBool::new(cancelled)),
+            join: None,
+        }
+    }
+
+    #[test]
+    fn cancelled_login_reports_sign_in_cancelled() {
+        let mut login = abandoned_login(true);
+        let message = login.poll().expect("result").expect_err("error");
+        assert!(
+            message.contains("cancelled"),
+            "unexpected message: {message}"
+        );
+        assert!(!message.contains("exited"), "unexpected message: {message}");
+    }
+
+    #[test]
+    fn abandoned_login_still_reports_exited_task() {
+        let mut login = abandoned_login(false);
+        let message = login.poll().expect("result").expect_err("error");
+        assert!(message.contains("exited"), "unexpected message: {message}");
+    }
+
+    #[test]
+    fn drop_never_blocks_on_stuck_worker() {
+        let (_tx, rx) = mpsc::channel();
+        // Worker ignores cancellation and sleeps; dropping the handle must
+        // still return promptly instead of hanging teardown in join().
+        let stuck = OpenAiOAuthLogin {
+            receiver: rx,
+            cancel: Arc::new(AtomicBool::new(false)),
+            join: Some(thread::spawn(|| {
+                thread::sleep(Duration::from_secs(30));
+            })),
+        };
+        let started = Instant::now();
+        drop(stuck);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "drop blocked on worker join"
+        );
+    }
 
     #[test]
     fn discovered_models_are_sorted_deduplicated_and_accept_slugs() {

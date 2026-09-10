@@ -8,6 +8,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use medusa_runtime::{
@@ -305,16 +306,86 @@ fn validate_mime_type(value: Option<&str>) -> Result<Option<String>, FrontendArt
     Ok(Some(trimmed))
 }
 
+static WRITE_ONCE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write-once publish through a unique temporary file plus an atomic rename.
+///
+/// A crash during the old direct `create_new` write left a truncated file behind;
+/// the next ingest then returned `AlreadyExists`-as-`Ok` while reads failed with
+/// `CorruptArtifact`. If the destination already holds exactly `bytes` the write
+/// is a no-op duplicate; otherwise the complete buffer is fsynced to a temporary
+/// file in the same directory and atomically renamed over the destination, and
+/// the directory entry is fsynced so the publish survives a crash.
 fn write_once(path: &Path, bytes: &[u8]) -> Result<(), FrontendArtifactStoreError> {
-    match OpenOptions::new().create_new(true).write(true).open(path) {
-        Ok(mut file) => {
-            file.write_all(bytes)?;
-            file.sync_all()?;
-            Ok(())
+    if let Ok(existing) = fs::read(path) {
+        if existing == bytes {
+            return Ok(());
         }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(error.into()),
+    } else if path.exists() {
+        // Unreadable destination: fall through to atomic replacement below so a
+        // permission or I/O failure surfaces instead of masquerading as success.
     }
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "artifact destination has no parent directory",
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    // A stale temporary from a crashed process (plus pid reuse) can collide
+    // with a fresh name; retry allocation with a new counter instead of
+    // failing the ingest.
+    let mut allocated = None;
+    for _ in 0..8 {
+        let counter = WRITE_ONCE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                allocated = Some((candidate, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let Some((temporary, mut file)) = allocated else {
+        // A full collision window surfaces as an error so the caller retries
+        // instead of assuming publication. The pre-existing destination, if
+        // any, is left untouched.
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate a unique temporary artifact path",
+        )
+        .into());
+    };
+    let publish = (|| -> std::io::Result<()> {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        #[cfg(windows)]
+        if path.exists() {
+            // `rename` does not replace on Windows; the pre-existing file is
+            // either an identical duplicate (already checked above) or a
+            // truncated/corrupt predecessor that healing must replace.
+            fs::remove_file(path)?;
+        }
+        fs::rename(&temporary, path)?;
+        if let Ok(directory) = fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    })();
+    if publish.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    Ok(publish?)
 }
 
 #[derive(Debug, Error)]
@@ -422,5 +493,60 @@ mod tests {
             store.resolve(&["frontend-artifact-../secret".to_owned()]),
             Err(FrontendArtifactStoreError::InvalidArtifactId(_))
         ));
+    }
+
+    #[test]
+    fn truncated_blob_heals_on_reingest_instead_of_corrupt_read() {
+        let directory = tempfile::tempdir().expect("artifact store");
+        let store = FrontendArtifactStore::new(directory.path().to_path_buf());
+        let bytes = b"complete durable payload".to_vec();
+        let id = store
+            .ingest(FrontendArtifactInput {
+                display_name: "notes.txt".to_owned(),
+                mime_type: Some("text/plain".to_owned()),
+                kind: FrontendArtifactKind::Text,
+                bytes: bytes.clone(),
+            })
+            .expect("ingest");
+        // Simulate a crash that left a truncated blob behind.
+        let digest = id
+            .strip_prefix("frontend-artifact-")
+            .expect("artifact prefix");
+        let blob = directory.path().join(digest).join("notes.txt");
+        {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&blob)
+                .expect("open blob");
+            file.set_len(bytes.len() as u64 / 2).expect("truncate");
+        }
+        // Re-ingesting the same content must heal the truncation atomically;
+        // the old code returned AlreadyExists-Ok here and reads failed later.
+        let duplicate = store
+            .ingest(FrontendArtifactInput {
+                display_name: "notes.txt".to_owned(),
+                mime_type: Some("text/plain".to_owned()),
+                kind: FrontendArtifactKind::Text,
+                bytes,
+            })
+            .expect("re-ingest heals truncation");
+        assert_eq!(id, duplicate);
+        assert!(matches!(
+            store.resolve(std::slice::from_ref(&id)).expect("resolve").as_slice(),
+            [PromptAttachment::PastedText(TextAttachment { text, .. })]
+            if text == "complete durable payload"
+        ));
+        // No stray temporary files may survive publication.
+        let leftovers: Vec<_> = std::fs::read_dir(directory.path().join(digest))
+            .expect("artifact dir")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.contains(".tmp-"))
+            })
+            .collect();
+        assert!(leftovers.is_empty());
     }
 }

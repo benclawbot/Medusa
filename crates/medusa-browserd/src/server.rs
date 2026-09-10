@@ -1,6 +1,8 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -20,16 +22,24 @@ use crate::{
 
 const BROWSER_BRIDGE_PATH_ENV: &str = "MEDUSA_BROWSER_BRIDGE_PATH";
 const BROWSER_BRIDGE_RELATIVE_PATH: &str = "browser/playwright_bridge.mjs";
+/// How long `run` waits for the loopback proxy to accept connections before serving.
+const PROXY_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long `spawn_bridge` waits for the node bridge to answer Ping before serving.
+const BRIDGE_READINESS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Request id reserved for the internal bridge readiness Ping.
+const BRIDGE_PROBE_REQUEST_ID: u64 = u64::MAX;
 
 pub fn run() -> io::Result<()> {
     let verification_route = configured_verification_route()?;
     let proxy = proxy::spawn()?;
+    wait_for_proxy_ready(&proxy, PROXY_READINESS_TIMEOUT)?;
     let mut bridge = spawn_bridge(&proxy).map_err(io::Error::other)?;
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let mut frame = Vec::with_capacity(4096);
+    let mut consecutive_bridge_restarts: u32 = 0;
     loop {
         let count = read_bounded_frame(&mut stdin, &mut frame, MAX_BROWSER_REQUEST_FRAME_BYTES)?;
         if count == 0 {
@@ -67,6 +77,14 @@ pub fn run() -> io::Result<()> {
             write_response(&mut stdout, request_id, &BrowserResponse::Ok)?;
             continue;
         }
+        // Supervise the bridge: a child that died while idle is restarted
+        // with backoff before the next request is forwarded to it.
+        if bridge_exited(&mut bridge)? {
+            let delay = bridge_restart_delay(consecutive_bridge_restarts);
+            std::thread::sleep(delay);
+            bridge = spawn_bridge(&proxy).map_err(io::Error::other)?;
+            consecutive_bridge_restarts = consecutive_bridge_restarts.saturating_add(1);
+        }
         if matches!(request, BrowserRequest::Close) {
             let response =
                 forward_to_bridge(&mut bridge.stdin, &mut bridge.stdout, request_id, &request);
@@ -81,8 +99,35 @@ pub fn run() -> io::Result<()> {
             }
         };
 
-        let response =
+        let mut response =
             forward_to_bridge(&mut bridge.stdin, &mut bridge.stdout, request_id, &request);
+        // A transport failure against a dead child deserves one retry on a
+        // freshly restarted bridge instead of surfacing a stale pipe error.
+        if is_bridge_transport_failure(&response) && bridge_exited(&mut bridge).unwrap_or(false) {
+            let delay = bridge_restart_delay(consecutive_bridge_restarts);
+            std::thread::sleep(delay);
+            match spawn_bridge(&proxy) {
+                Ok(restarted) => {
+                    bridge = restarted;
+                    consecutive_bridge_restarts = consecutive_bridge_restarts.saturating_add(1);
+                    response = forward_to_bridge(
+                        &mut bridge.stdin,
+                        &mut bridge.stdout,
+                        request_id,
+                        &request,
+                    );
+                }
+                Err(error) => {
+                    response = BrowserResponse::Error {
+                        code: "bridge_restart_failed".into(),
+                        message: error.to_string(),
+                    };
+                }
+            }
+        }
+        if !is_bridge_transport_failure(&response) {
+            consecutive_bridge_restarts = 0;
+        }
         write_response(&mut stdout, request_id, &response)?;
     }
     let _ = bridge.child.kill();
@@ -154,11 +199,130 @@ fn spawn_bridge(proxy: &proxy::Proxy) -> io::Result<Bridge> {
     command.creation_flags(0x0800_0000);
     let mut child = command.spawn()?;
     let (stdin, stdout) = take_bridge_stdio(&mut child)?;
-    Ok(Bridge {
-        child,
-        stdin,
-        stdout,
-    })
+    let (pipes, readiness) = probe_bridge_stdio(stdin, stdout, BRIDGE_READINESS_TIMEOUT);
+    match (pipes, readiness) {
+        (Some((stdin, stdout)), Ok(())) => Ok(Bridge {
+            child,
+            stdin,
+            stdout,
+        }),
+        (pipes, readiness) => {
+            drop(pipes);
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(readiness.err().unwrap_or_else(|| {
+                io::Error::other("Playwright bridge readiness probe failed without a cause")
+            }))
+        }
+    }
+}
+
+/// Confirms the loopback proxy accepts connections before `run` serves traffic.
+fn wait_for_proxy_ready(proxy: &proxy::Proxy, timeout: Duration) -> io::Result<()> {
+    let started = Instant::now();
+    loop {
+        match std::net::TcpStream::connect(proxy.local_addr()) {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                if started.elapsed() >= timeout {
+                    return Err(io::Error::new(
+                        error.kind(),
+                        format!(
+                            "browser proxy did not become ready within {} ms: {error}",
+                            timeout.as_millis()
+                        ),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+}
+
+/// Non-blocking liveness check for the supervised bridge child.
+fn bridge_exited(bridge: &mut Bridge) -> io::Result<bool> {
+    Ok(bridge.child.try_wait()?.is_some())
+}
+
+/// Capped exponential backoff between bridge restarts: 100ms doubling to 5s.
+fn bridge_restart_delay(consecutive_restarts: u32) -> Duration {
+    Duration::from_millis(100_u64.saturating_mul(1_u64 << consecutive_restarts.min(6)))
+        .min(Duration::from_secs(5))
+}
+
+/// True when a forward failed because the bridge pipe itself is broken, as
+/// opposed to the bridge answering with an application-level error.
+fn is_bridge_transport_failure(response: &BrowserResponse) -> bool {
+    let BrowserResponse::Error { code, .. } = response else {
+        return false;
+    };
+    matches!(
+        code.as_str(),
+        "request_write"
+            | "request_flush"
+            | "response_frame"
+            | "response_parse"
+            | "sidecar_closed"
+            | "sidecar_transport_failed"
+            | "request_id_mismatch"
+    )
+}
+
+/// Ping round-trip proving the bridge child is alive before `spawn_bridge`
+/// reports success. The read blocks, so the probe runs on a worker thread
+/// bounded by `timeout`. Returns the pipes on success; on timeout the pipes
+/// stay with the detached worker, which exits once the caller kills the child.
+fn probe_bridge_stdio<W: Write + Send + 'static, R: BufRead + Send + 'static>(
+    mut writer: W,
+    mut reader: R,
+    timeout: Duration,
+) -> (Option<(W, R)>, io::Result<()>) {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let worker = std::thread::Builder::new()
+        .name("medusa-browserd-bridge-probe".to_owned())
+        .spawn(move || {
+            let response = forward_to_bridge(
+                &mut writer,
+                &mut reader,
+                BRIDGE_PROBE_REQUEST_ID,
+                &BrowserRequest::Ping,
+            );
+            let ready = matches!(response, BrowserResponse::Ok);
+            let _ = sender.send((writer, reader, ready, response));
+        });
+    if worker.is_err() {
+        return (
+            None,
+            Err(io::Error::other(
+                "could not start bridge readiness probe worker",
+            )),
+        );
+    }
+    match receiver.recv_timeout(timeout.max(Duration::from_millis(1))) {
+        Ok((writer, reader, true, _)) => (Some((writer, reader)), Ok(())),
+        Ok((writer, reader, false, response)) => (
+            Some((writer, reader)),
+            Err(io::Error::other(format!(
+                "Playwright bridge readiness probe failed: {response:?}"
+            ))),
+        ),
+        Err(mpsc::RecvTimeoutError::Timeout) => (
+            None,
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "Playwright bridge did not answer the readiness probe within {} ms",
+                    timeout.as_millis()
+                ),
+            )),
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => (
+            None,
+            Err(io::Error::other(
+                "Playwright bridge readiness probe worker exited",
+            )),
+        ),
+    }
 }
 
 fn resolve_bridge_path() -> io::Result<PathBuf> {
@@ -304,8 +468,9 @@ mod tests {
     use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
 
     use super::{
-        admit_verification_route, bridge_path_candidates, forward_to_bridge,
-        normalize_navigation_request, take_bridge_stdio, write_response,
+        admit_verification_route, bridge_path_candidates, bridge_restart_delay, forward_to_bridge,
+        is_bridge_transport_failure, normalize_navigation_request, probe_bridge_stdio,
+        take_bridge_stdio, wait_for_proxy_ready, write_response,
     };
 
     #[derive(Default)]
@@ -496,5 +661,88 @@ mod tests {
         write_response(&mut output, 9, &BrowserResponse::Ok).unwrap();
 
         assert_eq!(output, b"{\"request_id\":9,\"kind\":\"ok\"}\n");
+    }
+
+    #[test]
+    fn bridge_restart_backoff_grows_and_caps() {
+        use std::time::Duration;
+
+        assert_eq!(bridge_restart_delay(0), Duration::from_millis(100));
+        assert_eq!(bridge_restart_delay(1), Duration::from_millis(200));
+        assert_eq!(bridge_restart_delay(2), Duration::from_millis(400));
+        assert_eq!(bridge_restart_delay(6), Duration::from_secs(5));
+        assert_eq!(bridge_restart_delay(100), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn transport_failures_are_distinguished_from_bridge_answers() {
+        let transport = BrowserResponse::Error {
+            code: "response_frame".into(),
+            message: "pipe broke".into(),
+        };
+        assert!(is_bridge_transport_failure(&transport));
+        let application = BrowserResponse::Error {
+            code: "navigation_failed".into(),
+            message: "bridge refused".into(),
+        };
+        assert!(!is_bridge_transport_failure(&application));
+        assert!(!is_bridge_transport_failure(&BrowserResponse::Ok));
+    }
+
+    #[test]
+    fn readiness_probe_accepts_an_answering_bridge_and_rejects_a_silent_one() {
+        use std::time::Duration;
+
+        let ok_frame = format!(
+            "{{\"request_id\":{},\"kind\":\"ok\"}}\n",
+            super::BRIDGE_PROBE_REQUEST_ID
+        );
+        let (pipes, readiness) = probe_bridge_stdio(
+            FailingWriter::default(),
+            Cursor::new(ok_frame.into_bytes()),
+            Duration::from_secs(5),
+        );
+        assert!(pipes.is_some());
+        readiness.expect("answering bridge must pass the readiness probe");
+
+        struct SilentReader;
+        impl std::io::Read for SilentReader {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(500));
+                Ok(0)
+            }
+        }
+        impl BufRead for SilentReader {
+            fn fill_buf(&mut self) -> io::Result<&[u8]> {
+                std::thread::sleep(Duration::from_millis(500));
+                Ok(&[])
+            }
+            fn consume(&mut self, _amount: usize) {}
+        }
+        let (_pipes, readiness) = probe_bridge_stdio(
+            FailingWriter::default(),
+            SilentReader,
+            Duration::from_millis(50),
+        );
+        let error = readiness.expect_err("silent bridge must fail the readiness probe");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn proxy_readiness_probe_accepts_a_live_listener_and_rejects_a_dead_port() {
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let proxy = crate::proxy::spawn().expect("proxy");
+        wait_for_proxy_ready(&proxy, Duration::from_secs(5)).expect("live proxy must be ready");
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("dead port probe");
+        let address = listener.local_addr().expect("listener address");
+        drop(listener);
+        let dead = crate::proxy::Proxy::for_test(address);
+        assert!(
+            wait_for_proxy_ready(&dead, Duration::from_millis(100)).is_err(),
+            "closed port must fail the readiness probe"
+        );
     }
 }
