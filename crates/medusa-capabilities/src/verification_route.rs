@@ -152,7 +152,8 @@ impl VerificationRoute {
             }
             vec![SocketAddr::new(normalized, self.port)]
         } else {
-            resolver(&self.host, self.port).map_err(VerificationRouteError::Resolution)?
+            let (host, port) = self.host_and_port();
+            resolver(host, port).map_err(VerificationRouteError::Resolution)?
         };
         validate_probe_time_addresses(&addresses)?;
         Ok(addresses)
