@@ -45,26 +45,56 @@ pub enum AudioEnvironment {
 impl AudioEnvironment {
     #[must_use]
     pub fn detect() -> Self {
-        if env::var_os("CI").is_some() {
+        Self::detect_from(
+            &env::vars_os().collect(),
+            cfg!(target_os = "windows"),
+            Path::new("/.dockerenv").exists(),
+        )
+    }
+
+    /// Testable core of [`AudioEnvironment::detect`]: `vars` holds the
+    /// observed environment, `is_windows` selects the platform branch, and
+    /// `container_file` stands in for `/.dockerenv`.
+    ///
+    /// Both platform branches are compiled on every target (selected with a
+    /// runtime flag, never `cfg`) so Windows headless sessions are detected
+    /// instead of falling through to `Local`.
+    pub(crate) fn detect_from(
+        vars: &std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>,
+        is_windows: bool,
+        container_file: bool,
+    ) -> Self {
+        let present = |name: &str| vars.contains_key(std::ffi::OsStr::new(name));
+        let non_empty = |name: &str| {
+            vars.get(std::ffi::OsStr::new(name))
+                .is_some_and(|value| !value.is_empty())
+        };
+        if present("CI") {
             return Self::Ci;
         }
-        if env::var_os("SSH_CONNECTION").is_some() || env::var_os("SSH_TTY").is_some() {
+        if present("SSH_CONNECTION") || present("SSH_TTY") {
             return Self::Ssh;
         }
-        if env::var_os("WSL_DISTRO_NAME").is_some() || env::var_os("WSL_INTEROP").is_some() {
+        if present("WSL_DISTRO_NAME") || present("WSL_INTEROP") {
             return Self::Wsl;
         }
-        if env::var_os("container").is_some()
-            || env::var_os("KUBERNETES_SERVICE_HOST").is_some()
-            || Path::new("/.dockerenv").exists()
-        {
+        if present("container") || present("KUBERNETES_SERVICE_HOST") || container_file {
             return Self::Container;
         }
-        #[cfg(unix)]
-        if env::var_os("DISPLAY").is_none()
-            && env::var_os("WAYLAND_DISPLAY").is_none()
-            && env::var_os("PULSE_SERVER").is_none()
-            && env::var_os("PIPEWIRE_REMOTE").is_none()
+        if is_windows {
+            // Windows has no DISPLAY/WAYLAND audio-server variables. An
+            // interactive session exposes SESSIONNAME (Console/RDP) or runs
+            // inside Windows Terminal (WT_SESSION); services and other
+            // headless sessions expose neither.
+            if non_empty("SESSIONNAME") || present("WT_SESSION") {
+                return Self::Local;
+            }
+            return Self::Headless;
+        }
+        if !present("DISPLAY")
+            && !present("WAYLAND_DISPLAY")
+            && !present("PULSE_SERVER")
+            && !present("PIPEWIRE_REMOTE")
         {
             return Self::Headless;
         }
@@ -428,5 +458,61 @@ mod tests {
         voice.enter().expect("enter");
         voice.leave().expect("leave");
         assert_eq!(voice.state(), RealtimeVoiceState::Closed);
+    }
+
+    fn vars(
+        pairs: &[(&str, &str)],
+    ) -> std::collections::HashMap<std::ffi::OsString, std::ffi::OsString> {
+        pairs
+            .iter()
+            .map(|(key, value)| {
+                (
+                    std::ffi::OsString::from(key),
+                    std::ffi::OsString::from(value),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn windows_headless_sessions_are_detected_at_runtime() {
+        // No session indicators: service / headless session.
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[]), true, false),
+            AudioEnvironment::Headless
+        );
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[("SESSIONNAME", "")]), true, false),
+            AudioEnvironment::Headless
+        );
+        // Interactive Windows sessions stay local.
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[("SESSIONNAME", "Console")]), true, false),
+            AudioEnvironment::Local
+        );
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[("WT_SESSION", "abc")]), true, false),
+            AudioEnvironment::Local
+        );
+    }
+
+    #[test]
+    fn unix_headless_detection_still_uses_audio_server_variables() {
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[]), false, false),
+            AudioEnvironment::Headless
+        );
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[("DISPLAY", ":0")]), false, false),
+            AudioEnvironment::Local
+        );
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[("WAYLAND_DISPLAY", "wayland-0")]), false, false),
+            AudioEnvironment::Local
+        );
+        assert_eq!(
+            AudioEnvironment::detect_from(&vars(&[("CI", "true")]), true, false),
+            AudioEnvironment::Ci
+        );
     }
 }

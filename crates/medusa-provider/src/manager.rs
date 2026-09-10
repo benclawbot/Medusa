@@ -45,6 +45,9 @@ pub struct ProviderHealth {
 const MAX_ROUTE_RETRIES: u8 = 2;
 /// Consecutive failures after which a route is skipped while a fallback remains.
 const ROUTE_BREAKER_THRESHOLD: u64 = 5;
+/// Upper bound on plan-limit reset waits per request. Exceeding it fails fast
+/// with a Policy error instead of retrying forever when a quota never resets.
+const MAX_PLAN_RESET_ROUNDS: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RetryDisposition {
@@ -809,284 +812,291 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
             return Ok(response.clone());
         }
 
-        let stats = self.latency.stats()?;
-        let phase_latency_policy = self.latency_policy.for_phase(phase);
-        let pinned_index = self.pinned_route_for_phase(phase);
-        let mut route_order = latency_aware_route_order(
-            &self.profiles,
-            &stats,
-            !request.tools.is_empty(),
-            false,
-            phase_latency_policy,
-        );
-        if let Some((context, evidence, policy)) = &self.verified_routing {
-            let decision = select_verified_route_with_latency_policy(
+        let mut plan_resets: u32 = 0;
+        'plans: loop {
+            let stats = self.latency.stats()?;
+            let phase_latency_policy = self.latency_policy.for_phase(phase);
+            let pinned_index = self.pinned_route_for_phase(phase);
+            let mut route_order = latency_aware_route_order(
                 &self.profiles,
                 &stats,
-                evidence,
-                context,
-                policy,
+                !request.tools.is_empty(),
+                false,
                 phase_latency_policy,
-                pinned_index,
             );
-            route_order = decision.ordered_indices;
-            if let Ok(mut receipt) = self.last_route_selection_receipt.lock() {
-                *receipt = Some(decision.receipt);
-            }
-        } else if let Some(pinned_index) = pinned_index {
-            route_order.retain(|index| *index != pinned_index);
-            route_order.insert(0, pinned_index);
-        }
-        let route_order = self.apply_route_breaker(route_order);
-        let hedge = if pinned_index.is_none() {
-            hedge_decision(
-                &route_order,
-                &self.profiles,
-                &stats,
-                request.max_tokens,
-                self.hedge_policy,
-                phase_latency_policy,
-            )
-        } else {
-            None
-        };
-        if let Some(decision) = hedge {
-            let primary_ordinal = route_order
-                .iter()
-                .position(|index| *index == decision.primary_index)
-                .unwrap_or_default();
-            let secondary_ordinal = route_order
-                .iter()
-                .position(|index| *index == decision.secondary_index)
-                .unwrap_or(1);
-            if let Some(audit) = before_attempt.as_deref_mut() {
-                audit(&self.provider_attempt_descriptor(
-                    decision.primary_index,
-                    primary_ordinal,
-                    0,
-                    ProviderAttemptKind::HedgePrimary,
-                    false,
-                    None,
-                )?)?;
-                audit(&self.provider_attempt_descriptor(
-                    decision.secondary_index,
-                    secondary_ordinal,
-                    0,
-                    ProviderAttemptKind::HedgeSecondary,
-                    true,
-                    Some(decision.launch_after_ms),
-                )?)?;
-            }
-            self.record_attempt(decision.primary_index)?;
-            let mut race_sink = sink.take();
-            let race_result = race_provider_candidates(
-                &self.providers,
-                &self.profiles,
-                request,
-                HedgeRacePlan {
-                    primary_index: decision.primary_index,
-                    secondary_index: decision.secondary_index,
-                    launch_after_ms: decision.launch_after_ms,
-                },
-                cancel,
-                &mut race_sink,
-            );
-            sink = race_sink;
-            let outcome = race_result?;
-            if outcome.secondary.is_some() {
-                self.record_attempt(decision.secondary_index)?;
-            }
-            let mut response = self.record_hedge_candidate(
-                &outcome.primary,
-                outcome.authoritative_index,
-                request,
-            )?;
-            if let Some(secondary) = outcome.secondary.as_ref()
-                && let Some(authoritative) =
-                    self.record_hedge_candidate(secondary, outcome.authoritative_index, request)?
-            {
-                response = Some(authoritative);
-            }
-            if let Some(response) = response {
-                if let Ok(mut cache) = self.cache.lock() {
-                    cache.insert(key.clone(), response.clone());
+            if let Some((context, evidence, policy)) = &self.verified_routing {
+                let decision = select_verified_route_with_latency_policy(
+                    &self.profiles,
+                    &stats,
+                    evidence,
+                    context,
+                    policy,
+                    phase_latency_policy,
+                    pinned_index,
+                );
+                route_order = decision.ordered_indices;
+                if let Ok(mut receipt) = self.last_route_selection_receipt.lock() {
+                    *receipt = Some(decision.receipt);
                 }
-                return Ok(response);
+            } else if let Some(pinned_index) = pinned_index {
+                route_order.retain(|index| *index != pinned_index);
+                route_order.insert(0, pinned_index);
             }
-        }
-
-        let mut final_error = None;
-        let mut earliest_plan_reset = None;
-        'routes: for (position, index) in route_order.iter().copied().enumerate() {
-            let provider = &self.providers[index];
-            let has_fallback = position + 1 < route_order.len();
-            let policy = self
-                .profiles
-                .get(index)
-                .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
-            let max_retries = policy.max_retries.min(MAX_ROUTE_RETRIES);
-            for attempt in 0..=max_retries {
-                let kind = if attempt > 0 {
-                    ProviderAttemptKind::Retry
-                } else if position > 0 {
-                    ProviderAttemptKind::Failover
-                } else {
-                    ProviderAttemptKind::Primary
-                };
+            let route_order = self.apply_route_breaker(route_order);
+            let hedge = if pinned_index.is_none() {
+                hedge_decision(
+                    &route_order,
+                    &self.profiles,
+                    &stats,
+                    request.max_tokens,
+                    self.hedge_policy,
+                    phase_latency_policy,
+                )
+            } else {
+                None
+            };
+            if let Some(decision) = hedge {
+                let primary_ordinal = route_order
+                    .iter()
+                    .position(|index| *index == decision.primary_index)
+                    .unwrap_or_default();
+                let secondary_ordinal = route_order
+                    .iter()
+                    .position(|index| *index == decision.secondary_index)
+                    .unwrap_or(1);
                 if let Some(audit) = before_attempt.as_deref_mut() {
                     audit(&self.provider_attempt_descriptor(
-                        index, position, attempt, kind, false, None,
+                        decision.primary_index,
+                        primary_ordinal,
+                        0,
+                        ProviderAttemptKind::HedgePrimary,
+                        false,
+                        None,
+                    )?)?;
+                    audit(&self.provider_attempt_descriptor(
+                        decision.secondary_index,
+                        secondary_ordinal,
+                        0,
+                        ProviderAttemptKind::HedgeSecondary,
+                        true,
+                        Some(decision.launch_after_ms),
                     )?)?;
                 }
-                self.record_attempt(index)?;
-                let started = Instant::now();
-                let streaming = self
+                self.record_attempt(decision.primary_index)?;
+                let mut race_sink = sink.take();
+                let race_result = race_provider_candidates(
+                    &self.providers,
+                    &self.profiles,
+                    request,
+                    HedgeRacePlan {
+                        primary_index: decision.primary_index,
+                        secondary_index: decision.secondary_index,
+                        launch_after_ms: decision.launch_after_ms,
+                    },
+                    cancel,
+                    &mut race_sink,
+                );
+                sink = race_sink;
+                let outcome = race_result?;
+                if outcome.secondary.is_some() {
+                    self.record_attempt(decision.secondary_index)?;
+                }
+                let mut response = self.record_hedge_candidate(
+                    &outcome.primary,
+                    outcome.authoritative_index,
+                    request,
+                )?;
+                if let Some(secondary) = outcome.secondary.as_ref()
+                    && let Some(authoritative) = self.record_hedge_candidate(
+                        secondary,
+                        outcome.authoritative_index,
+                        request,
+                    )?
+                {
+                    response = Some(authoritative);
+                }
+                if let Some(response) = response {
+                    if let Ok(mut cache) = self.cache.lock() {
+                        cache.insert(key.clone(), response.clone());
+                    }
+                    return Ok(response);
+                }
+            }
+
+            let mut final_error = None;
+            let mut earliest_plan_reset = None;
+            'routes: for (position, index) in route_order.iter().copied().enumerate() {
+                let provider = &self.providers[index];
+                let has_fallback = position + 1 < route_order.len();
+                let policy = self
                     .profiles
                     .get(index)
-                    .is_some_and(|profile| profile.streaming)
-                    && provider.capabilities().streaming;
-                let mut first_token_ms = None;
-                let mut route_stream_started = false;
-                let mut stream_sink = |event: ProviderStreamEvent| {
-                    if first_token_ms.is_none()
-                        && matches!(event, ProviderStreamEvent::OutputStarted)
-                    {
-                        first_token_ms = Some(elapsed_ms(started));
+                    .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
+                let max_retries = policy.max_retries.min(MAX_ROUTE_RETRIES);
+                for attempt in 0..=max_retries {
+                    let kind = if attempt > 0 {
+                        ProviderAttemptKind::Retry
+                    } else if position > 0 {
+                        ProviderAttemptKind::Failover
+                    } else {
+                        ProviderAttemptKind::Primary
+                    };
+                    if let Some(audit) = before_attempt.as_deref_mut() {
+                        audit(&self.provider_attempt_descriptor(
+                            index, position, attempt, kind, false, None,
+                        )?)?;
                     }
-                    if matches!(
-                        event,
-                        ProviderStreamEvent::OutputStarted
-                            | ProviderStreamEvent::TextDelta { .. }
-                            | ProviderStreamEvent::ToolUseReady { .. }
-                            | ProviderStreamEvent::Completed { .. }
-                    ) {
-                        route_stream_started = true;
-                    }
-                    if let Some(sink) = sink.as_deref_mut() {
-                        sink(event)?;
-                    }
-                    Ok(())
-                };
-                let result = if streaming {
-                    match cancel {
-                        Some(flag) => {
-                            provider.complete_streaming_cancellable(request, flag, &mut stream_sink)
+                    self.record_attempt(index)?;
+                    let started = Instant::now();
+                    let streaming = self
+                        .profiles
+                        .get(index)
+                        .is_some_and(|profile| profile.streaming)
+                        && provider.capabilities().streaming;
+                    let mut first_token_ms = None;
+                    let mut route_stream_started = false;
+                    let mut stream_sink = |event: ProviderStreamEvent| {
+                        if first_token_ms.is_none()
+                            && matches!(event, ProviderStreamEvent::OutputStarted)
+                        {
+                            first_token_ms = Some(elapsed_ms(started));
                         }
-                        None => provider.complete_streaming(request, &mut stream_sink),
-                    }
-                } else {
-                    match cancel {
-                        Some(flag) => provider.complete_cancellable(request, flag),
-                        None => provider.complete(request),
-                    }
-                };
-                match result {
-                    Ok(response) => {
-                        let duration_ms = elapsed_ms(started);
-                        if attempt > 0 {
-                            self.latency.record_retry_recovery(index)?;
+                        if matches!(
+                            event,
+                            ProviderStreamEvent::OutputStarted
+                                | ProviderStreamEvent::TextDelta { .. }
+                                | ProviderStreamEvent::ToolUseReady { .. }
+                                | ProviderStreamEvent::Completed { .. }
+                        ) {
+                            route_stream_started = true;
                         }
-                        self.latency.record_success_with_first_token(
-                            index,
-                            duration_ms,
-                            first_token_ms,
-                            response.usage,
-                        )?;
-                        let _ =
-                            self.record_prompt_cache_observation(index, request, response.usage);
-                        self.record_success(index)?;
-                        if !streaming && let Some(sink) = sink.as_deref_mut() {
-                            sink(ProviderStreamEvent::Completed {
-                                response: response.clone(),
-                            })?;
+                        if let Some(sink) = sink.as_deref_mut() {
+                            sink(event)?;
                         }
-                        if let Ok(mut cache) = self.cache.lock() {
-                            cache.insert(key.clone(), response.clone());
+                        Ok(())
+                    };
+                    let result = if streaming {
+                        match cancel {
+                            Some(flag) => provider.complete_streaming_cancellable(
+                                request,
+                                flag,
+                                &mut stream_sink,
+                            ),
+                            None => provider.complete_streaming(request, &mut stream_sink),
                         }
-                        return Ok(response);
-                    }
-                    Err(error) => {
-                        let duration_ms = elapsed_ms(started);
-                        self.latency.record_failure_with_category(
-                            index,
-                            duration_ms,
-                            Some(error.category),
-                        )?;
-                        self.record_error(index, &error)?;
-                        if route_stream_started {
-                            return Err(error);
+                    } else {
+                        match cancel {
+                            Some(flag) => provider.complete_cancellable(request, flag),
+                            None => provider.complete(request),
                         }
-                        if let Some(reset_at) = provider_plan_reset_at(&error) {
-                            earliest_plan_reset = Some(
-                                earliest_plan_reset
-                                    .map_or(reset_at, |current: i64| current.min(reset_at)),
+                    };
+                    match result {
+                        Ok(response) => {
+                            let duration_ms = elapsed_ms(started);
+                            if attempt > 0 {
+                                self.latency.record_retry_recovery(index)?;
+                            }
+                            self.latency.record_success_with_first_token(
+                                index,
+                                duration_ms,
+                                first_token_ms,
+                                response.usage,
+                            )?;
+                            let _ = self.record_prompt_cache_observation(
+                                index,
+                                request,
+                                response.usage,
                             );
+                            self.record_success(index)?;
+                            if !streaming && let Some(sink) = sink.as_deref_mut() {
+                                sink(ProviderStreamEvent::Completed {
+                                    response: response.clone(),
+                                })?;
+                            }
+                            if let Ok(mut cache) = self.cache.lock() {
+                                cache.insert(key.clone(), response.clone());
+                            }
+                            return Ok(response);
                         }
-                        final_error = Some(error.clone());
-                        match classify_error(&error, has_fallback) {
-                            RetryDisposition::Retry if attempt < max_retries => {
-                                let delay_ms = policy.delay_ms(&error, index, attempt);
-                                self.record_retry(index, delay_ms)?;
-                                self.latency.record_retry_attempt(index)?;
-                                if let Some(flag) = cancel {
-                                    let deadline = Instant::now() + Duration::from_millis(delay_ms);
-                                    while Instant::now() < deadline {
-                                        if flag.load(Ordering::SeqCst) {
-                                            self.latency.record_cancellation(index, 0)?;
-                                            return Err(MedusaError::new(
-                                                ErrorCode::DependencyUnavailable,
-                                                ErrorCategory::Transient,
-                                                "provider request cancelled",
-                                            ));
+                        Err(error) => {
+                            let duration_ms = elapsed_ms(started);
+                            self.latency.record_failure_with_category(
+                                index,
+                                duration_ms,
+                                Some(error.category),
+                            )?;
+                            self.record_error(index, &error)?;
+                            if route_stream_started {
+                                return Err(error);
+                            }
+                            if let Some(reset_at) = provider_plan_reset_at(&error) {
+                                earliest_plan_reset = Some(
+                                    earliest_plan_reset
+                                        .map_or(reset_at, |current: i64| current.min(reset_at)),
+                                );
+                            }
+                            final_error = Some(error.clone());
+                            match classify_error(&error, has_fallback) {
+                                RetryDisposition::Retry if attempt < max_retries => {
+                                    let delay_ms = policy.delay_ms(&error, index, attempt);
+                                    self.record_retry(index, delay_ms)?;
+                                    self.latency.record_retry_attempt(index)?;
+                                    if let Some(flag) = cancel {
+                                        let deadline =
+                                            Instant::now() + Duration::from_millis(delay_ms);
+                                        while Instant::now() < deadline {
+                                            if flag.load(Ordering::SeqCst) {
+                                                self.latency.record_cancellation(index, 0)?;
+                                                return Err(MedusaError::new(
+                                                    ErrorCode::DependencyUnavailable,
+                                                    ErrorCategory::Transient,
+                                                    "provider request cancelled",
+                                                ));
+                                            }
+                                            thread::sleep(Duration::from_millis(25));
                                         }
-                                        thread::sleep(Duration::from_millis(25));
+                                    } else {
+                                        (self.sleeper)(Duration::from_millis(delay_ms));
                                     }
-                                } else {
-                                    (self.sleeper)(Duration::from_millis(delay_ms));
                                 }
-                            }
-                            RetryDisposition::Retry | RetryDisposition::Failover
-                                if has_fallback =>
-                            {
-                                self.record_failover(index)?;
-                                break;
-                            }
-                            RetryDisposition::Permanent | RetryDisposition::Failover => {
-                                if earliest_plan_reset.is_some() {
-                                    break 'routes;
+                                RetryDisposition::Retry | RetryDisposition::Failover
+                                    if has_fallback =>
+                                {
+                                    self.record_failover(index)?;
+                                    break;
                                 }
-                                return Err(error);
-                            }
-                            RetryDisposition::Retry => {
-                                if earliest_plan_reset.is_some() {
-                                    break 'routes;
+                                RetryDisposition::Permanent | RetryDisposition::Failover => {
+                                    if earliest_plan_reset.is_some() {
+                                        break 'routes;
+                                    }
+                                    return Err(error);
                                 }
-                                return Err(error);
+                                RetryDisposition::Retry => {
+                                    if earliest_plan_reset.is_some() {
+                                        break 'routes;
+                                    }
+                                    return Err(error);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        if let Some(reset_at) = earliest_plan_reset {
-            wait_for_provider_plan_reset(cancel, reset_at, self.sleeper)?;
-            return self.complete_with_cancel_and_sink_audited(
-                request,
-                phase,
-                cancel,
-                sink,
-                before_attempt,
-            );
+            if let Some(reset_at) = earliest_plan_reset {
+                plan_reset_round(plan_resets, reset_at)?;
+                plan_resets += 1;
+                wait_for_provider_plan_reset(cancel, reset_at, self.sleeper)?;
+                continue 'plans;
+            }
+            return Err(final_error.unwrap_or_else(|| {
+                MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Environment,
+                    "no compatible model providers are configured",
+                )
+            }));
         }
-
-        Err(final_error.unwrap_or_else(|| {
-            MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                "no compatible model providers are configured",
-            )
-        }))
     }
 }
 
@@ -1118,6 +1128,22 @@ fn provider_plan_reset_at(error: &MedusaError) -> Option<i64> {
         .get("provider_plan_reset_at_unix")
         .and_then(Value::as_i64)?;
     (reset_at > OffsetDateTime::now_utc().unix_timestamp()).then_some(reset_at)
+}
+
+/// Bounds plan-limit reset waits: the first `MAX_PLAN_RESET_ROUNDS` waits are
+/// allowed, further rounds fail fast with a non-retryable Policy error.
+fn plan_reset_round(plan_resets: u32, reset_at_unix: i64) -> MedusaResult<()> {
+    if plan_resets < MAX_PLAN_RESET_ROUNDS {
+        return Ok(());
+    }
+    Err(MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Policy,
+        format!(
+            "provider plan limit persists after {MAX_PLAN_RESET_ROUNDS} reset waits (reset at {reset_at_unix}); switch provider with `medusa config` or wait for the next reset window"
+        ),
+    )
+    .with_retryable(false))
 }
 
 fn wait_for_provider_plan_reset(
@@ -1655,5 +1681,86 @@ mod tests {
         assert_eq!(slow_calls.load(Ordering::SeqCst), 0);
         assert_eq!(fast_calls.load(Ordering::SeqCst), 1);
         assert_eq!(manager.last_completed_provider(), Some(1));
+    }
+
+    struct PlanLimitProvider {
+        calls: Arc<AtomicUsize>,
+        failures_before_success: usize,
+        reset_in_secs: i64,
+    }
+
+    impl ModelProvider for PlanLimitProvider {
+        fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call < self.failures_before_success {
+                let mut error = failure(ErrorCategory::Transient, true);
+                error
+                    .context
+                    .insert("provider_plan_limit".into(), json!(true));
+                error.context.insert(
+                    "provider_plan_reset_at_unix".into(),
+                    json!(OffsetDateTime::now_utc().unix_timestamp() + self.reset_in_secs),
+                );
+                return Err(error);
+            }
+            Ok(success())
+        }
+    }
+
+    #[test]
+    fn plan_limit_rounds_are_bounded_and_fail_fast() {
+        assert!(plan_reset_round(0, 1_700_000_000).is_ok());
+        assert!(plan_reset_round(MAX_PLAN_RESET_ROUNDS - 1, 1_700_000_000).is_ok());
+        let error = plan_reset_round(MAX_PLAN_RESET_ROUNDS, 1_700_000_000)
+            .expect_err("rounds past the bound must fail");
+        assert_eq!(error.category, ErrorCategory::Policy);
+        assert!(!error.retryable);
+        assert!(error.message.contains("reset waits"));
+    }
+
+    #[test]
+    fn plan_limit_wait_retries_within_the_bound_then_succeeds() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let manager = ProviderManager::new(vec![PlanLimitProvider {
+            calls: calls.clone(),
+            // First full pass (primary + one retry) hits the plan limit, the
+            // next pass succeeds after the reset wait.
+            failures_before_success: 2,
+            reset_in_secs: 1,
+        }])
+        .without_sleep();
+
+        manager.complete(&request()).expect("post-reset response");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(manager.last_completed_provider(), Some(0));
+    }
+
+    #[test]
+    fn persistent_plan_limit_exhausts_the_bound() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let manager = ProviderManager::new(vec![PlanLimitProvider {
+            calls: calls.clone(),
+            failures_before_success: usize::MAX,
+            reset_in_secs: 1,
+        }])
+        .with_policy(RouteRetryPolicy {
+            max_retries: 0,
+            base_delay_ms: 1,
+            max_delay_ms: 5_000,
+            jitter_ms: 0,
+        })
+        .without_sleep();
+
+        let error = manager
+            .complete(&request())
+            .expect_err("persistent plan limit must fail");
+        assert_eq!(error.category, ErrorCategory::Policy);
+        assert!(!error.retryable);
+        // One attempt per round, initial round plus bounded reset waits.
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            MAX_PLAN_RESET_ROUNDS as usize + 1
+        );
     }
 }

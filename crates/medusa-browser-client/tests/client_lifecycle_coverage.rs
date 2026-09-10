@@ -62,5 +62,5 @@ fn browser_client_reports_missing_sidecar_as_retryable_dependency_error() {
     };
     assert_eq!(error.code, ErrorCode::DependencyUnavailable);
     assert!(error.retryable);
-    assert!(error.message.contains("could not launch"));
+    assert!(error.message.contains("was not found on PATH"));
 }
