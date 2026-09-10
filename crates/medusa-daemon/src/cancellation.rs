@@ -31,6 +31,8 @@ pub(crate) fn cancel_job(
             return Ok(Response::Error {
                 code: "job_not_cancellable".into(),
                 message: format!("daemon job {job_id} is already terminal"),
+                category: ErrorCategory::Environment,
+                retryable: false,
             });
         }
         JobState::Queued | JobState::Running => {}
@@ -59,6 +61,8 @@ pub(crate) fn cancel_job(
             return Ok(Response::Error {
                 code: "cancellation_failed".into(),
                 message: error.to_string(),
+                category: ErrorCategory::Environment,
+                retryable: false,
             });
         }
     }
