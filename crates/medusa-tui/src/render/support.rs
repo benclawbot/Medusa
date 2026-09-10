@@ -77,6 +77,12 @@ fn verbose_filterable(kind: TranscriptActivityKind) -> bool {
     )
 }
 
+/// Masks credential-like substrings in displayed transcript and modal text
+/// using the shared agent redactor. The composer keeps its own masking.
+fn mask_secret_text(value: &str) -> String {
+    medusa_agent::redact_diagnostic_text(value)
+}
+
 pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     let mut previous_activity_group = None;
@@ -88,14 +94,14 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
             TranscriptEntry::User(draft) => {
                 previous_activity_group = None;
                 let text = if draft.text.is_empty() {
-                    "(attachment-only prompt)"
+                    "(attachment-only prompt)".to_owned()
                 } else {
-                    &draft.text
+                    mask_secret_text(&draft.text)
                 };
                 lines.extend(conversation_block_lines(
                     "› ",
                     Color::White,
-                    text,
+                    &text,
                     Color::White,
                     Some(Color::DarkGrey),
                     true,
@@ -120,7 +126,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 lines.extend(super::markdown::markdown_block_lines(
                     "",
                     Color::White,
-                    text,
+                    &mask_secret_text(text),
                     width,
                 ));
             }
@@ -158,7 +164,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 {
                     lines.push(worked_for_line(elapsed_seconds, width));
                 } else {
-                    lines.extend(system_lines(message, width));
+                    lines.extend(system_lines(&mask_secret_text(message), width));
                 }
             }
         }
@@ -245,6 +251,17 @@ pub(super) fn set_frame_line(frame: &mut [StyledLine], row: usize, line: StyledL
 
 pub(super) fn separator_line(width: u16) -> StyledLine {
     StyledLine::new("-".repeat(usize::from(width)), Color::DarkGrey)
+}
+
+/// Overlay shown on the newest visible transcript row while the user is
+/// scrolled up and fresh turn output has arrived below the viewport.
+pub(super) fn new_output_below_line() -> StyledLine {
+    StyledLine::with_marker(
+        "↓ ",
+        Color::Yellow,
+        "new output below — Ctrl+End to follow",
+        Color::Yellow,
+    )
 }
 
 pub(super) fn draw_frame(
@@ -373,6 +390,7 @@ pub(super) fn question_modal_lines(question_modal: &app::QuestionModal) -> Vec<S
                     prompt.header,
                     question_modal
                         .answer_for(index)
+                        .map(|answer| mask_secret_text(&answer))
                         .unwrap_or_else(|| "Not answered".to_owned())
                 ),
                 if question_modal.answer_for(index).is_some() {
@@ -444,7 +462,7 @@ pub(super) fn question_modal_lines(question_modal: &app::QuestionModal) -> Vec<S
         if answer.is_empty() {
             "Type a custom answer...".to_owned()
         } else {
-            answer.to_owned()
+            mask_secret_text(answer)
         },
         if answer.is_empty() {
             Color::DarkGrey
@@ -790,7 +808,7 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> V
     let mut lines = vec![StyledLine::with_marker(
         format!("{marker} "),
         color,
-        format!("[{lifecycle}] {}", activity.title),
+        format!("[{lifecycle}] {}", mask_secret_text(&activity.title)),
         foreground,
     )];
     if !matches!(
@@ -800,7 +818,12 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> V
         lines.extend(
             presented_activity_details(&activity.details, expanded)
                 .into_iter()
-                .map(|detail| StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)),
+                .map(|detail| {
+                    StyledLine::new(
+                        format!("  └ {}", mask_secret_text(&detail)),
+                        Color::DarkGrey,
+                    )
+                }),
         );
     }
     lines
@@ -911,30 +934,61 @@ pub(crate) fn runtime_error(error: runtime::RuntimeError) -> io::Error {
     io::Error::other(error)
 }
 
+/// Returns true for terminal control characters that must never reach the
+/// terminal raw. Newlines and tabs are preserved so multi-line layout still
+/// works; everything else in `Cc` (C0 controls like ESC and BEL, DEL, and
+/// the C1 range 0x80-0x9f) is stripped.
+fn is_strippable_terminal_control(value: char) -> bool {
+    if value == '\n' || value == '\t' {
+        return false;
+    }
+    value.is_control()
+}
+
+/// Removes raw control characters from a non-hyperlink text segment so
+/// pasted model output cannot smuggle OSC/APC/DCS sequences (OSC-52
+/// clipboard writes, title sets, bracketed-paste markers, ...) through
+/// `crossterm::style::Print`.
+fn sanitize_terminal_segment(text: &str) -> String {
+    if !text
+        .bytes()
+        .any(|byte| byte < 0x20 || byte == 0x7f || byte >= 0x80)
+    {
+        return text.to_owned();
+    }
+    text.chars()
+        .filter(|value| !is_strippable_terminal_control(*value))
+        .collect()
+}
+
 pub(crate) fn terminal_hyperlinks(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("http://").or_else(|| rest.find("https://")) {
-        output.push_str(&rest[..start]);
+        output.push_str(&sanitize_terminal_segment(&rest[..start]));
         let candidate = &rest[start..];
         let end = candidate
             .find(char::is_whitespace)
             .unwrap_or(candidate.len());
         let raw_url = &candidate[..end];
-        let url = raw_url.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}']);
+        // URLs cannot contain whitespace, but a control character could still
+        // be embedded in the candidate; strip it before wrapping in OSC-8 so
+        // the hyperlink itself cannot break out of the escape sequence.
+        let sanitized = sanitize_terminal_segment(raw_url);
+        let url = sanitized.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}']);
         if url.is_empty() {
-            output.push_str(raw_url);
+            output.push_str(&sanitized);
         } else {
             output.push_str("\x1b]8;;");
             output.push_str(url);
             output.push_str("\x1b\\");
             output.push_str(url);
             output.push_str("\x1b]8;;\x1b\\");
-            output.push_str(&raw_url[url.len()..]);
+            output.push_str(&sanitized[url.len()..]);
         }
         rest = &candidate[end..];
     }
-    output.push_str(rest);
+    output.push_str(&sanitize_terminal_segment(rest));
     output
 }
 

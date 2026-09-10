@@ -23,12 +23,16 @@ interface WakeState extends WakeCounters {
   disposed: boolean;
   starting?: Promise<void>;
   unlisten?: UnlistenFn;
+  lastWakeupInstallError?: string;
+  lastDrainError?: string;
 }
 
 export interface RuntimeWakeupMetrics extends WakeCounters {
   runtimeId: string;
   pending: boolean;
   wakeupInstalled: boolean;
+  lastWakeupInstallError?: string;
+  lastDrainError?: string;
 }
 
 const wakeStates = new Map<string, WakeState>();
@@ -84,6 +88,15 @@ async function ensureRuntimeWakeups(runtimeId: string): Promise<void> {
       }
     } catch (error) {
       state.wakeupInstallFailures += 1;
+      state.lastWakeupInstallError = error instanceof Error ? error.message : String(error);
+      // Structured log: the UI reads the same failure through
+      // getRuntimeWakeupMetrics().lastWakeupInstallError and keeps polling on
+      // the fallback path, so this must never be a silent empty catch.
+      console.error("[medusa-runtime-wakeup] wakeup install failed", {
+        runtimeId,
+        failures: state.wakeupInstallFailures,
+        error: state.lastWakeupInstallError,
+      });
       unlisten();
       throw error;
     }
@@ -104,19 +117,24 @@ function disposeRuntimeWakeups(runtimeId: string): void {
 /**
  * Start the durable runtime first, then subscribe to backend replay wakeups. Browser-only test
  * harnesses do not expose the native event command, so failure to install the optimization keeps
- * the low-frequency fallback path rather than failing startup.
+ * the low-frequency fallback path rather than failing startup. The failure is still recorded on
+ * getRuntimeWakeupMetrics() and logged, never silently swallowed.
  */
 export async function startRuntime(repo?: string): Promise<legacy.RuntimeStartResponse> {
   const response = await legacy.startRuntime(repo);
   markRuntimeWake(response.runtimeId);
-  void ensureRuntimeWakeups(response.runtimeId).catch(() => undefined);
+  void ensureRuntimeWakeups(response.runtimeId).catch(() => {
+    // Recorded as lastWakeupInstallError and logged inside ensureRuntimeWakeups.
+  });
   return response;
 }
 
 export async function resumeRuntime(repo: string, sessionId: string): Promise<legacy.RuntimeStartResponse> {
   const response = await legacy.resumeRuntime(repo, sessionId);
   markRuntimeWake(response.runtimeId);
-  void ensureRuntimeWakeups(response.runtimeId).catch(() => undefined);
+  void ensureRuntimeWakeups(response.runtimeId).catch(() => {
+    // Recorded as lastWakeupInstallError and logged inside ensureRuntimeWakeups.
+  });
   return response;
 }
 
@@ -174,7 +192,9 @@ export async function performRecoveryAction(
  */
 export async function pollRuntime(runtimeId: string): Promise<legacy.RuntimeEvent[]> {
   const state = wakeState(runtimeId);
-  void ensureRuntimeWakeups(runtimeId).catch(() => undefined);
+  void ensureRuntimeWakeups(runtimeId).catch(() => {
+    // Recorded as lastWakeupInstallError and logged inside ensureRuntimeWakeups.
+  });
   const now = Date.now();
   if (!state.pending && now - state.lastPollAt < FALLBACK_POLL_MS) {
     state.localSkips += 1;
@@ -193,6 +213,14 @@ export async function pollRuntime(runtimeId: string): Promise<legacy.RuntimeEven
     return events;
   } catch (error) {
     state.drainFailures += 1;
+    state.lastDrainError = error instanceof Error ? error.message : String(error);
+    // Structured log: the caller also receives the rejection and surfaces it
+    // in the UI after consecutive failures, so this must never be silent.
+    console.error("[medusa-runtime-wakeup] replay drain failed", {
+      runtimeId,
+      failures: state.drainFailures,
+      error: state.lastDrainError,
+    });
     // A failed drain may still have unread durable replay. Keep the next call eligible instead of
     // suppressing it until the fallback deadline.
     state.pending = true;
@@ -219,6 +247,8 @@ export function getRuntimeWakeupMetrics(runtimeId: string): RuntimeWakeupMetrics
     drainedEvents: state.drainedEvents,
     drainFailures: state.drainFailures,
     wakeupInstallFailures: state.wakeupInstallFailures,
+    lastWakeupInstallError: state.lastWakeupInstallError,
+    lastDrainError: state.lastDrainError,
   };
 }
 

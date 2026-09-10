@@ -37,7 +37,17 @@ const CLI_FLAGS: &[&str] = &[
     "--client-secret",
 ];
 
-const TOKEN_PREFIXES: &[&str] = &["github_pat_", "ghp_", "xoxb-", "xoxp-", "sk-"];
+const TOKEN_PREFIXES: &[&str] = &[
+    "github_pat_",
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "xoxb-",
+    "xoxp-",
+    "sk-",
+];
 
 pub(crate) fn redact_args(args: &[String]) -> Vec<String> {
     let mut redact_next = false;
@@ -313,6 +323,22 @@ mod tests {
         let redacted = redact_text(input);
         for secret in ["alpha", "bearer-secret", "bravo", "sk-charlie", "ghp_delta"] {
             assert!(!redacted.contains(secret));
+        }
+        assert!(redacted.contains(REDACTED));
+    }
+
+    #[test]
+    fn redacts_all_github_token_families() {
+        let input = "saw gho_oauth ghu_user ghs_app ghr_refresh github_pat_fine next";
+        let redacted = redact_text(input);
+        for secret in [
+            "gho_oauth",
+            "ghu_user",
+            "ghs_app",
+            "ghr_refresh",
+            "github_pat_fine",
+        ] {
+            assert!(!redacted.contains(secret), "{secret} survived redaction");
         }
         assert!(redacted.contains(REDACTED));
     }

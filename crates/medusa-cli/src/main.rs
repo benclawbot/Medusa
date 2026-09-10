@@ -1173,8 +1173,74 @@ fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
     Ok(())
 }
 
+/// Basename of the requested program for deny-list comparison. A bare name
+/// like `rm` must match the same rule as `/bin/rm` or `C:\Windows\...\rm.exe`.
+fn shell_program_basename(program: &str) -> String {
+    let basename = Path::new(program)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| program.to_owned());
+    #[cfg(windows)]
+    {
+        basename.to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        basename
+    }
+}
+
+fn shell_denied_program(program: &str) -> bool {
+    let basename = shell_program_basename(program);
+    #[cfg(windows)]
+    {
+        const DENIED: &[&str] = &[
+            "rm",
+            "sudo",
+            "shutdown",
+            "reboot",
+            "mkfs",
+            "sh",
+            "bash",
+            "dash",
+            "zsh",
+            "fish",
+            "cmd",
+            "powershell",
+            "pwsh",
+        ];
+        // Windows executables are resolved case-insensitively and usually
+        // carry an extension; compare the stem so `CMD.EXE` cannot bypass.
+        let stem = basename
+            .strip_suffix(".exe")
+            .or_else(|| basename.strip_suffix(".com"))
+            .or_else(|| basename.strip_suffix(".cmd"))
+            .or_else(|| basename.strip_suffix(".bat"))
+            .unwrap_or(&basename);
+        DENIED.contains(&stem)
+    }
+    #[cfg(not(windows))]
+    {
+        matches!(
+            basename.as_str(),
+            "rm" | "sudo"
+                | "shutdown"
+                | "reboot"
+                | "mkfs"
+                | "sh"
+                | "bash"
+                | "dash"
+                | "zsh"
+                | "fish"
+                | "cmd"
+                | "powershell"
+                | "pwsh"
+        )
+    }
+}
+
 fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
-    if matches!(program, "rm" | "sudo" | "shutdown" | "reboot" | "mkfs") {
+    if shell_denied_program(program) {
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
@@ -1376,6 +1442,37 @@ mod tests {
             .expect("git log");
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "test checkpoint");
+    }
+
+    #[test]
+    fn shell_denies_bare_names_paths_and_shell_interpreters() {
+        for denied in [
+            "rm",
+            "/bin/rm",
+            "sudo",
+            "/usr/bin/sudo",
+            "sh",
+            "/bin/sh",
+            "bash",
+            "/bin/bash",
+            "dash",
+            "zsh",
+            "fish",
+            "cmd",
+            "powershell",
+            "pwsh",
+        ] {
+            assert!(
+                shell_denied_program(denied),
+                "{denied} must be hard-denied"
+            );
+        }
+        for allowed in ["git", "/usr/bin/git", "cargo", "ls"] {
+            assert!(
+                !shell_denied_program(allowed),
+                "{allowed} must not be hard-denied"
+            );
+        }
     }
 
     #[test]

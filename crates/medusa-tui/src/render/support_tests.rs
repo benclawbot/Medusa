@@ -106,6 +106,65 @@ fn conversation_urls_are_emitted_as_terminal_hyperlinks() {
 }
 
 #[test]
+fn non_url_control_sequences_are_neutralized_but_real_urls_keep_hyperlinks() {
+    // OSC-52 clipboard write, window-title set, and bracketed-paste markers
+    // must not reach the terminal raw.
+    let rendered = terminal_hyperlinks(concat!(
+        "before ",
+        "\x1b]52;c;aGVsbG8=\x07",
+        "\x1b]0;pwned title\x07",
+        "\x1b[200~pasted\x1b[201~",
+        " see https://example.com/docs for details",
+    ));
+    assert!(rendered.contains("\x1b]8;;https://example.com/docs\x1b\\"));
+    assert!(rendered.contains("before "));
+    assert!(rendered.contains("for details"));
+    let without_hyperlink_wrappers = rendered
+        .replace("\x1b]8;;https://example.com/docs\x1b\\", "")
+        .replace("\x1b]8;;\x1b\\", "");
+    assert!(
+        !without_hyperlink_wrappers.contains('\x1b'),
+        "stray ESC survived sanitization: {without_hyperlink_wrappers:?}"
+    );
+    assert!(!without_hyperlink_wrappers.contains('\x07'));
+    // The printable remnants ("]52;c;", "]0;") may survive as inert text, but
+    // without the surrounding ESC they cannot function as control sequences.
+    assert!(!without_hyperlink_wrappers.contains("\x1b]52;c;"));
+    assert!(!without_hyperlink_wrappers.contains("\x1b]0;"));
+    // C1 controls are stripped as well.
+    let c1 = terminal_hyperlinks("a\u{9b}5~b");
+    assert_eq!(c1, "a5~b");
+}
+
+#[test]
+fn transcript_rows_mask_apparent_tokens() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "secret-masking",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.transcript.push(TranscriptEntry::User(PromptDraft {
+        text: "deploy with gho_oauthsecret001".to_owned(),
+        ..PromptDraft::default()
+    }));
+    app.transcript.push(TranscriptEntry::Assistant(
+        "key is ghs_appsecret002 done".to_owned(),
+    ));
+
+    let visible = transcript_lines(&app, 80)
+        .into_iter()
+        .map(|line| line.visible_text(80))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!visible.contains("gho_oauthsecret001"));
+    assert!(!visible.contains("ghs_appsecret002"));
+    assert!(visible.contains("[REDACTED]"));
+}
+
+#[test]
 fn fixed_frame_rows_never_wrap_into_extra_terminal_lines() {
     let status = "session 23s · total 0 · input 0 · output 0 · cache-read 0 · cache-write 0 · cost — · — · — tok/s · confirmation [Full Access]";
     let row = fit_to_row(status, 80);

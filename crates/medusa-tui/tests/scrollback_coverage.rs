@@ -20,7 +20,10 @@ fn scrollback_scroll_up_caps_at_max() {
 
 #[test]
 fn scrollback_scroll_down_clamps_at_zero() {
-    let mut sb = Scrollback { offset: 5 };
+    let mut sb = Scrollback {
+        offset: 5,
+        ..Default::default()
+    };
     sb.scroll_down(10);
     assert_eq!(sb.offset, 0);
 }

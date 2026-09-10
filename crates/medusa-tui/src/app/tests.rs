@@ -618,6 +618,34 @@ fn page_and_mouse_scrolling_update_scrollback() {
 }
 
 #[test]
+fn fresh_turn_output_while_scrolled_up_sets_and_clears_follow_indicator() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "new-output-indicator",
+        "",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+    assert!(!app.has_new_output_below());
+
+    // Output at the live edge never raises the indicator.
+    app.push_transcript(TranscriptEntry::Assistant("first".to_owned()));
+    assert!(!app.has_new_output_below());
+
+    app.scrollback_scroll_up(10, usize::MAX);
+    assert_eq!(app.scrollback_offset(), 10);
+    app.push_transcript(TranscriptEntry::Assistant("fresh turn output".to_owned()));
+    assert!(app.has_new_output_below());
+
+    // Partial scroll-down keeps the indicator; reaching the bottom clears it.
+    app.scrollback_scroll_down(4);
+    assert!(app.has_new_output_below());
+    app.set_scrollback_offset(0);
+    assert!(!app.has_new_output_below());
+}
+
+#[test]
 fn ctrl_e_toggles_activity_detail_expansion_and_new_session_resets_it() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(

@@ -11,6 +11,9 @@ use time::{Duration, OffsetDateTime};
 
 pub const REGISTRY_SCHEMA_VERSION: u32 = 2;
 const LEGACY_REGISTRY_SCHEMA_VERSION: u32 = 1;
+/// Maximum registry file size accepted by [`ProcessRegistry::load`], matching
+/// the updater manifest convention (1 MiB).
+pub const MAX_REGISTRY_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -438,6 +441,14 @@ impl ProcessRegistry {
 
     pub fn load(path: &Path) -> Result<Self, RegistryError> {
         let bytes = fs::read(path)?;
+        // Bound the in-memory parse like the updater manifest cap (1 MiB) so
+        // a corrupt or hostile registry file cannot force unbounded allocation.
+        if bytes.len() > MAX_REGISTRY_BYTES {
+            return Err(RegistryError::RegistryTooLarge {
+                bytes: bytes.len(),
+                maximum: MAX_REGISTRY_BYTES,
+            });
+        }
         let mut value: Value = serde_json::from_slice(&bytes)?;
         migrate_legacy_registry(&mut value)?;
         let registry: Self = serde_json::from_value(value)?;
@@ -568,6 +579,8 @@ pub enum RegistryError {
     IdentityPidMismatch(ProcessId),
     #[error("unsupported registry schema version: {0}")]
     UnsupportedSchema(u32),
+    #[error("registry file is too large: {bytes} bytes exceeds {maximum} bytes")]
+    RegistryTooLarge { bytes: usize, maximum: usize },
     #[error("registry path has no parent directory")]
     MissingParentDirectory,
     #[error(transparent)]
@@ -791,5 +804,20 @@ mod tests {
         let mut registry = ProcessRegistry::default();
         registry.register(record("same")).expect("register");
         assert!(registry.register(record("same")).is_err());
+    }
+
+    #[test]
+    fn oversized_registry_file_is_rejected_before_parsing() {
+        let directory = std::env::temp_dir().join(format!(
+            "medusa-process-registry-oversize-{}.json",
+            std::process::id()
+        ));
+        fs::write(&directory, vec![b' '; MAX_REGISTRY_BYTES + 1]).expect("oversize file");
+        let error = ProcessRegistry::load(&directory).expect_err("oversize registry");
+        assert!(
+            matches!(error, RegistryError::RegistryTooLarge { .. }),
+            "unexpected error: {error}"
+        );
+        let _ = fs::remove_file(&directory);
     }
 }
