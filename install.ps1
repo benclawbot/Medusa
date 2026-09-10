@@ -3,7 +3,8 @@ param(
     [ValidateSet('auto', 'release', 'main')]
     [string]$Channel = 'auto',
     [switch]$NoLaunch,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [switch]$UseExistingPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -439,8 +440,20 @@ if (-not [string]::IsNullOrWhiteSpace($env:MEDUSA_INSTALL_CHANNEL)) {
 $existingTarget = Get-ExistingMedusa
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     if ($null -ne $existingTarget) {
-        $target = $existingTarget
-        $InstallDir = Split-Path -Parent $target
+        $existingDir = Split-Path -Parent $existingTarget
+        if (-not [string]::Equals($existingDir, $defaultInstallDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (-not $UseExistingPath) {
+                throw ('Found an existing medusa.exe at {0} which is outside the default install directory. ' +
+                    'The installer will not overwrite a foreign installation without explicit confirmation. ' +
+                    'Rerun with -InstallDir ''{0}'' -UseExistingPath to reuse that location, or pass an explicit -InstallDir.' -f $existingDir)
+            }
+            $target = $existingTarget
+            $InstallDir = $existingDir
+        }
+        else {
+            $target = $existingTarget
+            $InstallDir = $existingDir
+        }
     }
     else {
         $InstallDir = $defaultInstallDir
@@ -490,6 +503,23 @@ try {
         $asset = 'medusa-cli-windows.zip'
         $archive = Join-Path $tempDir $asset
         Download-File "https://github.com/$repo/releases/latest/download/$asset" $archive 'Downloading Medusa'
+        $digestsFile = Join-Path $tempDir 'SHA256SUMS'
+        Download-File "https://github.com/$repo/releases/latest/download/SHA256SUMS" $digestsFile 'Downloading checksums'
+        $expectedHash = $null
+        foreach ($line in (Get-Content -LiteralPath $digestsFile)) {
+            $parts = $line -split '\s+'
+            if ($parts.Count -ge 2 -and $parts[1] -eq $asset) {
+                $expectedHash = $parts[0].ToUpperInvariant()
+                break
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($expectedHash)) {
+            throw 'The published SHA256SUMS has no entry for medusa-cli-windows.zip; refusing to install an unverifiable download.'
+        }
+        $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+        if ($actualHash -ne $expectedHash) {
+            throw ('Checksum mismatch for medusa-cli-windows.zip: expected {0}, got {1}. Refusing to install.' -f $expectedHash, $actualHash)
+        }
         $extractDir = Join-Path $tempDir 'extract'
         Expand-Archive -LiteralPath $archive -DestinationPath $extractDir -Force
         $binaries = @(Get-ChildItem -Path $extractDir -Filter 'medusa.exe' -File -Recurse)

@@ -36,13 +36,7 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
         return Ok(FirstRunDisposition::Continue);
     }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return if skip_configured {
-            Ok(FirstRunDisposition::Continue)
-        } else {
-            Err(config_error(
-                "`medusa config init` requires an interactive terminal for native provider setup",
-            ))
-        };
+        return non_terminal_disposition(skip_configured, snapshot.profile.configured);
     }
 
     let existing_profiles = catalog
@@ -96,6 +90,23 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
             Ok(FirstRunDisposition::Continue)
         }
     }
+}
+
+fn non_terminal_disposition(
+    skip_configured: bool,
+    configured: bool,
+) -> MedusaResult<FirstRunDisposition> {
+    if skip_configured && configured {
+        return Ok(FirstRunDisposition::Continue);
+    }
+    if skip_configured {
+        return Err(config_error(
+            "no provider is configured and this session is not interactive; run `medusa config init` in an interactive terminal to complete provider setup",
+        ));
+    }
+    Err(config_error(
+        "`medusa config init` requires an interactive terminal for native provider setup",
+    ))
 }
 
 struct CliSetupHost;
@@ -173,6 +184,24 @@ mod tests {
             ..ProviderProfile::default()
         };
         assert!(validate_candidate(&profile).is_err());
+    }
+
+    #[test]
+    fn headless_first_run_fails_clearly_without_a_provider() {
+        assert_eq!(
+            non_terminal_disposition(true, true).expect("configured continues"),
+            FirstRunDisposition::Continue
+        );
+        let error = non_terminal_disposition(true, false).expect_err("unconfigured must fail");
+        assert!(
+            error.to_string().contains("medusa config init"),
+            "unexpected error: {error}"
+        );
+        let error = non_terminal_disposition(false, true).expect_err("init needs a terminal");
+        assert!(
+            error.to_string().contains("interactive terminal"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

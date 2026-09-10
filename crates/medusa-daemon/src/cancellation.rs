@@ -28,12 +28,10 @@ pub(crate) fn cancel_job(
     match current.state {
         JobState::Interrupted => return Ok(Response::Cancelled { job: Some(current) }),
         JobState::Succeeded | JobState::Failed => {
-            return Ok(Response::error(
-                "job_not_cancellable",
-                format!("daemon job {job_id} is already terminal"),
-                ErrorCategory::Validation,
-                false,
-            ));
+            return Ok(Response::Error {
+                code: "job_not_cancellable".into(),
+                message: format!("daemon job {job_id} is already terminal"),
+            });
         }
         JobState::Queued | JobState::Running => {}
     }
@@ -42,20 +40,26 @@ pub(crate) fn cancel_job(
     match processes.cancel(job_id) {
         Ok(true) => {}
         Ok(false) => {
-            return Ok(Response::error(
-                "job_not_cancellable",
-                format!("daemon job {job_id} no longer has an active process control"),
-                ErrorCategory::Environment,
-                false,
-            ));
+            // The process handle is already gone (or the job never started
+            // one), but the job is still queued or running from the
+            // scheduler's perspective. Mark it interrupted so cancellation
+            // is durable instead of reporting a stale control error.
+            let updated = mark_job_interrupted(
+                paths,
+                jobs,
+                job_id,
+                "cancelled by user request (no active process control)",
+            )?;
+            if removed_from_queue {
+                processes.remove(job_id)?;
+            }
+            return Ok(Response::Cancelled { job: Some(updated) });
         }
         Err(error) => {
-            return Ok(Response::error(
-                "cancellation_failed",
-                error.to_string(),
-                ErrorCategory::Environment,
-                false,
-            ));
+            return Ok(Response::Error {
+                code: "cancellation_failed".into(),
+                message: error.to_string(),
+            });
         }
     }
     let updated = mark_job_interrupted(paths, jobs, job_id, "cancelled by user request")?;
@@ -147,5 +151,57 @@ pub(crate) fn append_detail(target: &mut String, detail: &str) {
 fn retain_first_error(first_error: &mut Option<MedusaError>, error: MedusaError) {
     if first_error.is_none() {
         *first_error = Some(error);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scheduler::{DaemonLimits, JobScheduler};
+
+    fn test_job(state: JobState) -> JobRecord {
+        let now = OffsetDateTime::now_utc();
+        JobRecord {
+            id: "job-test".to_owned(),
+            program: "true".to_owned(),
+            args: Vec::new(),
+            state,
+            created_at: now,
+            started_at: None,
+            finished_at: None,
+            exit_code: None,
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+    }
+
+    #[test]
+    fn cancel_without_process_control_still_marks_job_interrupted() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonPaths::for_repo(directory.path());
+        let jobs = Arc::new(Mutex::new(BTreeMap::from([(
+            "job-test".to_owned(),
+            test_job(JobState::Running),
+        )])));
+        // No process registered for the job: the control handle is gone.
+        let processes = ProcessRegistry::default();
+        let runner: crate::scheduler::JobRunner = Arc::new(|_| {});
+        let scheduler = JobScheduler::start(DaemonLimits::default(), runner).expect("scheduler");
+        let response =
+            cancel_job(&paths, &jobs, &processes, &scheduler, "job-test").expect("cancel");
+        match response {
+            Response::Cancelled { job: Some(job) } => {
+                assert_eq!(job.state, JobState::Interrupted);
+            }
+            other => panic!("expected cancellation, got {other:?}"),
+        }
+        assert_eq!(
+            jobs.lock()
+                .expect("jobs")
+                .get("job-test")
+                .expect("job")
+                .state,
+            JobState::Interrupted
+        );
     }
 }

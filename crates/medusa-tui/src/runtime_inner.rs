@@ -134,6 +134,11 @@ struct DaemonRuntimeState {
     last_poll_error: Option<String>,
     pending_startup_error: Option<String>,
     initial_settings: Option<RuntimeEvent>,
+    /// A submit worker has started a turn but has not established a session
+    /// yet. Cancellation during this window must be recorded instead of
+    /// reporting that no task is running.
+    turn_start_pending: bool,
+    cancel_pending_start: bool,
 }
 
 struct CanonicalPresentation {
@@ -244,6 +249,8 @@ impl DaemonRuntimeState {
             pending_startup_error: (!pending_startup_error.is_empty())
                 .then_some(pending_startup_error),
             initial_settings: Some(initial_settings),
+            turn_start_pending: false,
+            cancel_pending_start: false,
         }
     }
 
@@ -429,6 +436,16 @@ impl DaemonRuntimeState {
     }
 
     fn submit_draft(&mut self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
+        self.turn_start_pending = true;
+        let result = self.submit_draft_inner(draft);
+        self.turn_start_pending = false;
+        result
+    }
+
+    fn submit_draft_inner(
+        &mut self,
+        draft: PromptDraft,
+    ) -> Result<SubmitDisposition, RuntimeError> {
         self.ensure_daemon()?;
         let (text, attachment_ids) = self.stage_draft(draft)?;
         let command = if self.session_id.is_none() {
@@ -452,6 +469,9 @@ impl DaemonRuntimeState {
             ));
         };
         self.session_id = Some(session_id);
+        if std::mem::replace(&mut self.cancel_pending_start, false) {
+            self.dispatch(FrontendCommand::CancelTurn)?;
+        }
         Ok(if queued {
             SubmitDisposition::Queued
         } else {
@@ -604,6 +624,10 @@ impl DaemonRuntimeState {
 
     fn cancel(&mut self) -> Result<bool, RuntimeError> {
         if self.session_id.is_none() {
+            if self.turn_start_pending {
+                self.cancel_pending_start = true;
+                return Ok(true);
+            }
             return Ok(false);
         }
         let acknowledgement = self.dispatch(FrontendCommand::CancelTurn)?;
@@ -649,7 +673,8 @@ impl DaemonRuntimeState {
                 && let Err(error) = self.resume(session_id)
             {
                 events.push(RuntimeEvent::Failed(error.to_string()));
-                return events;
+                // Fall through to poll_daemon below: a failed auto-resume
+                // must not drop an event cycle.
             }
         }
 
@@ -718,6 +743,8 @@ impl DaemonRuntimeState {
 
     fn reset_session(&mut self) {
         self.session_id = None;
+        self.turn_start_pending = false;
+        self.cancel_pending_start = false;
         self.replay_cursor = 0;
         self.pending_ack_cursor = None;
         self.presentation.reset();
@@ -1432,6 +1459,15 @@ mod tests {
     }
 
     #[test]
+    fn cancel_during_turn_start_is_recorded_not_dismissed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut state = DaemonRuntimeState::new(directory.path().to_path_buf());
+        assert!(!state.cancel().expect("cancel idle"));
+        state.turn_start_pending = true;
+        assert!(state.cancel().expect("cancel during start"));
+        assert!(state.cancel_pending_start);
+    }
+
     fn ensure_daemon_reuses_existing_daemon_before_status_poll() {
         let directory = tempfile::tempdir().expect("tempdir");
         let paths = DaemonPaths::for_repo(directory.path());

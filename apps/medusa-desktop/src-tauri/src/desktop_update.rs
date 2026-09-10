@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, fs, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_update::{
@@ -28,6 +28,9 @@ pub struct DesktopUpdateStatus {
     artifact_published: bool,
     up_to_date: bool,
     last_outcome: Option<UpdateOutcome>,
+    /// Install channel recorded by the installer (`release`, `main`, or
+    /// absent). Release installs must not be pushed main builds.
+    channel: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -88,16 +91,29 @@ fn status() -> MedusaResult<DesktopUpdateStatus> {
         .map(read_update_outcome)
         .transpose()?
         .flatten();
+    let channel = installed_channel(executable.parent());
+    // Release-channel installs are never offered rolling-main builds here;
+    // they update through the verified release path instead.
+    let on_release_channel = channel.as_deref() == Some("release");
     Ok(DesktopUpdateStatus {
         current_version: CURRENT_RELEASE_ID.to_owned(),
         current_revision,
         latest_main_sha,
         executable: executable.display().to_string(),
-        ready: artifact_published && !installed,
+        ready: artifact_published && !installed && !on_release_channel,
         artifact_published,
         up_to_date: installed,
         last_outcome,
+        channel,
     })
+}
+
+/// Reads the install-channel marker written beside the executable by
+/// install.sh / install.ps1. Absent markers mean "unknown", never "main".
+fn installed_channel(directory: Option<&Path>) -> Option<String> {
+    let marker = fs::read_to_string(directory?.join(".medusa-install-channel")).ok()?;
+    let channel = marker.trim().to_owned();
+    (!channel.is_empty()).then_some(channel)
 }
 
 fn revisions_match(installed: &str, available: &str) -> bool {
@@ -235,6 +251,26 @@ mod tests {
         assert!(validate_target_sha("main").is_err());
         assert!(validate_target_sha("0123456789abcdef0123456789abcdef0123456z").is_err());
         assert!(validate_target_sha("01234567;rm -rf /").is_err());
+    }
+
+    #[test]
+    fn release_channel_is_never_offered_main_builds() {
+        assert_eq!(
+            installed_channel(None),
+            None,
+            "absent marker means unknown, not main"
+        );
+        let directory = tempfile::tempdir().expect("tempdir");
+        assert_eq!(installed_channel(Some(directory.path())), None);
+        fs::write(
+            directory.path().join(".medusa-install-channel"),
+            "release\n",
+        )
+        .expect("marker");
+        assert_eq!(
+            installed_channel(Some(directory.path())).as_deref(),
+            Some("release")
+        );
     }
 
     #[test]

@@ -50,9 +50,42 @@ fn requires_preflight(config: &Config) -> bool {
 }
 
 fn eager_model_command() -> bool {
-    env::args_os()
-        .skip(1)
-        .any(|argument| matches!(argument.to_str(), Some("run" | "resume")))
+    eager_model_command_for(
+        env::args_os()
+            .skip(1)
+            .filter_map(|argument| argument.into_string().ok()),
+    )
+}
+
+/// Headless `run`/`resume` always need a live OAuth session, and so does the
+/// interactive terminal, which is `medusa` with no subcommand at all.
+fn eager_model_command_for(args: impl IntoIterator<Item = String>) -> bool {
+    const SUBCOMMANDS: &[&str] = &[
+        "bootstrap",
+        "doctor",
+        "health",
+        "migrate",
+        "config",
+        "update",
+        "search",
+        "shell",
+        "checkpoint",
+        "request-audit",
+        "telegram",
+        "__daemon-serve",
+        "run",
+        "resume",
+    ];
+    let args: Vec<String> = args.into_iter().collect();
+    if args
+        .iter()
+        .any(|argument| argument == "run" || argument == "resume")
+    {
+        return true;
+    }
+    !args
+        .iter()
+        .any(|argument| SUBCOMMANDS.contains(&argument.as_str()))
 }
 
 fn preflight_mode() -> PreflightMode {
@@ -112,6 +145,20 @@ mod tests {
     fn model_discovery_requires_requested_model() {
         verify_model(&["gpt-test".to_owned()], "gpt-test").expect("model");
         assert!(verify_model(&["other".to_owned()], "gpt-test").is_err());
+    }
+
+    #[test]
+    fn interactive_terminal_without_subcommand_runs_preflight() {
+        assert!(eager_model_command_for(Vec::<String>::new()));
+        assert!(eager_model_command_for(["--repo".into(), ".".into()]));
+        assert!(eager_model_command_for(["run".into(), "do it".into()]));
+        assert!(eager_model_command_for(["resume".into(), "abc".into()]));
+        assert!(!eager_model_command_for(["doctor".into()]));
+        assert!(!eager_model_command_for([
+            "--repo".into(),
+            ".".into(),
+            "update".into()
+        ]));
     }
 
     #[test]

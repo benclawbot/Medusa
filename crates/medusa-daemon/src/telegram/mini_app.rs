@@ -4,7 +4,8 @@
 //! identity and one authoritative Medusa session, mints the same short-lived WebRTC credential used
 //! by the desktop, and submits final user transcripts through the shared frontend control plane.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 
 use medusa_config::Config;
 use medusa_protocol::frontend::{
@@ -91,7 +92,6 @@ pub struct TelegramMiniAppAuthToken {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum TelegramMiniAppTokenPurpose {
-    Launch,
     Authenticated,
 }
 
@@ -119,15 +119,40 @@ pub struct TelegramMiniAppRealtimeSession {
     pub session_id: String,
 }
 
+/// Server-side launch ticket behind a chat-delivered reference.
+///
+/// Only the opaque reference ever leaves the daemon (for example inside a
+/// Mini App button URL). It reveals no claims and is redeemed at most once.
+#[derive(Clone, Debug)]
+struct StoredLaunchTicket {
+    identity: TelegramIdentity,
+    session_id: String,
+    expires_at: i64,
+}
+
 #[derive(Clone)]
 pub struct TelegramMiniAppBridge {
     secret: TelegramMiniAppSecret,
+    launch_tickets: Arc<Mutex<HashMap<String, StoredLaunchTicket>>>,
 }
 
 impl TelegramMiniAppBridge {
     #[must_use]
     pub fn new(secret: TelegramMiniAppSecret) -> Self {
-        Self { secret }
+        Self {
+            secret,
+            launch_tickets: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Redacted single-use reference for diagnostics. Never log raw tokens.
+    #[must_use]
+    pub fn redact_reference(reference: &str) -> String {
+        const PREFIX: usize = 6;
+        if reference.len() <= PREFIX {
+            return "ticket:[redacted]".to_owned();
+        }
+        format!("ticket:{}…", &reference[..PREFIX])
     }
 
     pub fn verify_init_data(
@@ -203,14 +228,71 @@ impl TelegramMiniAppBridge {
         session_id: &str,
         now: OffsetDateTime,
     ) -> Result<TelegramMiniAppLaunchTicket, TelegramMiniAppError> {
+        validate_session_id(session_id)?;
         let expires_at = (now + LAUNCH_TICKET_LIFETIME).unix_timestamp();
-        let token = self.issue_token(
-            identity,
-            session_id,
-            TelegramMiniAppTokenPurpose::Launch,
+        let reference = Ulid::new().to_string();
+        let mut tickets = self
+            .launch_tickets
+            .lock()
+            .map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        // Launch tickets live for minutes; evict expired ones on issue so a
+        // burst of Mini App buttons cannot grow the table without bound.
+        tickets.retain(|_, ticket| ticket.expires_at > now.unix_timestamp());
+        tickets.insert(
+            reference.clone(),
+            StoredLaunchTicket {
+                identity: identity.clone(),
+                session_id: session_id.to_owned(),
+                expires_at,
+            },
+        );
+        Ok(TelegramMiniAppLaunchTicket {
+            token: reference,
             expires_at,
-        )?;
-        Ok(TelegramMiniAppLaunchTicket { token, expires_at })
+        })
+    }
+
+    /// Validates a launch reference without consuming it, for pre-checks.
+    /// Exchanges must use [`Self::redeem_launch_ticket`] so each reference
+    /// mints at most one authenticated token.
+    pub fn inspect_launch_ticket(
+        &self,
+        token: &str,
+        now: OffsetDateTime,
+    ) -> Result<TelegramMiniAppBinding, TelegramMiniAppError> {
+        let tickets = self
+            .launch_tickets
+            .lock()
+            .map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        let ticket = tickets
+            .get(token)
+            .ok_or(TelegramMiniAppError::InvalidTicket)?;
+        if ticket.expires_at <= now.unix_timestamp() {
+            return Err(TelegramMiniAppError::InvalidTicket);
+        }
+        Ok(TelegramMiniAppBinding {
+            identity: ticket.identity.clone(),
+            session_id: ticket.session_id.clone(),
+            expires_at: ticket.expires_at,
+        })
+    }
+
+    /// Consumes a launch reference and returns its binding. Replays fail:
+    /// each chat-delivered reference is single-use.
+    pub fn redeem_launch_ticket(
+        &self,
+        token: &str,
+        now: OffsetDateTime,
+    ) -> Result<TelegramMiniAppBinding, TelegramMiniAppError> {
+        let binding = self.inspect_launch_ticket(token, now)?;
+        let mut tickets = self
+            .launch_tickets
+            .lock()
+            .map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        if tickets.remove(token).is_none() {
+            return Err(TelegramMiniAppError::InvalidTicket);
+        }
+        Ok(binding)
     }
 
     pub fn issue_authenticated_token(
@@ -231,14 +313,6 @@ impl TelegramMiniAppBridge {
             expires_at,
         )?;
         Ok(TelegramMiniAppAuthToken { token, expires_at })
-    }
-
-    pub fn inspect_launch_ticket(
-        &self,
-        token: &str,
-        now: OffsetDateTime,
-    ) -> Result<TelegramMiniAppBinding, TelegramMiniAppError> {
-        self.inspect_token(token, TelegramMiniAppTokenPurpose::Launch, now)
     }
 
     pub fn inspect_authenticated_token(
@@ -817,6 +891,40 @@ mod tests {
         assert_eq!(binding.identity.user_id, identity.user_id);
         assert_eq!(binding.identity.chat_kind, TelegramChatKind::Supergroup);
         assert_eq!(binding.session_id, "session-group");
+    }
+
+    #[test]
+    fn launch_references_redeem_exactly_once() {
+        let bridge = TelegramMiniAppBridge::new(
+            TelegramMiniAppSecret::from_bot_token("123456:abcdefghijklmnopqrstuvwxyz")
+                .expect("secret"),
+        );
+        let identity = TelegramIdentity {
+            chat_id: 7,
+            topic_id: None,
+            user_id: 11,
+            chat_kind: TelegramChatKind::Private,
+            bot_mentioned: false,
+        };
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("time");
+        let ticket = bridge
+            .issue_launch_ticket(&identity, "session-1", now)
+            .expect("launch");
+        // The chat-delivered reference is opaque: no signed claims travel to chat.
+        assert!(!ticket.token.contains('.'));
+        let binding = bridge
+            .redeem_launch_ticket(&ticket.token, now)
+            .expect("first redeem");
+        assert_eq!(binding.session_id, "session-1");
+        assert!(bridge.redeem_launch_ticket(&ticket.token, now).is_err());
+        assert!(bridge.inspect_launch_ticket(&ticket.token, now).is_err());
+        assert_eq!(
+            TelegramMiniAppBridge::redact_reference(&ticket.token),
+            format!("ticket:{}…", &ticket.token[..6])
+        );
+        assert!(
+            !TelegramMiniAppBridge::redact_reference(&ticket.token).contains(&ticket.token[6..])
+        );
     }
 
     #[test]

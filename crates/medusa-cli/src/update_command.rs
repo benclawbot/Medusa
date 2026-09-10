@@ -32,6 +32,10 @@ const DEFAULT_PREBUILT_WAIT_SECS: u64 = 600;
 // artifact. The CI publish step typically finishes in under five minutes.
 const PREBUILT_POLL_INTERVAL_SECS: u64 = 15;
 
+/// Channel marker written beside the installed executable by install.sh and
+/// install.ps1. `medusa update` consults it to warn loudly on channel switches.
+pub(crate) const INSTALL_CHANNEL_MARKER: &str = ".medusa-install-channel";
+
 pub(super) fn run(
     repo: &Path,
     check_only: bool,
@@ -41,10 +45,50 @@ pub(super) fn run(
     local_build: bool,
     wait_for_prebuilt: Option<u64>,
 ) -> MedusaResult<()> {
+    warn_on_channel_switch(if release { "release" } else { "main" });
     if release {
         release_channel(repo, check_only, automatic, allow_downgrade)
     } else {
         source_channel(repo, check_only, automatic, local_build, wait_for_prebuilt)
+    }
+}
+
+/// Reads the install channel recorded by the installer, if any.
+fn installed_channel() -> Option<String> {
+    let executable = InstallLocation::current().ok()?.executable;
+    let directory = executable.parent()?;
+    let marker = fs::read_to_string(directory.join(INSTALL_CHANNEL_MARKER)).ok()?;
+    let channel = marker.trim().to_owned();
+    (!channel.is_empty()).then_some(channel)
+}
+
+fn channel_switch_warning(installed: Option<&str>, requested: &str) -> Option<String> {
+    match installed {
+        Some(installed) if installed != requested => Some(format!(
+            "WARNING: this installation was installed from the `{installed}` channel, but the requested update targets `{requested}`.              This switches update channels; use `{}` to stay on the installed channel.",
+            if installed == "release" {
+                "`medusa update --release`"
+            } else {
+                "bare `medusa update` (main channel)"
+            }
+        )),
+        _ => None,
+    }
+}
+
+fn warn_on_channel_switch(requested: &str) {
+    if let Some(warning) = channel_switch_warning(installed_channel().as_deref(), requested) {
+        eprintln!("{warning}");
+    }
+}
+
+/// Records the channel of a completed update beside the executable so future
+/// runs can warn on switches. Best-effort: installer-owned markers win.
+fn record_channel(channel: &str) {
+    if let Ok(location) = InstallLocation::current()
+        && let Some(directory) = location.executable.parent()
+    {
+        let _ = fs::write(directory.join(INSTALL_CHANNEL_MARKER), format!("{channel}\n"));
     }
 }
 
@@ -168,7 +212,7 @@ fn release_channel(
         target_revision: Some(release.source.revision.clone()),
         previous_revision: Some(env!("MEDUSA_BUILD_COMMIT").to_owned()),
     };
-    super::request_daemon_shutdown(repo);
+    super::request_daemon_shutdown(repo)?;
     installer.schedule_replace(&candidate, &restart, std::process::id())?;
     staging_timer.finish("atomic-handoff-staged", Some(artifact.bytes), None)?;
 
@@ -194,12 +238,13 @@ fn release_channel(
             .finish("health-check-pending", None, None)?;
         progress.finish();
         println!(
-            "Medusa update installed and staged: {}. Restarting.",
+            "Medusa update installed and staged: {}. Relaunch Medusa manually to run the new build.",
             version_transition(
                 &current_release_id.to_string(),
                 &release.release_id.to_string(),
             )
         );
+        record_channel("release");
         Ok(())
     }
 }
@@ -254,7 +299,7 @@ fn source_channel(
         wait_for_prebuilt,
         &mut progress,
     )?;
-    super::request_daemon_shutdown(repo);
+    super::request_daemon_shutdown(repo)?;
     match strategy {
         MainUpdateStrategy::Prebuilt => progress.stage(
             UpdateStage::Preparing,
@@ -301,10 +346,11 @@ fn source_channel(
             MainUpdateStrategy::LocalBuild => "built",
         };
         println!(
-            "Medusa update {} and staged: {}. Restarting.",
+            "Medusa update {} and staged: {}. Relaunch Medusa manually to run the new build.",
             update_kind,
             version_transition(&current_version, &new_version),
         );
+        record_channel("main");
         Ok(())
     }
 }
@@ -921,6 +967,21 @@ mod tests {
         );
         let visible = line.trim_start_matches('\r');
         assert!(visible.chars().count() <= 80, "line wrapped: {visible}");
+    }
+
+    #[test]
+    fn channel_switch_warns_loudly_but_same_channel_stays_quiet() {
+        let warning =
+            channel_switch_warning(Some("release"), "main").expect("switch must warn");
+        assert!(warning.contains("WARNING"));
+        assert!(warning.contains("release"));
+        assert!(warning.contains("main"));
+        let warning =
+            channel_switch_warning(Some("main"), "release").expect("switch must warn");
+        assert!(warning.contains("WARNING"));
+        assert!(channel_switch_warning(Some("release"), "release").is_none());
+        assert!(channel_switch_warning(Some("main"), "main").is_none());
+        assert!(channel_switch_warning(None, "main").is_none());
     }
 
     #[test]
