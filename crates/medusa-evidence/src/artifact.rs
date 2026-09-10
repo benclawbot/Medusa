@@ -156,10 +156,14 @@ impl ArtifactStore {
         if !receipt_path.is_file() {
             return Ok(());
         }
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&fs::read(receipt_path)?)
-        else {
-            return Ok(());
-        };
+        // A corrupt receipt file must fail loudly: the old code returned `Ok`
+        // here, silently dropping the entire authoritative read-receipt set.
+        let raw = fs::read(&receipt_path)?;
+        let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|error| {
+            EvidenceError::Validation(format!(
+                "persisted artifact read receipts are corrupt: {error}"
+            ))
+        })?;
         let Some(reads) = value
             .get("evidence")
             .and_then(|evidence| evidence.get("reads"))
@@ -167,11 +171,17 @@ impl ArtifactStore {
         else {
             return Ok(());
         };
+        let mut unparseable = 0_u32;
         for value in reads {
             let Ok(expected) = serde_json::from_value::<ArtifactReadReceipt>(value.clone()) else {
+                unparseable = unparseable.saturating_add(1);
                 continue;
             };
-            if expected.artifact_id != *id || validate_read(&expected).is_err() {
+            if expected.artifact_id != *id {
+                continue;
+            }
+            if validate_read(&expected).is_err() {
+                unparseable = unparseable.saturating_add(1);
                 continue;
             }
             let end = expected.offset.saturating_add(expected.length);
@@ -196,6 +206,11 @@ impl ArtifactStore {
                     &expected,
                 )?;
             }
+        }
+        if unparseable > 0 {
+            return Err(EvidenceError::Validation(format!(
+                "{unparseable} persisted artifact read receipt(s) are unparseable"
+            )));
         }
         Ok(())
     }
@@ -518,5 +533,45 @@ mod tests {
 
         store.metadata(&artifact.id).expect("repair reads");
         assert_eq!(store.load_read_receipt(&expected.id).unwrap(), expected);
+    }
+
+    #[test]
+    fn corrupt_persisted_receipts_surface_as_errors_instead_of_ok() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let bytes = b"authoritative evidence";
+        let artifact = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("artifact");
+
+        // A receipt file that is not JSON at all must fail loudly.
+        fs::write(
+            store.root().join("verification-receipt.json"),
+            b"{broken-json",
+        )
+        .expect("persist corrupt receipt");
+        let error = store
+            .metadata(&artifact.id)
+            .expect_err("corrupt receipt file must surface");
+        assert!(error.to_string().contains("corrupt"));
+
+        // Entries that claim this artifact but don't parse must be counted
+        // and surfaced instead of skipped.
+        fs::write(
+            store.root().join("verification-receipt.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "evidence": { "reads": [{"bogus": true}, {"also": "bogus"}] }
+            }))
+            .expect("receipt json"),
+        )
+        .expect("persist receipt");
+        let error = store
+            .metadata(&artifact.id)
+            .expect_err("unparseable entries must surface");
+        assert!(
+            error
+                .to_string()
+                .contains("2 persisted artifact read receipt")
+        );
     }
 }

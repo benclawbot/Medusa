@@ -168,6 +168,13 @@ pub struct TelegramCallbackQuery {
     pub data: Option<String>,
 }
 
+/// A single update delivered by the Telegram Bot API (long polling or webhook).
+///
+/// Unknown-field policy: unknown fields are intentionally IGNORED, never
+/// rejected. Telegram extends update objects (new message kinds, new top-level
+/// update types) without versioning the payload, so a `deny_unknown_fields`
+/// here would turn every provider-side addition into a hard webhook rejection.
+/// Validation of the fields Medusa acts on happens in `TryFrom<TelegramUpdate>`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TelegramUpdate {
     pub update_id: i64,

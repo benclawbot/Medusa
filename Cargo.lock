@@ -1319,6 +1319,7 @@ dependencies = [
  "medusa-confidence",
  "medusa-failure",
  "serde",
+ "serde_json",
  "time",
 ]
 

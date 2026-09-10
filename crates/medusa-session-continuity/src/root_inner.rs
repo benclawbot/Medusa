@@ -522,6 +522,10 @@ pub struct AttachRequest {
     pub requested_mode: AttachmentMode,
     pub expected_revision: u64,
     pub journal_cursor: u64,
+    /// Authoritative length of the external runtime journal the cursor indexes.
+    /// The continuity store cannot see that journal, so the caller — which can
+    /// — must supply its length for bounds validation.
+    pub journal_len: u64,
     pub occurred_at_unix_ms: i64,
     pub event_id: String,
 }
@@ -558,6 +562,9 @@ pub struct CursorAckRequest {
     pub client_id: String,
     pub expected_revision: u64,
     pub cursor: u64,
+    /// Authoritative length of the external runtime journal the cursor indexes;
+    /// see [`AttachRequest::journal_len`].
+    pub journal_len: u64,
     pub occurred_at_unix_ms: i64,
     pub event_id: String,
 }
@@ -600,6 +607,8 @@ pub enum ContinuityError {
     ConflictingReplay { event_id: String },
     #[error("client cursor regressed from {acknowledged} to {requested}")]
     CursorRegression { acknowledged: u64, requested: u64 },
+    #[error("journal cursor {cursor} exceeds journal length {journal_len}")]
+    InvalidJournalCursor { cursor: u64, journal_len: u64 },
     #[error("event sequence is invalid")]
     InvalidEventSequence,
     #[error("session attachment state is inconsistent")]
@@ -647,10 +656,77 @@ impl ContinuityStore {
     pub fn load(&self) -> Result<ContinuitySession, ContinuityError> {
         let bytes = fs::read(&self.path)?;
         let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let from_version = value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         let migrated = migrate(value)?;
         let session: ContinuitySession = serde_json::from_value(migrated)?;
         validate(&session)?;
+        if from_version != u64::from(CURRENT_SCHEMA_VERSION) {
+            self.record_migration(from_version, &bytes, &session)?;
+        }
         Ok(session)
+    }
+
+    /// Preserves the pre-migration bytes and appends a migration record plus
+    /// audit entry. `migrate()` used to stamp `CURRENT_SCHEMA_VERSION` with
+    /// fabricated defaults and no trace; a failed migration review had nothing
+    /// to diff against. Only the first migration of a given source version
+    /// records (concurrent migrators race on `create_new`), so repeated loads
+    /// of an un-persisted legacy file do not spam the audit log.
+    fn record_migration(
+        &self,
+        from_version: u64,
+        original_bytes: &[u8],
+        session: &ContinuitySession,
+    ) -> Result<(), ContinuityError> {
+        let mut backup = self.path.as_os_str().to_owned();
+        backup.push(format!(".migration-backup-v{from_version}"));
+        let backup = PathBuf::from(backup);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup)
+        {
+            Ok(mut file) => {
+                file.write_all(original_bytes)?;
+                file.sync_all()?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        let entry = format!(
+            "{{\"from_version\":{from_version},\"to_version\":{},\"session_id\":{},\"backup\":{},\"migrated_unix_secs\":{timestamp}}}\n",
+            CURRENT_SCHEMA_VERSION,
+            serde_json::to_string(&session.session_id).unwrap_or_else(|_| "\"\"".to_owned()),
+            serde_json::to_string(&backup.display().to_string())
+                .unwrap_or_else(|_| "\"\"".to_owned()),
+        );
+        let mut audit = self.path.as_os_str().to_owned();
+        audit.push(".migrations.jsonl");
+        let audit = PathBuf::from(audit);
+        if let Err(error) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&audit)
+            .and_then(|mut file| {
+                file.write_all(entry.as_bytes())?;
+                file.sync_all()
+            })
+        {
+            // The session itself loaded and validated; the audit trail must not
+            // fail the read, but it must not vanish silently either.
+            eprintln!(
+                "medusa: could not append continuity migration audit to {}: {error}",
+                audit.display()
+            );
+        }
+        Ok(())
     }
 
     pub fn attach(&self, request: AttachRequest) -> Result<ApplyOutcome, ContinuityError> {
@@ -658,6 +734,16 @@ impl ContinuityStore {
             request.expected_revision,
             &request.event_id,
             |session| {
+                // Journal cursors index the external runtime journal, whose
+                // length the caller supplies: an inflated cursor would let a
+                // client pretend to have seen events that never existed, so it
+                // is rejected instead of being max()ed in.
+                if request.journal_cursor > request.journal_len {
+                    return Err(ContinuityError::InvalidJournalCursor {
+                        cursor: request.journal_cursor,
+                        journal_len: request.journal_len,
+                    });
+                }
                 if let Some(existing) = session
                     .attachments
                     .iter_mut()
@@ -818,6 +904,12 @@ impl ContinuityStore {
                     return Err(ContinuityError::CursorRegression {
                         acknowledged: attachment.journal_cursor,
                         requested: request.cursor,
+                    });
+                }
+                if request.cursor > request.journal_len {
+                    return Err(ContinuityError::InvalidJournalCursor {
+                        cursor: request.cursor,
+                        journal_len: request.journal_len,
                     });
                 }
                 attachment.journal_cursor = request.cursor;
@@ -1198,6 +1290,7 @@ mod tests {
                 requested_mode: mode,
                 expected_revision: revision,
                 journal_cursor: 0,
+                journal_len: 0,
                 occurred_at_unix_ms: at,
                 event_id: event.to_owned(),
             })
@@ -1498,6 +1591,7 @@ mod tests {
             requested_mode: AttachmentMode::Owner,
             expected_revision: 0,
             journal_cursor: 0,
+            journal_len: 0,
             occurred_at_unix_ms: 1,
             event_id: "attach".to_owned(),
         };
@@ -1513,6 +1607,7 @@ mod tests {
             requested_mode: AttachmentMode::ReadOnly,
             expected_revision: applied.session().revision,
             journal_cursor: 0,
+            journal_len: 0,
             occurred_at_unix_ms: 2,
             event_id: "attach".to_owned(),
         });
@@ -1561,6 +1656,7 @@ mod tests {
             requested_mode: AttachmentMode::Owner,
             expected_revision: owner.revision,
             journal_cursor: 0,
+            journal_len: 0,
             occurred_at_unix_ms: 2,
             event_id: "b".to_owned(),
         });
@@ -1568,6 +1664,102 @@ mod tests {
             second,
             Err(ContinuityError::OwnershipConflict { owner }) if owner == "tui"
         ));
+    }
+
+    #[test]
+    fn inflated_journal_cursors_are_rejected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ContinuityStore::new(temp.path().join("session.json"));
+        store.create("session-1").expect("create");
+        // The external runtime journal is empty (length 0): any cursor beyond
+        // 0 is inflated, even though the continuity log itself is also empty.
+        let inflated = store.attach(AttachRequest {
+            client_id: "tui".to_owned(),
+            client_kind: ClientKind::Tui,
+            requested_mode: AttachmentMode::Owner,
+            expected_revision: 0,
+            journal_cursor: 99,
+            journal_len: 0,
+            occurred_at_unix_ms: 1,
+            event_id: "attach".to_owned(),
+        });
+        assert!(matches!(
+            inflated,
+            Err(ContinuityError::InvalidJournalCursor { cursor: 99, .. })
+        ));
+
+        // A cursor at the boundary of a two-event runtime journal is legal even
+        // though the continuity log holds fewer events: the two logs live in
+        // different coordinate spaces.
+        let session = store
+            .attach(AttachRequest {
+                client_id: "tui".to_owned(),
+                client_kind: ClientKind::Tui,
+                requested_mode: AttachmentMode::Owner,
+                expected_revision: 0,
+                journal_cursor: 1,
+                journal_len: 2,
+                occurred_at_unix_ms: 1,
+                event_id: "attach-ok".to_owned(),
+            })
+            .expect("boundary attach")
+            .session()
+            .clone();
+        let ack = store.acknowledge_cursor(CursorAckRequest {
+            client_id: "tui".to_owned(),
+            expected_revision: session.revision,
+            cursor: 3,
+            journal_len: 2,
+            occurred_at_unix_ms: 2,
+            event_id: "ack".to_owned(),
+        });
+        assert!(matches!(
+            ack,
+            Err(ContinuityError::InvalidJournalCursor { cursor: 3, .. })
+        ));
+        store
+            .acknowledge_cursor(CursorAckRequest {
+                client_id: "tui".to_owned(),
+                expected_revision: session.revision,
+                cursor: 2,
+                journal_len: 2,
+                occurred_at_unix_ms: 3,
+                event_id: "ack-ok".to_owned(),
+            })
+            .expect("boundary cursor");
+    }
+
+    #[test]
+    fn legacy_migration_writes_backup_record_and_audit_entry() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("session.json");
+        let original = r#"{"session_id":"legacy","task":{"plan_state":null,"active_step":null,"attention_required":false,"approvals":[],"checkpoints":[],"recovery_state":null,"verification_evidence":[],"file_changes":[],"completion_status":null}}"#;
+        fs::write(&path, original).expect("legacy write");
+        let store = ContinuityStore::new(&path);
+        let migrated = store.load().expect("migration");
+        assert_eq!(migrated.schema_version, CURRENT_SCHEMA_VERSION);
+
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".migration-backup-v0");
+        assert_eq!(
+            fs::read_to_string(PathBuf::from(backup)).expect("backup"),
+            original
+        );
+        let mut audit = path.as_os_str().to_owned();
+        audit.push(".migrations.jsonl");
+        let audit = fs::read_to_string(PathBuf::from(audit)).expect("audit log");
+        assert!(audit.contains("\"from_version\":0"));
+        assert!(audit.contains("\"session_id\":\"legacy\""));
+
+        // A second load of the still-legacy file must not duplicate the record.
+        store.load().expect("second load");
+        let mut audit = path.as_os_str().to_owned();
+        audit.push(".migrations.jsonl");
+        let lines = fs::read_to_string(PathBuf::from(audit))
+            .expect("audit log")
+            .lines()
+            .count();
+        assert_eq!(lines, 1);
     }
 }
 
@@ -1749,6 +1941,7 @@ mod coding_trajectory_tests {
                 requested_mode: AttachmentMode::Owner,
                 expected_revision: initial.revision,
                 journal_cursor: 0,
+                journal_len: 0,
                 occurred_at_unix_ms: 1,
                 event_id: "attach".into(),
             })
