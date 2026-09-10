@@ -11,6 +11,7 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{Client as AsyncClient, StatusCode, blocking::Client as BlockingClient};
 use serde::de::DeserializeOwned;
+use time::OffsetDateTime;
 
 use crate::{ProviderPlanUsage, plan_usage::observe_provider_plan_headers};
 
@@ -210,10 +211,94 @@ async fn read_async_bounded(
 }
 
 fn retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<u64> {
-    headers
+    let value = headers
         .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
+        .and_then(|value| value.to_str().ok())?;
+    let trimmed = value.trim();
+    if let Ok(seconds) = trimmed.parse::<u64>() {
+        return Some(seconds);
+    }
+    // RFC 9111 allows the HTTP-date form: wait until that instant.
+    http_date_retry_delay_secs(trimmed)
+}
+
+/// Delay in seconds until an HTTP-date (IMF-fixdate, RFC 850, or asctime)
+/// `Retry-After` value. Past dates yield zero; unparseable values yield `None`.
+fn http_date_retry_delay_secs(value: &str) -> Option<u64> {
+    use time::format_description::FormatItem;
+    use time::macros::format_description;
+
+    const IMF_FIXDATE: &[FormatItem<'static>] = format_description!(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT"
+    );
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    if let Ok(parsed) = time::PrimitiveDateTime::parse(value, IMF_FIXDATE) {
+        let target = parsed.assume_utc().unix_timestamp();
+        return Some(target.saturating_sub(now).max(0) as u64);
+    }
+    legacy_http_date_unix(value).map(|target| target.saturating_sub(now).max(0) as u64)
+}
+
+/// Unix timestamp for the two obsolete HTTP-date forms.
+///
+/// RFC 850 (`Sunday, 06-Nov-94 08:49:37 GMT`, two-digit years pivot at 69 just
+/// like cookies) and ANSI C `asctime` (`Sun Nov  6 08:49:37 1994`). Returns
+/// `None` when the value matches neither shape.
+fn legacy_http_date_unix(value: &str) -> Option<i64> {
+    const MONTHS: [&str; 12] = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
+    let month_number = |name: &str| {
+        MONTHS
+            .iter()
+            .position(|month| *month == name)
+            .map(|i| i + 1)
+    };
+    let compose = |year: i32, month: u8, day: u8, time: &str| -> Option<i64> {
+        let mut parts = time.split(':');
+        let (hour, minute, second) = (
+            parts.next()?.parse::<u8>().ok()?,
+            parts.next()?.parse::<u8>().ok()?,
+            parts.next()?.parse::<u8>().ok()?,
+        );
+        if parts.next().is_some() {
+            return None;
+        }
+        let date = time::Date::from_calendar_date(year, month.try_into().ok()?, day).ok()?;
+        let moment = date.with_hms(hour, minute, second).ok()?.assume_utc();
+        Some(moment.unix_timestamp())
+    };
+    // RFC 850: "Sunday, 06-Nov-94 08:49:37 GMT".
+    if let Some(rest) = value.split_once(", ") {
+        let fields: Vec<&str> = rest.1.split_whitespace().collect();
+        if let [date, time, zone] = fields[..] {
+            let date_parts: Vec<&str> = date.split('-').collect();
+            if zone.eq_ignore_ascii_case("GMT")
+                && let [day, month, year] = date_parts[..]
+            {
+                let month = month_number(&month.to_ascii_lowercase())? as u8;
+                let year_two: i32 = year.parse().ok()?;
+                if !(0..100).contains(&year_two) {
+                    return None;
+                }
+                let full_year = if year_two >= 69 {
+                    1900 + year_two
+                } else {
+                    2000 + year_two
+                };
+                return compose(full_year, month, day.parse().ok()?, time);
+            }
+        }
+    }
+    // asctime: "Sun Nov  6 08:49:37 1994".
+    let words: Vec<&str> = value.split_whitespace().collect();
+    if let [weekday, month, day, time, year] = words[..] {
+        if weekday.len() == 3 && year.len() == 4 {
+            let month = month_number(&month.to_ascii_lowercase())? as u8;
+            return compose(year.parse().ok()?, month, day.parse().ok()?, time);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -234,17 +319,21 @@ pub(crate) fn classify_status(
 }
 
 /// Body fragments showing the provider refused on billing, quota, or plan
-/// grounds rather than a transient throttle. Retrying a spent quota only
-/// burns time before the same refusal, so these fail fast with an
-/// actionable message instead of the raw provider blob.
+/// grounds rather than a transient throttle. These are deliberately narrow
+/// provider-code style signals (`quota`, `rate_limit_exceeded`,
+/// `billing_hard_limit`, ...): bare words like `billing` or `insufficient`
+/// also match retryable failures ("billing address invalid",
+/// "insufficient permissions") and would misclassify them as Policy.
+/// Retrying a spent quota only burns time before the same refusal, so these
+/// fail fast with an actionable message instead of the raw provider blob.
 const QUOTA_BODY_SIGNALS: &[&str] = &[
+    "quota",
     "usage limit",
     "usage_limit",
-    "quota",
-    "billing",
-    "insufficient",
+    "rate_limit_exceeded",
+    "insufficient_quota",
+    "billing_hard_limit",
     "out of credit",
-    "upgrade to",
     "plan limit",
     "payment required",
 ];
@@ -606,5 +695,92 @@ Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try a
         })
         .expect_err("truncated success body must be rejected");
         assert!(error.to_string().contains("exceeded"));
+    }
+
+    #[test]
+    fn bare_billing_words_no_longer_flag_quota() {
+        // Retryable failures mentioning billing/permissions must stay retryable
+        // instead of being misclassified as a Policy plan limit.
+        let error = classify_status(
+            StatusCode::TOO_MANY_REQUESTS,
+            "billing address verification failed; update your payment method".into(),
+            None,
+        );
+        assert!(error.retryable);
+        assert_eq!(error.context.get("provider_plan_limit"), None);
+
+        let error = classify_status(
+            StatusCode::FORBIDDEN,
+            "insufficient permissions to access this model".into(),
+            None,
+        );
+        assert_eq!(error.context.get("provider_plan_limit"), None);
+    }
+
+    #[test]
+    fn provider_quota_codes_still_fail_fast() {
+        for body in [
+            "insufficient_quota: you exceeded your current quota",
+            "billing_hard_limit reached for this account",
+            "rate_limit_exceeded: quota exhausted, retry after reset",
+        ] {
+            let error = classify_status(StatusCode::TOO_MANY_REQUESTS, body.into(), None);
+            assert!(!error.retryable, "{body}");
+            assert_eq!(
+                error.context.get("provider_plan_limit"),
+                Some(&serde_json::Value::Bool(true)),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_after_accepts_the_http_date_form() {
+        let imf = time::format_description::parse(
+            "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT",
+        )
+        .expect("imf-fixdate format");
+        let format_header = |moment: OffsetDateTime| {
+            HeaderValue::from_str(&moment.format(&imf).expect("http date header"))
+                .expect("retry-after header")
+        };
+
+        let target = OffsetDateTime::now_utc() + time::Duration::seconds(120);
+        let mut headers = HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, format_header(target));
+        let seconds = retry_after_seconds(&headers).expect("http-date retry-after");
+        assert!(
+            (100..=120).contains(&seconds),
+            "expected ~120s, got {seconds}"
+        );
+
+        let past = OffsetDateTime::now_utc() - time::Duration::seconds(60);
+        headers.insert(reqwest::header::RETRY_AFTER, format_header(past));
+        assert_eq!(retry_after_seconds(&headers), Some(0));
+
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("not-a-date-or-number"),
+        );
+        assert_eq!(retry_after_seconds(&headers), None);
+    }
+
+    #[test]
+    fn retry_after_accepts_obsolete_http_date_forms() {
+        // RFC 850 with a far-future date must parse to a positive delay.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("Sunday, 06-Nov-94 08:49:37 GMT"),
+        );
+        assert_eq!(retry_after_seconds(&headers), Some(0));
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            HeaderValue::from_static("Sun Nov  6 08:49:37 2094"),
+        );
+        assert!(
+            retry_after_seconds(&headers).is_some_and(|seconds| seconds > 1_000_000),
+            "far-future asctime must yield a large delay"
+        );
     }
 }

@@ -252,6 +252,8 @@ pub struct Transport<W: Wire> {
     muted: bool,
     activated: bool,
     closed: bool,
+    unknown_events_skipped: u64,
+    dropped_audio_frames: u64,
 }
 
 impl<W: Wire> Transport<W> {
@@ -284,12 +286,27 @@ impl<W: Wire> Transport<W> {
             muted: true,
             activated: false,
             closed: false,
+            unknown_events_skipped: 0,
+            dropped_audio_frames: 0,
         })
     }
 
     #[must_use]
     pub fn capability(&self) -> &GatewayCapability {
         &self.capability
+    }
+
+    /// Future-proof event frames skipped by [`Transport::next_event`] because
+    /// their type is unknown to this build.
+    #[must_use]
+    pub fn unknown_events_skipped(&self) -> u64 {
+        self.unknown_events_skipped
+    }
+
+    /// Queued input-audio frames discarded at capacity while unmuted and active.
+    #[must_use]
+    pub fn dropped_audio_frames(&self) -> u64 {
+        self.dropped_audio_frames
     }
 
     pub fn activate(&mut self) -> Result<(), TransportError> {
@@ -317,6 +334,11 @@ impl<W: Wire> Transport<W> {
         }
         if self.pending_audio.len() == self.audio_capacity {
             self.pending_audio.pop_front();
+            self.dropped_audio_frames = self.dropped_audio_frames.saturating_add(1);
+            eprintln!(
+                "medusa realtime: dropping oldest queued input audio frame ({} dropped total); capture is outrunning the gateway",
+                self.dropped_audio_frames
+            );
         }
         self.pending_audio.push_back(audio_base64);
         self.flush_audio()
@@ -358,24 +380,34 @@ impl<W: Wire> Transport<W> {
 
     pub fn next_event(&mut self) -> Result<Option<Event>, TransportError> {
         self.ensure_open()?;
-        let Some(payload) = self.wire.receive_json().map_err(TransportError::Wire)? else {
-            return Ok(None);
-        };
-        let event = translate_event(&payload)?;
-        match &event {
-            Event::ResponseStarted { response_id } => {
-                self.active_response_id = Some(response_id.clone());
+        loop {
+            let Some(payload) = self.wire.receive_json().map_err(TransportError::Wire)? else {
+                return Ok(None);
+            };
+            let Some(event) = translate_event(&payload)? else {
+                self.unknown_events_skipped = self.unknown_events_skipped.saturating_add(1);
+                eprintln!(
+                    "medusa realtime: skipping unknown event type {} ({} skipped total)",
+                    payload["type"].as_str().unwrap_or("<missing>"),
+                    self.unknown_events_skipped
+                );
+                continue;
+            };
+            match &event {
+                Event::ResponseStarted { response_id } => {
+                    self.active_response_id = Some(response_id.clone());
+                }
+                Event::AssistantAudioDelta { item_id, .. } => {
+                    self.active_item_id = Some(item_id.clone());
+                }
+                Event::ResponseDone { .. } => {
+                    self.active_response_id = None;
+                    self.active_item_id = None;
+                }
+                _ => {}
             }
-            Event::AssistantAudioDelta { item_id, .. } => {
-                self.active_item_id = Some(item_id.clone());
-            }
-            Event::ResponseDone { .. } => {
-                self.active_response_id = None;
-                self.active_item_id = None;
-            }
-            _ => {}
+            return Ok(Some(event));
         }
-        Ok(Some(event))
     }
 
     pub fn reconnect(&mut self) -> Result<(), TransportError> {
@@ -442,7 +474,7 @@ fn session_update(config: &SessionConfig) -> Value {
     })
 }
 
-fn translate_event(payload: &Value) -> Result<Event, TransportError> {
+fn translate_event(payload: &Value) -> Result<Option<Event>, TransportError> {
     let event_type = payload["type"]
         .as_str()
         .ok_or_else(|| TransportError::Protocol("event omitted type".to_owned()))?;
@@ -452,49 +484,49 @@ fn translate_event(payload: &Value) -> Result<Event, TransportError> {
             .map(str::to_owned)
             .ok_or_else(|| TransportError::Protocol(format!("event omitted {field}")))
     };
-    match event_type {
-        "session.created" | "session.updated" => Ok(Event::Connected),
-        "input_audio_buffer.speech_started" => Ok(Event::UserSpeechStarted),
-        "input_audio_buffer.speech_stopped" => Ok(Event::UserSpeechStopped),
-        "conversation.item.input_audio_transcription.delta" => Ok(Event::UserTranscriptDelta {
+    let event = match event_type {
+        "session.created" | "session.updated" => Event::Connected,
+        "input_audio_buffer.speech_started" => Event::UserSpeechStarted,
+        "input_audio_buffer.speech_stopped" => Event::UserSpeechStopped,
+        "conversation.item.input_audio_transcription.delta" => Event::UserTranscriptDelta {
             item_id: string("item_id")?,
             delta: string("delta")?,
-        }),
-        "conversation.item.input_audio_transcription.completed" => Ok(Event::UserTranscriptFinal {
+        },
+        "conversation.item.input_audio_transcription.completed" => Event::UserTranscriptFinal {
             item_id: string("item_id")?,
             transcript: string("transcript")?,
-        }),
-        "response.audio_transcript.delta" => Ok(Event::AssistantTranscriptDelta {
+        },
+        "response.audio_transcript.delta" => Event::AssistantTranscriptDelta {
             item_id: string("item_id")?,
             delta: string("delta")?,
-        }),
-        "response.audio_transcript.done" => Ok(Event::AssistantTranscriptFinal {
+        },
+        "response.audio_transcript.done" => Event::AssistantTranscriptFinal {
             item_id: string("item_id")?,
             transcript: string("transcript")?,
-        }),
-        "response.audio.delta" => Ok(Event::AssistantAudioDelta {
+        },
+        "response.audio.delta" => Event::AssistantAudioDelta {
             item_id: string("item_id")?,
             audio_base64: string("delta")?,
-        }),
-        "response.audio.done" => Ok(Event::AssistantAudioDone {
+        },
+        "response.audio.done" => Event::AssistantAudioDone {
             item_id: string("item_id")?,
-        }),
-        "response.created" => Ok(Event::ResponseStarted {
+        },
+        "response.created" => Event::ResponseStarted {
             response_id: payload["response"]["id"]
                 .as_str()
                 .ok_or_else(|| TransportError::Protocol("response omitted id".to_owned()))?
                 .to_owned(),
-        }),
-        "response.done" => Ok(Event::ResponseDone {
+        },
+        "response.done" => Event::ResponseDone {
             response_id: payload["response"]["id"]
                 .as_str()
                 .ok_or_else(|| TransportError::Protocol("response omitted id".to_owned()))?
                 .to_owned(),
-        }),
-        "rate_limits.updated" => Ok(Event::RateLimited {
+        },
+        "rate_limits.updated" => Event::RateLimited {
             retry_after_ms: payload["retry_after_ms"].as_u64(),
-        }),
-        "error" => Ok(Event::Error {
+        },
+        "error" => Event::Error {
             code: payload["error"]["code"]
                 .as_str()
                 .unwrap_or("realtime_error")
@@ -504,11 +536,12 @@ fn translate_event(payload: &Value) -> Result<Event, TransportError> {
                 .unwrap_or("Realtime request failed")
                 .to_owned(),
             retryable: payload["error"]["retryable"].as_bool().unwrap_or(false),
-        }),
-        other => Err(TransportError::Protocol(format!(
-            "unsupported Realtime event {other}"
-        ))),
-    }
+        },
+        // Unknown future event types are skipped by the caller with a metric,
+        // never hard-failed: a gateway upgrade must not break this build.
+        _ => return Ok(None),
+    };
+    Ok(Some(event))
 }
 
 #[cfg(test)]
@@ -732,5 +765,49 @@ mod tests {
         transport.close().expect("retry close");
         assert_eq!(transport.wire.closes, 2);
         assert_eq!(transport.request_response(), Err(TransportError::Closed));
+    }
+
+    #[test]
+    fn unknown_future_events_are_skipped_with_a_metric() {
+        let mut wire = MockWire::default();
+        wire.incoming.push_back(json!({
+            "type": "response.future_hologram",
+            "hologram": true,
+        }));
+        wire.incoming
+            .push_back(json!({ "type": "session.created" }));
+        let mut transport =
+            Transport::new(wire, capability(), SessionConfig::default()).expect("transport");
+        assert!(matches!(
+            transport.next_event().expect("skips unknown"),
+            Some(Event::Connected)
+        ));
+        assert_eq!(transport.unknown_events_skipped(), 1);
+        assert!(transport.next_event().expect("drained").is_none());
+    }
+
+    #[test]
+    fn audio_overflow_counts_dropped_frames_while_active() {
+        let mut transport = Transport::with_audio_capacity(
+            MockWire::default(),
+            capability(),
+            SessionConfig::default(),
+            1,
+        )
+        .expect("transport");
+        transport.activate().expect("activate");
+        // Stall the gateway so the queue fills instead of flushing through.
+        transport.wire.send_failures_remaining = usize::MAX;
+        assert!(transport.queue_input_audio("AAA=".to_owned()).is_err());
+        assert!(transport.queue_input_audio("BBB=".to_owned()).is_err());
+        assert_eq!(transport.dropped_audio_frames(), 1);
+        assert_eq!(
+            transport.pending_audio.front().map(String::as_str),
+            Some("BBB=")
+        );
+        transport.wire.send_failures_remaining = 0;
+        transport.commit_input_audio().expect("drain");
+        assert!(transport.pending_audio.is_empty());
+        assert_eq!(transport.dropped_audio_frames(), 1);
     }
 }
