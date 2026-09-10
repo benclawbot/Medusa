@@ -33,6 +33,9 @@ pub struct UpdatePhaseRecord {
     pub outcome: String,
 }
 
+/// Maximum retained updater diagnostic lines before rotation.
+pub const MAX_DIAGNOSTIC_LINES: usize = 2_000;
+
 /// Append-only, path-free updater diagnostics suitable for support bundles.
 pub struct UpdateDiagnostics {
     path: PathBuf,
@@ -69,7 +72,27 @@ impl UpdateDiagnostics {
         serde_json::to_writer(&mut output, record).map_err(std::io::Error::other)?;
         output.write_all(b"\n")?;
         output.sync_data()?;
+        drop(output);
+        let _ = self.prune();
         Ok(())
+    }
+
+    /// Retention: keeps only the newest diagnostic lines. Returns rotated lines.
+    pub fn prune(&self) -> MedusaResult<usize> {
+        let body = match fs::read_to_string(&self.path) {
+            Ok(body) => body,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        let lines: Vec<&str> = body.lines().collect();
+        if lines.len() <= MAX_DIAGNOSTIC_LINES {
+            return Ok(0);
+        }
+        fs::write(
+            &self.path,
+            lines[lines.len() - MAX_DIAGNOSTIC_LINES..].join("\n") + "\n",
+        )?;
+        Ok(lines.len() - MAX_DIAGNOSTIC_LINES)
     }
 }
 

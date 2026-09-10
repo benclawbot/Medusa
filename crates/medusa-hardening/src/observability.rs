@@ -9,7 +9,10 @@ use std::{
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
 
-use crate::support::{append_atomic, internal, invalid};
+use crate::support::{append_jsonl, internal, invalid, prune_jsonl};
+
+/// Maximum retained operational event lines before rotation.
+pub const MAX_OPERATIONAL_EVENT_LINES: usize = 2_000;
 
 /// Append-only JSONL operational event.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -67,7 +70,14 @@ impl Observability {
         let path = self.root.join("events.jsonl");
         let mut line = serde_json::to_vec(&event)?;
         line.push(b'\n');
-        append_atomic(&path, &line)
+        append_jsonl(&path, &line)?;
+        let _ = prune_jsonl(&path, MAX_OPERATIONAL_EVENT_LINES);
+        Ok(())
+    }
+
+    /// Retention: rotates the operational event journal, keeping the newest lines.
+    pub fn prune_events(&self) -> MedusaResult<usize> {
+        prune_jsonl(&self.root.join("events.jsonl"), MAX_OPERATIONAL_EVENT_LINES)
     }
 
     pub fn snapshot(&self) -> MedusaResult<serde_json::Value> {
@@ -200,5 +210,24 @@ mod tests {
         assert!(!text.contains("plain-secret"));
         assert!(!text.contains("ghp_hidden"));
         assert!(text.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn event_journal_rotation_keeps_newest_lines() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let observability = Observability::new(directory.path()).expect("observability");
+        let path = directory.path().join("events.jsonl");
+        let mut body = String::new();
+        for index in 0..10 {
+            body.push_str(&format!("{{\"line\":{index}}}\n"));
+        }
+        fs::write(&path, body).expect("seed");
+        let removed = observability.prune_events().expect("prune");
+        assert_eq!(removed, 0);
+        let removed = crate::support::prune_jsonl(&path, 4).expect("prune");
+        assert_eq!(removed, 6);
+        let pruned = fs::read_to_string(&path).expect("read");
+        assert_eq!(pruned.lines().count(), 4);
+        assert!(pruned.contains("{\"line\":9}"));
     }
 }

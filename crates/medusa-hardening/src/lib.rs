@@ -22,9 +22,10 @@ pub use feedback::{
 pub use migrations::{CURRENT_SCHEMA_VERSION, Migration, MigrationReceipt, Migrator};
 pub use observability::{Observability, OperationalEvent};
 pub use operational_health::{
-    HealthComponent, HealthReport, HealthStatus, LivenessDisposition, LivenessObservation,
-    OPERATIONAL_HEALTH_SCHEMA_VERSION, ResourceBudget, ResourcePressure, ResourceSnapshot,
-    SupportBundle, SupportBundleManifest, SupportProduct,
+    AlertSeverity, AlertThresholds, HealthComponent, HealthReport, HealthStatus,
+    LivenessDisposition, LivenessObservation, OPERATIONAL_HEALTH_SCHEMA_VERSION, OperationalAlert,
+    ResourceBudget, ResourcePressure, ResourceSnapshot, SupportBundle, SupportBundleManifest,
+    SupportProduct, evaluate_alerts,
 };
 pub use release::{ArtifactEntry, ReleaseManifest, build_release_manifest, package_smoke};
 

@@ -619,6 +619,7 @@ mod tests {
             EventPayload::FileTransactionCommitted {
                 paths: vec!["src/lib.rs".to_owned()],
                 rollback_ref: "rollback".to_owned(),
+                operation_id: None,
             },
         )
         .expect("file event");
@@ -653,6 +654,7 @@ mod tests {
             EventPayload::FileTransactionCommitted {
                 paths: vec!["binary.bin".to_owned()],
                 rollback_ref: "rollback".to_owned(),
+                operation_id: None,
             },
             None,
             time::OffsetDateTime::UNIX_EPOCH,

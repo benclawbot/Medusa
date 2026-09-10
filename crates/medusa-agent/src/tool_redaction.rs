@@ -39,7 +39,7 @@ const CLI_FLAGS: &[&str] = &[
 
 const TOKEN_PREFIXES: &[&str] = &["github_pat_", "ghp_", "xoxb-", "xoxp-", "sk-"];
 
-pub(crate) fn redact_args(args: &[String]) -> Vec<String> {
+pub fn redact_args(args: &[String]) -> Vec<String> {
     let mut redact_next = false;
     args.iter()
         .map(|arg| {
@@ -56,7 +56,7 @@ pub(crate) fn redact_args(args: &[String]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn redact_text(input: &str) -> String {
+pub fn redact_text(input: &str) -> String {
     let mut output = redact_url_userinfo(input);
     output = redact_bearer_tokens(&output);
     for name in ASSIGNMENT_NAMES {
@@ -74,6 +74,56 @@ pub(crate) fn redact_text(input: &str) -> String {
 fn is_sensitive_cli_flag(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     CLI_FLAGS.iter().any(|flag| normalized == *flag)
+}
+
+/// Replaces local filesystem paths with stable placeholders so durable and
+/// user-visible records never leak machine-specific directories.
+#[must_use]
+pub fn redact_local_paths(input: &str, repo: &std::path::Path) -> String {
+    let mut output = input.to_owned();
+    let repo_text = repo.to_string_lossy();
+    if !repo_text.is_empty() && repo_text.as_ref() != "." {
+        output = output.replace(repo_text.as_ref(), "[REPO]");
+    }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        output = output.replace(home.as_str(), "~");
+    }
+    redact_known_root_paths(&output)
+}
+
+fn redact_known_root_paths(input: &str) -> String {
+    const ROOTS: &[&str] = &[
+        "/home/",
+        "/Users/",
+        "/tmp/",
+        "/var/",
+        "/private/",
+        "/root/",
+        "/data/",
+        "/etc/",
+    ];
+    input
+        .split_inclusive(|character: char| character.is_whitespace())
+        .map(|fragment| {
+            let content = fragment.trim_end();
+            let trailing_ws = &fragment[content.len()..];
+            let stripped =
+                content.trim_end_matches([',', '.', ';', ':', '"', '\'', ')', ']', '\\']);
+            let trailing_punct = &content[stripped.len()..];
+            let looks_absolute = ROOTS.iter().any(|root| stripped.starts_with(root))
+                || (stripped.starts_with('/') && stripped.contains('/') && stripped.len() > 8)
+                || (stripped.len() > 3
+                    && stripped.as_bytes()[1] == b':'
+                    && matches!(stripped.as_bytes()[2], b'\\' | b'/'));
+            if stripped.is_empty() || !looks_absolute {
+                fragment.to_owned()
+            } else {
+                format!("[PATH]{trailing_punct}{trailing_ws}")
+            }
+        })
+        .collect()
 }
 
 fn redact_assignment(input: &str, name: &str) -> String {
@@ -325,6 +375,18 @@ mod tests {
             assert!(!redacted.contains(secret));
         }
         assert!(redacted.contains("postgres://user:[REDACTED]@example.test"));
+    }
+
+    #[test]
+    fn redacts_local_filesystem_paths_from_durable_records() {
+        let repo = std::path::Path::new("/home/tester/work/repo");
+        let input = "checkpoint /home/tester/work/repo/src/lib.rs failed at /tmp/medusa-txn-1 C:\\Users\\tester\\out.txt ok";
+        let redacted = redact_local_paths(input, repo);
+        assert!(!redacted.contains("/home/tester/work/repo"));
+        assert!(!redacted.contains("/tmp/medusa-txn-1"));
+        assert!(!redacted.contains("C:\\Users\\tester\\out.txt"));
+        assert!(redacted.contains("[REPO]") || redacted.contains("[PATH]"));
+        assert!(redacted.contains("failed at"));
     }
 
     #[test]

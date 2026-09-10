@@ -32,6 +32,8 @@ pub mod world_model_session;
 #[path = "tool_redaction.rs"]
 mod tool_redaction;
 
+pub use tool_redaction::{redact_args, redact_local_paths, redact_text};
+
 /// Redacts credential values from diagnostics crossing the agent/runtime boundary.
 ///
 /// This reuses the sanitizer applied to shell traces so provider and app-server failures cannot
@@ -92,10 +94,11 @@ pub fn run_contained_analysis_command(
 }
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
-    AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus, SessionEscalation,
-    SessionUsage, TurnUsage, UsageProvenance, bootstrap, export_manual_escalation,
-    import_manual_advice, launch_browser_assisted_escalation, load_escalation_journal,
-    persist_escalation_journal, render_chatgpt_prompt, session_usage,
+    AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus, EstimatedCost,
+    SessionEscalation, SessionUsage, TurnCost, TurnUsage, UsageProvenance, append_turn_cost,
+    bootstrap, estimated_cost, export_manual_escalation, import_manual_advice,
+    launch_browser_assisted_escalation, load_escalation_journal, load_turn_costs,
+    persist_escalation_journal, query_turn_cost, render_chatgpt_prompt, session_usage,
 };
 pub use team::{
     AgentExecutionPolicy, TeamMember, TeamMemberContext, TeamMemberLifecycle, TeamRole, TeamRuntime,
@@ -127,6 +130,20 @@ pub fn record_session_event(
     payload: medusa_protocol::EventPayload,
 ) -> medusa_core::MedusaResult<()> {
     evidence::append_event(session, actor, payload)?;
+    session.updated_at = time::OffsetDateTime::now_utc();
+    session::persist(session)
+}
+
+/// Appends one canonical session event carrying the caller's operation
+/// correlation, so journal, RuntimeEvent, telemetry, and daemon views join on
+/// one operation id instead of minting fresh ids per layer.
+pub fn record_session_event_with_correlation(
+    session: &mut AgentSession,
+    actor: medusa_protocol::Actor,
+    payload: medusa_protocol::EventPayload,
+    correlation: Option<medusa_core::CorrelationId>,
+) -> medusa_core::MedusaResult<()> {
+    evidence::append_event_with_correlation(session, actor, payload, correlation)?;
     session.updated_at = time::OffsetDateTime::now_utc();
     session::persist(session)
 }

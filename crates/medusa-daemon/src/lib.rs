@@ -7,6 +7,7 @@ pub mod frontend_control;
 mod lifecycle;
 pub mod live_session;
 pub mod observability;
+pub mod operational_alerts;
 mod paths;
 #[path = "process_bounded.rs"]
 mod process;
@@ -34,6 +35,7 @@ pub use live_session::{
 };
 pub use medusa_process_containment::{ConfinedDir, ConfinedReadError};
 pub use observability::initialize_observability;
+pub use operational_alerts::{OperationalAlertDispatcher, render_telegram_alert};
 pub use paths::DaemonPaths;
 pub use protocol::{
     DAEMON_PROTOCOL_VERSION, FrontendArtifactKind, FrontendArtifactUpload,

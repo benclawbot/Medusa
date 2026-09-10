@@ -1345,6 +1345,7 @@ dependencies = [
  "medusa-agent",
  "medusa-config",
  "medusa-core",
+ "medusa-hardening",
  "medusa-process-containment",
  "medusa-process-registry",
  "medusa-protocol",

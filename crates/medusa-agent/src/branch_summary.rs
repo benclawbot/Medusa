@@ -313,6 +313,7 @@ fn deterministic_metadata(
             EventPayload::FileTransactionCommitted {
                 paths,
                 rollback_ref,
+                ..
             } => {
                 files_touched.extend(paths.iter().cloned());
                 tool_artifacts.insert(rollback_ref.clone());

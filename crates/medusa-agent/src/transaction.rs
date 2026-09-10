@@ -8,6 +8,8 @@ use std::{
 use medusa_core::{
     ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command, repository_mutation,
 };
+#[cfg(test)]
+use medusa_protocol::EventPayload;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -96,8 +98,222 @@ pub fn preview(
 /// Callers that possess authoritative session and activity identity should use
 /// `apply_atomic_with_context`. Legacy callers remain safe, but their writes are explicitly
 /// unavailable for provenance-authorized selective revert.
+/// One phase record in a file-transaction lifecycle sidecar. Sidecars live at
+/// `.medusa/transactions/<operation_id>.jsonl` and stay queryable after crashes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FileTransactionLifecycleRecord {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub phase: String,
+    pub paths: Vec<String>,
+    pub message: String,
+    pub recorded_unix_ms: i128,
+}
+
+/// Tracks one git-mutation lifecycle (started/progress/committed/rolled back)
+/// under a single operation id shared with the journal's `FileTransaction*` events.
+#[derive(Clone, Debug)]
+pub struct FileTransactionTracker {
+    repo: PathBuf,
+    operation_id: String,
+    paths: Vec<String>,
+}
+
+fn lifecycle_now_ms() -> i128 {
+    time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000
+}
+
+/// Starts lifecycle tracking for a mutation batch and journals the
+/// `FileTransactionStarted` intent before any file is touched.
+pub fn begin_file_transaction(
+    repo: &Path,
+    paths: &[String],
+) -> MedusaResult<FileTransactionTracker> {
+    let nanos = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+    let tracker = FileTransactionTracker {
+        repo: repo.to_path_buf(),
+        operation_id: format!("txn-{nanos}-{}", std::process::id()),
+        paths: paths.to_vec(),
+    };
+    tracker.record("started", String::new())?;
+    Ok(tracker)
+}
+
+/// Lists transactions whose sidecar never reached a terminal phase: hung or
+/// crashed mutations that `FileTransactionCommitted` alone would hide.
+#[cfg(test)]
+pub fn list_incomplete_transactions(
+    repo: &Path,
+) -> MedusaResult<Vec<FileTransactionLifecycleRecord>> {
+    let dir = repo.join(".medusa").join("transactions");
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut incomplete = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if entry
+            .path()
+            .extension()
+            .is_none_or(|extension| extension != "jsonl")
+        {
+            continue;
+        }
+        let body = fs::read_to_string(entry.path())?;
+        let mut last: Option<FileTransactionLifecycleRecord> = None;
+        for line in body.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            last = serde_json::from_str(line).ok();
+        }
+        if let Some(record) = last
+            && record.phase != "committed"
+            && record.phase != "rolled_back"
+        {
+            incomplete.push(record);
+        }
+    }
+    incomplete.sort_by(|left, right| left.operation_id.cmp(&right.operation_id));
+    Ok(incomplete)
+}
+
+impl FileTransactionTracker {
+    #[must_use]
+    #[cfg(test)]
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    fn record(&self, phase: &str, message: String) -> MedusaResult<()> {
+        use std::io::Write as _;
+        let dir = self.repo.join(".medusa").join("transactions");
+        fs::create_dir_all(&dir)?;
+        let record = FileTransactionLifecycleRecord {
+            schema_version: 1,
+            operation_id: self.operation_id.clone(),
+            phase: phase.to_owned(),
+            paths: self.paths.clone(),
+            message,
+            recorded_unix_ms: lifecycle_now_ms(),
+        };
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(format!("{}.jsonl", self.operation_id)))?;
+        serde_json::to_writer(&mut file, &record).map_err(std::io::Error::other)?;
+        file.write_all(b"\n")?;
+        file.sync_data()?;
+        Ok(())
+    }
+
+    pub fn progress(&self, message: impl Into<String>) -> MedusaResult<()> {
+        self.record("progress", message.into())
+    }
+
+    pub fn committed(&self, rollback_ref: &str) -> MedusaResult<()> {
+        self.record("committed", rollback_ref.to_owned())
+    }
+
+    pub fn rolled_back(&self, reason: &str) -> MedusaResult<()> {
+        self.record("rolled_back", reason.to_owned())
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub fn started_payload(&self) -> EventPayload {
+        EventPayload::FileTransactionStarted {
+            operation_id: self.operation_id.clone(),
+            paths: self.paths.clone(),
+        }
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub fn progress_payload(&self, message: impl Into<String>) -> EventPayload {
+        EventPayload::FileTransactionProgress {
+            operation_id: self.operation_id.clone(),
+            message: message.into(),
+        }
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub fn committed_payload(&self, paths: &[String], rollback_ref: &str) -> EventPayload {
+        EventPayload::FileTransactionCommitted {
+            paths: paths.to_vec(),
+            rollback_ref: rollback_ref.to_owned(),
+            operation_id: Some(self.operation_id.clone()),
+        }
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub fn rolled_back_payload(&self, reason: &str) -> EventPayload {
+        EventPayload::FileTransactionRolledBack {
+            operation_id: self.operation_id.clone(),
+            rollback_ref: self.operation_id.clone(),
+            reason: reason.to_owned(),
+        }
+    }
+}
+
+fn note_progress(tracker: Option<&FileTransactionTracker>, message: String) {
+    if let Some(tracker) = tracker {
+        let _ = tracker.progress(message);
+    }
+}
+
+fn note_rollback(tracker: Option<&FileTransactionTracker>, reason: &str) {
+    if let Some(tracker) = tracker {
+        let _ = tracker.rolled_back(reason);
+    }
+}
+
+/// Records the terminal phase of a tracker so `list_incomplete_transactions`
+/// does not flag a successful batch as hung.
+fn finalize_tracker(
+    tracker: &FileTransactionTracker,
+    outcome: &MedusaResult<TransactionOutcome>,
+    paths: &[String],
+) {
+    match outcome {
+        Ok(result) => {
+            let rollback_ref = result
+                .mutation_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "provenance-unavailable".to_owned());
+            let _ = tracker.committed(&rollback_ref);
+            let _ = paths; // committed event payload is built by callers with a session
+        }
+        Err(error) => {
+            let reason: String = error.to_string().chars().take(512).collect();
+            let _ = tracker.rolled_back(&reason);
+        }
+    }
+}
+
 pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<TransactionOutcome> {
-    apply_atomic_inner(repo, mutations, None, true)
+    let paths = mutations.iter().map(|m| m.path.clone()).collect::<Vec<_>>();
+    let tracker = begin_file_transaction(repo, &paths)?;
+    let outcome = apply_atomic_with_tracker(repo, mutations, Some(&tracker));
+    finalize_tracker(&tracker, &outcome, &paths);
+    outcome
+}
+
+/// Session-free entry point for journaled mutation flows: applies mutations with
+/// lifecycle tracking but without emitting session events. The session-aware
+/// `apply_atomic_with_events` lives in `evidence`, next to the journal writer.
+pub(crate) fn apply_atomic_with_tracker(
+    repo: &Path,
+    mutations: &[FileMutation],
+    tracker: Option<&FileTransactionTracker>,
+) -> MedusaResult<TransactionOutcome> {
+    apply_atomic_inner(repo, mutations, None, true, tracker)
 }
 
 /// Applies every repository mutation through the rollback-capable boundary and atomically records
@@ -108,7 +324,11 @@ pub fn apply_atomic_with_context(
     mutations: &[FileMutation],
     context: &MutationContext,
 ) -> MedusaResult<TransactionOutcome> {
-    apply_atomic_inner(repo, mutations, Some(context), true)
+    let paths = mutations.iter().map(|m| m.path.clone()).collect::<Vec<_>>();
+    let tracker = begin_file_transaction(repo, &paths)?;
+    let outcome = apply_atomic_inner(repo, mutations, Some(context), true, Some(&tracker));
+    finalize_tracker(&tracker, &outcome, &paths);
+    outcome
 }
 
 fn apply_atomic_inner(
@@ -116,6 +336,7 @@ fn apply_atomic_inner(
     mutations: &[FileMutation],
     context: Option<&MutationContext>,
     acquire_repository_lock: bool,
+    tracker: Option<&FileTransactionTracker>,
 ) -> MedusaResult<TransactionOutcome> {
     if mutations.is_empty() {
         return Err(MedusaError::new(
@@ -145,6 +366,10 @@ fn apply_atomic_inner(
         }
         resolved.push((mutation, target));
     }
+    note_progress(
+        tracker,
+        format!("resolved {} mutation targets", resolved.len()),
+    );
 
     let mut backups = Vec::with_capacity(mutations.len());
     let mut staged = Vec::with_capacity(mutations.len());
@@ -180,9 +405,11 @@ fn apply_atomic_inner(
         }
         staged.push((target.clone(), temporary));
     }
+    note_progress(tracker, format!("staged {} writes", staged.len()));
 
     for (index, (target, temporary)) in staged.iter().enumerate() {
         if !matches_backup(target, &backups[index])? {
+            note_rollback(tracker, "target changed before commit");
             let rollback = rollback(&backups[..index]);
             cleanup_staged(&staged[index..]);
             return Err(MedusaError::new(
@@ -195,6 +422,7 @@ fn apply_atomic_inner(
             ));
         }
         if let Err(error) = fs::rename(temporary, target) {
+            note_rollback(tracker, "commit rename failed");
             let rollback = rollback(&backups[..index]);
             cleanup_staged(&staged[index..]);
             return Err(MedusaError::new(
@@ -205,6 +433,8 @@ fn apply_atomic_inner(
         }
     }
 
+    note_progress(tracker, format!("committed {} files", staged.len()));
+
     let mut mutation_ids = Vec::new();
     if let Some(context) = context {
         let repository_before = repository_before.ok_or_else(|| {
@@ -214,6 +444,7 @@ fn apply_atomic_inner(
         let mut journal = match load_provenance(repo) {
             Ok(journal) => journal,
             Err(error) => {
+                note_rollback(tracker, "provenance unavailable after write");
                 let rollback = rollback(&backups);
                 return Err(MedusaError::new(
                     ErrorCode::InternalInvariant,
@@ -250,6 +481,7 @@ fn apply_atomic_inner(
             );
             mutation_ids.push(record.id.clone());
             if let Err(error) = journal.append(record) {
+                note_rollback(tracker, "provenance conflict");
                 let rollback = rollback(&backups);
                 return Err(MedusaError::new(
                     ErrorCode::InternalInvariant,
@@ -259,6 +491,7 @@ fn apply_atomic_inner(
             }
         }
         if let Err(error) = persist_provenance(repo, &journal) {
+            note_rollback(tracker, "provenance persistence failed");
             let rollback = rollback(&backups);
             return Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
@@ -453,6 +686,7 @@ pub fn apply_selective_revert(
             }],
             Some(context),
             false,
+            None,
         );
     }
 
@@ -490,6 +724,7 @@ pub fn apply_selective_revert(
         }],
         Some(context),
         false,
+        None,
     )
 }
 
@@ -662,6 +897,75 @@ mod tests {
     };
 
     use super::*;
+    use medusa_protocol::EventPayload;
+
+    #[test]
+    fn file_transaction_lifecycle_links_commit_to_operation() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = vec!["src/new.rs".to_owned()];
+        let tracker = begin_file_transaction(directory.path(), &paths).expect("begin");
+        tracker.progress("staged 1 write").expect("progress");
+        tracker.committed("rollback-1").expect("committed");
+        assert!(
+            list_incomplete_transactions(directory.path())
+                .expect("list")
+                .is_empty()
+        );
+        let committed = tracker.committed_payload(&paths, "rollback-1");
+        match committed {
+            EventPayload::FileTransactionCommitted { operation_id, .. } => {
+                assert_eq!(operation_id.as_deref(), Some(tracker.operation_id()));
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lifecycle_payloads_link_every_phase_to_one_operation() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        // Payload constructors link every phase to the same operation id.
+        let tracker =
+            begin_file_transaction(directory.path(), &["src/x.rs".to_owned()]).expect("begin");
+        match tracker.progress_payload("staged") {
+            EventPayload::FileTransactionProgress { operation_id, .. } => {
+                assert_eq!(operation_id, tracker.operation_id());
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+        match tracker.rolled_back_payload("reason") {
+            EventPayload::FileTransactionRolledBack { operation_id, .. } => {
+                assert_eq!(operation_id, tracker.operation_id());
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+        match tracker.started_payload() {
+            EventPayload::FileTransactionStarted { operation_id, .. } => {
+                assert_eq!(operation_id, tracker.operation_id());
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn crashed_transaction_stays_visible_until_rolled_back() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = vec!["src/hung.rs".to_owned()];
+        let hung = begin_file_transaction(directory.path(), &paths).expect("begin hung");
+        hung.progress("resolved 1 mutation targets")
+            .expect("progress");
+        let incomplete = list_incomplete_transactions(directory.path()).expect("list hung");
+        assert!(
+            incomplete
+                .iter()
+                .any(|record| record.operation_id == hung.operation_id())
+        );
+        hung.rolled_back("test rollback").expect("rollback");
+        assert!(
+            list_incomplete_transactions(directory.path())
+                .expect("list")
+                .is_empty()
+        );
+    }
 
     fn context(sequence: u64) -> MutationContext {
         MutationContext {

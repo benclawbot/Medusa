@@ -7,6 +7,8 @@ mod git;
 mod intelligence;
 mod shell;
 pub(crate) mod skills;
+#[path = "../tool_telemetry.rs"]
+pub(crate) mod tool_telemetry;
 mod web;
 pub mod pipeline {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/tool_pipeline.rs"));

@@ -223,6 +223,129 @@ impl ResourceSnapshot {
     }
 }
 
+/// Threshold configuration for operational-health alerting. Unlike the raw
+/// counters, thresholds decide when a Warning or capacity pressure becomes a
+/// daemon/Telegram alert.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AlertThresholds {
+    /// Emit alerts for warning-level pressure (Warning resources, degraded health).
+    pub include_warnings: bool,
+    /// Minimum number of non-healthy components before any health alert fires.
+    pub min_affected_components: usize,
+}
+
+impl Default for AlertThresholds {
+    fn default() -> Self {
+        Self {
+            include_warnings: true,
+            min_affected_components: 1,
+        }
+    }
+}
+
+impl AlertThresholds {
+    /// Reads thresholds from the environment (`MEDUSA_ALERT_WARNINGS=0/1`,
+    /// `MEDUSA_ALERT_MIN_COMPONENTS=N`); invalid values fall back to defaults.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let include_warnings = std::env::var("MEDUSA_ALERT_WARNINGS")
+            .map(|value| value != "0")
+            .unwrap_or(true);
+        let min_affected_components = std::env::var("MEDUSA_ALERT_MIN_COMPONENTS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1);
+        Self {
+            include_warnings,
+            min_affected_components,
+        }
+    }
+}
+
+/// One alertable operational-health finding.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct OperationalAlert {
+    pub severity: AlertSeverity,
+    pub scope: String,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertSeverity {
+    Warning,
+    Critical,
+}
+
+/// Evaluates a health report plus resource snapshots against thresholds,
+/// returning alerts for degraded health and capacity pressure.
+#[must_use]
+pub fn evaluate_alerts(
+    report: &HealthReport,
+    resources: &[ResourceSnapshot],
+    thresholds: &AlertThresholds,
+) -> Vec<OperationalAlert> {
+    let affected = report
+        .components
+        .iter()
+        .filter(|component| component.status != HealthStatus::HealthyReady)
+        .count();
+    if affected < thresholds.min_affected_components {
+        return Vec::new();
+    }
+    let mut alerts = Vec::new();
+    for component in &report.components {
+        let severity = match component.status {
+            HealthStatus::HealthyReady => continue,
+            HealthStatus::DegradedSafe | HealthStatus::OptionalUnavailable => {
+                if !thresholds.include_warnings {
+                    continue;
+                }
+                AlertSeverity::Warning
+            }
+            HealthStatus::BlockedUserAction => AlertSeverity::Warning,
+            HealthStatus::UnhealthyRecoveryRequired | HealthStatus::UnsafeQuarantine => {
+                AlertSeverity::Critical
+            }
+        };
+        let mut message = component.summary.clone();
+        if let Some(remediation) = &component.remediation {
+            message.push_str("; remediation: ");
+            message.push_str(remediation);
+        }
+        alerts.push(OperationalAlert {
+            severity,
+            scope: format!("component:{}", component.id),
+            message,
+        });
+    }
+    for snapshot in resources {
+        let severity = match snapshot.pressure {
+            ResourcePressure::Nominal => continue,
+            ResourcePressure::Warning => {
+                if !thresholds.include_warnings {
+                    continue;
+                }
+                AlertSeverity::Warning
+            }
+            ResourcePressure::Critical => AlertSeverity::Critical,
+        };
+        alerts.push(OperationalAlert {
+            severity,
+            scope: format!("capacity:{}", snapshot.budget.name),
+            message: format!(
+                "capacity pressure on {}: {}/{} bytes, {}/{} entries",
+                snapshot.budget.name,
+                snapshot.bytes,
+                snapshot.budget.max_bytes,
+                snapshot.entries,
+                snapshot.budget.max_entries,
+            ),
+        });
+    }
+    alerts
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LivenessDisposition {
@@ -543,6 +666,51 @@ mod tests {
         assert_eq!(report.status, HealthStatus::UnsafeQuarantine);
         assert!(!report.safe_to_continue);
         assert_eq!(report.components[0].id, "daemon");
+    }
+
+    #[test]
+    fn warning_and_capacity_pressure_become_alerts() {
+        let report = HealthReport::new(vec![
+            component("journal", HealthStatus::DegradedSafe),
+            component("daemon", HealthStatus::HealthyReady),
+        ])
+        .expect("report");
+        let budget = ResourceBudget::new("journal", 100, 10).expect("budget");
+        let warning = ResourceSnapshot::from_usage(budget, 85, 1);
+        let alerts = evaluate_alerts(&report, &[warning], &AlertThresholds::default());
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.scope == "component:journal")
+        );
+        assert!(alerts.iter().any(|alert| alert.scope == "capacity:journal"));
+        assert!(
+            alerts
+                .iter()
+                .all(|alert| alert.severity == AlertSeverity::Warning)
+        );
+        // Warnings can be silenced; criticals still fire.
+        let quiet = AlertThresholds {
+            include_warnings: false,
+            min_affected_components: 1,
+        };
+        let critical_report = HealthReport::new(vec![component(
+            "store",
+            HealthStatus::UnhealthyRecoveryRequired,
+        )])
+        .expect("report");
+        let full = ResourceSnapshot::from_usage(
+            ResourceBudget::new("store", 100, 10).expect("budget"),
+            100,
+            10,
+        );
+        let alerts = evaluate_alerts(&critical_report, &[full], &quiet);
+        assert!(
+            alerts
+                .iter()
+                .all(|alert| alert.severity == AlertSeverity::Critical)
+        );
+        assert_eq!(alerts.len(), 2);
     }
 
     #[test]

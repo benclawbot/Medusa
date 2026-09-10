@@ -360,6 +360,16 @@ pub fn bind_session_to_delegation(
             "session identity does not match its delegation attempt",
         ));
     }
+    let delegation_started = std::time::Instant::now();
+    let delegation_operation_id = crate::tools::tool_telemetry::new_operation_id("delegation");
+    let delegation_repo = session.repo.clone();
+    let _ = crate::tools::tool_telemetry::record_intent(
+        &delegation_repo,
+        &delegation_operation_id,
+        "delegation",
+        &attempt.session_id,
+        &[contract.contract_id.clone()],
+    );
     append_event(
         session,
         Actor::Coordinator,
@@ -378,7 +388,25 @@ pub fn bind_session_to_delegation(
         },
     )?;
     session.updated_at = OffsetDateTime::now_utc();
-    persist(session)
+    let outcome = persist(session);
+    let (success, bytes) = match &outcome {
+        Ok(()) => (true, 0),
+        Err(_) => (false, 0),
+    };
+    crate::tools::tool_telemetry::record_completion(
+        &delegation_repo,
+        &delegation_operation_id,
+        &crate::tools::tool_telemetry::ToolExecutionTrace::for_delegation(
+            &attempt.session_id,
+            &contract.contract_id,
+            success,
+            delegation_started.elapsed(),
+            bytes,
+            bytes,
+            &delegation_operation_id,
+        ),
+    );
+    outcome
 }
 
 #[derive(Clone, Debug)]

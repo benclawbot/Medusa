@@ -9,6 +9,51 @@ use crate::output_envelope::{EnvelopeConfig, OutputFormat, wrap};
 use crate::tools::browser_dispatch::{build, format_response};
 
 pub(crate) fn run(
+    repo: &Path,
+    client: &mut BrowserClient,
+    envelope_config: &EnvelopeConfig,
+    method: &str,
+    input: &Value,
+    timeout: Duration,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    let started = std::time::Instant::now();
+    let operation_id = super::tool_telemetry::new_operation_id("browser");
+    let _ = super::tool_telemetry::record_intent(repo, &operation_id, "browser", method, &[]);
+    let outcome = run_inner(
+        repo,
+        client,
+        envelope_config,
+        method,
+        input,
+        timeout,
+        cancellation,
+    );
+    let (success, bytes) = match &outcome {
+        Ok(body) => (true, body.len()),
+        Err(_) => (false, 0),
+    };
+    let target: String = super::tool_telemetry::redact_text(&input.to_string())
+        .chars()
+        .take(256)
+        .collect();
+    super::tool_telemetry::record_completion(
+        repo,
+        &operation_id,
+        &super::tool_telemetry::ToolExecutionTrace::for_browser(
+            method,
+            &target,
+            success,
+            started.elapsed(),
+            bytes,
+            bytes,
+            &operation_id,
+        ),
+    );
+    outcome
+}
+
+fn run_inner(
     _repo: &Path,
     client: &mut BrowserClient,
     envelope_config: &EnvelopeConfig,

@@ -1127,6 +1127,106 @@ fn map_transient_event(
         }
         FrontendTransientEvent::NewSession => RuntimeEvent::NewSession,
         FrontendTransientEvent::Progress { turn } => RuntimeEvent::Progress { turn },
+        FrontendTransientEvent::Activity {
+            kind,
+            title,
+            details,
+        } => RuntimeEvent::Activity(RuntimeActivity {
+            id: None,
+            kind: match kind.as_str() {
+                "Assistant" => RuntimeActivityKind::Assistant,
+                "Done" => RuntimeActivityKind::Done,
+                "Error" => RuntimeActivityKind::Error,
+                "Progress" => RuntimeActivityKind::Progress,
+                "Tool" => RuntimeActivityKind::Tool,
+                "Verification" => RuntimeActivityKind::Verification,
+                _ => RuntimeActivityKind::Progress,
+            },
+            title,
+            details,
+        }),
+        FrontendTransientEvent::Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            duration_ms,
+            estimated_cost_microusd,
+            provenance,
+        } => RuntimeEvent::Usage {
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            total_tokens,
+            duration_ms,
+            tokens_per_second_milli: if duration_ms == 0 {
+                0
+            } else {
+                total_tokens.saturating_mul(1_000_000) / duration_ms
+            },
+            estimated_cost_microusd,
+            provenance,
+        },
+        FrontendTransientEvent::Plan { steps } => {
+            match serde_json::from_value::<Vec<medusa_runtime::RuntimePlanStep>>(steps) {
+                Ok(steps) => RuntimeEvent::Plan(TranscriptPlan {
+                    steps: steps
+                        .into_iter()
+                        .map(|step| TranscriptPlanStep {
+                            title: step.title,
+                            state: match step.status {
+                                medusa_runtime::AgentPlanStepStatus::Pending => {
+                                    TranscriptPlanStepState::Pending
+                                }
+                                medusa_runtime::AgentPlanStepStatus::InProgress => {
+                                    TranscriptPlanStepState::Active
+                                }
+                                medusa_runtime::AgentPlanStepStatus::Completed => {
+                                    TranscriptPlanStepState::Completed
+                                }
+                                medusa_runtime::AgentPlanStepStatus::Failed => {
+                                    TranscriptPlanStepState::Failed
+                                }
+                            },
+                        })
+                        .collect(),
+                }),
+                Err(error) => RuntimeEvent::Notice {
+                    title: "Plan unavailable".to_owned(),
+                    details: vec![format!("Daemon plan could not be rendered: {error}")],
+                },
+            }
+        }
+        FrontendTransientEvent::Question { question } => {
+            match serde_json::from_value::<medusa_runtime::RuntimeQuestion>(question) {
+                Ok(question) => RuntimeEvent::Question(RuntimeQuestion {
+                    questions: question
+                        .questions
+                        .into_iter()
+                        .map(|item| QuestionPrompt {
+                            header: item.header,
+                            question: item.question,
+                            options: item
+                                .options
+                                .into_iter()
+                                .map(|option| QuestionOption {
+                                    label: option.label,
+                                    description: option.description,
+                                })
+                                .collect(),
+                            multi_select: item.multi_select,
+                        })
+                        .collect(),
+                }),
+                Err(error) => RuntimeEvent::Notice {
+                    title: "Question unavailable".to_owned(),
+                    details: vec![format!("Daemon question could not be rendered: {error}")],
+                },
+            }
+        }
+        FrontendTransientEvent::Completed { session_id } => RuntimeEvent::Completed { session_id },
+        FrontendTransientEvent::TurnFinished => RuntimeEvent::TurnFinished,
+        FrontendTransientEvent::Cancelled => RuntimeEvent::Cancelled,
         FrontendTransientEvent::Failed { message } => RuntimeEvent::Failed(message),
     }
 }
