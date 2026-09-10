@@ -95,6 +95,33 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
     };
   }, []);
 
+  useEffect(() => {
+    if (!oauth || oauthConnected) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const refreshed = await loadProviderCatalog(true, provider);
+        if (cancelled) return;
+        setCatalog(refreshed);
+        const entry = refreshed.find((item) => item.profileProvider === provider);
+        if (entry?.credentialConfigured) {
+          setOauthConnected(true);
+        }
+      } catch {
+        // Offline catalog refreshes keep the current state; the click
+        // handler still surfaces explicit sign-in results.
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 5000);
+    window.addEventListener("focus", refresh);
+    void refresh();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [oauth, oauthConnected, provider]);
+
   const chooseProvider = (value: string) => {
     const next = catalog.find((entry) => entry.profileProvider === value);
     setProvider(value);

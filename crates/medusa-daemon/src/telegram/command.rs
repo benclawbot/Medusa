@@ -80,6 +80,7 @@ pub(crate) fn map_message(
         ),
         Some("/status") => forward(message, FrontendCommand::ShowStatus),
         Some("/stop") => forward(message, FrontendCommand::CancelTurn),
+        Some("/cancel") => forward(message, FrontendCommand::CancelTurn),
         Some("/model") => forward(
             message,
             FrontendCommand::ConfigureModel {
@@ -248,6 +249,13 @@ mod tests {
             panic!("expected forwarded cancellation");
         };
         assert_eq!(stop.command, FrontendCommand::CancelTurn);
+
+        let TelegramInboundAction::Forward(cancel) =
+            map_message(&config(), &message("/cancel")).expect("cancel")
+        else {
+            panic!("expected forwarded cancellation");
+        };
+        assert_eq!(cancel.command, FrontendCommand::CancelTurn);
     }
 
     #[test]

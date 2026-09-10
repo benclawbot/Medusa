@@ -190,6 +190,13 @@ impl TelegramMiniAppHttpServer {
         {
             return Response::text(401, "Telegram authentication failed");
         }
+        // Consume the single-use reference only after the caller proved
+        // ownership of the bound Telegram identity, so failed attempts do
+        // not burn a legitimate retry while replays can never mint twice.
+        let binding = match self.bridge.redeem_launch_ticket(&request.ticket, now) {
+            Ok(binding) => binding,
+            Err(_) => return Response::text(401, "invalid launch ticket"),
+        };
         let authenticated = match self.bridge.issue_authenticated_token(&binding, now) {
             Ok(authenticated) => authenticated,
             Err(_) => return Response::text(401, "Telegram authentication failed"),

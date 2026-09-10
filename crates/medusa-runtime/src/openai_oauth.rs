@@ -70,9 +70,11 @@ impl OpenAiOAuthLogin {
         match self.receiver.try_recv() {
             Ok(result) => Some(result),
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(Err(
-                "Codex browser sign-in task exited before reporting a result".to_owned(),
-            )),
+            Err(TryRecvError::Disconnected) => Some(Err(if self.cancel.load(Ordering::SeqCst) {
+                "Codex browser sign-in was cancelled before reporting a result".to_owned()
+            } else {
+                "Codex browser sign-in task exited before reporting a result".to_owned()
+            })),
         }
     }
 
@@ -1034,6 +1036,36 @@ fn terminate_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn abandoned_login(cancelled: bool) -> OpenAiOAuthLogin {
+        // Drop the sender so the receiver is disconnected, as when the worker
+        // exits without reporting a result.
+        let (sender, receiver) = mpsc::channel::<Result<Vec<String>, String>>();
+        drop(sender);
+        OpenAiOAuthLogin {
+            receiver,
+            cancel: Arc::new(AtomicBool::new(cancelled)),
+            join: None,
+        }
+    }
+
+    #[test]
+    fn cancelled_login_reports_sign_in_cancelled() {
+        let mut login = abandoned_login(true);
+        let message = login.poll().expect("result").expect_err("error");
+        assert!(
+            message.contains("cancelled"),
+            "unexpected message: {message}"
+        );
+        assert!(!message.contains("exited"), "unexpected message: {message}");
+    }
+
+    #[test]
+    fn abandoned_login_still_reports_exited_task() {
+        let mut login = abandoned_login(false);
+        let message = login.poll().expect("result").expect_err("error");
+        assert!(message.contains("exited"), "unexpected message: {message}");
+    }
 
     #[test]
     fn discovered_models_are_sorted_deduplicated_and_accept_slugs() {

@@ -60,6 +60,8 @@ pub struct TuiOptions {
     pub initial_prompt: Option<String>,
     pub resume_session: Option<String>,
     pub continue_latest: bool,
+    /// Start a clean session: ignore saved drafts and never auto-resume durable tasks.
+    pub fresh: bool,
     pub build_label: Option<String>,
 }
 
@@ -72,6 +74,7 @@ impl TuiOptions {
             initial_prompt: None,
             resume_session: None,
             continue_latest: false,
+            fresh: false,
             build_label: None,
         }
     }

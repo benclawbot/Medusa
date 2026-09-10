@@ -440,7 +440,21 @@ impl RuntimeRegistry {
         };
         thread::spawn(move || {
             for mut supervisor in supervisors {
-                let _ = supervisor.shutdown_now();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                thread::spawn(move || {
+                    let _ = sender.send(supervisor.shutdown_now());
+                });
+                match receiver.recv_timeout(std::time::Duration::from_secs(30)) {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        eprintln!("desktop daemon shutdown failed: {error}");
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "desktop daemon shutdown timed out after 30s; a provider turn or child process may still be running"
+                        );
+                    }
+                }
             }
         });
     }
@@ -495,7 +509,21 @@ pub fn runtime_close(
         .ok_or_else(|| format!("runtime {runtime_id} shutdown handle does not exist"))?;
     thread::spawn(move || {
         let mut supervisor = supervisor;
-        let _ = supervisor.shutdown_now();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(supervisor.shutdown_now());
+        });
+        match receiver.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                eprintln!("desktop runtime {runtime_id} daemon shutdown failed: {error}");
+            }
+            Err(_) => {
+                eprintln!(
+                    "desktop runtime {runtime_id} daemon shutdown timed out after 30s; a provider turn or child process may still be running"
+                );
+            }
+        }
     });
     Ok(())
 }

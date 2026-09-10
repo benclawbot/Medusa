@@ -2,6 +2,7 @@ mod config_command;
 mod config_profiles;
 mod headless_approval;
 mod telegram_command;
+mod uninstall_command;
 mod update_command;
 
 use std::{
@@ -148,6 +149,8 @@ enum CommandKind {
     Resume {
         session: String,
     },
+    /// Remove the installed binary, repository state, channel marker, and locks.
+    Uninstall,
     /// Run the Telegram remote frontend over the repository daemon authority.
     Telegram {
         #[command(flatten)]
@@ -268,6 +271,7 @@ fn run() -> MedusaResult<()> {
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;
         options.continue_latest = cli.r#continue;
+        options.fresh = cli.fresh;
         let _ = run_tui(options)?;
         return Ok(());
     };
@@ -299,6 +303,7 @@ fn run() -> MedusaResult<()> {
 
     let command = match command {
         CommandKind::Telegram { args } => return telegram_command::run(&repo, *args),
+        CommandKind::Uninstall => return uninstall_command::run(&repo),
         command => command,
     };
 
@@ -376,6 +381,7 @@ fn run() -> MedusaResult<()> {
             non_interactive,
             approve_allowlist,
         } => {
+            ensure_first_run()?;
             ensure_selected_runtime()?;
             let approval_policy = HeadlessApprovalPolicy::load(
                 non_interactive,
@@ -391,6 +397,7 @@ fn run() -> MedusaResult<()> {
             drain_headless_runtime(&runtime, &repo, approval_policy.as_ref())
         }
         CommandKind::Resume { session } => {
+            ensure_first_run()?;
             ensure_selected_runtime()?;
             let runtime = RuntimeController::start_resumed_with_config(repo.clone(), &session, config)
                 .map_err(runtime_error)?;
@@ -404,6 +411,7 @@ fn run() -> MedusaResult<()> {
         }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::Telegram { .. } => unreachable!("handled before runtime config loading"),
+        CommandKind::Uninstall => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
 }
@@ -568,24 +576,46 @@ fn is_unjournaled_runtime_failure(message: &str) -> bool {
     message.starts_with("runtime event was not published because")
 }
 
-fn request_daemon_shutdown(repo: &Path) {
+fn request_daemon_shutdown(repo: &Path) -> MedusaResult<()> {
     let paths = DaemonPaths::for_repo(repo);
     if !paths.owner.exists() {
-        return;
+        return Ok(());
     }
-    let _ = DaemonClient::new(&paths.socket).request(Request::ShutdownNow);
+    DaemonClient::new(&paths.socket)
+        .request(Request::ShutdownNow)
+        .map_err(|error| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Execution,
+                format!("daemon shutdown request failed: {error}"),
+            )
+        })?;
 
     // The daemon acknowledges the request before its accept loop has finished
     // tearing down the listener and releasing the executable on Windows. Wait
-    // for ownership to disappear before the updater stages the replacement.
-    wait_for_daemon_shutdown(&paths.owner);
+    // for ownership to disappear before the updater stages the replacement,
+    // and fail loudly instead of racing the replacement with a live daemon.
+    wait_for_daemon_shutdown(&paths.owner)
 }
 
-fn wait_for_daemon_shutdown(owner: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(3);
+fn wait_for_daemon_shutdown(owner: &Path) -> MedusaResult<()> {
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+    let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
     while owner.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(25));
+        thread::sleep(Duration::from_millis(50));
     }
+    if owner.exists() {
+        return Err(MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Execution,
+            format!(
+                "daemon did not shut down within {}s ({} still exists); aborting update to avoid replacing a live executable",
+                SHUTDOWN_TIMEOUT.as_secs(),
+                owner.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn health(
@@ -1664,7 +1694,7 @@ mod tests {
             fs::remove_file(release).expect("release owner");
         });
 
-        wait_for_daemon_shutdown(&owner);
+        wait_for_daemon_shutdown(&owner).expect("shutdown observed");
         worker.join().expect("release worker");
         assert!(!owner.exists());
     }

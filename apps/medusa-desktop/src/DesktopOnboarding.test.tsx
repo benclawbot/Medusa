@@ -115,6 +115,16 @@ it("keeps authentication recoverable when browser OAuth fails or is cancelled", 
   expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
 });
 
+it("picks up a completed browser sign-in from a catalog refresh", async () => {
+  vi.mocked(loadProviderCatalog).mockResolvedValue([
+    { ...oauthProvider, credentialConfigured: true },
+  ]);
+  render(<DesktopOnboarding configuration={configuration} providers={[oauthProvider]} onApply={vi.fn()} />);
+
+  expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Sign in with ChatGPT" })).not.toBeInTheDocument();
+});
+
 it("does not treat an OAuth route as authenticated merely because it has no API key", async () => {
   const catalogOAuthProvider = { ...oauthProvider, authMethods: ["none"], defaultAuth: "none" };
   const catalogConfiguration = { ...configuration, auth: "none" };
