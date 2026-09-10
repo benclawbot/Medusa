@@ -12,6 +12,7 @@ use std::{
 
 use medusa_multi_agent_scheduler::{DynamicSchedule, Task, TaskState, Worker as ScheduledWorker};
 use medusa_progress::{ProgressEvent, ProgressKind};
+use medusa_protocol::EventPayload;
 use medusa_worker_leases::WorkerLease;
 use medusa_workers::{Worker, WorkerState};
 use serde::{Deserialize, Serialize};
@@ -480,6 +481,91 @@ impl WorkerExecutionController {
         &self.state.progress
     }
 
+    /// Reader returning every progress event at or after `sequence`, so journal
+    /// writers and RuntimeEvent projectors can consume without cloning the log.
+    #[must_use]
+    pub fn progress_since(&self, sequence: u64) -> Vec<ProgressEvent> {
+        self.state
+            .progress
+            .iter()
+            .filter(|event| event.sequence >= sequence)
+            .cloned()
+            .collect()
+    }
+
+    /// Projects durable progress into session-journal-compatible records. Each
+    /// record carries its durability class so consumers route canonical,
+    /// projected, and presentation-only progress without reimplementing the mapping.
+    #[must_use]
+    pub fn progress_journal_projection(&self, since: u64) -> Vec<serde_json::Value> {
+        self.progress_since(since)
+            .iter()
+            .map(|event| {
+                let class = event.kind.durable_event_class();
+                serde_json::json!({
+                    "execution_id": self.state.execution_id,
+                    "sequence": event.sequence,
+                    "kind": event.kind,
+                    "durability": class.label(),
+                    "durable": class.is_durable(),
+                    "message": event.message,
+                    "step_id": event.step_id,
+                    "checkpoint_id": event.checkpoint_id,
+                })
+            })
+            .collect()
+    }
+
+    /// Maps drained progress into session-journal payloads: tool start/finish and
+    /// checkpoints become first-class journal events, while status-style progress
+    /// rides as worker evidence carrying its durability class.
+    #[must_use]
+    pub fn progress_journal_payloads(&self, since: u64) -> Vec<EventPayload> {
+        self.progress_since(since)
+            .iter()
+            .map(|event| {
+                let tool = event
+                    .step_id
+                    .clone()
+                    .unwrap_or_else(|| event.message.clone());
+                match event.kind {
+                    ProgressKind::ToolStarted => EventPayload::ToolExecutionStarted { tool },
+                    ProgressKind::ToolFinished => EventPayload::ToolExecutionCompleted {
+                        tool,
+                        exit_code: Some(0),
+                    },
+                    ProgressKind::CheckpointCreated => EventPayload::CheckpointCreated {
+                        checkpoint_id: event
+                            .checkpoint_id
+                            .clone()
+                            .unwrap_or_else(|| event.message.clone()),
+                    },
+                    _ => EventPayload::WorkerEvidenceRecorded {
+                        evidence: serde_json::json!({
+                            "kind": "worker_progress",
+                            "execution_id": self.state.execution_id,
+                            "sequence": event.sequence,
+                            "progress_kind": event.kind,
+                            "durability": event.kind.durable_event_class().label(),
+                            "message": event.message,
+                            "step_id": event.step_id,
+                            "checkpoint_id": event.checkpoint_id,
+                        }),
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// Consumer cursor helper: returns new events and advances `cursor` past them.
+    pub fn drain_progress(&self, cursor: &mut u64) -> Vec<ProgressEvent> {
+        let events = self.progress_since(*cursor);
+        if let Some(last) = events.last() {
+            *cursor = last.sequence.saturating_add(1);
+        }
+        events
+    }
+
     pub fn summary(&self) -> &WorkerProgressSummary {
         &self.state.summary
     }
@@ -681,6 +767,39 @@ mod tests {
             write_paths: vec!["src/lib.rs".into()],
             speculative: false,
         }
+    }
+
+    #[test]
+    fn progress_readers_project_durable_journal_records() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("execution.json");
+        let controller = controller(&path);
+        assert!(!controller.progress().is_empty());
+        let mut cursor = 1_u64;
+        let drained = controller.drain_progress(&mut cursor);
+        assert_eq!(drained.len(), controller.progress().len());
+        assert!(controller.drain_progress(&mut cursor).is_empty());
+        let projection = controller.progress_journal_projection(1);
+        assert_eq!(projection.len(), controller.progress().len());
+        assert!(
+            projection
+                .iter()
+                .all(|record| record["execution_id"].is_string())
+        );
+        // Durable classes are explicit so journal consumers route correctly.
+        let started = projection
+            .iter()
+            .find(|record| record["kind"] == "started")
+            .expect("started projection");
+        assert_eq!(started["durable"], false);
+        // Journal payloads map tool finish to a first-class completion event.
+        let payloads = controller.progress_journal_payloads(1);
+        assert_eq!(payloads.len(), controller.progress().len());
+        assert!(
+            payloads
+                .iter()
+                .all(|payload| matches!(payload, EventPayload::WorkerEvidenceRecorded { .. }))
+        );
     }
 
     fn controller(path: &std::path::Path) -> WorkerExecutionController {

@@ -66,9 +66,39 @@ pub(crate) fn run(repo: &Path, input: &Value, cancellation: &AtomicBool) -> Medu
         return Err(cancelled());
     }
 
+    let started = std::time::Instant::now();
+    let operation_id = super::tool_telemetry::new_operation_id("skill");
+    let mut skill_args = vec![request.entrypoint.clone()];
+    if let Ok(digest) = digest_json(&request.input) {
+        skill_args.push(digest);
+    }
+    let _ = super::tool_telemetry::record_intent(
+        repo,
+        &operation_id,
+        "skill",
+        &request.name,
+        &skill_args,
+    );
     let run_root = temporary_run_root(&package)?;
     let result = execute_in_isolated_copy(&run_root, &package, entrypoint, &request, cancellation);
     let _ = fs::remove_dir_all(&run_root);
+    let (success, bytes) = match &result {
+        Ok(body) => (true, body.len()),
+        Err(_) => (false, 0),
+    };
+    super::tool_telemetry::record_completion(
+        repo,
+        &operation_id,
+        &super::tool_telemetry::ToolExecutionTrace::for_skill(
+            &request.name,
+            &skill_args,
+            success,
+            started.elapsed(),
+            bytes,
+            bytes,
+            &operation_id,
+        ),
+    );
     result
 }
 

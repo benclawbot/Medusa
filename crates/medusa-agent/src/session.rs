@@ -44,7 +44,10 @@ pub use escalation_state::{
 };
 pub use manual_escalation::{export_manual_escalation, import_manual_advice};
 pub(crate) use usage::record_turn_usage;
-pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
+pub use usage::{
+    EstimatedCost, SessionUsage, TurnCost, TurnUsage, UsageProvenance, append_turn_cost,
+    estimated_cost, load_turn_costs, query_turn_cost, session_usage,
+};
 
 pub(crate) fn record_loaded_skills(session: &AgentSession) -> MedusaResult<()> {
     if !completed_learning::telemetry_allowed(&session.repo)? {

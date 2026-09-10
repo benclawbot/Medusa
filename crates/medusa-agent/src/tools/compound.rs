@@ -19,7 +19,59 @@ const MAX_EXCERPT_FILES: usize = 8;
 const MAX_EXCERPT_LINES: usize = 80;
 const MAX_POLICY_FILES: usize = 8;
 
+fn traced_compound(
+    repo: &Path,
+    step: &str,
+    input: &Value,
+    started: std::time::Instant,
+    operation_id: &str,
+    outcome: MedusaResult<String>,
+) -> MedusaResult<String> {
+    let summary: String = crate::tools::tool_telemetry::redact_text(&input.to_string())
+        .chars()
+        .take(256)
+        .collect();
+    let (success, bytes) = match &outcome {
+        Ok(body) => (true, body.len()),
+        Err(_) => (false, 0),
+    };
+    crate::tools::tool_telemetry::record_completion(
+        repo,
+        operation_id,
+        &crate::tools::tool_telemetry::ToolExecutionTrace::for_compound(
+            step,
+            &[summary],
+            success,
+            started.elapsed(),
+            bytes,
+            bytes,
+            operation_id,
+        ),
+    );
+    outcome
+}
+
 pub(crate) fn inspect_target(repo: &Path, input: &Value) -> MedusaResult<String> {
+    let started = std::time::Instant::now();
+    let operation_id = crate::tools::tool_telemetry::new_operation_id("compound");
+    let _ = crate::tools::tool_telemetry::record_intent(
+        repo,
+        &operation_id,
+        "compound",
+        "inspect_target",
+        &[],
+    );
+    traced_compound(
+        repo,
+        "inspect_target",
+        input,
+        started,
+        &operation_id,
+        inspect_target_inner(repo, input),
+    )
+}
+
+fn inspect_target_inner(repo: &Path, input: &Value) -> MedusaResult<String> {
     let path = input
         .get("path")
         .and_then(Value::as_str)
@@ -144,6 +196,26 @@ pub(crate) fn inspect_target(repo: &Path, input: &Value) -> MedusaResult<String>
 }
 
 pub(crate) fn apply_structured_patch(repo: &Path, input: &Value) -> MedusaResult<String> {
+    let started = std::time::Instant::now();
+    let operation_id = crate::tools::tool_telemetry::new_operation_id("compound");
+    let _ = crate::tools::tool_telemetry::record_intent(
+        repo,
+        &operation_id,
+        "compound",
+        "apply_structured_patch",
+        &[],
+    );
+    traced_compound(
+        repo,
+        "apply_structured_patch",
+        input,
+        started,
+        &operation_id,
+        apply_structured_patch_inner(repo, input),
+    )
+}
+
+fn apply_structured_patch_inner(repo: &Path, input: &Value) -> MedusaResult<String> {
     let expected_revision = input
         .get("repository_revision")
         .and_then(Value::as_str)
@@ -317,6 +389,26 @@ pub(crate) fn apply_structured_patch(repo: &Path, input: &Value) -> MedusaResult
 }
 
 pub(crate) fn verify_impacted(repo: &Path, input: &Value) -> MedusaResult<String> {
+    let started = std::time::Instant::now();
+    let operation_id = crate::tools::tool_telemetry::new_operation_id("compound");
+    let _ = crate::tools::tool_telemetry::record_intent(
+        repo,
+        &operation_id,
+        "compound",
+        "verify_impacted",
+        &[],
+    );
+    traced_compound(
+        repo,
+        "verify_impacted",
+        input,
+        started,
+        &operation_id,
+        verify_impacted_inner(repo, input),
+    )
+}
+
+fn verify_impacted_inner(repo: &Path, input: &Value) -> MedusaResult<String> {
     let expected_revision = input
         .get("repository_revision")
         .and_then(Value::as_str)

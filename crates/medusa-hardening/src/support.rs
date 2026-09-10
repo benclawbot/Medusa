@@ -10,14 +10,38 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub(crate) use storage::atomic_write;
 
-pub(crate) fn append_atomic(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let mut existing = if path.exists() {
-        fs::read(path)?
-    } else {
-        Vec::new()
+/// Appends bytes to a JSONL journal in O(1) time. The previous implementation
+/// re-read and re-wrote the whole file on every event (O(n^2) total); single
+/// `write_all` frames under the append flag keep concurrent writers from
+/// interleaving short lines.
+pub(crate) fn append_jsonl(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    use std::io::Write as _;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_data()?;
+    Ok(())
+}
+
+/// Retention: keeps only the newest `max_lines` lines of a JSONL journal.
+/// Returns the number of rotated lines.
+pub(crate) fn prune_jsonl(path: &Path, max_lines: usize) -> MedusaResult<usize> {
+    let body = match fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
     };
-    existing.extend_from_slice(bytes);
-    storage::atomic_write(path, &existing).map_err(MedusaError::from)
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.len() <= max_lines {
+        return Ok(0);
+    }
+    fs::write(path, lines[lines.len() - max_lines..].join("\n") + "\n")?;
+    Ok(lines.len() - max_lines)
 }
 
 pub(crate) fn copy_tree(

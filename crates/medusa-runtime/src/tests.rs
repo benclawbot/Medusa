@@ -945,6 +945,99 @@ fn verbose_command_sets_cycles_and_notifies() {
     assert_eq!(state.verbosity, Verbosity::New);
 }
 
+#[test]
+fn dead_letter_preserves_original_event_payload() {
+    let directory = tempdir().expect("temporary directory");
+    let event = RuntimeEvent::Activity(RuntimeActivity {
+        id: Some("op-1".to_owned()),
+        kind: RuntimeActivityKind::Tool,
+        title: "tool ran".to_owned(),
+        details: vec![directory.path().display().to_string()],
+    });
+    let summary = bounded_summary(&event, directory.path());
+    assert!(summary.contains("tool ran"));
+    assert!(!summary.contains(directory.path().display().to_string().as_str()));
+    write_dead_letter(
+        directory.path(),
+        "journal",
+        Some("session-1"),
+        &summary,
+        "boom",
+    );
+    let body = std::fs::read_to_string(dead_letter_path(directory.path())).expect("dead letters");
+    assert!(body.contains("session-1"));
+    assert!(body.contains("tool ran"));
+    assert_eq!(prune_dead_letters(directory.path()).expect("prune"), 0);
+}
+
+#[test]
+fn worker_progress_reaches_journal_and_runtime_events() {
+    use medusa_agent::WorkerExecutionController;
+    use medusa_multi_agent_scheduler::{Task, Worker as ScheduledWorker};
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    medusa_agent::record_session_event(
+        &mut session,
+        Actor::Coordinator,
+        EventPayload::SessionCreated {
+            objective: "worker progress".to_owned(),
+        },
+    )
+    .expect("seed session");
+    let session_id = session.id.as_str().to_owned();
+    let controller = WorkerExecutionController::create(
+        directory.path().join("workers.json"),
+        "exec-test",
+        vec![Task {
+            id: "task-0".into(),
+            dependencies: vec![],
+            capabilities: vec!["rust".into()],
+            write_paths: vec![],
+            speculative: false,
+        }],
+        vec![ScheduledWorker {
+            id: "a".into(),
+            capabilities: vec!["rust".into()],
+            healthy: true,
+            capacity: 1,
+        }],
+        vec![medusa_git_workers::Worker {
+            id: "a".into(),
+            branch: "medusa/a".into(),
+            worktree: std::path::PathBuf::from("worktrees/a"),
+            state: medusa_git_workers::WorkerState::Ready,
+            commit: None,
+            stdout: String::new(),
+            stderr: String::new(),
+        }],
+        3,
+    )
+    .expect("controller");
+    let mut cursor = 1_u64;
+    let events = project_worker_progress(directory.path(), &controller, &mut cursor);
+    assert_eq!(events.len(), controller.progress().len());
+    assert!(
+        matches!(&events[0], RuntimeEvent::Activity(activity) if activity.id.as_deref() == Some("exec-test#1"))
+    );
+    let mut journal_cursor = 1_u64;
+    let recorded = record_worker_progress(
+        directory.path(),
+        &session_id,
+        &controller,
+        &mut journal_cursor,
+    )
+    .expect("record");
+    assert_eq!(recorded, controller.progress().len());
+    let reloaded =
+        medusa_agent::session_browser::load_session(directory.path(), &session_id).expect("reload");
+    assert!(
+        reloaded
+            .events
+            .iter()
+            .any(|event| matches!(&event.payload, EventPayload::WorkerEvidenceRecorded { .. }))
+    );
+}
+
 fn durable_runtime_session(repo: &Path) -> medusa_agent::AgentSession {
     medusa_agent::AgentSession {
         id: SessionId::new(),

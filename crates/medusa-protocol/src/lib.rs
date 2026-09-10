@@ -387,6 +387,21 @@ pub enum EventPayload {
     FileTransactionCommitted {
         paths: Vec<String>,
         rollback_ref: String,
+        #[serde(default)]
+        operation_id: Option<String>,
+    },
+    FileTransactionStarted {
+        operation_id: String,
+        paths: Vec<String>,
+    },
+    FileTransactionProgress {
+        operation_id: String,
+        message: String,
+    },
+    FileTransactionRolledBack {
+        operation_id: String,
+        rollback_ref: String,
+        reason: String,
     },
     CheckpointCreated {
         checkpoint_id: String,

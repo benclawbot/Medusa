@@ -16,8 +16,7 @@ mod repository_profile;
 mod tool_orchestration;
 #[path = "../tool_scheduler.rs"]
 mod tool_scheduler;
-#[path = "../tool_telemetry.rs"]
-mod tool_telemetry;
+use super::tool_telemetry;
 
 use crate::{
     output_envelope::{OutputMode, adapt_command},
@@ -110,10 +109,33 @@ fn run_validated(
         ));
     }
 
+    // Crash-durable intent first: if the process dies between exec and the
+    // completion trace, the next tool start reconciles this intent.
+    let _ = tool_telemetry::reconcile_intents(repo);
+    let operation_id = tool_telemetry::new_operation_id("shell_run");
+    let _ = tool_telemetry::record_intent(repo, &operation_id, "shell_run", program, args);
     let started = Instant::now();
     let output = match cancellation {
-        Some(cancellation) => sandboxed_command_cancellable(repo, program, args, cancellation)?,
-        None => sandboxed_command(repo, program, args)?,
+        Some(cancellation) => sandboxed_command_cancellable(repo, program, args, cancellation),
+        None => sandboxed_command(repo, program, args),
+    };
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            let elapsed = started.elapsed();
+            let failure = tool_telemetry::ToolExecutionTrace::for_shell(
+                program,
+                args,
+                false,
+                elapsed,
+                0,
+                &adapt_command(program, &persisted_args, &[], &[], false, output_mode),
+                &operation_id,
+            );
+            let _ = tool_telemetry::append_trace(repo, &failure);
+            let _ = tool_telemetry::complete_intent(repo, &operation_id);
+            return Err(error);
+        }
     };
     let command = format!("command={} {}", program, args.join(" "));
     let raw = format!(
@@ -139,8 +161,10 @@ fn run_validated(
         elapsed,
         raw.len(),
         &adapted,
+        &operation_id,
     );
     let trace_path = tool_telemetry::append_trace(repo, &trace)?;
+    let _ = tool_telemetry::complete_intent(repo, &operation_id);
     let profile_record_error = repository_profile::record(
         repo,
         "shell_run",
@@ -157,6 +181,7 @@ fn run_validated(
     .err();
 
     let mut evidence = tool_telemetry::redact_text(&adapted.to_string());
+    evidence = tool_telemetry::redact_local_paths(&evidence, repo);
     execution_budget.record_output(&evidence)?;
     if output.status.success() {
         cache_evidence =
@@ -182,9 +207,10 @@ fn run_validated(
         &verification,
     ));
     evidence.push_str(&format!(
-        "\n[tool-telemetry path={}; schema_version={}]",
+        "\n[tool-telemetry path={}; schema_version={}; operation_id={}]",
         trace_path.display(),
-        trace.schema_version
+        trace.schema_version,
+        operation_id
     ));
     if adapted.expansion_handle.is_some() {
         let path = persist_expansion(repo, &raw)?;
@@ -205,7 +231,7 @@ fn run_validated(
 }
 
 fn persist_expansion(repo: &Path, raw: &str) -> MedusaResult<std::path::PathBuf> {
-    let redacted = tool_telemetry::redact_text(raw);
+    let redacted = tool_telemetry::redact_local_paths(&tool_telemetry::redact_text(raw), repo);
     let digest = Sha256::digest(format!("shell_run\0{redacted}").as_bytes());
     let relative = Path::new(".medusa")
         .join("artifacts")
