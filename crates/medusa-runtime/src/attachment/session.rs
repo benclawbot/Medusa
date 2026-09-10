@@ -52,6 +52,11 @@ impl RuntimeSessionAttachment {
         let session = load_session(&repo, &request.session_id).map_err(RuntimeError::agent)?;
         let store = continuity_store(&repo, &request.session_id);
         initialize_continuity(&store, &request.session_id)?;
+        // Snapshot the authoritative journal once: its length bounds the
+        // continuity cursor below, and the tail is sliced locally so attach
+        // observes a single consistent view.
+        let journal = replay_events(&repo, &request.session_id, 0).map_err(RuntimeError::agent)?;
+        let journal_len = journal.len() as u64;
         let outcome = store
             .attach(AttachRequest {
                 client_id: request.client_id.clone(),
@@ -59,6 +64,7 @@ impl RuntimeSessionAttachment {
                 requested_mode: request.requested_mode,
                 expected_revision: request.expected_revision,
                 journal_cursor: request.cursor,
+                journal_len,
                 occurred_at_unix_ms: request.occurred_at_unix_ms,
                 event_id: request.event_id,
             })
@@ -70,9 +76,11 @@ impl RuntimeSessionAttachment {
             .iter()
             .find(|attachment| attachment.client_id == request.client_id)
             .ok_or_else(|| RuntimeError::agent("continuity attach did not retain the client"))?;
-        let replay_cursor = request.cursor.max(attachment.journal_cursor);
-        let replay = replay_events(&repo, &request.session_id, replay_cursor)
-            .map_err(RuntimeError::agent)?;
+        let replay_cursor = request
+            .cursor
+            .max(attachment.journal_cursor)
+            .min(journal_len);
+        let replay = journal[replay_cursor as usize..].to_vec();
         Ok(Self {
             repo,
             client_id: request.client_id,
@@ -98,10 +106,14 @@ impl RuntimeSessionAttachment {
         let client_id = self.client_id.clone();
         let event_id = event_id.into();
         let store = continuity_store(&self.repo, &self.session.id.to_string());
+        let journal_len = replay_events(&self.repo, &self.session.id.to_string(), 0)
+            .map_err(RuntimeError::agent)?
+            .len() as u64;
         let request = |expected_revision| CursorAckRequest {
             client_id: client_id.clone(),
             expected_revision,
             cursor,
+            journal_len,
             occurred_at_unix_ms,
             event_id: event_id.clone(),
         };
@@ -618,6 +630,7 @@ mod continuity_command_tests {
                 client_id: "daemon-subscriber".to_owned(),
                 expected_revision: 0,
                 cursor: 1,
+                journal_len: 1,
                 occurred_at_unix_ms: 20_000,
                 event_id: "ack-daemon".to_owned(),
             })
@@ -628,6 +641,7 @@ mod continuity_command_tests {
                 client_id: "daemon-subscriber".to_owned(),
                 expected_revision: revision,
                 cursor: 0,
+                journal_len: 1,
                 occurred_at_unix_ms: 20_001,
                 event_id: "ack-regression".to_owned(),
             })

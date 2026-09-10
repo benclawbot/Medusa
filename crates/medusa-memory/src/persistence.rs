@@ -7,7 +7,7 @@ use crate::{
     engine::MemoryEngine,
     index::recover_index_swap,
     schema::MemoryDocument,
-    support::{atomic_write, invalid, sanitize_component},
+    support::{atomic_write, internal, invalid, sanitize_component},
 };
 
 impl MemoryEngine {
@@ -31,7 +31,18 @@ impl MemoryEngine {
 
     pub(crate) fn documents(&self) -> MedusaResult<Vec<(PathBuf, MemoryDocument)>> {
         let mut documents = Vec::new();
-        for entry in WalkDir::new(&self.root).into_iter().filter_map(Result::ok) {
+        for entry in WalkDir::new(&self.root) {
+            // WalkDir I/O failures (unreadable directories, vanishing paths) must
+            // surface to the caller instead of being silently dropped: a partial
+            // document list would otherwise make reads and index rebuilds wrong.
+            let entry = entry.map_err(|error| {
+                tracing::warn!(
+                    root = %self.root.display(),
+                    %error,
+                    "memory walk failed"
+                );
+                internal(format!("memory directory walk failed: {error}"))
+            })?;
             if !entry.file_type().is_file()
                 || entry
                     .path()
@@ -77,5 +88,24 @@ impl MemoryEngine {
         self.root
             .join(directory)
             .join(format!("{}.md", sanitize_component(&document.id)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walk_errors_surface_instead_of_silently_truncating_the_corpus() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engine = MemoryEngine::new(directory.path()).expect("engine");
+        // Vanishing the memory root makes the directory walk fail. The old
+        // `filter_map(Result::ok)` turned that into an empty corpus, so reads
+        // and index rebuilds silently operated on partial state.
+        fs::remove_dir_all(directory.path().join(".medusa/memory")).expect("remove root");
+        let error = engine
+            .read_by_id("anything")
+            .expect_err("walk failure must surface");
+        assert!(error.to_string().contains("directory walk failed"));
     }
 }

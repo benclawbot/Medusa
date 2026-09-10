@@ -281,6 +281,9 @@ impl Config {
         if self.model.context_window_tokens == 0 {
             return Err(invalid("context_window_tokens must be greater than zero"));
         }
+        if self.model.max_output_tokens == 0 {
+            return Err(invalid("max_output_tokens must be greater than zero"));
+        }
         validate_route(
             "primary",
             &self.model.provider,
@@ -602,6 +605,41 @@ mod tests {
             parse_override_value("only_irreducible").expect("string override"),
             toml::Value::String("only_irreducible".into())
         );
+    }
+
+    #[test]
+    fn validate_rejects_bad_token_counts_memory_format_and_retry_ordering() {
+        // Zero token counts are never valid runtime budgets.
+        let mut config = Config::default();
+        config.model.max_output_tokens = 0;
+        assert!(config.validate().is_err());
+        let mut config = Config::default();
+        config.model.context_window_tokens = 0;
+        assert!(config.validate().is_err());
+
+        // Memory must remain canonical Markdown.
+        let mut config = Config::default();
+        config.memory.format = "json".to_owned();
+        assert!(config.validate().is_err());
+
+        // retry_max must not undercut retry_base (primary and fallbacks).
+        let mut config = Config::default();
+        config.model.retry_max_delay_ms = config.model.retry_base_delay_ms - 1;
+        assert!(config.validate().is_err());
+
+        // Agent modes and verification flags are fail-closed by type: every
+        // representable value must validate.
+        for mode in [Mode::Yolo, Mode::Review, Mode::ReadOnly] {
+            let mut config = Config::default();
+            config.agent.mode = mode;
+            config.validate().expect("agent mode must validate");
+        }
+        for (required, browser) in [(true, true), (true, false), (false, true), (false, false)] {
+            let mut config = Config::default();
+            config.verification.required = required;
+            config.verification.browser_on_ui_change = browser;
+            config.validate().expect("verification flags must validate");
+        }
     }
 }
 

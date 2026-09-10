@@ -307,4 +307,35 @@ mod tests {
             Err(TelegramWebhookError::NonLoopbackBind(_))
         ));
     }
+
+    #[test]
+    fn webhook_payload_ignores_provider_side_field_additions() {
+        // Telegram extends update objects without versioning. Unknown fields at
+        // the top level, inside the message, and inside the chat must not
+        // hard-reject the webhook body.
+        let body = serde_json::json!({
+            "update_id": 42,
+            "future_top_level_addition": {"nested": [1, 2, 3]},
+            "edited_message": {"message_id": 7, "text": "unsupported kind"},
+            "message": {
+                "message_id": 1,
+                "date": 1_786_000_000,
+                "chat": {
+                    "id": 9,
+                    "type": "private",
+                    "future_chat_field": true
+                },
+                "text": "hello",
+                "sticker": {"file_id": "x", "width": 1, "height": 1},
+                "future_message_field": "whatever"
+            }
+        });
+        let update: TelegramUpdate =
+            serde_json::from_value(body).expect("unknown provider fields must parse");
+        assert_eq!(update.update_id, 42);
+        assert_eq!(
+            update.message.as_ref().and_then(|m| m.text.as_deref()),
+            Some("hello")
+        );
+    }
 }
