@@ -45,6 +45,22 @@ pub use medusa_runtime::{
 const TUI_CLIENT_PREFIX: &str = "tui-primary";
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(50);
 static COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const CREDENTIAL_SERVICE: &str = "com.benclawbot.medusa";
+
+fn saved_credential(provider: &str) -> Option<String> {
+    let account = provider.trim().to_ascii_lowercase();
+    keyring::Entry::new(CREDENTIAL_SERVICE, &account)
+        .ok()
+        .and_then(|entry| entry.get_password().ok())
+}
+
+fn save_credential(provider: &str, credential: &str) -> Result<(), RuntimeError> {
+    let account = provider.trim().to_ascii_lowercase();
+    keyring::Entry::new(CREDENTIAL_SERVICE, &account)
+        .map_err(|error| invalid_runtime(format!("cannot open credential store: {error}")))?
+        .set_password(credential)
+        .map_err(|error| invalid_runtime(format!("cannot save API key: {error}")))
+}
 
 pub(crate) fn discover_openai_oauth_models() -> Vec<String> {
     medusa_runtime::discover_openai_oauth_models().unwrap_or_default()
@@ -58,6 +74,7 @@ fn credentials_ready(config: &Config) -> bool {
     // `auth=none` is an explicit route contract, not a missing credential.
     config.model.auth == "none"
         || credential_environment(&config.model.provider).is_some_and(|name| env::var(name).is_ok())
+        || saved_credential(&config.model.provider).is_some()
 }
 
 #[derive(Debug)]
@@ -361,6 +378,7 @@ impl DaemonRuntimeState {
         let Some(credential) = credential.filter(|value| !value.trim().is_empty()) else {
             return Ok(());
         };
+        save_credential(provider, &credential)?;
         self.ensure_daemon()?;
         self.client()
             .frontend_credential(FrontendCredentialUpdate {
@@ -529,7 +547,7 @@ impl DaemonRuntimeState {
             base_url,
         } = configuration;
         if provider != "openai-oauth" {
-            self.sync_credential(&provider, api_key)?;
+            self.sync_credential(&provider, api_key.or_else(|| saved_credential(&provider)))?;
         }
         if provider == "openai-oauth" {
             let available = ensure_openai_oauth_connected().map_err(invalid_runtime)?;

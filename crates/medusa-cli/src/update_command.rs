@@ -348,7 +348,7 @@ fn source_channel(
             MainUpdateStrategy::LocalBuild => "built",
         };
         println!(
-            "Medusa update {} and staged: {}. Relaunch Medusa manually to run the new build.",
+            "Medusa update {} and staged: {}. Restarting Medusa.",
             update_kind,
             version_transition(&current_version, &new_version),
         );

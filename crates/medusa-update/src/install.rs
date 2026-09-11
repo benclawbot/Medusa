@@ -521,7 +521,7 @@ rollback() {{
   printf 'rolled-back\n' > "$state"
   write_outcome 'rolled-back' 'replacement failed' 'restored'
   rm -f "$lock"
-  "$target" {arguments} >/dev/null 2>&1 &
+  "$target" {arguments} &
   rm -f "$0"
   exit 1
 }}
@@ -535,12 +535,14 @@ if ! mv "$candidate" "$target"; then
   printf 'swap-failed\n' > "$state"
   write_outcome 'swap-failed' 'replacement failed while moving candidate' 'restored'
   rm -f "$lock"
-  if [ -x "$target" ]; then "$target" {arguments} >/dev/null 2>&1 & fi
+  if [ -x "$target" ]; then "$target" {arguments} & fi
   rm -f "$0"
   exit 1
 fi
 chmod 755 "$target" || rollback
 cd "$(dirname "$target")"
+# Preserve the caller's stdin/stdout/stderr so an interactive restart keeps
+# the original terminal. Headless callers already have their own streams.
 MEDUSA_UPDATE_HEALTH_FILE="$health" MEDUSA_UPDATE_HEALTH_NONCE="$health_nonce" "$target" {arguments} &
 child=$!
 i=0
