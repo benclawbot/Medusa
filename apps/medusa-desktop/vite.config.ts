@@ -17,6 +17,14 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: "./src/test/setup.ts",
+    // jsdom only exposes Storage for documents with a non-opaque origin.
+    // Without an explicit URL, every test that reads the desktop's persisted
+    // repository/session state fails before the component under test mounts.
+    environmentOptions: {
+      jsdom: {
+        url: "http://localhost",
+      },
+    },
     exclude: [...configDefaults.exclude, "src-tauri/**"],
     // Packaging jobs run the full jsdom suite beside native bundler prerequisites on bounded
     // runners. Keep a finite budget, but allow integration-style App renders to survive CPU

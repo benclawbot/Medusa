@@ -59,7 +59,7 @@
 .session-inline-heading small {
   overflow: hidden;
   color: var(--muted, #77776f);
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -152,7 +152,7 @@
   gap: 3px;
   padding: 2px 4px;
   border-radius: 999px;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .session-status.completed { background: #e8f7ef; color: #168a52; }
@@ -167,7 +167,7 @@
   gap: 6px;
   margin-top: 4px;
   color: var(--muted, #77776f);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .session-dock-meta code,
@@ -197,13 +197,13 @@
 
 .session-history-message small {
   color: var(--muted, #77776f);
-  font-size: 9px;
+  font-size: 11px;
   text-transform: capitalize;
 }
 
 .session-history-message p {
   margin: 3px 0 0;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -218,7 +218,7 @@
   gap: 6px;
   padding: 8px;
   color: var(--muted, #77776f);
-  font-size: 10px;
+  font-size: 12px;
   text-align: center;
 }
 
@@ -236,7 +236,7 @@
   background: #edf3ff;
   color: #285ea8;
   font: inherit;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
 }
 

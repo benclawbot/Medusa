@@ -113,7 +113,7 @@ mod tests {
     fn four_part_release_ids_order_after_their_base_package() {
         let base = ReleaseId::parse("1.0.7").expect("base");
         let rebuild = ReleaseId::parse("v1.0.7.1").expect("rebuild");
-        let next = ReleaseId::parse("1.0.8").expect("next");
+        let next = ReleaseId::parse("1.0.9").expect("next");
         assert!(base < rebuild);
         assert!(rebuild < next);
         assert_eq!(rebuild.to_string(), "1.0.7.1");

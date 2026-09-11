@@ -48,7 +48,7 @@ use walkdir::WalkDir;
 use super::oauth_preflight;
 
 const CLI_DISPLAY_VERSION: &str = concat!(
-    "1.0.8.1 · main ",
+    "1.0.9.1 · main ",
     env!("MEDUSA_BUILD_COMMIT_SHORT")
 );
 

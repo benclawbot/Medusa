@@ -427,6 +427,18 @@ it("closes the composer selector when clicking outside it", async () => {
   expect(screen.queryByRole("dialog", { name: "Provider, model, and effort" })).not.toBeInTheDocument();
 });
 
+it("closes the composer selector with Escape", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  fireEvent.click(screen.getByRole("button", { name: /Choose model and settings/ }));
+  const dialog = screen.getByRole("dialog", { name: "Provider, model, and effort" });
+
+  fireEvent.keyDown(dialog, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: "Provider, model, and effort" })).not.toBeInTheDocument();
+});
+
 it("places the context meter below the prompt input without a checkmark", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
   render(<App />);
