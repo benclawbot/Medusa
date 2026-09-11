@@ -735,13 +735,16 @@ impl FrontendControlPlane {
                 model,
                 base_url,
             } => {
-                // Provider/model configuration is daemon-global state; clients
-                // may stage it before any session exists so pre-session TUI
-                // setup can select the right model. When a session is bound
-                // the caller must still pass session-scoped authorization
-                // before the change is pushed to the live runtime.
+                // Provider/model configuration is daemon-global state. The
+                // interactive TUI setup flow may stage it before any session
+                // exists; every other session-less caller must bind a session
+                // first. When a session is bound the caller must still pass
+                // session-scoped authorization before the change is pushed to
+                // the live runtime.
                 if let Some(session_id) = envelope.session_id.as_deref() {
                     self.authorize_control(session_id, &envelope.client_id)?;
+                } else {
+                    require_tui_bootstrap(envelope)?;
                 }
                 let provider_changed = provider
                     .as_deref()
@@ -777,12 +780,16 @@ impl FrontendControlPlane {
                 })
             }
             FrontendCommand::SetEffort { effort } => {
-                // Effort is daemon-global; clients may stage the budget before
-                // a session exists. When a session is bound the caller must
-                // still pass session-scoped authorization before the change is
-                // pushed to the live runtime.
+                // Effort is daemon-global. The interactive TUI setup flow may
+                // stage the budget before a session exists; every other
+                // session-less caller must bind a session first. When a
+                // session is bound the caller must still pass session-scoped
+                // authorization before the change is pushed to the live
+                // runtime.
                 if let Some(session_id) = envelope.session_id.as_deref() {
                     self.authorize_control(session_id, &envelope.client_id)?;
+                } else {
+                    require_tui_bootstrap(envelope)?;
                 }
                 let effort = parse_effort(effort)?;
                 let configuration = self.model_configuration(
@@ -1163,6 +1170,19 @@ fn command_session_id(envelope: &FrontendCommandEnvelope) -> Option<String> {
 
 fn required_session_id(envelope: &FrontendCommandEnvelope) -> Result<String, FrontendControlError> {
     command_session_id(envelope).ok_or(FrontendControlError::SessionRequired)
+}
+
+/// Session-less mutation of daemon-global model/effort state is reserved for
+/// the interactive TUI first-run setup flow, which must stage provider
+/// selection before any session exists. All other frontends (desktop,
+/// Telegram, headless, third-party) configure model and effort through a
+/// bound session so the session-owner gate always applies.
+fn require_tui_bootstrap(envelope: &FrontendCommandEnvelope) -> Result<(), FrontendControlError> {
+    if envelope.frontend == FrontendKind::Tui {
+        Ok(())
+    } else {
+        Err(FrontendControlError::SessionRequired)
+    }
 }
 
 fn frontend_source(kind: FrontendKind, client_id: &str) -> String {

@@ -37,6 +37,18 @@ fn envelope(
     }
 }
 
+fn tui_envelope(
+    sequence: u32,
+    client_id: &str,
+    session_id: Option<&str>,
+    command: FrontendCommand,
+) -> FrontendCommandEnvelope {
+    FrontendCommandEnvelope {
+        frontend: FrontendKind::Tui,
+        ..envelope(sequence, client_id, session_id, command)
+    }
+}
+
 fn create_session(repo: &std::path::Path) -> String {
     AgentEngine::new(UnusedProvider, Config::default())
         .create_session(repo, "Frontend control coverage".to_owned())
@@ -420,6 +432,25 @@ fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
     ));
     assert_eq!(control.model_provider(), baseline_provider);
 
+    // The interactive TUI setup flow may stage daemon-global model and
+    // effort state before any session exists; the staged values apply and
+    // no controller push is attempted without a session.
+    let staged = control
+        .dispatch(tui_envelope(
+            104,
+            "tui-setup-client",
+            None,
+            FrontendCommand::SetEffort {
+                effort: "low".to_owned(),
+            },
+        ))
+        .expect("TUI bootstrap effort must stage");
+    assert!(matches!(
+        staged.result,
+        FrontendControlResult::CommandAccepted { .. }
+    ));
+    assert_eq!(control.agent_max_turns(), 64);
+
     // Unknown session / non-owner client: authorization fails before any
     // daemon-global state changes.
     assert!(matches!(
@@ -433,5 +464,7 @@ fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
         )),
         Err(FrontendControlError::ReadOnlyClient(_))
     ));
-    assert_eq!(control.agent_max_turns(), baseline_turns);
+    // The intruder changed nothing: the previously staged TUI bootstrap
+    // budget is still in effect.
+    assert_eq!(control.agent_max_turns(), 64);
 }
