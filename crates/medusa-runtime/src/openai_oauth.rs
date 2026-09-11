@@ -84,6 +84,14 @@ impl OpenAiOAuthLogin {
             let _ = join.join();
         }
     }
+
+    /// Signals cancellation without joining the worker. Use this when the
+    /// caller wants to abandon the attempt without blocking on the worker's
+    /// exit (for example, UI cancellation paths that already have a deadline).
+    pub fn detach(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        let _ = self.join.take();
+    }
 }
 
 impl Drop for OpenAiOAuthLogin {
@@ -1090,6 +1098,34 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "drop blocked on worker join"
+        );
+    }
+
+    #[test]
+    fn detach_signals_cancel_without_joining_a_stuck_worker() {
+        let (_tx, rx) = mpsc::channel();
+        // Explicit UI cancellation (Esc/Ctrl-C) must not freeze the setup
+        // loop while the worker is inside a long-running request.
+        let mut stuck = OpenAiOAuthLogin {
+            receiver: rx,
+            cancel: Arc::new(AtomicBool::new(false)),
+            join: Some(thread::spawn(|| {
+                thread::sleep(Duration::from_secs(30));
+            })),
+        };
+        let started = Instant::now();
+        stuck.detach();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "detach blocked on worker join"
+        );
+        assert!(
+            stuck.cancel.load(Ordering::SeqCst),
+            "detach must signal cancellation"
+        );
+        assert!(
+            stuck.join.is_none(),
+            "detach must release the worker handle"
         );
     }
 
