@@ -227,6 +227,7 @@ fn release_channel(
         // The replacement helper waits for this process to exit before it can
         // move the executable. Returning would leave the old process alive;
         // terminate immediately after the durable handoff is recorded.
+        record_channel("release");
         std::process::exit(0);
     }
 
@@ -334,6 +335,7 @@ fn source_channel(
         println!("Medusa update staged. Restarting.");
         // The replacement helper waits for this process to exit before it can
         // move the executable. Terminate immediately after staging the handoff.
+        record_channel("main");
         std::process::exit(0);
     }
 
