@@ -106,6 +106,9 @@ def test_stable_release_is_complete_before_publication() -> None:
     primary_name = "sign-release-manifest.yml"
     recovery_name = "sign-release-manifest-recovery.yml"
     verifier_path = "./.github/workflows/verify-published-release.yml"
+    primary = read_workflow(primary_name)
+    assert "github.event.workflow_run.event == 'push'" in primary
+    assert "github.event.workflow_run.event == 'workflow_dispatch'" in primary
     for name in (primary_name, recovery_name):
         signer = read_workflow(name)
         assert "--json isDraft --jq '.isDraft'" in signer
