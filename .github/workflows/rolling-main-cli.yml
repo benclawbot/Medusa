@@ -456,8 +456,8 @@ jobs:
             echo "CLI release $release_tag is missing" >&2
             exit 1
           fi
-          if [[ "$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" == "true" ]]; then
-            echo "CLI release $release_tag is still a draft" >&2
+          if [[ "$(gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]]; then
+            echo "CLI release $release_tag is already published; refusing to mutate an immutable rolling release" >&2
             exit 1
           fi
           gh release upload "$release_tag" release-assets/* --repo "$GITHUB_REPOSITORY"
