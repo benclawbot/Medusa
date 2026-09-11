@@ -83,6 +83,14 @@ pub(crate) fn system_prompt_with_discovery_error(
 
 pub(crate) fn append_dynamic_system_context(prompt: &mut String, additional_context: Option<&str>) {
     prompt.push_str(DYNAMIC_SYSTEM_CONTEXT_MARKER);
+    // Ground the model in the real current date on every turn. Without this, models fall
+    // back to their training cutoff and refuse legitimate requests about recent months
+    // (e.g. claiming July 2026 "doesn't exist yet"). This sits after the cache marker so
+    // the stable prefix stays cacheable while the volatile date does not poison the cache.
+    let today = OffsetDateTime::now_utc().date();
+    prompt.push_str(&format!(
+        "\n\nCurrent date (UTC): {today}. Your training data may end earlier; use `web_search`/`web_fetch` for events, releases, or trends after your cutoff, and never claim a real past date is in the future."
+    ));
     if let Some(context) = additional_context
         .map(str::trim)
         .filter(|context| !context.is_empty())
@@ -894,6 +902,21 @@ mod tests {
         assert!(prompt.contains("Run the focused test suite."));
         assert!(prompt.contains("release (project): Release preparation"));
         assert!(prompt.contains("call `skill_read`"));
+    }
+
+    #[test]
+    fn dynamic_system_context_is_grounded_in_today() {
+        let mut prompt = String::from("stable base");
+        append_dynamic_system_context(&mut prompt, None);
+        let today = OffsetDateTime::now_utc().date().to_string();
+        assert!(prompt.contains(&format!("Current date (UTC): {today}")));
+        assert!(prompt.contains("never claim a real past date is in the future"));
+        // The date lives after the cache marker so the stable prefix stays cacheable.
+        let marker = prompt
+            .find(DYNAMIC_SYSTEM_CONTEXT_MARKER)
+            .expect("cache marker");
+        let date = prompt.find(&today).expect("current date");
+        assert!(date > marker);
     }
 
     #[test]
