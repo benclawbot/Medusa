@@ -36,6 +36,37 @@ RELEASE_DELETION = [
     re.compile(r"(?i)\bgh\s+release\s+delete\b"),
     re.compile(r"(?is)\bgh\s+api\b.{0,200}(?:--method\s+DELETE|-X\s+DELETE).{0,300}/releases(?:/|\b)"),
 ]
+GH_RELEASE_DELETE_TAG = re.compile(
+    r"(?i)\bgh\s+release\s+delete\s+(?:--[a-z-]+\s+(?:\"[^\"]*\"|'[^']*'|\S+)\s+)*"
+    r"(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
+)
+# The rolling pipeline rotates exactly one designated mutable alias,
+# `main-latest`, for pre-immutable-protocol clients. The verifier
+# (verify-published-release.yml) requires the alias tag to track the current
+# revision, so rotation is load-bearing. Immutable per-revision releases
+# (`main-<sha>`, version tags) stay under the blanket deletion ban.
+MUTABLE_ROLLING_ALIAS = "main-latest"
+
+
+def release_deletion_violations(text: str) -> list[str]:
+    """Flag release deletion unless every deletion targets the mutable alias.
+
+    A bare `gh release delete` of anything but the literal `main-latest`
+    alias — or any REST API release deletion — is a violation, so a future
+    `gh release delete v1.2.3` (or a variable-held tag) trips the guard even
+    in a file that legitimately rotates the alias.
+    """
+    api_deletes = RELEASE_DELETION[1].findall(text)
+    cli_targets = [
+        quoted or single or bare
+        for quoted, single, bare in GH_RELEASE_DELETE_TAG.findall(text)
+    ]
+    # A bare `gh release delete` with no parsable tag is fail-closed.
+    if api_deletes or (not cli_targets and RELEASE_DELETION[0].search(text)):
+        return ["workflow can delete/recreate a published release"]
+    if any(target != MUTABLE_ROLLING_ALIAS for target in cli_targets):
+        return ["workflow can delete/recreate a published release"]
+    return []
 MARKER_REFERENCE = re.compile(
     r"(?i)\.github/[A-Za-z0-9._/-]*release[A-Za-z0-9._/-]*(?:trigger|bootstrap|replace)|"
     r"\.github/[A-Za-z0-9._/-]*(?:trigger|bootstrap|replace)[A-Za-z0-9._/-]*release"
@@ -146,10 +177,7 @@ def workflow_violations(path: Path, text: str) -> list[str]:
                 violations.append("release workflow can create or update tag refs")
                 break
 
-    for pattern in RELEASE_DELETION:
-        if pattern.search(text):
-            violations.append("workflow can delete/recreate a published release")
-            break
+    violations.extend(release_deletion_violations(text))
 
     violations.extend(signing_violations(path, text))
 
@@ -268,6 +296,15 @@ jobs:
         "delete-release.yml",
         """name: Release\njobs:\n  publish:\n    steps:\n      - run: gh release delete \"$RELEASE_TAG\" --yes\n""",
         "delete/recreate",
+    )
+    assert_rejected(
+        "delete-stable-alias.yml",
+        """name: Release\njobs:\n  publish:\n    steps:\n      - run: gh release delete stable --yes\n""",
+        "delete/recreate",
+    )
+    assert_accepted(
+        "rotate-legacy-alias.yml",
+        """name: Release\njobs:\n  publish:\n    steps:\n      - run: gh release delete main-latest --cleanup-tag --yes\n""",
     )
     assert_rejected(
         "publish-release.yml",

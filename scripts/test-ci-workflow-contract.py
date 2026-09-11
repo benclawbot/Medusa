@@ -181,6 +181,15 @@ def test_cargo_machete_install_selects_the_pinned_package() -> None:
     assert "--locked" in command
 
 
+def test_rolling_alias_rotation_deletes_only_the_mutable_alias() -> None:
+    import re
+
+    workflow = read_workflow("rolling-main-cli.yml")
+    deletes = re.findall(r"gh\s+release\s+delete\s+(\S+)", workflow)
+    assert deletes, "alias rotation must be explicit"
+    assert set(deletes) == {"main-latest"}, deletes
+
+
 def test_secret_live_provider_pr_gate_is_same_repo() -> None:
     gate = "github.event.pull_request.head.repo.full_name == github.repository"
     for name in ("live-provider-dogfood.yml", "architecture-policy.yml"):
@@ -218,6 +227,7 @@ def main() -> int:
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,
         test_cargo_machete_install_selects_the_pinned_package,
+        test_rolling_alias_rotation_deletes_only_the_mutable_alias,
         test_secret_live_provider_pr_gate_is_same_repo,
         test_tui_model_is_explicitly_parameterized,
         test_openai_oauth_never_uses_latest,
