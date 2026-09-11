@@ -3,9 +3,12 @@ use std::{
     fs::OpenOptions,
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::process::Stdio;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
