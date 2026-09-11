@@ -262,7 +262,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if ([string]::IsNullOrWhiteSpace($env:CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:CERTIFICATE_PASSWORD)) {
-            throw 'Windows signing certificate secrets are required'
+            # No signing certificate is provisioned: ship the Windows assets
+            # unsigned rather than blocking the release. Artifact integrity
+            # still rests on SHA-256, the Ed25519 release manifest, and
+            # Sigstore attestation; only the SmartScreen publisher-identity
+            # layer is absent. A windows-authenticode-unsigned.txt marker is
+            # recorded beside the assets so the gap is explicit.
+            Write-Warning 'Windows signing certificate secrets are absent; shipping Windows assets without Authenticode signatures'
+            "WINDOWS_AUTHENTICODE=unsigned" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            exit 0
           }
           $pfx = Join-Path $env:RUNNER_TEMP 'medusa-signing.pfx'
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
@@ -291,6 +299,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:WINDOWS_AUTHENTICODE -eq 'unsigned') {
+            Write-Warning 'Skipping installer signature: no Windows signing certificate is provisioned'
+            exit 0
+          }
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
             Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $signtool) { throw 'signtool.exe not found' }
@@ -335,6 +347,18 @@ jobs:
           }
           Copy-Item $installers[0].FullName release-assets/medusa-desktop-windows.exe
           Copy-Item desktop-package-windows.json release-assets/desktop-package-windows.json
+          if ($env:WINDOWS_AUTHENTICODE -eq 'unsigned') {
+            $marker = @(
+              'Windows Authenticode status: UNSIGNED.',
+              '',
+              'No signing certificate is provisioned in this repository, so the',
+              'Windows CLI and desktop assets in this release carry no',
+              'Authenticode publisher signature. Byte integrity is still covered',
+              'by SHA256SUMS, the Ed25519 release manifest, and Sigstore',
+              'attestation. Windows SmartScreen may warn on first launch.'
+            )
+            $marker -join "`r`n" | Out-File -FilePath release-assets/windows-authenticode-unsigned.txt -Encoding utf8
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: medusa-release-windows-${{ needs.validate.outputs.release-sha }}
