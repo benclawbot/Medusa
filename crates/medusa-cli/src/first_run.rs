@@ -1,11 +1,12 @@
 use std::{
     collections::BTreeMap,
+    env,
     io::{self, IsTerminal},
 };
 
 use medusa_config::{
     Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, PROVIDER_PROFILE_KEYS,
-    ProviderProfile, ProviderProfileCatalog,
+    ProviderProfile, ProviderProfileCatalog, credential_environment,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_tui::setup::{
@@ -151,6 +152,7 @@ impl BrowserOAuthSession for OpenAiOAuthLogin {
 
 fn validate_candidate(profile: &ProviderProfile) -> MedusaResult<Config> {
     profile.validate()?;
+    check_api_key_present(profile, &|name| env::var(name).ok())?;
     Config::load_layers_with_provider_profile(
         profile,
         None,
@@ -158,6 +160,37 @@ fn validate_candidate(profile: &ProviderProfile) -> MedusaResult<Config> {
         &BTreeMap::new(),
         &BTreeMap::new(),
     )
+}
+
+/// Rejects `auth == "api-key"` candidates whose registered credential
+/// variable is unset. The lookup is injectable so tests never mutate the
+/// process environment.
+fn check_api_key_present(
+    profile: &ProviderProfile,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> MedusaResult<()> {
+    let Some(variable) = api_key_variable(profile) else {
+        return Ok(());
+    };
+    if lookup(variable).is_some_and(|value| !value.is_empty()) {
+        return Ok(());
+    }
+    Err(config_error(format!(
+        "provider `{}` with auth `api-key` needs the {variable} environment variable set in this shell; export it and retry setup. Medusa reads the key from the environment and never stores it in provider.toml",
+        profile.provider,
+    )))
+}
+
+/// Returns the environment variable a profile expects its API key in, if any.
+///
+/// Profiles with `auth == "api-key"` read the key from the registered provider
+/// variable at request time; nothing in the setup flow stores the value.
+fn api_key_variable(profile: &ProviderProfile) -> Option<&'static str> {
+    if profile.auth == "api-key" {
+        credential_environment(&profile.provider)
+    } else {
+        None
+    }
 }
 
 fn config_error(message: impl Into<String>) -> MedusaError {
@@ -174,8 +207,11 @@ mod tests {
 
     #[test]
     fn configured_candidates_pass_the_existing_config_loader() {
+        // Unmapped provider: no registered credential variable, so the gate
+        // is skipped and this exercises the loader without ambient env.
         let profile = ProviderProfile {
             configured: true,
+            provider: "custom".to_owned(),
             ..ProviderProfile::default()
         };
         validate_candidate(&profile).expect("candidate");
@@ -207,6 +243,50 @@ mod tests {
             error.to_string().contains("interactive terminal"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn api_key_variable_follows_auth_mode_and_provider() {
+        let keyed = ProviderProfile {
+            provider: "minimax".to_owned(),
+            auth: "api-key".to_owned(),
+            ..ProviderProfile::default()
+        };
+        assert_eq!(api_key_variable(&keyed), Some("MINIMAX_API_KEY"));
+        let oauth = ProviderProfile {
+            auth: "oauth".to_owned(),
+            ..ProviderProfile::default()
+        };
+        assert_eq!(api_key_variable(&oauth), None);
+        let unmapped = ProviderProfile {
+            provider: "custom".to_owned(),
+            auth: "api-key".to_owned(),
+            ..ProviderProfile::default()
+        };
+        assert_eq!(api_key_variable(&unmapped), None);
+    }
+
+    #[test]
+    fn missing_api_key_variable_blocks_setup_before_catalog_mutation() {
+        let profile = ProviderProfile {
+            configured: true,
+            provider: "minimax".to_owned(),
+            auth: "api-key".to_owned(),
+            ..ProviderProfile::default()
+        };
+        let absent = |_: &str| None;
+        let error = check_api_key_present(&profile, &absent).expect_err("missing key must fail");
+        assert!(
+            error.to_string().contains("MINIMAX_API_KEY"),
+            "unexpected error: {error}"
+        );
+        let empty = |_: &str| Some(String::new());
+        assert!(
+            check_api_key_present(&profile, &empty).is_err(),
+            "empty key must fail"
+        );
+        let present = |_: &str| Some("secret".to_owned());
+        check_api_key_present(&profile, &present).expect("present key passes");
     }
 
     #[test]
