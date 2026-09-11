@@ -8,3 +8,11 @@ runs:
       uses: dtolnay/rust-toolchain@1.88.0
       with:
         components: clippy, rustfmt
+    - name: Install Linux system dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      # medusa-tui uses keyring with the Secret Service backend, which links
+      # against the system D-Bus client library via libdbus-sys/pkg-config.
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libdbus-1-dev pkg-config
