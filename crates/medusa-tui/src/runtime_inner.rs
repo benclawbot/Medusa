@@ -47,11 +47,17 @@ const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(50);
 static COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const CREDENTIAL_SERVICE: &str = "com.benclawbot.medusa";
 
-fn saved_credential(provider: &str) -> Option<String> {
+fn saved_credential(provider: &str) -> Result<Option<String>, RuntimeError> {
     let account = provider.trim().to_ascii_lowercase();
-    keyring::Entry::new(CREDENTIAL_SERVICE, &account)
-        .ok()
-        .and_then(|entry| entry.get_password().ok())
+    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, &account)
+        .map_err(|error| invalid_runtime(format!("cannot open credential store: {error}")))?;
+    match entry.get_password() {
+        Ok(credential) => Ok(Some(credential)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(invalid_runtime(format!(
+            "cannot read API key from credential store: {error}"
+        ))),
+    }
 }
 
 fn save_credential(provider: &str, credential: &str) -> Result<(), RuntimeError> {
@@ -70,11 +76,12 @@ pub(crate) fn ensure_openai_oauth_connected() -> Result<Vec<String>, String> {
     medusa_runtime::ensure_openai_oauth_connected()
 }
 
-fn credentials_ready(config: &Config) -> bool {
+fn credentials_ready(config: &Config) -> Result<bool, RuntimeError> {
     // `auth=none` is an explicit route contract, not a missing credential.
-    config.model.auth == "none"
-        || credential_environment(&config.model.provider).is_some_and(|name| env::var(name).is_ok())
-        || saved_credential(&config.model.provider).is_some()
+    Ok(config.model.auth == "none"
+        || credential_environment(&config.model.provider)
+            .is_some_and(|name| env::var(name).is_ok())
+        || saved_credential(&config.model.provider)?.is_some())
 }
 
 #[derive(Debug)]
@@ -235,7 +242,10 @@ impl DaemonRuntimeState {
                     Some(format!("runtime configuration failed: {error}")),
                 ),
             };
-        let credential_configured = credentials_ready(&config);
+        let (credential_configured, credential_error) = match credentials_ready(&config) {
+            Ok(configured) => (configured, None),
+            Err(error) => (false, Some(error.to_string())),
+        };
         let initial_settings = RuntimeEvent::Settings {
             model: format!("{} / {}", config.model.provider, config.model.name),
             effort: format!("effort:{}", effort_label_for_turns(config.agent.max_turns)),
@@ -245,7 +255,7 @@ impl DaemonRuntimeState {
             context_window_tokens: config.model.context_window_tokens,
             auto_compact_percent: config.model.auto_compact_percent,
         };
-        let pending_startup_error = [launch_error, config_error]
+        let pending_startup_error = [launch_error, config_error, credential_error]
             .into_iter()
             .flatten()
             .collect::<Vec<_>>()
@@ -547,7 +557,11 @@ impl DaemonRuntimeState {
             base_url,
         } = configuration;
         if provider != "openai-oauth" {
-            self.sync_credential(&provider, api_key.or_else(|| saved_credential(&provider)))?;
+            let credential = match api_key {
+                Some(credential) => Some(credential),
+                None => saved_credential(&provider)?,
+            };
+            self.sync_credential(&provider, credential)?;
         }
         if provider == "openai-oauth" {
             let available = ensure_openai_oauth_connected().map_err(invalid_runtime)?;
@@ -1573,7 +1587,7 @@ mod tests {
         config.model.provider = "openai-oauth".to_owned();
         config.model.auth = "none".to_owned();
 
-        assert!(credentials_ready(&config));
+        assert!(credentials_ready(&config).expect("credential state"));
     }
 
     #[test]
