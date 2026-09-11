@@ -522,7 +522,7 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             } else {
                 Some(
                     Verbosity::parse(remainder)
-                        .ok_or_else(|| "/verbose expects off, new, all, or verbose".to_owned())?,
+                        .ok_or_else(|| "/verbose expects off, new, all, or verbose (bare /verbose cycles the level)".to_owned())?,
                 )
             };
             Ok(Some(SlashCommand::Verbose { mode }))
@@ -1148,6 +1148,8 @@ mod tests {
             Ok(Some(SlashCommand::Verbose { mode: None }))
         );
         assert!(parse_slash_command("/verbose loud").is_err());
+        let error = parse_slash_command("/verbose loud").expect_err("reject bad verbosity");
+        assert!(error.contains("bare /verbose cycles"));
         assert_eq!(Verbosity::parse("nope"), None);
     }
 

@@ -26,6 +26,67 @@ fn general_chat_requests_skip_repository_work_but_attachments_stay_explicit() {
 }
 
 #[test]
+fn webpage_requests_skip_general_chat_regardless_of_phrasing() {
+    for text in [
+        "can you build a beautiful webpage showcasing the latest agentic AI trends",
+        "build a beautiful web page about agents",
+        "build a beautiful website for the team",
+        "create a landing page for the release",
+        "generate a static site draft",
+        "write an html page summary",
+    ] {
+        assert!(!is_general_chat_request(text, 0), "general chat: {text}");
+    }
+    assert!(is_general_chat_request("hey", 0));
+}
+
+#[test]
+fn retry_references_resolve_to_the_previous_user_objective() {
+    for text in [
+        "try again",
+        "Try again.",
+        "please try again",
+        "try again please",
+        "RETRY!",
+        "do it again",
+        "run it again",
+        "same again",
+        "one more time",
+        "again",
+    ] {
+        assert!(is_retry_reference(text), "retry: {text}");
+    }
+    for text in [
+        "try again please now",
+        "retry the login flow",
+        "try again tomorrow",
+        "",
+        "hey",
+    ] {
+        assert!(!is_retry_reference(text), "not retry: {text}");
+    }
+    assert_eq!(previous_user_objective(None), None);
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    assert_eq!(
+        previous_user_objective(Some(&session)),
+        Some("runtime event coverage".to_owned())
+    );
+    session.messages.push(Message {
+        role: Role::User,
+        content: vec![MessageBlock::Text {
+            text: "try again".to_owned(),
+        }],
+    });
+    assert_eq!(
+        previous_user_objective(Some(&session)),
+        Some("runtime event coverage".to_owned())
+    );
+    session.messages.clear();
+    assert_eq!(previous_user_objective(Some(&session)), None);
+}
+
+#[test]
 fn general_chat_preparation_does_not_scan_or_capture_repository_state() {
     let draft = PromptDraft {
         text: "hey".to_owned(),

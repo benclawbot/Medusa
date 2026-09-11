@@ -1622,7 +1622,7 @@ fn bound_model(snapshot: &serde_json::Value) -> Option<(&str, &str)> {
     ))
 }
 
-const GENERAL_CHAT_TURN_INSTRUCTION: &str = "General conversation mode: answer the user's request directly in this turn. Do not inspect the repository, create a plan, or call coding, file, shell, or desktop tools unless the user explicitly asks for repository work. Use web tools only when current or source-linked information is actually needed. A clear text answer is complete; do not invent follow-up work.";
+const GENERAL_CHAT_TURN_INSTRUCTION: &str = "General conversation mode: answer the user's request directly in this turn. Do not inspect the repository, create a plan, or call coding, file, shell, or desktop tools unless the user explicitly asks for repository work. Use web tools only when current or source-linked information is actually needed. A clear text answer is complete; do not invent follow-up work. A bare retry reference such as 'try again' with no earlier request in this session names nothing to retry: ask what to redo instead of guessing.";
 
 fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
     if attachment_count != 0 {
@@ -1649,7 +1649,13 @@ fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
         "crash",
         "compile",
         "build a website",
+        "build a web page",
         "webpage",
+        "web page",
+        "website",
+        "landing page",
+        "static site",
+        "html page",
         "component",
         "function",
         "pull request",
@@ -1658,6 +1664,50 @@ fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
     ]
     .iter()
     .all(|marker| !normalized.contains(marker))
+}
+
+/// Whole-message retry references ("try again", "retry", ...). These carry no objective of
+/// their own; they re-run the previous user request. Without this distinction they classify
+/// as general chat and the follow-up turn loses the previous objective entirely.
+fn is_retry_reference(text: &str) -> bool {
+    let normalized = text
+        .trim()
+        .trim_end_matches(['.', '!'])
+        .trim()
+        .to_ascii_lowercase();
+    let normalized = normalized.strip_prefix("please ").unwrap_or(&normalized);
+    let normalized = normalized.strip_suffix(" please").unwrap_or(normalized);
+    matches!(
+        normalized,
+        "try again"
+            | "retry"
+            | "retry that"
+            | "do it again"
+            | "run it again"
+            | "same again"
+            | "one more time"
+            | "again"
+    )
+}
+
+/// Previous user objective for a retry reference: the latest user message that is itself
+/// neither empty nor another retry reference.
+fn previous_user_objective(session: Option<&AgentSession>) -> Option<String> {
+    let session = session.as_ref()?;
+    session
+        .messages
+        .iter()
+        .rev()
+        .filter(|message| message.role == Role::User)
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            MessageBlock::Text { text } => {
+                let trimmed = text.trim();
+                (!trimmed.is_empty() && !is_retry_reference(trimmed)).then(|| trimmed.to_owned())
+            }
+            _ => None,
+        })
+        .next()
 }
 
 fn should_capture_review_baseline_for_plan(
@@ -2438,7 +2488,7 @@ fn run_openai_oauth_prompt(
 #[tracing::instrument(skip_all)]
 fn run_prompt(
     state: &mut RuntimeState,
-    draft: PromptDraft,
+    mut draft: PromptDraft,
     events: &Sender<RuntimeEvent>,
     cancel: &Arc<AtomicBool>,
     submission: &Arc<Mutex<SubmissionState>>,
@@ -2474,6 +2524,16 @@ fn run_prompt(
         .session
         .as_ref()
         .is_some_and(|session| session.pending_question.is_some());
+    // A bare retry reference ("try again") carries no objective of its own: re-run the
+    // previous user request so the follow-up keeps the previous plan instead of falling
+    // back to general chat and refusing work the user already asked for.
+    if draft.attachments.is_empty()
+        && !resuming_pending_question
+        && is_retry_reference(&draft.text)
+        && let Some(previous) = previous_user_objective(state.session.as_ref())
+    {
+        draft.text = previous;
+    }
     let general_chat = is_general_chat_request(&draft.text, draft.attachments.len());
     let turn_instruction = general_chat.then_some(GENERAL_CHAT_TURN_INSTRUCTION);
     let selected_skill = state.pending_skill.clone();
@@ -2609,6 +2669,10 @@ fn run_prompt(
         send_runtime_event(events, submission, RuntimeEvent::Plan(projected));
         Some(ledger)
     } else {
+        // Direct turns own no durable tasks: clear any previous plan so frontends stop
+        // rendering the last orchestrated checklist.
+        session.plan = Vec::new();
+        send_runtime_event(events, submission, RuntimeEvent::Plan(Vec::new()));
         None
     };
     if execution_plan.mode == crate::coordination::production_orchestrator::ExecutionMode::Direct {

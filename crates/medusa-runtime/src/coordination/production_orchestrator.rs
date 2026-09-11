@@ -349,12 +349,10 @@ pub fn validate_subagent_result(
 
 pub fn events(plan: &ProductionExecutionPlan) -> Vec<RuntimeEvent> {
     if plan.mode == ExecutionMode::Direct {
-        return vec![RuntimeEvent::Activity(RuntimeActivity {
-            id: Some(plan.fingerprint.clone()),
-            kind: RuntimeActivityKind::Progress,
-            title: "Direct execution selected".to_owned(),
-            details: vec!["No durable scheduler tasks were created.".to_owned()],
-        })];
+        // Direct turns create no durable work: stay silent instead of leaking
+        // scheduler internals ("No durable scheduler tasks were created.") into the
+        // transcript as a stuck `[running]` row.
+        return Vec::new();
     }
     vec![RuntimeEvent::Activity(RuntimeActivity {
         id: Some(plan.fingerprint.clone()),
@@ -669,6 +667,17 @@ mod tests {
             ..PromptDraft::default()
         };
         assert_eq!(plan(&draft).unwrap().mode, ExecutionMode::Direct);
+    }
+
+    #[test]
+    fn direct_plans_emit_no_transcript_noise() {
+        let draft = PromptDraft {
+            text: "Hello, explain this concept".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan(&draft).unwrap();
+        assert_eq!(planned.mode, ExecutionMode::Direct);
+        assert!(events(&planned).is_empty());
     }
 
     #[test]
