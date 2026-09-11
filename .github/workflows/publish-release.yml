@@ -193,6 +193,11 @@ jobs:
           --manifest desktop-package-macos.json
       - name: Build macOS CLI
         run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
+      - name: Validate macOS CLI architecture
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          file target/release/medusa | grep -F 'arm64'
       - name: Assemble macOS release assets
         shell: bash
         run: |

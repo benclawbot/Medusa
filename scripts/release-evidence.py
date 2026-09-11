@@ -40,12 +40,12 @@ REQUIRED_ASSETS = {
 
 INSTALLABLE_ASSETS = {
     "medusa-cli-linux.tar.gz": ("cli-archive", "linux", "x86_64", "x86_64-unknown-linux-gnu"),
-    "medusa-cli-macos.tar.gz": ("cli-archive", "macos", "x86_64", "x86_64-apple-darwin"),
+    "medusa-cli-macos.tar.gz": ("cli-archive", "macos", "aarch64", "aarch64-apple-darwin"),
     "medusa-cli-windows.zip": ("cli-archive", "windows", "x86_64", "x86_64-pc-windows-msvc"),
     "medusa-desktop-linux.deb": ("desktop-package", "linux", "x86_64", "x86_64-unknown-linux-gnu"),
     "medusa-desktop-linux.AppImage": ("desktop-package", "linux", "x86_64", "x86_64-unknown-linux-gnu"),
-    "medusa-desktop-macos-app.zip": ("desktop-package", "macos", "x86_64", "x86_64-apple-darwin"),
-    "medusa-desktop-macos.dmg": ("desktop-package", "macos", "x86_64", "x86_64-apple-darwin"),
+    "medusa-desktop-macos-app.zip": ("desktop-package", "macos", "aarch64", "aarch64-apple-darwin"),
+    "medusa-desktop-macos.dmg": ("desktop-package", "macos", "aarch64", "aarch64-apple-darwin"),
     "medusa-desktop-windows.exe": ("desktop-package", "windows", "x86_64", "x86_64-pc-windows-msvc"),
 }
 

@@ -66,7 +66,7 @@ An interrupted swap is recovered when the target is absent but its adjacent back
 
 ## Platform and archive boundaries
 
-Supported update coordinates are explicit `(operating system, architecture)` values. A release without exactly one matching CLI artifact is rejected. The current schema supports Linux, macOS, and Windows on `x86_64`, plus the contract representation for `aarch64`; release publication must add a corresponding signed artifact before an architecture becomes installable.
+Supported update coordinates are explicit `(operating system, architecture)` values. A release without exactly one matching CLI artifact is rejected. The current stable distribution ships Linux and Windows on `x86_64` and macOS on `aarch64`; release publication must add a corresponding signed artifact before another architecture becomes installable.
 
 Archives are extracted into a private temporary workspace. Absolute paths, parent traversal, links or non-regular executable entries, multiple Medusa executables, empty candidates, duplicate signed artifact names, and artifact names containing path components are rejected.
 

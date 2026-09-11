@@ -77,6 +77,13 @@ def test_windows_distribution_requires_authenticode() -> None:
     assert stable.index("Authenticode-sign Windows product executables") < stable.index(
         "Compress-Archive -Path cli-package/*"
     )
+    assert "Validate macOS CLI architecture" in stable
+    assert 'test "$(uname -m)" = "arm64"' in stable
+
+    evidence = (ROOT / "scripts/release-evidence.py").read_text(encoding="utf-8")
+    assert '"medusa-cli-macos.tar.gz": ("cli-archive", "macos", "aarch64", "aarch64-apple-darwin")' in evidence
+    assert '"medusa-desktop-macos-app.zip": ("desktop-package", "macos", "aarch64", "aarch64-apple-darwin")' in evidence
+    assert '"medusa-desktop-macos.dmg": ("desktop-package", "macos", "aarch64", "aarch64-apple-darwin")' in evidence
 
     # Rolling main is authenticated by the required Ed25519 updater authority.
     # It must not depend on stable-release platform credentials or a reviewed
