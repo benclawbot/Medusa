@@ -25,8 +25,8 @@ const PROGRESS_WIDTH: usize = 32;
 const MIN_PROGRESS_BAR_WIDTH: usize = 12;
 const DEFAULT_TERMINAL_WIDTH: usize = 120;
 
-// Default time to wait for a CI-built prebuilt main artifact before either
-// falling back to a local compile (`--local-build`) or refusing the update.
+// Default time to wait for a CI-built prebuilt main artifact before falling
+// back to a local compile.
 const DEFAULT_PREBUILT_WAIT_SECS: u64 = 600;
 // How often to poll the release endpoint while waiting for the prebuilt
 // artifact. The CI publish step typically finishes in under five minutes.
@@ -405,17 +405,14 @@ fn main_update_strategy(
             ),
         );
         if Instant::now() >= deadline {
-            return Err(MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Transient,
+            progress.stage(
+                UpdateStage::Building,
+                BUILD_PHASE_START,
                 format!(
-                    "no prebuilt main artifact for {short_rev} after waiting {timeout_secs}s. \
-                     Either wait longer with `--wait-for-prebuilt=<secs>`, opt out with \
-                     `--local-build` to compile from source (~15 minutes), or check the \
-                     `rolling-main-cli` GitHub Actions workflow for failures."
+                    "prebuilt artifact unavailable for {short_rev} · compiling locally"
                 ),
-            )
-            .with_retryable(true));
+            );
+            return Ok(MainUpdateStrategy::LocalBuild);
         }
         std::thread::sleep(poll_interval);
         let started = deadline
