@@ -18,8 +18,8 @@ mod source;
 mod windows_install;
 
 /// Release identity for the current build. Cargo package metadata stays at
-/// `1.0.7` because Cargo accepts only SemVer package versions.
-pub const CURRENT_RELEASE_ID: &str = "1.0.7.1";
+/// `1.0.8` because Cargo accepts only SemVer package versions.
+pub const CURRENT_RELEASE_ID: &str = "1.0.8.1";
 
 pub use diagnostics::{PhaseTimer, UpdateDiagnostics, UpdatePhase, UpdatePhaseRecord};
 pub use github::{GithubReleaseClient, ReleaseClient};
