@@ -140,7 +140,12 @@ impl BrowserOAuthSession for OpenAiOAuthLogin {
     }
 
     fn cancel(&mut self) {
-        self.login.cancel();
+        // Mirror the runtime handle's Drop semantics: signal cancellation and
+        // detach the worker instead of joining it. Explicit cancellation
+        // paths (Esc/Ctrl-C, error propagation, Drop) all run from UI
+        // contexts where blocking on the worker would freeze the loop while
+        // the Codex app-server is still inside a long-running request.
+        self.login.detach();
     }
 }
 

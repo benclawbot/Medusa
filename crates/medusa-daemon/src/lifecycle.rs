@@ -11,6 +11,8 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 #[cfg(not(windows))]
 use medusa_core::hidden_command;
@@ -79,6 +81,8 @@ impl DaemonLaunch {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         #[cfg(unix)]
+        configure_detached(&mut command);
+        #[cfg(windows)]
         configure_detached(&mut command);
         command.spawn().map(|_| ()).map_err(|error| {
             MedusaError::new(
@@ -396,6 +400,18 @@ impl Drop for StartupLock {
 #[cfg(unix)]
 fn configure_detached(command: &mut Command) {
     command.process_group(0);
+}
+
+#[cfg(windows)]
+fn configure_detached(command: &mut Command) {
+    // `CREATE_NEW_PROCESS_GROUP` puts the daemon in its own console group so
+    // a Ctrl+C observed by the launching frontend (e.g. `medusa telegram`)
+    // is not delivered to the daemon. `CREATE_NO_WINDOW` was previously
+    // combined with this flag and observed to suppress the daemon's loopback
+    // endpoint on Windows; we therefore omit it and rely on stdio redirection
+    // for output isolation.
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
 #[cfg(unix)]
