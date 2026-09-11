@@ -540,6 +540,13 @@ impl AppState {
         self.auto_compact_percent = settings.auto_compact_percent;
     }
 
+    /// Records whether the session currently holds a usable credential.
+    /// Applied after a successful in-session model configuration so a pasted
+    /// API key clears the send gate without waiting for a settings refresh.
+    pub(crate) fn set_credential_configured(&mut self, configured: bool) {
+        self.credential_configured = configured;
+    }
+
     pub fn set_plan(&mut self, plan: TranscriptPlan) {
         self.plan = Some(plan);
         self.task_list_visible = true;

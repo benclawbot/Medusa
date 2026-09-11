@@ -1,9 +1,11 @@
 use super::*;
 use crate::{
+    commands::{Effort, ModelConfiguration},
     daemon_status::DaemonMonitor,
     render::support::{app_error, runtime_error},
     runtime::RuntimeActivity,
 };
+use medusa_config::provider_catalog_entry;
 use std::time::Instant;
 
 const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
@@ -524,8 +526,10 @@ fn handle_action(
             Ok(false)
         }
         AppAction::ConfigureModel(configuration) => {
+            let credential_ready = configuration_supplies_credential(&configuration);
             match runtime.configure_model(configuration) {
                 Ok(()) => {
+                    app.set_credential_configured(credential_ready);
                     app.status = "updating model configuration".to_owned();
                 }
                 Err(error) => {
@@ -540,6 +544,22 @@ fn handle_action(
         }
         AppAction::None | AppAction::Redraw => Ok(false),
     }
+}
+
+/// Whether applying this modal configuration leaves the session with a usable
+/// credential: either a freshly typed key or a route that needs none.
+/// Evaluated at apply time so a pasted key clears the send gate, while
+/// switching to a keyed provider without typing a key re-arms it.
+fn configuration_supplies_credential(configuration: &ModelConfiguration) -> bool {
+    if configuration
+        .api_key
+        .as_ref()
+        .is_some_and(|key| !key.trim().is_empty())
+    {
+        return true;
+    }
+    !provider_catalog_entry(&configuration.provider)
+        .is_some_and(|entry| entry.auth_methods.contains(&"api-key"))
 }
 
 fn should_auto_resume(fresh: bool, app: &AppState, draft: &PromptDraft) -> bool {
@@ -852,6 +872,38 @@ mod tests {
         );
         assert!(idle >= Duration::from_millis(200));
         assert!(running <= Duration::from_millis(50));
+    }
+
+    #[test]
+    fn applied_configuration_drives_the_credential_gate() {
+        fn configuration(provider: &str, api_key: Option<&str>) -> ModelConfiguration {
+            ModelConfiguration {
+                provider: provider.to_owned(),
+                model: "MiniMax-M3".to_owned(),
+                effort: Effort::Auto,
+                api_key: api_key.map(str::to_owned),
+                base_url: None,
+            }
+        }
+
+        // A pasted key clears the send gate.
+        assert!(configuration_supplies_credential(&configuration(
+            "minimax",
+            Some("secret")
+        )));
+        // No key for a keyed provider re-arms it, including whitespace-only.
+        assert!(!configuration_supplies_credential(&configuration(
+            "minimax", None
+        )));
+        assert!(!configuration_supplies_credential(&configuration(
+            "minimax",
+            Some("   ")
+        )));
+        // Routes without an api-key method need no credential.
+        assert!(configuration_supplies_credential(&configuration(
+            "openai-oauth",
+            None
+        )));
     }
 
     #[test]
