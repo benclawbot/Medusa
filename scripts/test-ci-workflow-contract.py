@@ -144,7 +144,8 @@ def test_stable_release_is_complete_before_publication() -> None:
         "medusa-cli-windows.zip",
     ):
         assert archive in verifier
-    assert "update --check --release" in verifier
+    assert verifier.count("update --check --release --allow-downgrade") == 2
+    assert "workflow_dispatch:" in verifier
     assert "env -u GH_TOKEN -u GITHUB_TOKEN" in verifier
     assert "Remove-Item Env:GH_TOKEN" in verifier
     assert "Remove-Item Env:GITHUB_TOKEN" in verifier
