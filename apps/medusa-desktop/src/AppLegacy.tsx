@@ -1523,6 +1523,10 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const selectProvider = async (value: string) => {
     const requestId = ++providerRequestId.current;
     authenticationRequestId.current += 1;
+    // Switching providers abandons any in-flight browser sign-in. Clear its
+    // spinner explicitly: the orphaned flow's guarded reset is skipped by
+    // design, and without this the Apply button stays disabled permanently.
+    setAuthenticating(false);
     const nextProvider = providerCatalog.find((entry) => entry.profileProvider === value);
     setProvider(value);
     setApiKey("");
