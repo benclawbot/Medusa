@@ -65,6 +65,12 @@ def test_windows_distribution_requires_authenticode() -> None:
     assert "npm run tauri -- bundle --bundles nsis" in stable
     assert "https://timestamp.digicert.com" in stable
     assert stable.count("signtool.FullName verify /pa /all /v") >= 2
+    # Without a provisioned certificate the release must degrade to explicitly
+    # marked unsigned Windows assets instead of failing: the sign path stays
+    # mandatory whenever the secrets exist, and the unsigned marker must be
+    # recorded beside the assets.
+    assert "WINDOWS_AUTHENTICODE=unsigned" in stable
+    assert "windows-authenticode-unsigned.txt" in stable
     assert stable.index("Authenticode-sign Windows product executables") < stable.index(
         "Bundle signed Windows desktop executable"
     )

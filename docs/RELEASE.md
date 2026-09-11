@@ -123,6 +123,8 @@ Path-free release phase diagnostics are appended to `.medusa/update-diagnostics.
 
 When platform-native signing is required, complete it before approving or rerunning the manifest-authority signer so the Ed25519 manifest binds the final signed bytes. The Ed25519 manifest proves the updater's release authority and exact artifact metadata. Platform signatures prove publisher/platform identity. GitHub attestations prove workflow provenance. SHA-256 proves byte identity. These controls are complementary.
 
+Windows Authenticode applies only when a signing certificate is provisioned (`WINDOWS_SIGNING_CERTIFICATE_BASE64` / `WINDOWS_SIGNING_CERTIFICATE_PASSWORD` in the release-signing environment). Without one, the release ships Windows assets unsigned and records a `windows-authenticode-unsigned.txt` marker beside them; SmartScreen may warn on first launch while SHA-256, manifest, and attestation guarantees still hold.
+
 See [Release signing](RELEASE-SIGNING.md), [Desktop distribution](DESKTOP-DISTRIBUTION.md), [Release compatibility](COMPATIBILITY.md), and [Verified prebuilt update architecture](architecture/PREBUILT-UPDATES.md).
 
 ## Manual verification
