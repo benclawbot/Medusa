@@ -111,6 +111,7 @@ def test_stable_release_is_complete_before_publication() -> None:
     assert "github.event.workflow_run.event == 'workflow_dispatch'" in primary
     for name in (primary_name, recovery_name):
         signer = read_workflow(name)
+        assert signer.count("contents: write") >= 3
         assert "--json isDraft --jq '.isDraft'" in signer
         assert "refusing to mutate published stable assets" in signer
         assert "--clobber" in signer
