@@ -97,6 +97,11 @@ def test_windows_distribution_requires_authenticode() -> None:
     assert "Authenticode-sign rolling Windows desktop executable" not in rolling
     assert "Package exact-revision rolling CLI asset" in rolling
     assert "Package exact-revision desktop asset" in rolling
+    legacy_alias_uploads = [
+        line for line in rolling.splitlines() if "gh release upload main-latest" in line
+    ]
+    assert len(legacy_alias_uploads) == 6
+    assert all('--repo "$GITHUB_REPOSITORY" --clobber' in line for line in legacy_alias_uploads)
 
 
 def test_stable_release_is_complete_before_publication() -> None:

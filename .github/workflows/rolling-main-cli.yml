@@ -215,13 +215,13 @@ jobs:
             --title "Medusa rolling main (legacy alias)" \
             --notes "Compatibility alias for clients older than the immutable main-<sha> updater protocol."
           for archive in release-assets/*.tar.gz release-assets/*.zip; do
-            gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY"
+            gh release upload main-latest "$archive" --repo "$GITHUB_REPOSITORY" --clobber
           done
           for manifest in release-assets/*.tar.gz.json release-assets/*.zip.json; do
-            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY"
+            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
           done
           for signature in release-assets/*.tar.gz.json.sig.json release-assets/*.zip.json.sig.json; do
-            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY"
+            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber
           done
 
   build-desktop:
@@ -475,14 +475,14 @@ jobs:
           fi
           for artifact in release-assets/medusa-desktop-main-*; do
             if [[ "$artifact" != *.json ]]; then
-              gh release upload main-latest "$artifact" --repo "$GITHUB_REPOSITORY"
+              gh release upload main-latest "$artifact" --repo "$GITHUB_REPOSITORY" --clobber
             fi
           done
           for manifest in release-assets/medusa-desktop-main-*.json; do
-            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY"
+            gh release upload main-latest "$manifest" --repo "$GITHUB_REPOSITORY" --clobber
           done
           for signature in release-assets/medusa-desktop-main-*.json.sig.json; do
-            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY"
+            gh release upload main-latest "$signature" --repo "$GITHUB_REPOSITORY" --clobber
           done
 
   verify-rolling-alias:
