@@ -165,6 +165,22 @@ def test_pr_base_ref_is_bound_through_environment() -> None:
             assert line.strip().startswith("BASE_REF:")
 
 
+def test_cargo_machete_install_selects_the_pinned_package() -> None:
+    import shlex
+
+    workflow = read_workflow("ci.yml")
+    installs = [
+        shlex.split(line.strip().removeprefix("run: "))
+        for line in workflow.splitlines()
+        if line.strip().startswith("run: cargo install --git https://github.com/bnjbvr/cargo-machete")
+    ]
+    assert len(installs) == 1, installs
+    command = installs[0]
+    assert "cargo-machete" in command[2:], "git install must select the binary package"
+    assert command[command.index("--rev") + 1] == "ac30a525c0a8d163a92d727b3ff079ee3f6ecb08"
+    assert "--locked" in command
+
+
 def test_secret_live_provider_pr_gate_is_same_repo() -> None:
     gate = "github.event.pull_request.head.repo.full_name == github.repository"
     for name in ("live-provider-dogfood.yml", "architecture-policy.yml"):
@@ -201,6 +217,7 @@ def main() -> int:
         test_stable_release_is_complete_before_publication,
         test_rolling_desktop_uses_tauri_production_build,
         test_pr_base_ref_is_bound_through_environment,
+        test_cargo_machete_install_selects_the_pinned_package,
         test_secret_live_provider_pr_gate_is_same_repo,
         test_tui_model_is_explicitly_parameterized,
         test_openai_oauth_never_uses_latest,
