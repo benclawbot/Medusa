@@ -1325,11 +1325,7 @@ mod tests {
             .control_clients
             .insert("session-1".to_owned(), "owner-a".to_owned());
         let denied = plane
-            .dispatch(effort_envelope(
-                Some("session-1"),
-                "attacker",
-                "attack-1",
-            ))
+            .dispatch(effort_envelope(Some("session-1"), "attacker", "attack-1"))
             .expect_err("non-owner effort must be denied");
         assert!(
             matches!(denied, FrontendControlError::ReadOnlyClient(_)),
