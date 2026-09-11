@@ -27,7 +27,9 @@ const DEFAULT_TERMINAL_WIDTH: usize = 120;
 
 // Default time to wait for a CI-built prebuilt main artifact before falling
 // back to a local compile.
-const DEFAULT_PREBUILT_WAIT_SECS: u64 = 600;
+// Do not make a normal interactive update sit at 1% while CI publishes an
+// artifact. Users can opt into waiting explicitly with --wait-for-prebuilt.
+const DEFAULT_PREBUILT_WAIT_SECS: u64 = 0;
 // How often to poll the release endpoint while waiting for the prebuilt
 // artifact. The CI publish step typically finishes in under five minutes.
 const PREBUILT_POLL_INTERVAL_SECS: u64 = 15;
