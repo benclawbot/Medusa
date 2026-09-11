@@ -2487,6 +2487,7 @@ dependencies = [
  "medusa-agent",
  "medusa-config",
  "medusa-core",
+ "medusa-hardening",
  "medusa-process-containment",
  "medusa-process-registry",
  "medusa-protocol",
@@ -2630,6 +2631,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "medusa-hardening"
+version = "1.0.7"
+dependencies = [
+ "medusa-core",
+ "medusa-protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+ "ulid",
 ]
 
 [[package]]
@@ -2870,7 +2884,9 @@ dependencies = [
 name = "medusa-tool-control"
 version = "1.0.7"
 dependencies = [
+ "medusa-core",
  "serde",
+ "serde_json",
  "sha2",
 ]
 

@@ -76,8 +76,133 @@ fn map_transient_event(event: FrontendTransientEvent) -> DesktopRuntimeEvent {
         }
         FrontendTransientEvent::NewSession => DesktopRuntimeEvent::NewSession,
         FrontendTransientEvent::Progress { turn } => DesktopRuntimeEvent::Progress { turn },
+        FrontendTransientEvent::Activity { kind, title, details } => {
+            DesktopRuntimeEvent::Activity {
+                activity: crate::dto::DesktopActivity {
+                    id: None,
+                    kind: transient_activity_kind(&kind),
+                    title,
+                    details,
+                },
+            }
+        }
+        FrontendTransientEvent::Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            duration_ms,
+            estimated_cost_microusd,
+            provenance,
+        } => DesktopRuntimeEvent::Usage {
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            total_tokens,
+            duration_ms,
+            tokens_per_second_milli: 0,
+            estimated_cost_microusd,
+            provenance,
+        },
+        FrontendTransientEvent::Plan { steps } => DesktopRuntimeEvent::Plan {
+            steps: transient_plan_steps(steps),
+        },
+        FrontendTransientEvent::Question { question } => DesktopRuntimeEvent::Question {
+            prompts: vec![crate::dto::DesktopQuestionPrompt {
+                header: "Question".to_owned(),
+                question: transient_question_text(&question),
+                options: transient_question_options(&question),
+                multi_select: false,
+            }],
+        },
+        FrontendTransientEvent::Completed { session_id } => {
+            DesktopRuntimeEvent::Completed { session_id }
+        }
+        FrontendTransientEvent::TurnFinished => DesktopRuntimeEvent::TurnFinished,
+        FrontendTransientEvent::Cancelled => DesktopRuntimeEvent::Cancelled,
         FrontendTransientEvent::Failed { message } => DesktopRuntimeEvent::Failed { message },
     }
+}
+
+fn transient_activity_kind(kind: &str) -> crate::dto::DesktopActivityKind {
+    match kind {
+        "assistant" => crate::dto::DesktopActivityKind::Assistant,
+        "tool" => crate::dto::DesktopActivityKind::Tool,
+        "verification" | "test" => crate::dto::DesktopActivityKind::Verification,
+        "error" => crate::dto::DesktopActivityKind::Error,
+        "done" => crate::dto::DesktopActivityKind::Done,
+        _ => crate::dto::DesktopActivityKind::Progress,
+    }
+}
+
+fn transient_plan_steps(steps: serde_json::Value) -> Vec<crate::dto::DesktopPlanStep> {
+    let entries = steps.as_array().cloned().unwrap_or_default();
+    entries
+        .into_iter()
+        .map(|step| {
+            let status = step
+                .get("lifecycle")
+                .and_then(|value| value.as_str())
+                .map(|lifecycle| match lifecycle {
+                    "succeeded" => crate::dto::DesktopPlanStepStatus::Completed,
+                    "active" => crate::dto::DesktopPlanStepStatus::InProgress,
+                    "failed" | "cancelled" => crate::dto::DesktopPlanStepStatus::Failed,
+                    _ => crate::dto::DesktopPlanStepStatus::Pending,
+                })
+                .unwrap_or(crate::dto::DesktopPlanStepStatus::Pending);
+            crate::dto::DesktopPlanStep {
+                title: step
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
+                status,
+            }
+        })
+        .collect()
+}
+
+fn transient_question_text(question: &serde_json::Value) -> String {
+    question
+        .get("prompt")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            question
+                .get("question")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+                .unwrap_or_default()
+        })
+}
+
+fn transient_question_options(question: &serde_json::Value) -> Vec<crate::dto::DesktopQuestionOption> {
+    let options = question
+        .get("options")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    options
+        .into_iter()
+        .map(|option| {
+            let label = option
+                .get("label")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+                .unwrap_or_default();
+            let description = option
+                .get("value")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+                .unwrap_or_default();
+            let description = if description != label {
+                description
+            } else {
+                String::new()
+            };
+            crate::dto::DesktopQuestionOption { label, description }
+        })
+        .collect()
 }
 
 fn map_frontend_event(
@@ -488,6 +613,83 @@ mod desktop_projection_tests {
                 estimated_cost_microusd: 123,
                 provenance,
             }) if provenance == "provider_reported"
+        ));
+    }
+
+    #[test]
+    fn transient_activity_usage_plan_question_reach_the_desktop() {
+        assert!(matches!(
+            map_transient_event(FrontendTransientEvent::Activity {
+                kind: "tool".to_owned(),
+                title: "Read file".to_owned(),
+                details: vec!["apps/medusa-desktop".to_owned()],
+            }),
+            DesktopRuntimeEvent::Activity { activity }
+                if activity.title == "Read file"
+                    && matches!(
+                        activity.kind,
+                        crate::dto::DesktopActivityKind::Tool
+                    )
+        ));
+        assert!(matches!(
+            map_transient_event(FrontendTransientEvent::Usage {
+                input_tokens: 11,
+                output_tokens: 7,
+                total_tokens: 18,
+                duration_ms: 900,
+                estimated_cost_microusd: 123,
+                provenance: "provider_reported".to_owned(),
+            }),
+            DesktopRuntimeEvent::Usage {
+                input_tokens: 11,
+                total_tokens: 18,
+                ..
+            }
+        ));
+        let steps = serde_json::json!([
+            {"title": "Wire desktop", "lifecycle": "active"},
+            {"title": "Ship desktop", "lifecycle": "succeeded"},
+        ]);
+        assert!(matches!(
+            map_transient_event(FrontendTransientEvent::Plan { steps }),
+            DesktopRuntimeEvent::Plan { steps }
+                if steps.len() == 2
+                    && matches!(
+                        steps[0].status,
+                        crate::dto::DesktopPlanStepStatus::InProgress
+                    )
+                    && matches!(
+                        steps[1].status,
+                        crate::dto::DesktopPlanStepStatus::Completed
+                    )
+        ));
+        let question = serde_json::json!({
+            "prompt": "Continue?",
+            "options": [{"label": "Yes", "value": "yes"}],
+        });
+        assert!(matches!(
+            map_transient_event(FrontendTransientEvent::Question { question }),
+            DesktopRuntimeEvent::Question { prompts }
+                if prompts.len() == 1 && prompts[0].question == "Continue?"
+        ));
+    }
+
+    #[test]
+    fn transient_terminal_states_reach_the_desktop() {
+        assert!(matches!(
+            map_transient_event(FrontendTransientEvent::Completed {
+                session_id: "session-1".to_owned(),
+            }),
+            DesktopRuntimeEvent::Completed { session_id }
+                if session_id == "session-1"
+        ));
+        assert!(matches!(
+            map_transient_event(FrontendTransientEvent::TurnFinished),
+            DesktopRuntimeEvent::TurnFinished
+        ));
+        assert!(matches!(
+            map_transient_event(FrontendTransientEvent::Cancelled),
+            DesktopRuntimeEvent::Cancelled
         ));
     }
 }
