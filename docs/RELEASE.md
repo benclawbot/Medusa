@@ -35,6 +35,8 @@ The build workflow rejects missing, duplicate, symlinked, or path-escaping asset
 
 Only after those authority files are attached and verified does the workflow publish the draft. A post-publish matrix then downloads the public Linux, macOS, and Windows CLI archives and runs the released `medusa update --check --release` against the public GitHub API. A failed public verification is a failed release workflow, not an invitation to mutate the published assets.
 
+Tag-triggered `Publish Release` runs invoke the primary signer automatically. When `Publish Release` is manually dispatched with an exact tag and commit SHA, manually dispatch `Sign Release Manifest` with that same draft tag; GitHub's `workflow_run` event does not carry the publisher's release-tag input.
+
 ## Manifest trust
 
 The signed manifest binds:
