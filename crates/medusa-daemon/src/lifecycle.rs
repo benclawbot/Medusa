@@ -80,7 +80,9 @@ impl DaemonLaunch {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        #[cfg(any(unix, windows))]
+        #[cfg(unix)]
+        configure_detached(&mut command);
+        #[cfg(windows)]
         configure_detached(&mut command);
         command.spawn().map(|_| ()).map_err(|error| {
             MedusaError::new(
@@ -402,9 +404,12 @@ fn configure_detached(command: &mut Command) {
 
 #[cfg(windows)]
 fn configure_detached(command: &mut Command) {
-    // CREATE_NO_WINDOW prevents the daemon from publishing its loopback
-    // endpoint on affected Windows builds, but the process still needs its
-    // own console group so Ctrl+C in the frontend cannot terminate it.
+    // `CREATE_NEW_PROCESS_GROUP` puts the daemon in its own console group so
+    // a Ctrl+C observed by the launching frontend (e.g. `medusa telegram`)
+    // is not delivered to the daemon. `CREATE_NO_WINDOW` was previously
+    // combined with this flag and observed to suppress the daemon's loopback
+    // endpoint on Windows; we therefore omit it and rely on stdio redirection
+    // for output isolation.
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     command.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }

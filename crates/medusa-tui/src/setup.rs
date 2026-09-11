@@ -691,44 +691,52 @@ pub fn run_first_run_setup_with_host(
         if oauth_session.is_some() {
             let poll_result = oauth_session
                 .as_mut()
-                .expect("oauth session")
-                .session_mut()
-                .expect("oauth guard always holds a session while armed")
-                .poll()?;
-            if let Some(result) = poll_result {
-                // The attempt completed: disarm the guard so Drop does not
-                // cancel a finished session.
-                oauth_session.take().expect("oauth session").disarm();
-                match result {
-                    Ok(models) => {
-                        let provider = state
-                            .provider_entry()
-                            .map(|entry| entry.id)
-                            .unwrap_or("openai-oauth")
-                            .to_owned();
-                        state.oauth_succeeded(&provider, models);
+                .and_then(|guard| guard.session_mut())
+                .ok_or_else(|| {
+                    io::Error::other("OAuth session guard disappeared between is_some() and use")
+                })?
+                .poll();
+            let result = match poll_result {
+                Ok(Some(result)) => result,
+                Ok(None) => {
+                    if !event::poll(Duration::from_millis(100))? {
+                        continue;
                     }
-                    Err(message) => state.oauth_failed(message),
+                    let Event::Key(key) = event::read()? else {
+                        continue;
+                    };
+                    if key.kind == KeyEventKind::Release {
+                        continue;
+                    }
+                    if key.code == KeyCode::Esc
+                        || (key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL))
+                    {
+                        // Dropping the guard cancels the attempt via its Drop impl,
+                        // which also covers early returns and error propagation.
+                        oauth_session = None;
+                        state.status =
+                            Some("Browser sign-in cancelled; configuration unchanged.".to_owned());
+                    }
+                    continue;
                 }
-                continue;
-            }
-            if !event::poll(Duration::from_millis(100))? {
-                continue;
-            }
-            let Event::Key(key) = event::read()? else {
-                continue;
+                Err(error) => return Err(error),
             };
-            if key.kind == KeyEventKind::Release {
-                continue;
+            // The attempt completed: disarm the guard so Drop does not
+            // cancel a finished session.
+            if let Some(mut guard) = oauth_session.take() {
+                guard.disarm();
             }
-            if key.code == KeyCode::Esc
-                || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-            {
-                // Dropping the guard cancels the attempt via its Drop impl,
-                // which also covers early returns and error propagation.
-                oauth_session = None;
-                state.status =
-                    Some("Browser sign-in cancelled; configuration unchanged.".to_owned());
+            match result {
+                Ok(models) => {
+                    let provider = state
+                        .provider_entry()
+                        .map(|entry| entry.id)
+                        .unwrap_or("openai-oauth")
+                        .to_owned();
+                    state.oauth_succeeded(&provider, models);
+                }
+                Err(message) => state.oauth_failed(message),
             }
             continue;
         }

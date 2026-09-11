@@ -735,10 +735,17 @@ impl FrontendControlPlane {
                 model,
                 base_url,
             } => {
-                // Session-scoped authorization gates the daemon-global model
-                // configuration: only the session owner may mutate it.
-                let session_id = required_session_id(envelope)?;
-                self.authorize_control(&session_id, &envelope.client_id)?;
+                // Provider/model configuration is daemon-global state. The
+                // interactive TUI setup flow may stage it before any session
+                // exists; every other session-less caller must bind a session
+                // first. When a session is bound the caller must still pass
+                // session-scoped authorization before the change is pushed to
+                // the live runtime.
+                if let Some(session_id) = envelope.session_id.as_deref() {
+                    self.authorize_control(session_id, &envelope.client_id)?;
+                } else {
+                    require_tui_bootstrap(envelope)?;
+                }
                 let provider_changed = provider
                     .as_deref()
                     .is_some_and(|next| next != self.config.model.provider);
@@ -754,8 +761,10 @@ impl FrontendControlPlane {
                 let effort = current_effort(&self.config);
                 let configuration =
                     self.model_configuration(&provider, model, effort, next_base_url.clone());
-                self.controller(&session_id)?
-                    .configure_model(configuration)?;
+                if let Some(session_id) = envelope.session_id.as_deref() {
+                    self.controller(session_id)?
+                        .configure_model(configuration)?;
+                }
                 self.config.model.provider = provider;
                 self.config.model.name = model.clone();
                 self.config.model.protocol = protocol_for_provider(&self.config.model.provider);
@@ -771,10 +780,17 @@ impl FrontendControlPlane {
                 })
             }
             FrontendCommand::SetEffort { effort } => {
-                // Session-scoped authorization gates the daemon-global effort
-                // budget: only the session owner may mutate it.
-                let session_id = required_session_id(envelope)?;
-                self.authorize_control(&session_id, &envelope.client_id)?;
+                // Effort is daemon-global. The interactive TUI setup flow may
+                // stage the budget before a session exists; every other
+                // session-less caller must bind a session first. When a
+                // session is bound the caller must still pass session-scoped
+                // authorization before the change is pushed to the live
+                // runtime.
+                if let Some(session_id) = envelope.session_id.as_deref() {
+                    self.authorize_control(session_id, &envelope.client_id)?;
+                } else {
+                    require_tui_bootstrap(envelope)?;
+                }
                 let effort = parse_effort(effort)?;
                 let configuration = self.model_configuration(
                     &self.config.model.provider,
@@ -782,8 +798,10 @@ impl FrontendControlPlane {
                     effort,
                     self.config.model.base_url.clone(),
                 );
-                self.controller(&session_id)?
-                    .configure_model(configuration)?;
+                if let Some(session_id) = envelope.session_id.as_deref() {
+                    self.controller(session_id)?
+                        .configure_model(configuration)?;
+                }
                 self.config.agent.max_turns = turns_for_effort(effort);
                 Ok(FrontendControlResult::CommandAccepted {
                     session_id: envelope.session_id.clone().unwrap_or_default(),
@@ -1154,6 +1172,19 @@ fn required_session_id(envelope: &FrontendCommandEnvelope) -> Result<String, Fro
     command_session_id(envelope).ok_or(FrontendControlError::SessionRequired)
 }
 
+/// Session-less mutation of daemon-global model/effort state is reserved for
+/// the interactive TUI first-run setup flow, which must stage provider
+/// selection before any session exists. All other frontends (desktop,
+/// Telegram, headless, third-party) configure model and effort through a
+/// bound session so the session-owner gate always applies.
+fn require_tui_bootstrap(envelope: &FrontendCommandEnvelope) -> Result<(), FrontendControlError> {
+    if envelope.frontend == FrontendKind::Tui {
+        Ok(())
+    } else {
+        Err(FrontendControlError::SessionRequired)
+    }
+}
+
 fn frontend_source(kind: FrontendKind, client_id: &str) -> String {
     let kind = match kind {
         FrontendKind::Tui => "tui",
@@ -1275,6 +1306,51 @@ mod tests {
             Some("https://api.openai.com/v1"),
         );
         assert_eq!(next.as_deref(), Some("https://gateway.example/v1"));
+    }
+
+    fn effort_envelope(
+        session_id: Option<&str>,
+        client_id: &str,
+        idempotency_key: &str,
+    ) -> FrontendCommandEnvelope {
+        FrontendCommandEnvelope {
+            protocol_version: medusa_protocol::CURRENT_PROTOCOL_VERSION,
+            command_id: format!("command-{idempotency_key}"),
+            idempotency_key: idempotency_key.to_owned(),
+            frontend: FrontendKind::Tui,
+            client_id: client_id.to_owned(),
+            session_id: session_id.map(str::to_owned),
+            turn_id: None,
+            timestamp: time::OffsetDateTime::UNIX_EPOCH,
+            command: FrontendCommand::SetEffort {
+                effort: "high".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn effort_stages_without_a_session_but_stays_owner_gated_with_one() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut plane =
+            FrontendControlPlane::new(directory.path().to_path_buf(), Config::default());
+
+        // Pre-session bootstrap: no session bound, no controller yet.
+        plane
+            .dispatch(effort_envelope(None, "setup-client", "bootstrap-1"))
+            .expect("pre-session effort must stage");
+        assert_eq!(plane.agent_max_turns(), turns_for_effort(Effort::High));
+
+        // A bound session stays owner-gated: a different client is denied.
+        plane
+            .control_clients
+            .insert("session-1".to_owned(), "owner-a".to_owned());
+        let denied = plane
+            .dispatch(effort_envelope(Some("session-1"), "attacker", "attack-1"))
+            .expect_err("non-owner effort must be denied");
+        assert!(
+            matches!(denied, FrontendControlError::ReadOnlyClient(_)),
+            "unexpected denial: {denied:?}"
+        );
     }
 
     #[test]
