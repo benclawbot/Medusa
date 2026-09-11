@@ -40,6 +40,7 @@ pub(crate) struct DaemonMonitor {
     worker: Option<JoinHandle<()>>,
     shutting_down: Arc<AtomicBool>,
     last_kind: Option<DaemonConnectionKind>,
+    degraded_streak: u32,
     snapshot: DaemonSnapshot,
 }
 
@@ -79,6 +80,7 @@ impl DaemonMonitor {
             worker,
             shutting_down,
             last_kind: None,
+            degraded_streak: 0,
             snapshot: if worker_started {
                 (Vec::new(), "checking".to_owned())
             } else {
@@ -117,9 +119,22 @@ impl DaemonMonitor {
     }
 
     fn should_record(&mut self, kind: DaemonConnectionKind) -> bool {
+        if kind == DaemonConnectionKind::Degraded {
+            self.degraded_streak += 1;
+        } else {
+            self.degraded_streak = 0;
+        }
         let changed = self.last_kind != Some(kind);
         self.last_kind = Some(kind);
-        changed
+        if kind != DaemonConnectionKind::Degraded {
+            return changed;
+        }
+        // A missing socket on the first observations is the expected cold-start
+        // race while the runtime worker brings the daemon up. Only a degraded
+        // state that persists across three consecutive observations is
+        // reported, so recovery leaves no stale "degraded" line behind in the
+        // transcript. The live snapshot still reflects every observation.
+        !changed && self.degraded_streak == 3
     }
 }
 
@@ -217,24 +232,74 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_transition_is_recorded_once() {
+    fn persistent_disconnect_is_recorded_once() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = app(directory.path());
         let mut monitor = DaemonMonitor::new(directory.path().join("missing.sock"));
 
-        let first = wait_for_snapshot(&mut monitor, &mut app, |snapshot| {
-            snapshot.1.starts_with("degraded:")
-        });
-        let _ = wait_for_snapshot(&mut monitor, &mut app, |snapshot| {
-            snapshot.1.starts_with("degraded:")
-        });
-
-        assert!(first.1.starts_with("degraded:"));
-        assert_eq!(app.transcript.len(), 1);
+        // The first two degraded observations stay silent as a possible
+        // cold-start race; the third consecutive one is reported.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            monitor.poll(&mut app);
+            if app.transcript.len() == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "persistently degraded daemon was never reported"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
         assert!(matches!(
             app.transcript.first(),
             Some(TranscriptEntry::System(message)) if message.starts_with("daemon degraded:")
         ));
+
+        // Further polls while still down stay silent.
+        for _ in 0..5 {
+            thread::sleep(Duration::from_millis(5));
+            monitor.poll(&mut app);
+        }
+        assert_eq!(app.transcript.len(), 1);
+    }
+
+    #[test]
+    fn cold_start_recovery_leaves_no_stale_degraded_line() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonPaths::for_repo(directory.path());
+        let mut app = app(directory.path());
+        let mut monitor = DaemonMonitor::new(paths.socket.clone());
+
+        // Establish the silent baseline while the socket is still missing.
+        let first = wait_for_snapshot(&mut monitor, &mut app, |snapshot| {
+            snapshot.1.starts_with("degraded:")
+        });
+        assert!(first.1.starts_with("degraded:"));
+        assert!(
+            app.transcript.is_empty(),
+            "baseline degraded observation must stay silent"
+        );
+
+        let (handle, server) = spawn(paths.clone()).expect("spawn daemon");
+        wait_for_endpoint(&paths.socket);
+        let snapshot =
+            wait_for_snapshot(&mut monitor, &mut app, |snapshot| snapshot.1 == "connected");
+
+        assert_eq!(snapshot.1, "connected");
+        assert!(matches!(
+            app.transcript.last(),
+            Some(TranscriptEntry::System(message)) if message == "daemon connected · 0 background jobs"
+        ));
+        assert!(
+            !app.transcript.iter().any(|entry| matches!(
+                entry,
+                TranscriptEntry::System(message) if message.starts_with("daemon degraded:")
+            )),
+            "stale degraded line survived recovery"
+        );
+        handle.shutdown();
+        server.join().expect("join daemon").expect("daemon result");
     }
 
     #[test]
