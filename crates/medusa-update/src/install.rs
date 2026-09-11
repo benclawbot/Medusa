@@ -316,7 +316,7 @@ impl AtomicInstaller {
                 }
                 let _ = fs::remove_file(&backup);
                 let _ = fs::remove_file(&lock);
-                return Ok(());
+                Ok(())
             }
 
             #[cfg(not(unix))]
