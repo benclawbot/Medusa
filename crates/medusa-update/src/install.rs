@@ -3,7 +3,7 @@ use std::{
     fs::OpenOptions,
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -19,6 +19,7 @@ use crate::model::invalid;
 pub const HEALTH_FILE_ENV: &str = "MEDUSA_UPDATE_HEALTH_FILE";
 pub const HEALTH_NONCE_ENV: &str = "MEDUSA_UPDATE_HEALTH_NONCE";
 pub const UPDATE_OUTCOME_FILE: &str = ".medusa-update-outcome.json";
+#[cfg(any(not(unix), test))]
 const HEALTH_CHECK_ATTEMPTS: usize = 600;
 const UPDATE_LOCK_SCHEMA: &str = "2";
 
@@ -197,9 +198,10 @@ impl AtomicInstaller {
         Ok(false)
     }
 
-    /// Stages the candidate beside the running executable and starts a replacement helper.
-    /// On Windows the helper owns the final handoff: it stops processes using this exact
-    /// installation, replaces the executable, verifies the new binary, and reports success.
+    /// Installs the candidate with an atomic handoff.
+    /// On Unix the running executable may be renamed safely, so installation completes before
+    /// this process exits and the next invocation uses the new build. On Windows a helper owns
+    /// the final handoff because the running executable remains locked.
     pub fn schedule_replace(
         &self,
         candidate: &Path,
@@ -230,6 +232,9 @@ impl AtomicInstaller {
             .parent()
             .ok_or_else(|| invalid("update target has no parent directory"))?;
         let lock = directory.join(".medusa-update.lock");
+        #[cfg(unix)]
+        let _lock_file = acquire_update_lock(&lock, parent_pid)?;
+        #[cfg(not(unix))]
         let mut lock_file = acquire_update_lock(&lock, parent_pid)?;
 
         let staged = staged_path(&self.target);
@@ -243,7 +248,8 @@ impl AtomicInstaller {
         if let Some(revision) = target_revision {
             validate_target_revision(revision)?;
         }
-        let mut helper_process = None;
+        #[cfg(not(unix))]
+        let mut helper_process: Option<std::process::Child> = None;
         let result = (|| -> MedusaResult<()> {
             self.recover_interrupted()?;
             if staged.exists() {
@@ -254,52 +260,97 @@ impl AtomicInstaller {
             validate_candidate(&staged)?;
             #[cfg(unix)]
             set_executable(&staged)?;
-            let script = if cfg!(windows) {
-                windows_replace_script(
-                    parent_pid,
-                    &backup,
-                    &self.target,
-                    &staged,
-                    &state,
-                    &health,
-                    &outcome,
-                    &nonce,
-                    target_revision,
-                    restart.previous_revision.as_deref(),
-                    &lock,
-                    restart,
-                )
-            } else {
-                unix_replace_script(
-                    parent_pid,
-                    &backup,
-                    &self.target,
-                    &staged,
-                    &state,
-                    &health,
-                    &outcome,
-                    &nonce,
-                    target_revision,
-                    restart.previous_revision.as_deref(),
-                    &lock,
-                    restart,
-                )
-            };
-            storage::atomic_write(&helper, script.as_bytes())?;
+
             #[cfg(unix)]
-            set_executable(&helper)?;
-            let child = helper_command(&helper).spawn().map_err(io_error)?;
-            let child_pid = child.id();
-            helper_process = Some(child);
-            writeln!(lock_file, "helper_pid={child_pid}")?;
-            if let Some(identity) = process_identity(child_pid)? {
-                writeln!(lock_file, "helper_identity={identity}")?;
+            {
+                // Unix permits renaming an executable that is currently running. Install the
+                // complete staged inode now and let the update command exit normally; the next
+                // invocation then starts the new build. This avoids a helper process, a second
+                // terminal, and a fragile self-relaunch handoff.
+                let version_status = Command::new(&staged)
+                    .arg("--version")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map_err(io_error)?;
+                if !version_status.success() {
+                    return Err(invalid(
+                        "replacement executable did not pass --version verification",
+                    ));
+                }
+                fs::remove_file(&backup).or_else(|error| {
+                    if error.kind() == io::ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                })?;
+                if self.target.exists() {
+                    fs::rename(&self.target, &backup)?;
+                }
+                if let Err(error) = fs::rename(&staged, &self.target) {
+                    if self.target.exists() {
+                        let _ = fs::remove_file(&self.target);
+                    }
+                    if backup.exists() {
+                        let _ = fs::rename(&backup, &self.target);
+                    }
+                    return Err(io_error(error));
+                }
+                let finalize = (|| -> MedusaResult<()> {
+                    if let (Some(sequence_file), Some(sequence)) =
+                        (restart.sequence_file.as_deref(), restart.rollout_sequence)
+                    {
+                        storage::atomic_write(sequence_file, format!("{sequence}\n").as_bytes())?;
+                    }
+                    storage::atomic_write(&state, b"updated\n")?;
+                    Ok(())
+                })();
+                if let Err(error) = finalize {
+                    let _ = fs::remove_file(&self.target);
+                    if backup.exists() {
+                        let _ = fs::rename(&backup, &self.target);
+                    }
+                    let _ = fs::remove_file(&lock);
+                    return Err(error);
+                }
+                let _ = fs::remove_file(&backup);
+                let _ = fs::remove_file(&lock);
+                return Ok(());
             }
-            writeln!(lock_file, "helper_ready=1")?;
-            lock_file.sync_all()?;
-            Ok(())
+
+            #[cfg(not(unix))]
+            let script = windows_replace_script(
+                parent_pid,
+                &backup,
+                &self.target,
+                &staged,
+                &state,
+                &health,
+                &outcome,
+                &nonce,
+                target_revision,
+                restart.previous_revision.as_deref(),
+                &lock,
+                restart,
+            );
+            #[cfg(not(unix))]
+            {
+                storage::atomic_write(&helper, script.as_bytes())?;
+                let child = helper_command(&helper).spawn().map_err(io_error)?;
+                let child_pid = child.id();
+                helper_process = Some(child);
+                writeln!(lock_file, "helper_pid={child_pid}")?;
+                if let Some(identity) = process_identity(child_pid)? {
+                    writeln!(lock_file, "helper_identity={identity}")?;
+                }
+                writeln!(lock_file, "helper_ready=1")?;
+                lock_file.sync_all()?;
+                Ok(())
+            }
         })();
         if result.is_err() {
+            #[cfg(not(unix))]
             if let Some(mut child) = helper_process {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -428,6 +479,7 @@ fn process_matches(pid: u32, expected_identity: Option<&str>) -> MedusaResult<bo
     })
 }
 
+#[cfg(not(unix))]
 fn helper_command(script: &Path) -> Command {
     if cfg!(windows) {
         #[cfg(windows)]
@@ -458,6 +510,7 @@ fn helper_command(script: &Path) -> Command {
 
 // Atomic replacement scripts intentionally receive every persisted path explicitly.
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(not(unix), test))]
 fn unix_replace_script(
     parent_pid: u32,
     backup: &Path,
@@ -590,6 +643,7 @@ rollback
 
 // Atomic replacement scripts intentionally receive every persisted path explicitly.
 #[allow(clippy::too_many_arguments)]
+#[cfg(any(not(unix), test))]
 fn windows_replace_script(
     parent_pid: u32,
     backup: &Path,
@@ -861,18 +915,22 @@ fn helper_path(target: &Path) -> PathBuf {
     }
 }
 
+#[cfg(any(not(unix), test))]
 fn shell_quote_path(path: &Path) -> String {
     shell_quote(&path.to_string_lossy())
 }
 
+#[cfg(any(not(unix), test))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+#[cfg(any(not(unix), test))]
 fn powershell_quote_path(path: &Path) -> String {
     powershell_quote(&path.to_string_lossy())
 }
 
+#[cfg(any(not(unix), test))]
 fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -940,6 +998,41 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(&target).expect("target preserved"), b"old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_update_replaces_now_for_next_invocation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let target = directory.path().join("medusa");
+        let candidate = directory.path().join("candidate");
+        fs::write(&target, b"old").expect("target");
+        fs::write(&candidate, b"#!/bin/sh\nexit 0\n").expect("candidate");
+        let mut permissions = fs::metadata(&candidate)
+            .expect("candidate metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&candidate, permissions).expect("candidate executable");
+
+        AtomicInstaller::new(target.clone())
+            .schedule_replace(&candidate, &Restart::default(), std::process::id())
+            .expect("atomic replacement");
+
+        assert_eq!(
+            fs::read(&target).expect("new target"),
+            b"#!/bin/sh\nexit 0\n"
+        );
+        assert!(!backup_path(&target).exists());
+        assert!(!target.with_extension("update-new").exists());
+        assert!(
+            !target
+                .parent()
+                .unwrap()
+                .join(".medusa-update.lock")
+                .exists()
+        );
     }
 
     #[test]

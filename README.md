@@ -200,7 +200,7 @@ For development or source-only installation, use Cargo explicitly:
 cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli --quiet
 ```
 
-`medusa update` downloads the platform-specific CLI archive, verifies the GitHub/Sigstore attestation for the release manifest and the archive SHA-256, then performs an atomic replacement with a rollback binary. On Unix the staged update requires a manual relaunch; Windows exits through a short-lived helper process so the running executable is never locked. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
+`medusa update` downloads the platform-specific CLI archive, verifies the GitHub/Sigstore attestation for the release manifest and the archive SHA-256, then performs an atomic replacement with a rollback binary. On Unix the replacement is installed immediately and takes effect on the next invocation; Windows exits through a short-lived helper process so the running executable is never locked. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
 
 The Unix installer verifies the download against the published SHA256SUMS, records the install channel beside the binary, and launches Medusa unless `--no-launch` is passed. `medusa update` warns loudly when the requested channel (`--release` vs the default main channel) differs from the installed one.
 

@@ -241,7 +241,7 @@ fn release_channel(
             .finish("health-check-pending", None, None)?;
         progress.finish();
         println!(
-            "Medusa update installed and staged: {}. Relaunch Medusa manually to run the new build.",
+            "Medusa update installed: {}. Start Medusa again to use the new build.",
             version_transition(
                 &current_release_id.to_string(),
                 &release.release_id.to_string(),
@@ -350,7 +350,7 @@ fn source_channel(
             MainUpdateStrategy::LocalBuild => "built",
         };
         println!(
-            "Medusa update {} and staged: {}. Restarting Medusa.",
+            "Medusa update {} installed: {}. Start Medusa again to use the new build.",
             update_kind,
             version_transition(&current_version, &new_version),
         );
