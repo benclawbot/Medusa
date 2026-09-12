@@ -63,6 +63,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+      - name: Install Linux system dependencies
+        shell: bash
+        # medusa-tui uses keyring with the Secret Service backend, which links
+        # against the system D-Bus client library via libdbus-sys/pkg-config.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Compare governed crates with the pull-request base
         uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
         with:

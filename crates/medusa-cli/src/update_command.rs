@@ -1002,8 +1002,8 @@ mod tests {
     }
 
     #[test]
-    fn main_updates_default_to_waiting_when_prebuilt_missing() {
-        assert!(std::hint::black_box(DEFAULT_PREBUILT_WAIT_SECS) >= 60);
+    fn main_updates_default_to_no_wait_when_prebuilt_missing() {
+        assert_eq!(std::hint::black_box(DEFAULT_PREBUILT_WAIT_SECS), 0);
         assert!(std::hint::black_box(PREBUILT_POLL_INTERVAL_SECS) >= 5);
     }
 
