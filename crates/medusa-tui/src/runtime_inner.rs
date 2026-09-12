@@ -559,7 +559,12 @@ impl DaemonRuntimeState {
         if provider != "openai-oauth" {
             let credential = match api_key {
                 Some(credential) => Some(credential),
-                None => saved_credential(&provider)?,
+                // Best-effort forward of a previously saved key: a missing or
+                // unreachable store means "nothing to forward", not a failed
+                // model switch. Store health is reported by credentials_ready
+                // at startup; failing here would block effort/model changes
+                // on machines without a secret service.
+                None => saved_credential(&provider).unwrap_or(None),
             };
             self.sync_credential(&provider, credential)?;
         }
