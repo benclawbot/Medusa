@@ -1,11 +1,15 @@
-use std::{env, process::Command};
+use std::{env, path::PathBuf, process::Command};
 
 fn main() {
+    let repository = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"))
+        .join("../../..");
     println!("cargo:rerun-if-env-changed=MEDUSA_BUILD_COMMIT");
     println!("cargo:rerun-if-changed=../../../.git/HEAD");
     let revision = env::var("MEDUSA_BUILD_COMMIT").unwrap_or_else(|_| {
         Command::new("git")
-            .args(["-C", "../../..", "rev-parse", "HEAD"])
+            .arg("-C")
+            .arg(&repository)
+            .args(["rev-parse", "HEAD"])
             .output()
             .ok()
             .filter(|output| output.status.success())
