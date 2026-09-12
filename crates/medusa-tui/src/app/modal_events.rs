@@ -91,12 +91,17 @@ impl AppState {
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let clipboard = self.clipboard.read()?;
-                    if let ClipboardContent::Text(text) = clipboard
-                        && let Some(modal) = self.model_modal.as_mut()
-                    {
-                        modal.focus_api_key();
-                        modal.insert_key_text(&text);
+                    match self.clipboard.read() {
+                        Ok(ClipboardContent::Text(text)) => {
+                            if let Some(modal) = self.model_modal.as_mut() {
+                                modal.focus_api_key();
+                                modal.insert_key_text(&text);
+                            }
+                        }
+                        Ok(_) => self.status = "clipboard has no text to paste".to_owned(),
+                        Err(error) => {
+                            self.status = format!("could not paste API key: {error}");
+                        }
                     }
                     Ok(AppAction::Redraw)
                 }
@@ -344,11 +349,18 @@ impl AppState {
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let ClipboardContent::Text(text) = self.clipboard.read()?
-                        && let Some(modal) = self.question_modal.as_mut()
-                        && !modal.is_reviewing()
-                    {
-                        modal.insert_answer(&text);
+                    match self.clipboard.read() {
+                        Ok(ClipboardContent::Text(text)) => {
+                            if let Some(modal) = self.question_modal.as_mut()
+                                && !modal.is_reviewing()
+                            {
+                                modal.insert_answer(&text);
+                            }
+                        }
+                        Ok(_) => self.status = "clipboard has no text to paste".to_owned(),
+                        Err(error) => {
+                            self.status = format!("could not paste answer: {error}");
+                        }
                     }
                     Ok(AppAction::Redraw)
                 }

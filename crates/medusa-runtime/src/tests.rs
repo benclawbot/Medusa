@@ -26,6 +26,25 @@ fn general_chat_requests_skip_repository_work_but_attachments_stay_explicit() {
 }
 
 #[test]
+fn general_chat_marker_matching_does_not_treat_substrings_as_repository_work() {
+    for text in [
+        "get the latest ai news since september 2026",
+        "summarize this provider profile",
+        "what is the fastest way to learn Rust?",
+    ] {
+        assert!(is_general_chat_request(text, 0), "repository work: {text}");
+    }
+    for text in [
+        "run the tests",
+        "fix the bug",
+        "open src/main.rs",
+        "inspect the repository",
+    ] {
+        assert!(!is_general_chat_request(text, 0), "general chat: {text}");
+    }
+}
+
+#[test]
 fn webpage_requests_skip_general_chat_regardless_of_phrasing() {
     for text in [
         "can you build a beautiful webpage showcasing the latest agentic AI trends",
@@ -88,16 +107,21 @@ fn retry_references_resolve_to_the_previous_user_objective() {
 
 #[test]
 fn general_chat_preparation_does_not_scan_or_capture_repository_state() {
-    let draft = PromptDraft {
-        text: "hey".to_owned(),
-        ..PromptDraft::default()
-    };
-
     assert!(!should_capture_review_baseline_for_plan(true, false, false));
-    let plan = execution_plan_for_prompt(Path::new("C:/profile-root"), &draft, true)
-        .expect("general chat plan");
-    assert_eq!(plan.mode, production_orchestrator::ExecutionMode::Direct);
-    assert!(plan.planning.scope.effective.is_empty());
+    for text in ["hey", "get the latest ai news since september 2026"] {
+        let draft = PromptDraft {
+            text: text.to_owned(),
+            ..PromptDraft::default()
+        };
+        let plan = execution_plan_for_prompt(Path::new("C:/profile-root"), &draft)
+            .expect("general chat plan");
+        assert_eq!(plan.mode, production_orchestrator::ExecutionMode::Direct);
+        assert_eq!(
+            plan.planning.intent,
+            medusa_multi_agent_scheduler::PlanningIntent::Conversation
+        );
+        assert!(plan.planning.scope.effective.is_empty());
+    }
 }
 
 #[test]

@@ -583,10 +583,10 @@ impl RuntimeController {
             return Ok(());
         }
         let mut submission = lock_submission(&self.submission);
-        let can_queue_while_busy = matches!(
-            &command,
-            SlashCommand::Config(_) | SlashCommand::Effort { .. } | SlashCommand::Verbose { .. }
-        );
+        // Control commands are serialized by the worker and may safely wait
+        // behind the active turn. Only commands that start another agent task
+        // must remain rejected while one is already running.
+        let can_queue_while_busy = !command.runs_agent();
         if submission.busy && !can_queue_while_busy {
             return Err(RuntimeError::Busy);
         }
@@ -1645,6 +1645,8 @@ fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
         "file",
         "src/",
         "test",
+        "tests",
+        "testing",
         "bug",
         "crash",
         "compile",
@@ -1663,7 +1665,27 @@ fn is_general_chat_request(text: &str, attachment_count: usize) -> bool {
         "push changes",
     ]
     .iter()
-    .all(|marker| !normalized.contains(marker))
+    .all(|marker| !request_contains_marker(&normalized, marker))
+}
+
+/// Match explicit request vocabulary without treating a marker as an arbitrary substring.
+///
+/// The classifier is only a lightweight hint for provider routing. A substring match here is
+/// particularly costly because it can turn an ordinary conversation into a repository-scoped
+/// turn; for example, `latest` contains `test` and `profile` contains `file`.
+fn request_contains_marker(text: &str, marker: &str) -> bool {
+    text.match_indices(marker).any(|(start, matched)| {
+        let end = start + matched.len();
+        let left_is_boundary = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|character| !character.is_alphanumeric() && character != '_');
+        let right_is_boundary = text[end..].chars().next().is_none_or(|character| {
+            (!character.is_alphanumeric() && character != '_')
+                || (marker.ends_with('/') && (character.is_alphanumeric() || character == '_'))
+        });
+        left_is_boundary && right_is_boundary
+    })
 }
 
 /// Whole-message retry references ("try again", "retry", ...). These carry no objective of
@@ -1721,14 +1743,9 @@ fn should_capture_review_baseline_for_plan(
 fn execution_plan_for_prompt(
     repo: &Path,
     draft: &PromptDraft,
-    general_chat: bool,
 ) -> Result<crate::coordination::production_orchestrator::ProductionExecutionPlan, RuntimeError> {
-    let plan = if general_chat {
-        crate::coordination::production_orchestrator::plan_for_general_chat(draft)
-    } else {
-        crate::coordination::production_orchestrator::plan_for_repository(repo, draft)
-    };
-    plan.map_err(RuntimeError::agent)
+    crate::coordination::production_orchestrator::plan_for_repository(repo, draft)
+        .map_err(RuntimeError::agent)
 }
 
 fn oauth_input_from_content(
@@ -2534,10 +2551,14 @@ fn run_prompt(
     {
         draft.text = previous;
     }
-    let general_chat = is_general_chat_request(&draft.text, draft.attachments.len());
-    let turn_instruction = general_chat.then_some(GENERAL_CHAT_TURN_INSTRUCTION);
     let selected_skill = state.pending_skill.clone();
-    let execution_plan = execution_plan_for_prompt(&state.repo, &draft, general_chat)?;
+    // Use the canonical typed planner to decide whether this is repository work. It performs the
+    // conversation fast-path before enumerating repository paths, so a heuristic false positive
+    // cannot send ordinary requests (including current-news research) through workspace indexing.
+    let execution_plan = execution_plan_for_prompt(&state.repo, &draft)?;
+    let general_chat = execution_plan.planning.intent
+        == medusa_multi_agent_scheduler::PlanningIntent::Conversation;
+    let turn_instruction = general_chat.then_some(GENERAL_CHAT_TURN_INSTRUCTION);
     let repository_work = execution_plan.planning.intent
         != medusa_multi_agent_scheduler::PlanningIntent::Conversation;
     if should_capture_review_baseline_for_plan(

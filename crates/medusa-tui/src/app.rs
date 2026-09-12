@@ -84,6 +84,11 @@ pub struct AppState {
     pub model_label: Option<String>,
     pub effort_label: Option<String>,
     pub verbosity: Verbosity,
+    /// A verbosity choice made before the daemon has a session. The daemon's
+    /// initial settings event is still authoritative for every other setting,
+    /// but must not overwrite this local display preference while it is being
+    /// bootstrapped.
+    pending_verbosity: Option<Verbosity>,
     pub plan_mode: bool,
     pub task_list_visible: bool,
     expanded_activity_details: BTreeSet<ActivityDetailKey>,
@@ -234,6 +239,7 @@ impl AppState {
             model_label: None,
             effort_label: None,
             verbosity: Verbosity::default(),
+            pending_verbosity: None,
             plan_mode: false,
             task_list_visible: true,
             expanded_activity_details: BTreeSet::new(),
@@ -386,21 +392,6 @@ impl AppState {
                 }
                 let submitted = self.composer.draft.clone();
                 let submitted_text = submitted.text.trim();
-                let is_command =
-                    submitted.attachments.is_empty() && submitted_text.starts_with('/');
-                if !self.credential_configured && !is_command {
-                    self.model_modal = Some(ModelModal::new(
-                        self.model_label.as_deref(),
-                        self.effort_label.as_deref(),
-                        self.credential_configured,
-                    ));
-                    self.status = "model configuration required before sending".to_owned();
-                    self.push_transcript(TranscriptEntry::System(
-                        "Configure a model/provider before sending this message. Your draft has been kept."
-                            .to_owned(),
-                    ));
-                    return Ok(AppAction::Redraw);
-                }
                 if submitted.attachments.is_empty() && submitted_text == "/" {
                     self.status = "choose a command".to_owned();
                     return Ok(AppAction::Redraw);
@@ -533,11 +524,28 @@ impl AppState {
     pub fn set_runtime_settings(&mut self, settings: RuntimeSettings) {
         self.model_label = Some(settings.model);
         self.effort_label = Some(settings.effort);
-        self.verbosity = Verbosity::parse(&settings.verbosity).unwrap_or_default();
+        let runtime_verbosity = Verbosity::parse(&settings.verbosity).unwrap_or_default();
+        if self.pending_verbosity == Some(runtime_verbosity) {
+            // The daemon has caught up with a pre-session local selection.
+            self.pending_verbosity = None;
+            self.verbosity = runtime_verbosity;
+        } else if self.pending_verbosity.is_none() {
+            self.verbosity = runtime_verbosity;
+        }
         self.plan_mode = settings.plan_mode;
         self.credential_configured = settings.credential_configured;
         self.context_window_tokens = settings.context_window_tokens;
         self.auto_compact_percent = settings.auto_compact_percent;
+    }
+
+    /// Apply a verbosity command locally while the first daemon session is
+    /// still being created. Verbosity controls TUI rendering, so waiting for a
+    /// session-bound command would only make a valid command fail at startup.
+    pub(crate) fn set_local_verbosity(&mut self, mode: Option<Verbosity>) -> Verbosity {
+        let next = mode.unwrap_or_else(|| self.verbosity.cycled());
+        self.verbosity = next;
+        self.pending_verbosity = Some(next);
+        next
     }
 
     pub fn set_plan(&mut self, plan: TranscriptPlan) {

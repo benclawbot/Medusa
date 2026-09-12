@@ -147,6 +147,7 @@ pub struct DaemonSupervisor {
     paths: DaemonPaths,
     launcher: Option<Launcher>,
     next_retry: Instant,
+    owns_daemon: bool,
 }
 
 impl DaemonSupervisor {
@@ -229,6 +230,7 @@ impl DaemonSupervisor {
                     }
                     launcher(&self.paths)?;
                     wait_for_ready(&self.paths, deadline)?;
+                    self.owns_daemon = true;
                     self.next_retry = Instant::now();
                     return Ok(DaemonLifecycle {
                         state: if had_previous_instance {
@@ -305,11 +307,18 @@ impl DaemonSupervisor {
         }
     }
 
+    /// Whether this supervisor started the currently connected daemon.
+    #[must_use]
+    pub fn owns_daemon(&self) -> bool {
+        self.owns_daemon
+    }
+
     fn with_optional_launcher(repo: &Path, launcher: Option<Launcher>) -> Self {
         Self {
             paths: DaemonPaths::for_repo(repo),
             launcher,
             next_retry: Instant::now(),
+            owns_daemon: false,
         }
     }
 

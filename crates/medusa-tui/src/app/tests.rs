@@ -100,7 +100,7 @@ fn submit_clears_durable_draft_after_capturing_prompt() {
 }
 
 #[test]
-fn unconfigured_model_keeps_first_message_and_opens_configuration() {
+fn unconfigured_model_sends_first_message_for_daemon_side_credential_resolution() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(
         repository.path().to_path_buf(),
@@ -115,12 +115,17 @@ fn unconfigured_model_keeps_first_message_and_opens_configuration() {
             KeyCode::Enter,
             KeyModifiers::NONE,
         )))
-        .expect("gate unconfigured prompt");
+        .expect("submit prompt");
 
-    assert_eq!(action, AppAction::Redraw);
-    assert_eq!(app.composer.draft.text, "keep this prompt");
-    assert!(app.model_modal().is_some());
-    assert!(app.status.contains("configuration required"));
+    assert_eq!(
+        action,
+        AppAction::Submit(crate::clipboard::PromptDraft {
+            text: "keep this prompt".to_owned(),
+            attachments: Vec::new(),
+            revision: 0,
+        })
+    );
+    assert!(app.composer.draft.text.is_empty());
 }
 
 #[test]
@@ -204,6 +209,49 @@ fn verbose_command_is_submitted_and_clears_the_composer() {
         AppAction::Command(SlashCommand::Verbose { mode: None })
     );
     assert!(app.composer.draft.text.is_empty());
+}
+
+#[test]
+fn local_verbosity_survives_initial_runtime_settings_until_acknowledged() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "verbose-bootstrap",
+        "",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+
+    assert_eq!(app.verbosity, Verbosity::All);
+    assert_eq!(
+        app.set_local_verbosity(Some(Verbosity::Off)),
+        Verbosity::Off
+    );
+    assert_eq!(app.pending_verbosity, Some(Verbosity::Off));
+
+    app.set_runtime_settings(RuntimeSettings {
+        model: "minimax / MiniMax-M3".to_owned(),
+        effort: "effort:high".to_owned(),
+        verbosity: "all".to_owned(),
+        plan_mode: false,
+        credential_configured: true,
+        context_window_tokens: 1_000_000,
+        auto_compact_percent: 40,
+    });
+    assert_eq!(app.verbosity, Verbosity::Off);
+    assert_eq!(app.pending_verbosity, Some(Verbosity::Off));
+
+    app.set_runtime_settings(RuntimeSettings {
+        model: "minimax / MiniMax-M3".to_owned(),
+        effort: "effort:high".to_owned(),
+        verbosity: "off".to_owned(),
+        plan_mode: false,
+        credential_configured: true,
+        context_window_tokens: 1_000_000,
+        auto_compact_percent: 40,
+    });
+    assert_eq!(app.verbosity, Verbosity::Off);
+    assert_eq!(app.pending_verbosity, None);
 }
 
 #[test]

@@ -788,6 +788,14 @@ impl DaemonRuntimeState {
     }
 }
 
+impl Drop for DaemonRuntimeState {
+    fn drop(&mut self) {
+        if self.supervisor.owns_daemon() {
+            let _ = self.supervisor.shutdown_now();
+        }
+    }
+}
+
 impl RuntimeController {
     pub fn start(repo: PathBuf) -> Self {
         Self::from_state(DaemonRuntimeState::new(repo))
@@ -854,10 +862,29 @@ impl RuntimeController {
     }
 
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
-        if self.submission_in_flight.load(Ordering::Acquire) {
+        if self.submission_in_flight.load(Ordering::Acquire) && command.runs_agent() {
             return Err(RuntimeError::Busy);
         }
         lock_state(&self.state).run_command(command)
+    }
+
+    /// Whether this frontend definitely has a durable session bound to it yet.
+    ///
+    /// Some commands, such as TUI verbosity, are valid during startup but the
+    /// generic frontend command endpoint intentionally requires a session.
+    /// Exposing this small bit of lifecycle state lets the TUI keep those
+    /// presentation-only commands local instead of reporting a misleading
+    /// session-id error.
+    #[must_use]
+    pub fn has_active_session(&self) -> bool {
+        match self.state.try_lock() {
+            Ok(state) => state.session_id.is_some(),
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().session_id.is_some(),
+            // Treat a state transition as pre-session from the presentation
+            // layer's point of view. This keeps a startup `/verbose` from
+            // racing the first CreateSession request into a session-id error.
+            Err(TryLockError::WouldBlock) => false,
+        }
     }
 
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {

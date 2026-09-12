@@ -7,6 +7,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -1038,9 +1039,21 @@ pub(crate) fn repository_fingerprint(repo: &Path) -> Result<String, String> {
             );
         } else if metadata.is_file() {
             digest.update(b"file");
-            digest.update(fs::read(&path).map_err(|error| {
-                format!("failed to read repository path {normalized}: {error}")
-            })?);
+            // Never materialize an arbitrary repository file in one allocation.
+            // Disk images and VM artifacts are valid repository entries but can
+            // be many gigabytes; stream them through the fingerprint instead.
+            let mut file = fs::File::open(&path)
+                .map_err(|error| format!("failed to read repository path {normalized}: {error}"))?;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let read = file.read(&mut buffer).map_err(|error| {
+                    format!("failed to read repository path {normalized}: {error}")
+                })?;
+                if read == 0 {
+                    break;
+                }
+                digest.update(&buffer[..read]);
+            }
         }
         digest.update([0xff]);
     }
@@ -1106,7 +1119,7 @@ fn walk_repository_paths(repo: &Path) -> Result<Vec<PathBuf>, String> {
 fn excluded_path(path: &str) -> bool {
     matches!(
         path.split('/').next(),
-        Some(".git" | ".medusa" | "target" | "node_modules")
+        Some(".git" | ".medusa" | ".windows" | "target" | "node_modules")
     )
 }
 

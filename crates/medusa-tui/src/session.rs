@@ -508,6 +508,13 @@ fn handle_action(
             }
             Ok(false)
         }
+        AppAction::Command(crate::commands::SlashCommand::Verbose { mode })
+            if !runtime.has_active_session() =>
+        {
+            let next = app.set_local_verbosity(mode);
+            app.status = format!("verbosity:{}", next.label());
+            Ok(false)
+        }
         AppAction::Command(command) => {
             match runtime.run_command(command) {
                 Ok(()) => {
