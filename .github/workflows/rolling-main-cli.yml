@@ -40,6 +40,14 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2
+      - name: Install Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        # medusa-tui uses keyring with the Secret Service backend, which links
+        # against the system D-Bus client library via libdbus-sys/pkg-config.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
       - name: Build Medusa CLI
         run: cargo build --release --locked --bin medusa
       - name: Package exact-revision rolling CLI asset
@@ -251,7 +259,7 @@ jobs:
           set -euo pipefail
           sudo bash scripts/disable-google-chrome-apt-source.sh
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
