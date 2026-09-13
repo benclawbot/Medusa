@@ -10,7 +10,25 @@ use medusa_process_containment::{
     WindowsSandboxLimits, WindowsSandboxRestrictions, run_appcontainer_cancellable_observed,
 };
 
+use super::CommandLimits;
 use super::analysis_process_tracker::AnalysisProcessTracker;
+
+pub(crate) fn run_cancellable_with_limits(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+    limits: CommandLimits,
+) -> MedusaResult<Output> {
+    if limits != CommandLimits::default() {
+        return Err(MedusaError::new(
+            ErrorCode::SandboxUnavailable,
+            ErrorCategory::Environment,
+            "Windows resource-limited execution is unavailable; refusing to run without enforceable skill budgets",
+        ));
+    }
+    run_cancellable(repo, program, args, cancellation)
+}
 
 pub(crate) fn run_cancellable(
     repo: &Path,

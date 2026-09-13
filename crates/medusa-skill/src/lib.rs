@@ -28,6 +28,7 @@ const MAX_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: u64 = 512 * 1024;
 const MAX_RUNTIME_SECONDS: u64 = 300;
+const VALIDATION_RECEIPT_FILE: &str = "skill.validation.json";
 
 pub mod lifecycle {
     use std::collections::BTreeMap;
@@ -378,30 +379,56 @@ fn validate_manifest(root: &Path, manifest: &SkillPackageManifest) -> MedusaResu
 
 fn package_digest(
     root: &Path,
-    manifest: &SkillPackageManifest,
-    instructions: &[u8],
+    _manifest: &SkillPackageManifest,
+    _instructions: &[u8],
 ) -> MedusaResult<String> {
-    let mut files = vec![PathBuf::from("SKILL.md"), PathBuf::from("skill.json")];
-    for entrypoint in &manifest.entrypoints {
-        files.push(PathBuf::from(&entrypoint.program));
-        files.extend(entrypoint.tests.iter().map(PathBuf::from));
-        files.extend(entrypoint.verification.iter().map(PathBuf::from));
-    }
+    let mut files = Vec::new();
+    let mut package_bytes = 0_u64;
+    collect_package_files(root, root, &mut files, &mut package_bytes)?;
     files.sort();
-    files.dedup();
     let mut digest = Sha256::new();
     for relative in files {
-        let bytes = if relative == Path::new("SKILL.md") {
-            instructions.to_vec()
-        } else {
-            read_bounded(&root.join(&relative), MAX_MANIFEST_BYTES)?
-        };
+        let bytes = read_bounded(&root.join(&relative), MAX_PACKAGE_BYTES)?;
         digest.update(relative.to_string_lossy().as_bytes());
         digest.update([0]);
         digest.update(bytes);
         digest.update([0]);
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+fn collect_package_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<PathBuf>,
+    package_bytes: &mut u64,
+) -> MedusaResult<()> {
+    let mut entries = fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            return Err(invalid("skill package contains a symlink"));
+        }
+        if metadata.is_dir() {
+            collect_package_files(root, &path, files, package_bytes)?;
+        } else if metadata.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| invalid("skill package path escaped its root"))?
+                .to_path_buf();
+            if relative == Path::new(VALIDATION_RECEIPT_FILE) {
+                continue;
+            }
+            *package_bytes = package_bytes.saturating_add(metadata.len());
+            if files.len() >= MAX_PACKAGE_FILES || *package_bytes > MAX_PACKAGE_BYTES as u64 {
+                return Err(invalid("skill package exceeds digest bounds"));
+            }
+            files.push(relative);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -583,6 +610,22 @@ mod tests {
         );
         assert_eq!(validated.receipt.package_digest.len(), 64);
         assert!(validated.receipt.entrypoints.contains(&"run".to_owned()));
+    }
+
+    #[test]
+    fn digest_covers_unlisted_package_files() {
+        let root = package();
+        let before = validate_package(root.path())
+            .expect("validate before helper")
+            .receipt
+            .package_digest;
+        fs::create_dir_all(root.path().join("helpers")).expect("helpers");
+        fs::write(root.path().join("helpers/extra"), "unlisted helper").expect("helper");
+        let after = validate_package(root.path())
+            .expect("validate after helper")
+            .receipt
+            .package_digest;
+        assert_ne!(before, after);
     }
 
     #[test]

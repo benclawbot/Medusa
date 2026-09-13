@@ -2,9 +2,11 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
+    time::Duration,
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::ProcessLimits;
 use medusa_skill::{
     RepositoryAccess, SKILL_VALIDATION_SCHEMA_VERSION, SkillRuntime, SkillValidationReceipt,
     ValidatedSkillPackage, copy_package, validate_input, validate_package,
@@ -15,6 +17,7 @@ use sha2::{Digest, Sha256};
 
 use super::shell;
 use crate::output_envelope::OutputMode;
+use crate::policy::CommandLimits;
 
 #[derive(Clone, Debug, Deserialize)]
 struct ExecuteInput {
@@ -146,12 +149,24 @@ fn execute_in_isolated_copy(
     } else {
         program
     };
-    let output = shell::run_cancellable(
+    let output = shell::run_cancellable_with_limits(
         run_root,
         &program,
         &command_args,
         OutputMode::Compact,
         cancellation,
+        CommandLimits {
+            timeout: Duration::from_secs(entrypoint.resources.timeout_seconds),
+            max_output_bytes: usize::try_from(entrypoint.resources.max_output_bytes)
+                .map_err(|_| invalid("skill output bound is too large"))?,
+            process_limits: ProcessLimits {
+                cpu_time_seconds: Some(entrypoint.resources.cpu_time_seconds),
+                max_memory_bytes: Some(entrypoint.resources.max_memory_bytes),
+                max_processes: Some(entrypoint.resources.max_processes),
+                max_file_bytes: Some(entrypoint.resources.max_disk_bytes),
+            },
+            max_disk_bytes: Some(entrypoint.resources.max_disk_bytes),
+        },
     )?;
     let output = bound_output(output, entrypoint.resources.max_output_bytes)?;
     let output_digest = digest_bytes(output.as_bytes());

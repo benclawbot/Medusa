@@ -38,6 +38,15 @@ pub struct OwnedProcessTree {
     job: WindowsJob,
 }
 
+/// Kernel-enforced limits inherited by the complete owned process tree.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProcessLimits {
+    pub cpu_time_seconds: Option<u64>,
+    pub max_memory_bytes: Option<u64>,
+    pub max_processes: Option<u16>,
+    pub max_file_bytes: Option<u64>,
+}
+
 impl OwnedProcessTree {
     /// Spawns a command under process-tree ownership before any child user code can escape it.
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
@@ -125,6 +134,27 @@ impl OwnedProcessTree {
                 terminated: false,
             })
         }
+    }
+
+    /// Spawns a process tree after installing kernel resource limits in the child before exec.
+    pub fn spawn_with_limits(command: &mut Command, limits: ProcessLimits) -> io::Result<Self> {
+        if limits == ProcessLimits::default() {
+            return Self::spawn(command);
+        }
+
+        #[cfg(unix)]
+        {
+            // SAFETY: the closure only installs inherited rlimits in the child between fork and
+            // exec. It does not access shared Rust state or invoke non-async-signal-safe code.
+            unsafe {
+                command.pre_exec(move || apply_limits(limits));
+            }
+        }
+
+        #[cfg(not(unix))]
+        let _ = limits;
+
+        Self::spawn(command)
     }
 
     pub fn id(&self) -> u32 {
@@ -254,6 +284,45 @@ impl OwnedProcessTree {
             self.terminated = true;
             Ok(())
         }
+    }
+}
+
+#[cfg(unix)]
+fn apply_limits(limits: ProcessLimits) -> io::Result<()> {
+    if let Some(seconds) = limits.cpu_time_seconds {
+        set_limit(libc::RLIMIT_CPU, seconds)?;
+    }
+    if let Some(bytes) = limits.max_file_bytes {
+        set_limit(libc::RLIMIT_FSIZE, bytes)?;
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if let Some(processes) = limits.max_processes {
+        set_limit(libc::RLIMIT_NPROC, u64::from(processes))?;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(bytes) = limits.max_memory_bytes {
+        set_limit(libc::RLIMIT_AS, bytes)?;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(bytes) = limits.max_memory_bytes {
+        set_limit(libc::RLIMIT_RSS, bytes)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_limit(resource: libc::__rlimit_resource_t, value: u64) -> io::Result<()> {
+    let value = libc::rlim_t::try_from(value)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "resource limit is too large"))?;
+    let limit = libc::rlimit {
+        rlim_cur: value,
+        rlim_max: value,
+    };
+    // SAFETY: `limit` is a valid rlimit value and the resource is a platform-provided constant.
+    if unsafe { libc::setrlimit(resource, &limit) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 

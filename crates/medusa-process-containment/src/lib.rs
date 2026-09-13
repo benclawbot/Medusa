@@ -50,6 +50,7 @@ pub use process_identity::{
     process_start_marker,
 };
 pub use process_tree::OwnedProcessTree;
+pub use process_tree::ProcessLimits;
 #[cfg(windows)]
 pub use windows::{WindowsJob, process_is_alive};
 #[cfg(windows)]

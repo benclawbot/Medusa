@@ -2,7 +2,11 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     process::Output,
-    sync::atomic::AtomicBool,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
+    },
+    time::Duration,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -13,11 +17,12 @@ use std::{
     io::Read,
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use medusa_process_containment::OwnedProcessTree;
+use medusa_process_containment::ProcessLimits;
 
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[path = "analysis_process_tracker.rs"]
@@ -35,8 +40,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 #[path = "windows_sandbox.rs"]
 mod windows_sandbox;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_SHELL_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(target_os = "macos")]
 const ANALYSIS_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -119,6 +124,41 @@ pub(crate) fn sandboxed_command_cancellable(
     args: &[String],
     cancellation: &AtomicBool,
 ) -> MedusaResult<Output> {
+    sandboxed_command_cancellable_with_limits(
+        repo,
+        program,
+        args,
+        cancellation,
+        CommandLimits::default(),
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CommandLimits {
+    pub timeout: Duration,
+    pub max_output_bytes: usize,
+    pub process_limits: ProcessLimits,
+    pub max_disk_bytes: Option<u64>,
+}
+
+impl Default for CommandLimits {
+    fn default() -> Self {
+        Self {
+            timeout: SHELL_COMMAND_TIMEOUT,
+            max_output_bytes: DEFAULT_SHELL_OUTPUT_BYTES,
+            process_limits: ProcessLimits::default(),
+            max_disk_bytes: None,
+        }
+    }
+}
+
+pub(crate) fn sandboxed_command_cancellable_with_limits(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+    limits: CommandLimits,
+) -> MedusaResult<Output> {
     #[cfg(target_os = "linux")]
     {
         let root = repo.canonicalize()?;
@@ -130,6 +170,7 @@ pub(crate) fn sandboxed_command_cancellable(
             &root,
             program,
             args,
+            limits,
         )
     }
     #[cfg(target_os = "macos")]
@@ -148,13 +189,14 @@ pub(crate) fn sandboxed_command_cancellable(
             &root,
             program,
             args,
+            limits,
         );
         let _ = fs::remove_file(&profile_path);
         result
     }
     #[cfg(windows)]
     {
-        windows_sandbox::run_cancellable(repo, program, args, cancellation)
+        windows_sandbox::run_cancellable_with_limits(repo, program, args, cancellation, limits)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
@@ -173,15 +215,17 @@ fn output_with_timeout(
     root: &Path,
     program: &str,
     args: &[String],
+    limits: CommandLimits,
 ) -> MedusaResult<Output> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut tree = OwnedProcessTree::spawn(command).map_err(|error| {
-        MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Environment,
-            format!("{description} unavailable: {error}"),
-        )
-    })?;
+    let mut tree =
+        OwnedProcessTree::spawn_with_limits(command, limits.process_limits).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!("{description} unavailable: {error}"),
+            )
+        })?;
     let is_analysis_process = root.to_string_lossy().contains("/analysis-workspace-v1/");
     let mut process_tracker = if is_analysis_process {
         Some(AnalysisProcessTracker::started(
@@ -193,6 +237,7 @@ fn output_with_timeout(
     } else {
         None
     };
+    let initial_disk_bytes = limits.max_disk_bytes.map(|_| directory_bytes(root));
     let stdout = tree.take_stdout().ok_or_else(|| {
         MedusaError::new(
             ErrorCode::InternalInvariant,
@@ -207,16 +252,20 @@ fn output_with_timeout(
             format!("{description} stderr pipe was unavailable"),
         )
     })?;
-    let stdout_reader = thread::spawn(move || {
-        let mut pipe = stdout;
-        let mut bytes = Vec::new();
-        pipe.read_to_end(&mut bytes).map(|_| bytes)
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut pipe = stderr;
-        let mut bytes = Vec::new();
-        pipe.read_to_end(&mut bytes).map(|_| bytes)
-    });
+    let output_bytes = Arc::new(AtomicUsize::new(0));
+    let output_limit_reached = Arc::new(AtomicBool::new(false));
+    let stdout_reader = spawn_bounded_reader(
+        stdout,
+        limits.max_output_bytes,
+        Arc::clone(&output_bytes),
+        Arc::clone(&output_limit_reached),
+    );
+    let stderr_reader = spawn_bounded_reader(
+        stderr,
+        limits.max_output_bytes,
+        Arc::clone(&output_bytes),
+        Arc::clone(&output_limit_reached),
+    );
     let started = Instant::now();
     loop {
         if cancellation.load(Ordering::Acquire) {
@@ -226,6 +275,31 @@ fn output_with_timeout(
                 let _ = tracker.failed("analysis execution cancelled");
             }
             return Err(cancelled_command(description));
+        }
+        if output_limit_reached.load(Ordering::Acquire) {
+            let _ = tree.terminate();
+            let status = tree.wait()?;
+            let stdout = join_bounded_reader(stdout_reader, description, "stdout")?;
+            let stderr = join_bounded_reader(stderr_reader, description, "stderr")?;
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        if let Some(maximum) = limits.max_disk_bytes {
+            let used = directory_bytes(root).saturating_sub(initial_disk_bytes.unwrap_or(0));
+            if used > maximum {
+                let _ = tree.terminate();
+                let status = tree.wait()?;
+                let stdout = join_bounded_reader(stdout_reader, description, "stdout")?;
+                let stderr = join_bounded_reader(stderr_reader, description, "stderr")?;
+                return Ok(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
         }
         #[cfg(target_os = "macos")]
         if is_analysis_process {
@@ -283,7 +357,7 @@ fn output_with_timeout(
                 stderr,
             });
         }
-        if started.elapsed() >= SHELL_COMMAND_TIMEOUT {
+        if started.elapsed() >= limits.timeout {
             let _ = tree.terminate();
             let _ = tree.wait();
             if let Some(tracker) = process_tracker.take() {
@@ -294,12 +368,91 @@ fn output_with_timeout(
                 ErrorCategory::Execution,
                 format!(
                     "{description} timed out after {} seconds",
-                    SHELL_COMMAND_TIMEOUT.as_secs()
+                    limits.timeout.as_secs()
                 ),
             ));
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn directory_bytes(root: &Path) -> u64 {
+    walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+        .fold(0_u64, u64::saturating_add)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn spawn_bounded_reader<R>(
+    mut pipe: R,
+    limit: usize,
+    used: Arc<AtomicUsize>,
+    limit_reached: Arc<AtomicBool>,
+) -> thread::JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            if limit_reached.load(AtomicOrdering::Acquire) {
+                break;
+            }
+            let current = used.load(AtomicOrdering::Acquire);
+            if current >= limit {
+                limit_reached.store(true, AtomicOrdering::Release);
+                break;
+            }
+            let allowance = (limit - current).min(buffer.len());
+            let read = pipe.read(&mut buffer[..allowance])?;
+            if read == 0 {
+                break;
+            }
+            let previous = used.fetch_add(read, AtomicOrdering::AcqRel);
+            if previous.saturating_add(read) > limit {
+                let keep = limit.saturating_sub(previous);
+                bytes.extend_from_slice(&buffer[..keep.min(read)]);
+                limit_reached.store(true, AtomicOrdering::Release);
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            if previous.saturating_add(read) == limit {
+                limit_reached.store(true, AtomicOrdering::Release);
+            }
+        }
+        Ok(bytes)
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn join_bounded_reader(
+    reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    description: &str,
+    stream: &str,
+) -> MedusaResult<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| {
+            MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!("{description} {stream} reader terminated unexpectedly"),
+            )
+        })?
+        .map_err(|error| {
+            MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!("{description} {stream} read failed: {error}"),
+            )
+        })
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
@@ -339,6 +492,54 @@ fn policy_denied(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod command_admission_tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn bounded_readers_never_retain_more_than_the_shared_limit() {
+        let used = Arc::new(AtomicUsize::new(0));
+        let reached = Arc::new(AtomicBool::new(false));
+        let stdout = spawn_bounded_reader(
+            std::io::Cursor::new(vec![b'x'; 4096]),
+            1024,
+            Arc::clone(&used),
+            Arc::clone(&reached),
+        );
+        let stderr = spawn_bounded_reader(
+            std::io::Cursor::new(vec![b'y'; 4096]),
+            1024,
+            Arc::clone(&used),
+            Arc::clone(&reached),
+        );
+        let stdout = stdout.join().expect("stdout reader").expect("stdout read");
+        let stderr = stderr.join().expect("stderr reader").expect("stderr read");
+        assert!(reached.load(AtomicOrdering::Acquire));
+        assert_eq!(stdout.len() + stderr.len(), 1024);
+        assert!(used.load(AtomicOrdering::Acquire) >= 1024);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn contained_commands_are_terminated_at_the_output_limit() {
+        let repository = tempfile::tempdir().expect("repository");
+        let cancellation = AtomicBool::new(false);
+        let output = sandboxed_command_cancellable_with_limits(
+            repository.path(),
+            "python3",
+            &[
+                "-c".to_owned(),
+                "import sys, time; sys.stdout.write('x' * 4096); sys.stdout.flush(); time.sleep(2)"
+                    .to_owned(),
+            ],
+            &cancellation,
+            CommandLimits {
+                max_output_bytes: 1024,
+                ..CommandLimits::default()
+            },
+        )
+        .expect("bounded command");
+        assert!(!output.status.success());
+        assert!(output.stdout.len() + output.stderr.len() <= 1024);
+    }
 
     #[test]
     fn contained_language_toolchains_are_admitted_on_every_platform() {

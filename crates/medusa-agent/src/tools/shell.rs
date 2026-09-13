@@ -20,7 +20,10 @@ use super::tool_telemetry;
 
 use crate::{
     output_envelope::{OutputMode, adapt_command},
-    policy::{sandboxed_command, sandboxed_command_cancellable, validate_shell_command},
+    policy::{
+        CommandLimits, sandboxed_command, sandboxed_command_cancellable_with_limits,
+        validate_shell_command,
+    },
 };
 
 pub(crate) fn run(
@@ -54,6 +57,18 @@ pub(crate) fn run_cancellable(
     run_validated(repo, program, args, output_mode, Some(cancellation))
 }
 
+pub(crate) fn run_cancellable_with_limits(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+    cancellation: &AtomicBool,
+    limits: CommandLimits,
+) -> MedusaResult<String> {
+    validate_shell_command(program, args)?;
+    run_validated_with_limits(repo, program, args, output_mode, Some(cancellation), limits)
+}
+
 pub(crate) fn run_approved_cancellable(
     repo: &Path,
     program: &str,
@@ -79,6 +94,24 @@ fn run_validated(
     args: &[String],
     output_mode: OutputMode,
     cancellation: Option<&AtomicBool>,
+) -> MedusaResult<String> {
+    run_validated_with_limits(
+        repo,
+        program,
+        args,
+        output_mode,
+        cancellation,
+        CommandLimits::default(),
+    )
+}
+
+fn run_validated_with_limits(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+    cancellation: Option<&AtomicBool>,
+    limits: CommandLimits,
 ) -> MedusaResult<String> {
     let mode = output_mode_label(output_mode);
     let persisted_args = tool_telemetry::redact_args(args);
@@ -116,7 +149,9 @@ fn run_validated(
     let _ = tool_telemetry::record_intent(repo, &operation_id, "shell_run", program, args);
     let started = Instant::now();
     let output = match cancellation {
-        Some(cancellation) => sandboxed_command_cancellable(repo, program, args, cancellation),
+        Some(cancellation) => {
+            sandboxed_command_cancellable_with_limits(repo, program, args, cancellation, limits)
+        }
         None => sandboxed_command(repo, program, args),
     };
     let output = match output {
