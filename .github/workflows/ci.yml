@@ -20,11 +20,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Linux system dependencies
         shell: bash
-        # medusa-tui uses keyring with the Secret Service backend, which links
-        # against the system D-Bus client library via libdbus-sys/pkg-config.
+        # medusa-agent's Linux containment tests require bubblewrap. medusa-tui
+        # uses keyring with the Secret Service backend, which links against the
+        # system D-Bus client library via libdbus-sys/pkg-config.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
+          sudo apt-get install -y bubblewrap libdbus-1-dev pkg-config
       - name: Validate repository artifact hygiene
         shell: bash
         run: |
