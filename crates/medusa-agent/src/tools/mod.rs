@@ -249,6 +249,10 @@ pub(crate) fn available_skills(repo: &Path) -> Vec<skills::SkillSummary> {
     skills::summaries(repo)
 }
 
+pub(crate) fn available_skills_for_query(repo: &Path, query: &str) -> Vec<skills::SkillSummary> {
+    skills::summaries_for_query(repo, query)
+}
+
 pub(crate) fn built_in_tools(
     repo: &Path,
     desktop_commander: &DesktopCommanderSettings,

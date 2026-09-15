@@ -1,9 +1,11 @@
 use std::{
+    cmp::Reverse,
     env, fs,
     path::{Path, PathBuf},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use sha2::{Digest, Sha256};
 
 const MAX_SKILL_BYTES: usize = 64_000;
 const MAX_AUTOMATIC_SKILLS: usize = 8;
@@ -15,17 +17,23 @@ pub(crate) struct SkillSummary {
     pub name: String,
     pub scope: String,
     pub description: Option<String>,
+    pub source: String,
+    pub digest: String,
     automatic_instructions: Option<String>,
 }
 
 pub(crate) fn summaries(repo: &Path) -> Vec<SkillSummary> {
+    summaries_for_query(repo, "")
+}
+
+pub(crate) fn summaries_for_query(repo: &Path, query: &str) -> Vec<SkillSummary> {
     let mut skills = roots(repo)
         .into_iter()
         .flat_map(|(scope, root, automatic)| entries_for_root(&scope, &root, automatic))
         .collect::<Vec<_>>();
     skills.sort_by(|left, right| (&left.scope, &left.name).cmp(&(&right.scope, &right.name)));
     skills.dedup_by(|left, right| left.scope == right.scope && left.name == right.name);
-    attach_approved_instructions(&mut skills);
+    attach_approved_instructions(&mut skills, query);
     skills
 }
 
@@ -60,8 +68,9 @@ pub(crate) fn read(repo: &Path, name: &str, scope: Option<&str>) -> MedusaResult
             )
         })?;
         return Ok(format!(
-            "Skill: {name} ({candidate_scope})\nSource: {}\n\n{}",
+            "Skill: {name} ({candidate_scope})\nSource: {}\nDigest: {}\n\n{}",
             path.display(),
+            hex::encode(Sha256::digest(content.as_bytes())),
             truncate(&content)
         ));
     }
@@ -97,20 +106,44 @@ fn entries_for_root(scope: &str, root: &Path, automatic: bool) -> Vec<SkillSumma
         .flatten()
         .filter_map(|entry| {
             let path = entry.path().join("SKILL.md");
+            let content = fs::read_to_string(&path).ok()?;
             path.is_file().then(|| SkillSummary {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 scope: scope.to_owned(),
-                description: description(&path),
-                automatic_instructions: automatic.then(|| fs::read_to_string(&path).ok()).flatten(),
+                description: description(&content),
+                source: path.display().to_string(),
+                digest: hex::encode(Sha256::digest(content.as_bytes())),
+                automatic_instructions: automatic.then_some(content),
             })
         })
         .collect()
 }
 
-fn attach_approved_instructions(skills: &mut [SkillSummary]) {
+fn attach_approved_instructions(skills: &mut [SkillSummary], query: &str) {
     let mut remaining = MAX_AUTOMATIC_SKILL_BYTES;
     let mut included = 0;
-    for skill in skills {
+    for skill in &mut *skills {
+        if !query.trim().is_empty() && skill_relevance(skill, query) == 0 {
+            skill.automatic_instructions = None;
+            continue;
+        }
+    }
+    let mut order = skills
+        .iter()
+        .enumerate()
+        .filter(|(_, skill)| skill.automatic_instructions.is_some())
+        .map(|(index, skill)| {
+            (
+                Reverse(skill_relevance(skill, query)),
+                skill.scope.clone(),
+                skill.name.clone(),
+                index,
+            )
+        })
+        .collect::<Vec<_>>();
+    order.sort();
+    for (_, _, _, index) in order {
+        let skill = &mut skills[index];
         let Some(content) = skill.automatic_instructions.take() else {
             continue;
         };
@@ -141,15 +174,50 @@ fn attach_approved_instructions(skills: &mut [SkillSummary]) {
     }
 }
 
-fn description(path: &Path) -> Option<String> {
-    fs::read_to_string(path).ok().and_then(|content| {
-        content.lines().find_map(|line| {
-            line.strip_prefix("description:")
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.trim_matches('"').to_owned())
-        })
+fn description(content: &str) -> Option<String> {
+    content.lines().find_map(|line| {
+        line.strip_prefix("description:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_matches(|character| matches!(character, '"' | '\'')))
+            .map(str::to_owned)
     })
+}
+
+fn skill_relevance(skill: &SkillSummary, query: &str) -> u32 {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return 1;
+    }
+    let name = skill.name.to_ascii_lowercase();
+    let explicit = query.split_whitespace().any(|token| {
+        let token = token.trim_matches(|character: char| {
+            !character.is_ascii_alphanumeric() && !matches!(character, '_' | '-' | '$' | ':')
+        });
+        token == name || token == format!("skill:{name}") || token == format!("${name}")
+    });
+    let name_tokens = name
+        .split(['-', '_'])
+        .filter(|token| token.len() >= 3)
+        .collect::<Vec<_>>();
+    let description = skill
+        .description
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let query_tokens = query
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| token.len() >= 3)
+        .collect::<Vec<_>>();
+    let name_matches = query_tokens
+        .iter()
+        .filter(|token| name_tokens.iter().any(|name| name == *token))
+        .count() as u32;
+    let description_matches = query_tokens
+        .iter()
+        .filter(|token| description.contains(*token))
+        .count() as u32;
+    explicit as u32 * 1_000 + name_matches * 100 + description_matches
 }
 
 fn validate_name(name: &str) -> MedusaResult<&str> {
@@ -216,6 +284,7 @@ mod tests {
         );
         let content = read(directory.path(), "release", Some("project")).expect("read skill");
         assert!(content.contains("Use release steps."));
+        assert!(content.contains("Digest:"));
     }
 
     #[test]
@@ -291,5 +360,46 @@ mod tests {
     fn traversal_names_are_rejected() {
         let directory = tempdir().expect("temporary directory");
         assert!(read(directory.path(), "../secret", None).is_err());
+    }
+
+    #[test]
+    fn relevant_late_sorting_skill_is_loaded_before_irrelevant_skills() {
+        let directory = tempdir().expect("temporary directory");
+        for (name, description) in [
+            ("aaa-unrelated", "Format unrelated notes"),
+            ("zzz-release", "Prepare a release publication"),
+        ] {
+            let skill = directory
+                .path()
+                .join(format!(".medusa/skills/{name}/SKILL.md"));
+            fs::create_dir_all(skill.parent().expect("skill directory")).expect("create skills");
+            fs::write(
+                &skill,
+                format!("---\ndescription: {description}\n---\nUse {name} instructions."),
+            )
+            .expect("write skill");
+        }
+
+        let skills = summaries_for_query(directory.path(), "prepare release");
+        let selected = skills
+            .iter()
+            .find(|skill| skill.name == "zzz-release")
+            .expect("relevant skill");
+        assert!(
+            selected
+                .description
+                .as_deref()
+                .is_some_and(|description| description.contains("Approved instructions"))
+        );
+        let unrelated = skills
+            .iter()
+            .find(|skill| skill.name == "aaa-unrelated")
+            .expect("unrelated skill");
+        assert!(
+            !unrelated
+                .description
+                .as_deref()
+                .is_some_and(|description| description.contains("Approved instructions"))
+        );
     }
 }

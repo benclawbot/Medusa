@@ -1,4 +1,4 @@
-use std::{io::Read, time::Duration};
+use std::{collections::BTreeSet, io::Read, time::Duration};
 
 use medusa_browser_client::network_policy::{ResolvedTarget, resolve_public_target};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -8,10 +8,13 @@ use reqwest::{
     header::{LOCATION, USER_AGENT},
     redirect::Policy,
 };
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const MAX_RESPONSE_BYTES: usize = 750_000;
 const MAX_REDIRECTS: usize = 4;
 const MAX_SEARCH_RESULTS: usize = 5;
+const MAX_OUTPUT_BYTES: usize = 48_000;
+const MAX_EXCERPT_LINES: usize = 240;
 const USER_AGENT_VALUE: &str = "Medusa/1.0 (public web research)";
 
 pub(crate) fn search(
@@ -40,8 +43,8 @@ pub(crate) fn search(
     let mut url = Url::parse("https://www.bing.com/search?format=rss")
         .map_err(|error| web_error(format!("could not construct search URL: {error}")))?;
     url.query_pairs_mut().append_pair("q", &search_query);
-    let (_, body) = request(url)?;
-    let results = parse_bing_rss(&String::from_utf8_lossy(&body))
+    let response = request(url)?;
+    let results = parse_bing_rss(&String::from_utf8_lossy(&response.body))
         .into_iter()
         .filter(|result| {
             Url::parse(&result.url).is_ok_and(|url| {
@@ -51,41 +54,74 @@ pub(crate) fn search(
         })
         .take(MAX_SEARCH_RESULTS)
         .collect::<Vec<_>>();
-    if results.is_empty() {
-        return Ok(format!("No public web results found for: {query}"));
-    }
-    let mut output = format!("Web search results for: {query}");
-    for (index, result) in results.iter().enumerate() {
-        output.push_str(&format!(
-            "\n\n{}. {}\n{}\n{}",
-            index + 1,
-            result.title,
-            result.url,
-            result.snippet
-        ));
-    }
-    Ok(output)
+    let retrieved_at = retrieved_at();
+    let (output, status) = if results.is_empty() {
+        (
+            format!(
+                "web_search status=no_results query={query:?} source=bing_rss retrieved_at={retrieved_at} response_truncated={}\nNo public web results found for this query; do not infer that the source is unavailable without trying another bounded search.",
+                response.content_truncated
+            ),
+            "no_results",
+        )
+    } else {
+        let mut output = format!(
+            "web_search status=results query={query:?} source=bing_rss retrieved_at={retrieved_at} response_truncated={} results={}",
+            response.content_truncated,
+            results.len()
+        );
+        for (index, result) in results.iter().enumerate() {
+            output.push_str(&format!(
+                "\n\n{}. {}\n{}\n{}",
+                index + 1,
+                result.title,
+                result.url,
+                result.snippet
+            ));
+        }
+        (output, "results")
+    };
+    let (output, output_truncated) = bounded_output(output);
+    Ok(format!(
+        "{output}\noutput_status={status} output_truncated={output_truncated}"
+    ))
 }
 
 pub(crate) fn fetch(url: &str, prompt: Option<&str>) -> MedusaResult<String> {
     let parsed = Url::parse(url.trim())
         .map_err(|error| invalid_input(format!("invalid web URL: {error}")))?;
-    let (final_url, body) = request(parsed)?;
-    let content = readable_text(&String::from_utf8_lossy(&body));
-    if content.is_empty() {
-        return Ok(format!(
-            "Fetched {final_url} but it did not contain readable text."
-        ));
-    }
-    let requested = prompt
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| format!("\nRequested extraction: {value}"))
-        .unwrap_or_default();
-    Ok(format!("Fetched: {final_url}{requested}\n\n{content}"))
+    let response = request(parsed)?;
+    let raw = String::from_utf8_lossy(&response.body);
+    let title = title_from_html(&raw).unwrap_or_else(|| "untitled".to_owned());
+    let content = readable_text(&raw);
+    let (excerpt, extraction_status, excerpt_truncated) = requested_excerpt(&content, prompt);
+    let output = if excerpt.is_empty() {
+        format!(
+            "web_fetch requested_url={url:?} final_url={:?} retrieved_at={} title={title:?} content_truncated={} extraction_status={extraction_status} untrusted_page_content=true\nNo readable text was available for the requested extraction.",
+            response.final_url,
+            retrieved_at(),
+            response.content_truncated
+        )
+    } else {
+        format!(
+            "web_fetch requested_url={url:?} final_url={:?} retrieved_at={} title={title:?} content_truncated={} extraction_status={extraction_status} untrusted_page_content=true\n\n{excerpt}",
+            response.final_url,
+            retrieved_at(),
+            response.content_truncated
+        )
+    };
+    let (output, output_truncated) = bounded_output(output);
+    Ok(format!(
+        "{output}\nexcerpt_truncated={excerpt_truncated} output_truncated={output_truncated}"
+    ))
 }
 
-fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
+struct WebResponse {
+    final_url: Url,
+    body: Vec<u8>,
+    content_truncated: bool,
+}
+
+fn request(mut url: Url) -> MedusaResult<WebResponse> {
     for _ in 0..=MAX_REDIRECTS {
         let target = resolve_url(&url).map_err(invalid_input)?;
         let client = Client::builder()
@@ -117,13 +153,12 @@ fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
                 response.status()
             )));
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-        {
-            return Err(web_error("web response exceeds the byte limit"));
-        }
-        return Ok((url, read_limited(&mut response)?));
+        let (body, content_truncated) = read_limited(&mut response)?;
+        return Ok(WebResponse {
+            final_url: url,
+            body,
+            content_truncated,
+        });
     }
     Err(web_error("web request exceeded the redirect limit"))
 }
@@ -142,16 +177,17 @@ fn resolve_url(url: &Url) -> Result<ResolvedTarget, String> {
     )
 }
 
-fn read_limited(response: &mut impl Read) -> MedusaResult<Vec<u8>> {
+fn read_limited(response: &mut impl Read) -> MedusaResult<(Vec<u8>, bool)> {
     let mut body = Vec::new();
     response
         .take((MAX_RESPONSE_BYTES + 1) as u64)
         .read_to_end(&mut body)
         .map_err(|error| web_error(format!("could not read web response: {error}")))?;
-    if body.len() > MAX_RESPONSE_BYTES {
-        return Err(web_error("web response exceeds the byte limit"));
+    let truncated = body.len() > MAX_RESPONSE_BYTES;
+    if truncated {
+        body.truncate(MAX_RESPONSE_BYTES);
     }
-    Ok(body)
+    Ok((body, truncated))
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -182,6 +218,12 @@ fn tag_value(value: &str, tag: &str) -> Option<String> {
     let value = value.split_once(&start)?.1.split_once(&end)?.0.trim();
     let value = value.strip_prefix("<![CDATA[").unwrap_or(value);
     Some(value.strip_suffix("]]>").unwrap_or(value).to_owned())
+}
+
+fn title_from_html(value: &str) -> Option<String> {
+    let title = tag_value(value, "title")?;
+    let title = readable_text(&title);
+    (!title.is_empty()).then_some(title)
 }
 
 fn normalize_domains(domains: Vec<String>) -> MedusaResult<Vec<String>> {
@@ -216,8 +258,14 @@ fn readable_text(value: &str) -> String {
     let mut inside_tag = false;
     for character in value.chars() {
         match character {
-            '<' => inside_tag = true,
-            '>' => inside_tag = false,
+            '<' => {
+                inside_tag = true;
+                plain.push('\n');
+            }
+            '>' => {
+                inside_tag = false;
+                plain.push('\n');
+            }
             _ if !inside_tag => plain.push(character),
             _ => {}
         }
@@ -235,6 +283,79 @@ fn readable_text(value: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn requested_excerpt(content: &str, prompt: Option<&str>) -> (String, &'static str, bool) {
+    let lines = content.lines().collect::<Vec<_>>();
+    let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) else {
+        let (excerpt, truncated) = bounded_lines(&lines);
+        return (excerpt, "not_requested", truncated);
+    };
+    let terms = prompt
+        .split(|character: char| !character.is_alphanumeric())
+        .map(str::trim)
+        .filter(|term| term.chars().count() >= 3)
+        .map(str::to_ascii_lowercase)
+        .collect::<BTreeSet<_>>();
+    if terms.is_empty() {
+        return (String::new(), "no_matching_excerpt", false);
+    }
+    let matching_lines = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            let lower = line.to_ascii_lowercase();
+            terms.iter().any(|term| lower.contains(term))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if matching_lines.is_empty() {
+        return (String::new(), "no_matching_excerpt", false);
+    }
+    let mut selected = BTreeSet::new();
+    for index in matching_lines {
+        let start = index.saturating_sub(2);
+        let end = (index + 2).min(lines.len().saturating_sub(1));
+        selected.extend(start..=end);
+    }
+    let selected_lines = selected
+        .into_iter()
+        .map(|index| lines[index])
+        .collect::<Vec<_>>();
+    let (excerpt, truncated) = bounded_lines(&selected_lines);
+    (excerpt, "matched", truncated)
+}
+
+fn bounded_lines(lines: &[&str]) -> (String, bool) {
+    let truncated = lines.len() > MAX_EXCERPT_LINES;
+    let end = lines.len().min(MAX_EXCERPT_LINES);
+    (lines[..end].join("\n"), truncated)
+}
+
+fn bounded_output(value: String) -> (String, bool) {
+    if value.len() <= MAX_OUTPUT_BYTES {
+        return (value, false);
+    }
+    let suffix = "\n[web output truncated]";
+    let prefix = safe_prefix(&value, MAX_OUTPUT_BYTES.saturating_sub(suffix.len()));
+    (format!("{prefix}{suffix}"), true)
+}
+
+fn safe_prefix(value: &str, maximum_bytes: usize) -> &str {
+    if value.len() <= maximum_bytes {
+        return value;
+    }
+    let mut end = maximum_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn retrieved_at() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| OffsetDateTime::now_utc().unix_timestamp().to_string())
 }
 
 fn invalid_input(message: impl Into<String>) -> MedusaError {
@@ -289,5 +410,35 @@ mod tests {
             Ok(vec!["docs.example.com".to_owned()])
         );
         assert!(normalize_domains(vec!["https://example.com".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn oversized_web_output_is_bounded_without_claiming_completeness() {
+        let (output, truncated) = bounded_output("x".repeat(MAX_OUTPUT_BYTES + 64));
+        assert!(truncated);
+        assert!(output.len() <= MAX_OUTPUT_BYTES);
+        assert!(output.contains("web output truncated"));
+    }
+
+    #[test]
+    fn missing_extraction_match_is_reported_instead_of_fabricated() {
+        let (excerpt, status, truncated) = requested_excerpt(
+            "A page about bounded public research.",
+            Some("quantum gravity"),
+        );
+        assert!(excerpt.is_empty());
+        assert_eq!(status, "no_matching_excerpt");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn requested_fetch_text_is_explicitly_selected_and_titled() {
+        let raw = "<html><head><title>Official Guide</title></head><body><p>Install the tool.</p><p>Use the bounded request.</p></body></html>";
+        let title = title_from_html(raw).expect("title");
+        let text = readable_text(raw);
+        let (excerpt, status, _) = requested_excerpt(&text, Some("bounded request"));
+        assert_eq!(title, "Official Guide");
+        assert!(excerpt.contains("Use the bounded request."));
+        assert_eq!(status, "matched");
     }
 }

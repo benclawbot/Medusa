@@ -13,6 +13,9 @@ use std::{
 };
 
 use crate::ProcessOwnershipReceipt;
+use crate::windows_launch_diagnostics::{
+    WindowsSandboxLaunchDiagnostic, WindowsSandboxLaunchStage, validate_windows_environment_block,
+};
 use flatbuffers::FlatBufferBuilder;
 use windows_sys::Win32::{
     Foundation::{
@@ -43,8 +46,6 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const PROCESSMODEL_DLL: &str = "processmodel.dll";
 const SANDBOX_EXPORT: &[u8] = b"Experimental_CreateProcessInSandbox\0";
 const BROKEN_PIPE: u32 = 109;
-const ERROR_CALL_NOT_IMPLEMENTED: i32 = 120;
-const ERROR_ENVVAR_NOT_FOUND: i32 = 203;
 // Win32 JOB_OBJECT_LIMIT_PROCESS_TIME (winnt.h). Kept local because this windows-sys feature surface does not export it.
 const JOB_OBJECT_LIMIT_PROCESS_TIME_FLAG: u32 = 0x0000_0002;
 // Reserved by Experimental_CreateProcessInSandbox and required to be FALSE.
@@ -162,7 +163,12 @@ where
     F: FnMut(&ProcessOwnershipReceipt) -> io::Result<()>,
 {
     let root = strip_verbatim(&repo.canonicalize()?);
-    let executable = strip_verbatim(&resolve_program(program)?);
+    let executable = strip_verbatim(&resolve_program(program).map_err(|_| {
+        WindowsSandboxLaunchDiagnostic::executable_unavailable(
+            WindowsSandboxLaunchStage::ProcessCreation,
+        )
+        .into_io_error()
+    })?);
     let read_only = read_only_paths(&executable);
     let specification = sandbox_specification(&root, &read_only);
     let api = SandboxApi::load()?;
@@ -208,7 +214,8 @@ unsafe fn launch(
         std::process::id(),
         NEXT_SANDBOX_IDENTITY.fetch_add(1, Ordering::Relaxed)
     );
-    let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;
+    let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })
+        .map_err(sandbox_process_creation_error)?;
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
@@ -229,11 +236,13 @@ unsafe fn launch(
         )
     } == 0
     {
-        return Err(io::Error::last_os_error());
+        return Err(sandbox_process_creation_error(io::Error::last_os_error()));
     }
 
-    let (stdout_read, stdout_write) = create_inheritable_pipe()?;
-    let (stderr_read, stderr_write) = create_inheritable_pipe()?;
+    let (stdout_read, stdout_write) =
+        create_inheritable_pipe().map_err(sandbox_process_creation_error)?;
+    let (stderr_read, stderr_write) =
+        create_inheritable_pipe().map_err(sandbox_process_creation_error)?;
     let mut command_line = wide_command_line(executable, args);
     let mut environment = environment_block(root)?;
     let executable_wide = wide_null(executable.as_os_str());
@@ -268,8 +277,10 @@ unsafe fn launch(
         return Err(sandbox_process_creation_error(io::Error::last_os_error()));
     }
 
-    let process_handle = OwnedHandle::new(process.hProcess)?;
-    let thread_handle = OwnedHandle::new(process.hThread)?;
+    let process_handle =
+        OwnedHandle::new(process.hProcess).map_err(sandbox_process_creation_error)?;
+    let thread_handle =
+        OwnedHandle::new(process.hThread).map_err(sandbox_process_creation_error)?;
     let ownership = ProcessOwnershipReceipt::capture(process.dwProcessId).map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -277,11 +288,11 @@ unsafe fn launch(
         )
     })?;
     if unsafe { AssignProcessToJobObject(job.0, process_handle.0) } == 0 {
-        return Err(io::Error::last_os_error());
+        return Err(sandbox_process_creation_error(io::Error::last_os_error()));
     }
     (controls.on_start)(&ownership)?;
     if unsafe { ResumeThread(thread_handle.0) } == u32::MAX {
-        return Err(io::Error::last_os_error());
+        return Err(sandbox_process_creation_error(io::Error::last_os_error()));
     }
     drop(stdout_write);
     drop(stderr_write);
@@ -336,19 +347,11 @@ unsafe fn launch(
 }
 
 fn sandbox_process_creation_error(error: io::Error) -> io::Error {
-    if matches!(
+    WindowsSandboxLaunchDiagnostic::from_native_error(
+        WindowsSandboxLaunchStage::ProcessCreation,
         error.raw_os_error(),
-        Some(ERROR_CALL_NOT_IMPLEMENTED | ERROR_ENVVAR_NOT_FOUND)
-    ) {
-        return io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows composable sandbox API cannot launch with an isolated environment on this Windows build",
-        );
-    }
-    io::Error::new(
-        error.kind(),
-        format!("Windows composable sandbox process creation failed: {error}"),
     )
+    .into_io_error()
 }
 
 fn create_inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
@@ -491,18 +494,20 @@ impl SandboxApi {
         let module =
             unsafe { LoadLibraryExW(dll.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
         if module.is_null() {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Windows composable sandbox API is unavailable; Windows 11 support is required",
-            ));
+            return Err(WindowsSandboxLaunchDiagnostic::from_native_error(
+                WindowsSandboxLaunchStage::ApiLoad,
+                io::Error::last_os_error().raw_os_error(),
+            )
+            .into_io_error());
         }
         let raw: FARPROC = unsafe { GetProcAddress(module, SANDBOX_EXPORT.as_ptr()) };
         let Some(raw) = raw else {
             unsafe { FreeLibrary(module) };
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "Experimental_CreateProcessInSandbox is unavailable; refusing an unsandboxed fallback",
-            ));
+            return Err(WindowsSandboxLaunchDiagnostic::from_native_error(
+                WindowsSandboxLaunchStage::ApiLoad,
+                None,
+            )
+            .into_io_error());
         };
         let create = unsafe {
             transmute::<unsafe extern "system" fn() -> isize, CreateProcessInSandbox>(raw)
@@ -549,7 +554,13 @@ fn resolve_program(program: &str) -> io::Result<PathBuf> {
 
 fn environment_block(root: &Path) -> io::Result<Vec<u16>> {
     let temp = root.join(".medusa-sandbox-tmp");
-    std::fs::create_dir_all(&temp)?;
+    std::fs::create_dir_all(&temp).map_err(|error| {
+        WindowsSandboxLaunchDiagnostic::from_native_error(
+            WindowsSandboxLaunchStage::EnvironmentBlock,
+            error.raw_os_error(),
+        )
+        .into_io_error()
+    })?;
     let mut values = vec![
         ("PATH", std::env::var_os("PATH").unwrap_or_default()),
         (
@@ -575,6 +586,9 @@ fn environment_block(root: &Path) -> io::Result<Vec<u16>> {
         block.push(0);
     }
     block.push(0);
+    if validate_windows_environment_block(&block).is_err() {
+        return Err(WindowsSandboxLaunchDiagnostic::environment_block_invalid().into_io_error());
+    }
     Ok(block)
 }
 
@@ -699,24 +713,5 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with(SANDBOX_IDENTITY_PREFIX));
         assert!(second.starts_with(SANDBOX_IDENTITY_PREFIX));
-    }
-
-    #[test]
-    fn unsupported_process_creation_has_a_locale_independent_error() {
-        let error = sandbox_process_creation_error(io::Error::from_raw_os_error(
-            ERROR_CALL_NOT_IMPLEMENTED,
-        ));
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
-        assert_eq!(
-            error.to_string(),
-            "Windows composable sandbox API cannot launch with an isolated environment on this Windows build"
-        );
-    }
-
-    #[test]
-    fn environment_rejection_is_reported_as_unsupported() {
-        let error =
-            sandbox_process_creation_error(io::Error::from_raw_os_error(ERROR_ENVVAR_NOT_FOUND));
-        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
 }

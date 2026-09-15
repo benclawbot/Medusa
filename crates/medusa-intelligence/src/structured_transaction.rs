@@ -1022,7 +1022,6 @@ mod tests {
             0o755
         );
     }
-
     #[test]
     fn plan_id_cannot_escape_transaction_journal_root() {
         let repo = tempfile::tempdir().expect("repo");

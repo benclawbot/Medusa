@@ -402,6 +402,7 @@ pub fn authoritative_verification_for_components_at(
                     repository_fingerprint,
                     commit,
                     &plan.components,
+                    check.reason.contains("changed files"),
                     &store,
                     &mut artifacts,
                     &mut reads,
@@ -1188,19 +1189,24 @@ fn semantic_material(
     repository_fingerprint: &str,
     commit: &str,
     components: &[ChangedComponent],
+    validate_all_changed_files: bool,
     store: &ArtifactStore,
     artifacts: &mut BTreeMap<ArtifactId, ArtifactMetadata>,
     reads: &mut Vec<ArtifactReadReceipt>,
     records: &mut Vec<EvidenceRecord>,
 ) -> MedusaResult<CheckMaterial> {
     let mut passed = true;
+    let mut applicable = false;
     let mut evidence_ids = Vec::new();
     let mut artifact_ids = Vec::new();
     let mut details = Vec::new();
     for component in components {
-        if component.kind == ChangeKind::Deleted || !requires_semantic_artifact(component) {
+        if component.kind == ChangeKind::Deleted
+            || (!validate_all_changed_files && !requires_semantic_artifact(component))
+        {
             continue;
         }
+        applicable = true;
         let path = repo.join(&component.path);
         let result = validate_artifact_semantics(&path).map_err(evidence_error)?;
         passed &= result.passed;
@@ -1239,13 +1245,43 @@ fn semantic_material(
             records.push(record);
         }
     }
-    Ok(CheckMaterial {
+    let material = CheckMaterial {
         passed,
         command: None,
         evidence_ids,
         artifact_ids,
         details,
-    })
+    };
+    if !applicable {
+        return Ok(rejected_semantic_material(
+            material,
+            "semantic_applicability=not_applicable",
+        ));
+    }
+    Ok(ensure_passing_material_has_evidence(material))
+}
+
+fn rejected_semantic_material(mut material: CheckMaterial, reason: &str) -> CheckMaterial {
+    material.passed = false;
+    material.details.push(reason.to_owned());
+    material
+        .details
+        .push("verification_blocked=true".to_owned());
+    material
+}
+
+fn ensure_passing_material_has_evidence(mut material: CheckMaterial) -> CheckMaterial {
+    if material.passed
+        && material.command.is_none()
+        && material.evidence_ids.is_empty()
+        && material.artifact_ids.is_empty()
+    {
+        material.passed = false;
+        material
+            .details
+            .push("verification_blocked=passing material has no evidence".to_owned());
+    }
+    material
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1363,13 +1399,30 @@ fn rejected_material(reason: String) -> CheckMaterial {
 
 fn requires_semantic_artifact(component: &ChangedComponent) -> bool {
     component.generated
+        || matches!(component.kind, ChangeKind::Added | ChangeKind::Renamed)
         || Path::new(&component.path)
             .extension()
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| {
                 matches!(
                     extension.to_ascii_lowercase().as_str(),
-                    "html" | "json" | "png" | "pdf" | "zip" | "jar" | "docx" | "xlsx" | "pptx"
+                    "css"
+                        | "html"
+                        | "json"
+                        | "js"
+                        | "jsx"
+                        | "png"
+                        | "pdf"
+                        | "py"
+                        | "rs"
+                        | "scss"
+                        | "ts"
+                        | "tsx"
+                        | "zip"
+                        | "jar"
+                        | "docx"
+                        | "xlsx"
+                        | "pptx"
                 )
             })
 }

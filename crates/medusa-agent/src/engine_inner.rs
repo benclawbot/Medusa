@@ -1587,20 +1587,25 @@ impl<P: ModelProvider> AgentEngine<P> {
             );
         }
         let capability_discovery = self.capability_registry_for_repo(&session.repo);
+        let skill_query = turn_instruction
+            .map(|instruction| format!("{}\n{}", session.objective, instruction))
+            .unwrap_or_else(|| session.objective.clone());
         let mut system = if self.general_chat {
             GENERAL_CHAT_SYSTEM_PROMPT.to_owned()
         } else {
             let prompt = match &capability_discovery {
-                Ok(registry) => system_prompt_with_registry(
+                Ok(registry) => system_prompt_with_registry_for_query(
                     self.config.agent.mode,
                     &session.repo,
                     None,
+                    &skill_query,
                     registry.as_ref(),
                 ),
-                Err(error) => system_prompt_with_discovery_error(
+                Err(error) => system_prompt_with_discovery_error_for_query(
                     self.config.agent.mode,
                     &session.repo,
                     None,
+                    &skill_query,
                     &error.to_string(),
                 ),
             };

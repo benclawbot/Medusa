@@ -2,8 +2,9 @@ mod config_command;
 mod config_profiles;
 mod headless_approval;
 mod telegram_command;
-mod uninstall_command;
 mod update_command;
+
+use super::uninstall_command;
 
 use std::{
     collections::BTreeMap,
@@ -303,7 +304,11 @@ fn run() -> MedusaResult<()> {
 
     let command = match command {
         CommandKind::Telegram { args } => return telegram_command::run(&repo, *args),
-        CommandKind::Uninstall => return uninstall_command::run(&repo),
+        CommandKind::Uninstall => {
+            return uninstall_command::run(&repo, &[]).map_err(|error| {
+                MedusaError::new(ErrorCode::PersistenceFailed, ErrorCategory::Execution, error)
+            });
+        }
         command => command,
     };
 

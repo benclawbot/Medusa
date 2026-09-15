@@ -23,6 +23,7 @@ mod process_identity;
 // SAFETY: reviewed process-group signal FFI is isolated in this low-level crate.
 #[allow(unsafe_code)]
 mod process_tree;
+mod windows_launch_diagnostics;
 // SAFETY: platform file-lock FFI is isolated in this low-level crate and exposed through an RAII
 // guard that releases the kernel lock when the owning handle is dropped.
 #[allow(unsafe_code)]
@@ -55,3 +56,8 @@ pub use process_tree::ProcessLimits;
 pub use windows::{WindowsJob, process_is_alive};
 #[cfg(windows)]
 pub use windows_acl::{secure_current_user_only, verify_current_user_only};
+pub use windows_launch_diagnostics::{
+    WindowsEnvironmentBlockError, WindowsSandboxLaunchDiagnostic,
+    WindowsSandboxLaunchFailureCategory, WindowsSandboxLaunchStage,
+    classify_windows_sandbox_failure, validate_windows_environment_block,
+};

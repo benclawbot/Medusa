@@ -14,6 +14,7 @@ mod skill_lifecycle;
 mod skill_probation;
 #[cfg_attr(not(test), allow(unused_imports))]
 mod skills;
+mod uninstall_command;
 
 mod legacy {
     pub(super) fn entry() {
@@ -72,6 +73,14 @@ fn main() {
         eprintln!("failed to initialize observability: {error}");
     }
 
+    if let Some(uninstall_args) = subcommand_arguments(&args, "uninstall") {
+        let command_args = strip_repository_argument(&uninstall_args);
+        finish(
+            uninstall_command::run(&repo, &command_args),
+            Some("usage: medusa [--repo PATH] uninstall [--preview|--dry-run] [--json]"),
+        );
+        return;
+    }
     if let Some(quickstart_args) = subcommand_arguments(&args, "quickstart") {
         finish(
             run_sibling("medusa-quickstart", &quickstart_args),
@@ -230,7 +239,7 @@ fn strip_repository_argument(args: &[String]) -> Vec<String> {
 fn takes_value(value: &str) -> bool {
     matches!(
         value,
-        "--repo" | "--set" | "--prompt" | "--resume" | "--format" | "--output"
+        "--repo" | "--set" | "--prompt" | "--resume" | "--format" | "--output" | "--scope"
     )
 }
 

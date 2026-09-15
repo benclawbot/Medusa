@@ -35,10 +35,30 @@ fn main() {
             );
         }
     }
-    let revision = env::var("MEDUSA_BUILD_COMMIT").unwrap_or_else(|_| {
-        git_output(&repository, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned())
-    });
+    let revision = env::var("MEDUSA_BUILD_COMMIT")
+        .ok()
+        .and_then(|value| valid_revision(&value))
+        .or_else(|| git_output(&repository, &["rev-parse", "HEAD"]))
+        .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=MEDUSA_BUILD_COMMIT={revision}");
-    let short_revision = revision.get(..12).unwrap_or(&revision);
+    let short_revision = revision.chars().take(12).collect::<String>();
     println!("cargo:rustc-env=MEDUSA_BUILD_COMMIT_SHORT={short_revision}");
+}
+
+fn valid_revision(value: &str) -> Option<String> {
+    let revision = value.trim();
+    (!revision.is_empty() && !revision.chars().any(char::is_control)).then(|| revision.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_revision;
+
+    #[test]
+    fn revision_metadata_is_single_line_and_unicode_safe() {
+        assert_eq!(valid_revision("  abc123  "), Some("abc123".to_owned()));
+        assert_eq!(valid_revision("abc\ndef"), None);
+        assert_eq!(valid_revision("éééééééé"), Some("éééééééé".to_owned()));
+    }
+
 }

@@ -968,11 +968,16 @@ fn recover_transaction(
             ));
         }
     }
-    let journal_len = journal.entries().len() as u64;
-    let candidate_journal_len = candidate_journal.entries().len() as u64;
-    let canonical_is_base = transaction.base_revision <= journal_len
-        && transaction.base_revision <= candidate_journal_len
-        && journal.entries() == &candidate_journal.entries()[..transaction.base_revision as usize];
+    let base_revision = usize::try_from(transaction.base_revision).map_err(|_| {
+        authority_corrupt(
+            root,
+            &path,
+            "transaction base revision does not fit the host index type".to_owned(),
+        )
+    })?;
+    let canonical_is_base = base_revision <= journal.entries().len()
+        && base_revision <= candidate_journal.entries().len()
+        && journal.entries() == &candidate_journal.entries()[..base_revision];
     let canonical_is_target = journal == &candidate_journal;
     if !canonical_is_base && !canonical_is_target {
         return Err(authority_corrupt(

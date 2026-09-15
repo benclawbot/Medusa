@@ -65,7 +65,7 @@ const TERMINAL_PROSE_PATH_DELIMITERS: &[char] = &['.', ',', ';', ':', ')', ']', 
 /// is restored before returning.
 pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static str> {
     let original_objective = input.objective.trim().to_owned();
-    let protected_paths = scoped_protected_paths(&original_objective, &input.repository_paths);
+    let protected_paths = scoped_protected_paths(&original_objective);
     input.objective = original_objective.clone();
     for path in &protected_paths {
         input.objective = input.objective.replace(path, "protected-file");
@@ -90,7 +90,7 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
     Ok(result)
 }
 
-fn scoped_protected_paths(objective: &str, repository_paths: &[String]) -> BTreeSet<String> {
+fn scoped_protected_paths(objective: &str) -> BTreeSet<String> {
     let lower = objective.to_ascii_lowercase();
     let mut protected = BTreeSet::new();
     for phrase in SCOPED_READ_ONLY_PHRASES {
@@ -103,24 +103,39 @@ fn scoped_protected_paths(objective: &str, repository_paths: &[String]) -> BTree
                 .or_else(|| remainder.find('\n'))
                 .unwrap_or(remainder.len());
             let clause = &remainder[..end];
-            for path in repository_paths {
-                if clause.split_whitespace().any(|token| {
-                    let candidate = token.trim_matches(|character: char| {
-                        !character.is_ascii_alphanumeric()
-                            && !matches!(character, '/' | '\\' | '.' | '-' | '_')
-                    });
-                    candidate == path
-                        || path
-                            .strip_prefix(candidate)
-                            .is_some_and(|remainder| remainder.starts_with('/'))
-                }) {
-                    protected.insert(path.clone());
-                }
+            for token in clause.split_whitespace() {
+                let Some(candidate) = protected_path_candidate(token) else {
+                    continue;
+                };
+                protected.insert(candidate);
             }
             search_from = start;
         }
     }
     protected
+}
+
+fn protected_path_candidate(token: &str) -> Option<String> {
+    let candidate = token.trim_matches(|character: char| {
+        !character.is_ascii_alphanumeric() && !matches!(character, '/' | '\\' | '.' | '-' | '_')
+    });
+    let candidate = candidate
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_owned();
+    let looks_like_path = candidate.contains('/')
+        || candidate
+            .rsplit('/')
+            .next()
+            .and_then(|name| name.rsplit_once('.'))
+            .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty());
+    (looks_like_path
+        && !candidate.is_empty()
+        && !candidate.starts_with('/')
+        && candidate.as_bytes().get(1) != Some(&b':')
+        && !candidate.split('/').any(|part| matches!(part, "" | "..")))
+    .then_some(candidate)
 }
 
 fn has_affirmative_mutation_request(objective: &str) -> bool {
@@ -267,6 +282,26 @@ mod tests {
             repository_paths: vec!["src/lib.rs".to_owned(), "tests/regression.rs".to_owned()],
         })
         .expect("scoped protection should preserve the affirmative repair");
+
+        assert_eq!(planned.scope.effective, vec!["src/lib.rs".to_owned()]);
+        assert_eq!(
+            planned
+                .task(TaskKind::Implementation)
+                .expect("implementation task")
+                .task
+                .write_paths,
+            vec!["src/lib.rs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn missing_protected_paths_are_excluded_from_new_file_scope() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Create src/lib.rs without modifying tests/new_regression.rs".to_owned(),
+            attachment_count: 0,
+            repository_paths: Vec::new(),
+        })
+        .expect("scoped protection should remain safe for a new file");
 
         assert_eq!(planned.scope.effective, vec!["src/lib.rs".to_owned()]);
         assert_eq!(

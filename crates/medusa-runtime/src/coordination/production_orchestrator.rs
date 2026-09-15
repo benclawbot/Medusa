@@ -102,14 +102,7 @@ pub fn plan_for_repository(
     }
 
     let mut repository_paths = repository_paths(repo);
-    repository_paths.extend(
-        initial_planning
-            .scope
-            .requested
-            .iter()
-            .filter(|candidate| repo.join(candidate).exists())
-            .cloned(),
-    );
+    repository_paths.extend(initial_planning.scope.requested.iter().cloned());
     repository_paths.sort();
     repository_paths.dedup();
 
@@ -858,6 +851,49 @@ mod tests {
         assert_eq!(
             planned.planning.scope.effective,
             vec!["src/lib.rs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn production_planning_preserves_explicit_nested_new_file_scope() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("crates/widget/src")).unwrap();
+        fs::write(
+            directory.path().join("crates/widget/Cargo.toml"),
+            "[package]\nname = \"widget\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let planned = plan_for_repository(
+            directory.path(),
+            &PromptDraft {
+                text: "Create crates/widget/src/generated.rs".to_owned(),
+                ..PromptDraft::default()
+            },
+        )
+        .unwrap();
+
+        assert!(requires_mutation(&planned));
+        assert_eq!(
+            planned.planning.scope.effective,
+            vec!["crates/widget/src/generated.rs".to_owned()]
+        );
+        assert_eq!(
+            planned
+                .planning
+                .task(TaskKind::Implementation)
+                .unwrap()
+                .task
+                .write_paths,
+            vec!["crates/widget/src/generated.rs".to_owned()]
+        );
+        assert_eq!(
+            planned
+                .contracts
+                .iter()
+                .find(|contract| contract.role == AgentRole::Implementer)
+                .unwrap()
+                .allowed_write_paths,
+            vec!["crates/widget/src/generated.rs".to_owned()]
         );
     }
 

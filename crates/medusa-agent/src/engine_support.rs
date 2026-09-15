@@ -23,7 +23,7 @@ use crate::{
         AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
         AgentSession, persist,
     },
-    tools::{available_skills, built_in_tools},
+    tools::{available_skills, available_skills_for_query, built_in_tools},
 };
 
 const MAX_REPOSITORY_INSTRUCTIONS_BYTES: usize = 32_000;
@@ -56,29 +56,51 @@ pub(crate) fn system_prompt_with_context(
     additional_context: Option<&str>,
 ) -> String {
     match CapabilityRegistry::discover(repo) {
-        Ok(registry) => system_prompt_with_registry(mode, repo, additional_context, &registry),
-        Err(error) => {
-            system_prompt_with_discovery_error(mode, repo, additional_context, &error.to_string())
+        Ok(registry) => {
+            system_prompt_with_registry_for_query(mode, repo, additional_context, "", &registry)
         }
+        Err(error) => system_prompt_with_discovery_error_for_query(
+            mode,
+            repo,
+            additional_context,
+            "",
+            &error.to_string(),
+        ),
     }
 }
 
-pub(crate) fn system_prompt_with_registry(
+pub(crate) fn system_prompt_with_registry_for_query(
     mode: Mode,
     repo: &Path,
     additional_context: Option<&str>,
+    skill_query: &str,
     registry: &CapabilityRegistry,
 ) -> String {
-    system_prompt_with_capability_state(mode, repo, additional_context, Some(registry), None)
+    system_prompt_with_capability_state(
+        mode,
+        repo,
+        additional_context,
+        Some(registry),
+        None,
+        skill_query,
+    )
 }
 
-pub(crate) fn system_prompt_with_discovery_error(
+pub(crate) fn system_prompt_with_discovery_error_for_query(
     mode: Mode,
     repo: &Path,
     additional_context: Option<&str>,
+    skill_query: &str,
     error: &str,
 ) -> String {
-    system_prompt_with_capability_state(mode, repo, additional_context, None, Some(error))
+    system_prompt_with_capability_state(
+        mode,
+        repo,
+        additional_context,
+        None,
+        Some(error),
+        skill_query,
+    )
 }
 
 pub(crate) fn append_dynamic_system_context(prompt: &mut String, additional_context: Option<&str>) {
@@ -106,6 +128,7 @@ fn system_prompt_with_capability_state(
     additional_context: Option<&str>,
     registry: Option<&CapabilityRegistry>,
     discovery_error: Option<&str>,
+    skill_query: &str,
 ) -> String {
     let base = if mode == Mode::ReadOnly {
         PLAN_SYSTEM_PROMPT
@@ -129,7 +152,11 @@ fn system_prompt_with_capability_state(
         prompt.push_str("\n\nRepository instructions (follow them as project constraints; the user request and system rules take precedence):\n");
         prompt.push_str(&instructions);
     }
-    let skills = available_skills(repo);
+    let skills = if skill_query.trim().is_empty() {
+        available_skills(repo)
+    } else {
+        available_skills_for_query(repo, skill_query)
+    };
     if skills.is_empty() {
         prompt.push_str("\n\nNo Medusa skills are installed for this workspace or user.");
     } else {

@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::SystemTime,
 };
 
@@ -52,7 +52,7 @@ pub(crate) struct RepositoryContextAssembly {
 
 struct CachedIndex {
     state_key: String,
-    index: CodeIndex,
+    index: Arc<CodeIndex>,
 }
 
 fn index_cache() -> &'static Mutex<HashMap<PathBuf, CachedIndex>> {
@@ -90,14 +90,15 @@ fn repo_state_key(repo: &Path) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn cached_code_index(repo: &Path, state_key: &str) -> Result<CodeIndex, RuntimeError> {
+fn cached_code_index(repo: &Path, state_key: &str) -> Result<Arc<CodeIndex>, RuntimeError> {
     if let Ok(cache) = index_cache().lock()
         && let Some(entry) = cache.get(repo)
         && entry.state_key == state_key
     {
         return Ok(entry.index.clone());
     }
-    let index = CodeIndex::build(repo).map_err(|error| RuntimeError::agent(error.to_string()))?;
+    let index =
+        Arc::new(CodeIndex::build(repo).map_err(|error| RuntimeError::agent(error.to_string()))?);
     if let Ok(mut cache) = index_cache().lock() {
         if cache.len() >= INDEX_CACHE_CAPACITY && !cache.contains_key(repo) {
             cache.clear();
@@ -106,7 +107,7 @@ fn cached_code_index(repo: &Path, state_key: &str) -> Result<CodeIndex, RuntimeE
             repo.to_path_buf(),
             CachedIndex {
                 state_key: state_key.to_owned(),
-                index: index.clone(),
+                index: Arc::clone(&index),
             },
         );
     }
@@ -606,6 +607,22 @@ mod tests {
         let second = assemble(directory.path(), &session, "cached_target").expect("second");
         assert_eq!(first.repository_fingerprint, second.repository_fingerprint);
         assert_eq!(first.selected, second.selected);
+    }
+
+    #[test]
+    fn cached_index_reuses_shared_index_without_deep_clone() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            directory.path().join("lib.rs"),
+            "pub fn shared_target() -> usize { 1 }\n",
+        )
+        .expect("source");
+        let state_key = repo_state_key(directory.path());
+
+        let first = cached_code_index(directory.path(), &state_key).expect("first index");
+        let second = cached_code_index(directory.path(), &state_key).expect("second index");
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[test]

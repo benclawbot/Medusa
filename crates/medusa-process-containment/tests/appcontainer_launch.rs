@@ -52,3 +52,32 @@ fn launch_failures_remain_diagnosable() {
     };
     assert!(!error.to_string().is_empty());
 }
+
+#[test]
+fn node_and_git_failures_remain_sanitized_and_fail_closed() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    for program in ["node.exe", "git.exe"] {
+        let result = run_appcontainer(directory.path(), program, &[]);
+        let Err(error) = result else {
+            continue;
+        };
+        let text = error.to_string();
+        assert!(text.contains("windows_sandbox_launch_failure"));
+        assert!(text.contains("fallback=none"));
+        assert!(!text.contains(program));
+        assert!(!text.contains(directory.path().to_string_lossy().as_ref()));
+    }
+}
+
+#[test]
+fn missing_contained_executable_reports_a_sanitized_failure() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let error = run_appcontainer(directory.path(), "medusa-missing-node-git", &[])
+        .expect_err("missing contained executable must fail closed");
+    let text = error.to_string();
+    assert!(text.contains("stage=process_creation"));
+    assert!(text.contains("category=executable_unavailable"));
+    assert!(text.contains("native_error=none"));
+    assert!(text.contains("fallback=none"));
+    assert!(!text.contains("medusa-missing-node-git"));
+}

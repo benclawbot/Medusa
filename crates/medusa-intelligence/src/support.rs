@@ -7,6 +7,12 @@ use walkdir::WalkDir;
 pub fn source_files(repo: &Path) -> Vec<PathBuf> {
     let mut paths = WalkDir::new(repo)
         .into_iter()
+        .filter_entry(|entry| {
+            entry.depth() == 0
+                || !relative(repo, entry.path())
+                    .components()
+                    .any(is_ignored_component)
+        })
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .map(|entry| entry.into_path())
@@ -15,7 +21,6 @@ pub fn source_files(repo: &Path) -> Vec<PathBuf> {
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| matches!(extension, "rs" | "py"))
         })
-        .filter(|path| !path.components().any(is_ignored_component))
         .collect::<Vec<_>>();
     paths.sort();
     paths
@@ -126,6 +131,19 @@ mod tests {
         assert_eq!(
             source_files(repository.path()),
             vec![repository.path().join("src/lib.rs")]
+        );
+    }
+
+    #[test]
+    fn discovery_does_not_apply_repository_ignores_to_parent_directories() {
+        let outer = tempfile::tempdir().expect("outer directory");
+        let repository = outer.path().join("build").join("repository");
+        fs::create_dir_all(repository.join("src")).expect("src");
+        fs::write(repository.join("src/lib.rs"), "fn included() {}\n").expect("source");
+
+        assert_eq!(
+            source_files(&repository),
+            vec![repository.join("src/lib.rs")]
         );
     }
 }

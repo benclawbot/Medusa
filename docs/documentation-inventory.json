@@ -404,6 +404,11 @@
       "sha256": "61960cc3824e8e748f11ae04c7d41552f649db84aaa1001fdef60f5da2a9b4dd"
     },
     {
+      "path": "docs/UNINSTALL.md",
+      "disposition": "current",
+      "sha256": "80b67dfe098eebdb314b2c3fe71c7c74ef613bae4e90f5caa2aaf87961e2a393"
+    },
+    {
       "path": "docs/WINDOWS-DESKTOP-NODE.md",
       "disposition": "current",
       "sha256": "e8ada547e0564ca45c7dbee909f22f9742b84bb63be4e768d5fa80688adf7dd2"

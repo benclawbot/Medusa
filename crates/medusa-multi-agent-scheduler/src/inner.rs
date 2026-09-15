@@ -212,9 +212,15 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
     } else {
         requested
             .iter()
+            // A path named by a mutation request is an explicit write boundary even when the
+            // file is new. The path has already passed `normalize_path`, and the public wrapper
+            // removes paths protected by scoped read-only clauses before reaching this planner.
+            // Keeping the exact candidate here preserves nested new-file scope without granting
+            // a parent directory or the repository as a whole.
             .filter(|candidate| {
                 path_exists(candidate, &input.repository_paths)
                     || (default_web_artifact && *candidate == "index.html")
+                    || mutation_requested
             })
             .cloned()
             .collect::<Vec<_>>()
@@ -816,6 +822,7 @@ fn normalize_path(value: &str) -> Option<String> {
         .to_owned();
     (!value.is_empty()
         && !value.starts_with('/')
+        && value.as_bytes().get(1) != Some(&b':')
         && !value.split('/').any(|part| matches!(part, "" | "..")))
     .then_some(value)
 }
@@ -1637,9 +1644,11 @@ fn validate_task(task: &Task) -> Result<(), &'static str> {
     if task.dependencies.contains(&task.id) {
         return Err("task cannot depend on itself");
     }
-    if task.write_paths.iter().any(|path| {
-        path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..")
-    }) {
+    if task
+        .write_paths
+        .iter()
+        .any(|path| normalize_path(path).is_none())
+    {
         return Err("write paths must be workspace relative");
     }
     Ok(())
@@ -1951,6 +1960,63 @@ mod tests {
         assert_eq!(planned.lane, ExecutionLane::FastMutation);
         assert_eq!(planned.model_turn_budget.successful_path_total, 4);
         assert_eq!(planned.model_turn_budget.repair_attempts, 2);
+    }
+
+    #[test]
+    fn typed_planner_preserves_explicit_nested_new_file_scope() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Create crates/widget/src/generated.rs".to_owned(),
+            attachment_count: 0,
+            repository_paths: vec!["crates/widget/Cargo.toml".to_owned()],
+        })
+        .expect("explicit new file should be plannable");
+
+        assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedMutation);
+        assert_eq!(
+            planned.scope.effective,
+            vec!["crates/widget/src/generated.rs".to_owned()]
+        );
+        assert_eq!(
+            planned
+                .task(TaskKind::Implementation)
+                .expect("implementation task")
+                .task
+                .write_paths,
+            vec!["crates/widget/src/generated.rs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn typed_planner_rejects_absolute_unc_and_drive_paths() {
+        for path in [
+            "/tmp/generated.rs",
+            r"\\server\share\generated.rs",
+            r"C:\workspace\generated.rs",
+        ] {
+            let planned = plan_typed(PlannerInput {
+                objective: format!("Create {path}"),
+                attachment_count: 0,
+                repository_paths: Vec::new(),
+            })
+            .expect("unsafe path should fail closed to a read-only plan");
+            assert_eq!(planned.scope.resolution, ScopeResolution::Unresolved);
+            assert!(planned.task(TaskKind::Implementation).is_none());
+        }
+    }
+
+    #[test]
+    fn scheduler_rejects_windows_drive_write_paths() {
+        let result = schedule(
+            vec![Task {
+                id: "write".to_owned(),
+                dependencies: Vec::new(),
+                capabilities: vec!["rust".to_owned()],
+                write_paths: vec![r"C:\workspace\generated.rs".to_owned()],
+                speculative: false,
+            }],
+            vec![worker("one")],
+        );
+        assert_eq!(result, Err("write paths must be workspace relative"));
     }
 
     #[test]
