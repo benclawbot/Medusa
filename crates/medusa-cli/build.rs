@@ -18,8 +18,10 @@ fn git_output(repository: &Path, arguments: &[&str]) -> Option<String> {
 }
 
 fn main() {
-    let repository =
-        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory")).join("../..");
+    let repository = env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("../..");
     println!("cargo:rerun-if-env-changed=MEDUSA_BUILD_COMMIT");
     if let Some(git_dir) = git_output(&repository, &["rev-parse", "--absolute-git-dir"]) {
         let git_dir = PathBuf::from(git_dir);
@@ -60,5 +62,4 @@ mod tests {
         assert_eq!(valid_revision("abc\ndef"), None);
         assert_eq!(valid_revision("éééééééé"), Some("éééééééé".to_owned()));
     }
-
 }

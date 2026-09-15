@@ -1,7 +1,9 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
-    let repository = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"))
+    let repository = env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
         .join("../../..");
     println!("cargo:rerun-if-env-changed=MEDUSA_BUILD_COMMIT");
     println!("cargo:rerun-if-changed=../../../.git/HEAD");

@@ -27,7 +27,10 @@ const PROXY_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long `spawn_bridge` waits for the node bridge to answer Ping before serving.
 const BRIDGE_READINESS_TIMEOUT: Duration = Duration::from_secs(10);
 /// Request id reserved for the internal bridge readiness Ping.
-const BRIDGE_PROBE_REQUEST_ID: u64 = u64::MAX;
+///
+/// The bridge runs in JavaScript, so the value must round-trip through an IEEE-754
+/// number without losing integer precision.
+const BRIDGE_PROBE_REQUEST_ID: u64 = (1_u64 << 53) - 1;
 
 pub fn run() -> io::Result<()> {
     let verification_route = configured_verification_route()?;

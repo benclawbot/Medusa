@@ -310,8 +310,14 @@ fn apply_limits(limits: ProcessLimits) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+type ResourceLimit = libc::__rlimit_resource_t;
+
+#[cfg(all(unix, not(target_os = "linux")))]
+type ResourceLimit = libc::c_int;
+
 #[cfg(unix)]
-fn set_limit(resource: libc::__rlimit_resource_t, value: u64) -> io::Result<()> {
+fn set_limit(resource: ResourceLimit, value: u64) -> io::Result<()> {
     let value = libc::rlim_t::try_from(value)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "resource limit is too large"))?;
     let limit = libc::rlimit {

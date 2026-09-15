@@ -24,7 +24,9 @@ The machine-readable authority is [`unsafe-rust-policy.json`](unsafe-rust-policy
 | `windows` | Job Object creation/configuration, thread snapshots and resume, process liveness, termination, and handle closing | Assign a suspended process before execution, close each owned handle exactly once, and keep `Send`/`Sync` justification limited to the owned Job Object wrapper. |
 | `windows_acl` | Process token lookup, SIDs, ACL/security descriptors, and LocalAlloc-owned results | Validate every returned structure, preserve allocation lifetimes, close/free resources exactly once, and reject inherited or unexpected access entries. |
 
-`lib.rs` and `flatbuffer_builder.rs` are classified safe and cannot receive unsafe-code exceptions.
+`lib.rs` and `windows_launch_diagnostics.rs` are classified safe and cannot receive
+unsafe-code exceptions. The full reviewed classification remains authoritative in
+`unsafe-rust-policy.json`.
 
 ## Trust boundary
 
