@@ -40,10 +40,6 @@ explicit registry contains that provider. The legacy compiler has no registry an
 fail closed for any selected service provider. This prevents configuration text from silently
 constructing a service or weakening an authority boundary.
 
-The canonical behavioral-health contract is also re-exported from `medusa-runtime`, so CLI,
-daemon, TUI, and embedded callers can consume the same versioned snapshot type rather than
-reimplementing status semantics.
-
 ## Alternatives considered
 
 ### Free-form provider names

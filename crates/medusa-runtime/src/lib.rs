@@ -56,14 +56,9 @@ use crate::{
 };
 
 pub mod analysis_contained;
+mod analysis_tool;
 pub mod analysis_workspace;
 pub mod attachment;
-pub mod behavioral_outcome;
-pub mod behavioral_health {
-    //! Runtime-facing re-export of the canonical cross-surface behavioral health contract.
-    pub use medusa_improvement::behavioral_health::*;
-}
-mod analysis_tool;
 pub mod checkpoint_payload;
 pub mod checkpoint_store;
 mod coding_trajectory;

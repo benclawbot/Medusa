@@ -459,17 +459,15 @@ Live coding evidence preserves committed product diffs, not only dirty working-t
 
 ### Memory and learning
 
-Medusa supports workspace-scoped Markdown memory, bounded recall with provenance, memory consolidation/writeback, verified-session learning/probationary lessons, failure history/negative outcomes, and a rule that optimistic or unverified completion cannot become accepted positive experience.
+Medusa supports workspace-scoped Markdown memory, bounded recall with provenance, verified-session learning/probationary lessons, failure history, and a rule that optimistic or unverified completion cannot become accepted positive experience.
 
-Continual refinement is evidence-gated: typed proposals preserve provenance, deterministic evaluation and explicit approval precede activation, security/authority roots stay outside refinable content, activation history is append-only, and exact rollback is retained. User corrections and accepted runtime signals feed a privacy-filtered typed provenance graph and evaluated correction loop rather than self-activating directly.
+Continual refinement is evidence-gated: typed proposals preserve provenance, explicit approval precedes activation, security/authority roots stay outside refinable content, activation history is append-only, and exact rollback is retained. User corrections and accepted runtime signals feed a privacy-filtered typed provenance graph and canonical refinement authority rather than self-activating directly.
 
-Production behavioral learning follows one result-authoritative lifecycle:
+Verified learning follows one result-authoritative lifecycle:
 
-**execute -> independently verify -> record outcome -> compare comparable cohorts -> detect improvement/regression -> test bounded adaptation -> independently re-verify -> promote or roll back**
+**execute -> independently verify -> propose -> review -> activate or reject**
 
 Model or worker claims such as “fixed,” “tests pass,” or confidence are observations, not correctness authority; independently verified root-task outcomes are the ground truth. Failed, cancelled, partial, censored, and inconclusive runs remain evidence, and monetary cost remains unknown unless an authoritative cost observation exists.
-
-The repository ships typed foundations for canonical behavioral outcomes, replayable/concurrency-safe learning projections, task-aware cohorts, drift reporting, bounded adaptive policy/controller contracts, Code Mode presentation, canonical tool results, model-experience/cache accounting, and runtime-loop configuration. README wording intentionally does **not** claim full end-to-end autonomous behavioral optimization acceptance until the corresponding production/live evidence is complete.
 
 ### Engineering policy
 
@@ -574,7 +572,7 @@ delegated worker only: sealed DelegationContract before session creation
 | **Containment** | Platform sandboxing, process ownership, limits, cleanup | `medusa-process-containment`, `medusa-process-registry`, `medusa-runtime-supervisor` |
 | **Protocol and providers** | Typed frontend/event contracts, model routes, role routing, reasoning exchange, streaming, Realtime voice contracts | `medusa-protocol`, `medusa-provider`, `medusa-openai-realtime` |
 
-For source-level ownership, see [Product architecture](docs/ARCHITECTURE.md), [Production execution trace](docs/PRODUCTION-EXECUTION-TRACE.md), [Contributor architecture](docs/CONTRIBUTOR-ARCHITECTURE.md), [Workspace modes](docs/WORKSPACES.md), and [ADR-0011: transactional component runtime](docs/architecture/decisions/0011-transactional-component-runtime.md).
+For source-level ownership, see [Product architecture](docs/ARCHITECTURE.md), [Production execution trace](docs/PRODUCTION-EXECUTION-TRACE.md), [Contributor architecture](docs/CONTRIBUTOR-ARCHITECTURE.md), and [Workspace modes](docs/WORKSPACES.md).
 
 ## Safety and containment
 
@@ -632,14 +630,11 @@ Workspace-local state lives under `.medusa`. Durable authority or rebuildable pr
 - transactional agent-scope contracts, generations, lifecycle, revocations, and owned-resource state;
 - coding trajectory checkpoints, structured repair ledgers, compaction manifests, and fingerprint-bound advisory summaries;
 - verification DAG checkpoints, exact-state reusable receipts, warm-resource descriptors, and repository-drift invalidation evidence;
-- continual-refinement proposals/activation history, correction-loop episodes, privacy-filtered provenance/effectiveness evidence, and rollback state;
-- canonical behavioral outcomes and rebuildable learning/cohort/drift projections where the corresponding contracts are active;
+- continual-refinement proposals/activation history, privacy-filtered provenance, and rollback state;
 - scheduled trigger occurrence/dispatch provenance admitted into durable session actions;
 - worker leases, epochs, isolated candidates, Git commit or directory snapshot receipts;
 - checkpoints, replay, time travel, transaction/review/authorization/rollback records;
 - failure/recovery decisions, memory/learning, and frontend continuity.
-
-The transactional component-runtime desired state, proposal records, effect ownership, cleanup debt, external-commit state, and reconciliation evidence use explicit version/revision semantics. The component runtime is an adoption seam and must not be confused with a second session journal or a replacement for existing canonical runtime authorities.
 
 Resume and recovery never treat display text or an optimistic model response as authoritative execution evidence. Model-visible worker instructions are tied to durable session/action state and effective request evidence rather than a standalone mailbox boolean.
 
@@ -656,9 +651,7 @@ Platform support does not imply identical containment, audio, browser, credentia
 - Autonomous nested delegation, unconstrained dynamic agent teams, consensus voting, and distributed multi-host mutation transactions are not supported.
 - Conflict-aware parallel **mutation** currently requires a Git workspace; directory/ephemeral workspaces deliberately use one isolated snapshot implementer.
 - Directory mutation fails closed on symlink-bearing workspaces; use Git mutation when symlink semantics must be preserved.
-- The transactional component runtime is an accepted and tested reference contract under incremental adoption; not every existing production service is component-managed or hot-replaceable.
 - The canonical tool-result migration is incomplete across all tool families; shell/output-envelope and related projections are migrated foundations, while remaining consumers continue to move toward one typed canonical result contract.
-- The full behavioral self-optimization loop is not claimed as end-to-end production-accepted until real canary/promotion/rollback evidence and cross-surface release integration are complete.
 - Telegram end-to-end voice acceptance still requires real bot/chat/Mini App access, audio hardware, and sanitized evidence under issue [#719](https://github.com/benclawbot/Medusa/issues/719). Desktop ChatGPT OAuth voice is not shipped because the Codex app-server route does not provide the Realtime session credential required by the desktop WebRTC path.
 - ChatGPT OAuth depends on the installed Codex CLI and its authenticated ChatGPT account; Node.js is not required for this route.
 - browser actions are readiness-gated preview: they are explicit opt-in, dispatched through the certified-production browser route, and not default-enabled. Set `MEDUSA_BROWSER_ENABLED=true` only with an approved `MEDUSA_BROWSER_PATH` and verified `MEDUSA_BROWSER_VERIFY_URL`; route admission, permissions, and required verification authority remain enforced.
@@ -670,9 +663,8 @@ Platform support does not imply identical containment, audio, browser, credentia
 
 GitHub issues are the source of truth for active work; the README does not treat closed implementation issues as future roadmap items.
 
-Current architecture work is focused on **adoption and completion**, not designing the component contract from scratch. The transactional component-runtime foundation is present on `main`; follow-on work should migrate appropriate non-authority runtime services to that contract without making fixed authorities pluggable, preserve cross-platform containment, and keep deterministic invariant/fault coverage authoritative.
-
-The behavioral-learning/Harness-inspired tracks also have substantial foundations on `main`—canonical outcome contracts, rebuildable projections, cohorts/drift foundations, Code Mode and canonical-result foundations, Model Experience/cache accounting, runtime configuration, and machine-checkable engineering policy—but remaining issue acceptance criteria must be completed before the README can claim every closed-loop adaptive behavior as production-proven.
+Current architecture work focuses on simplifying the shipped runtime around its canonical session,
+verification, memory, refinement, and recovery authorities.
 
 The remaining manual/live acceptance tracked for shipped-but-quarantined remote voice functionality is:
 
@@ -706,7 +698,6 @@ The remaining manual/live acceptance tracked for shipped-but-quarantined remote 
 - [Release process](docs/RELEASE.md)
 - [Release compatibility](docs/COMPATIBILITY.md)
 - [Telegram](docs/TELEGRAM.md)
-- [Live self-improvement acceptance](docs/LIVE-SELF-IMPROVEMENT-ACCEPTANCE.md)
 
 ## Development
 

@@ -456,7 +456,7 @@ kbd,
   border-color: var(--border) !important;
 }
 
-/* Engineering dashboard: neutral data visualization and honest no-data state. */
+/* Neutral data visualization and honest no-data states. */
 .engineering-shell,
 .engineering-dashboard {
   background: #f7f7f7 !important;

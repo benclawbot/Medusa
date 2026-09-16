@@ -1,24 +1,12 @@
 mod implementation;
 
-pub mod behavioral_health;
-pub mod behavioral_metrics;
-pub mod behavioral_outcome;
-pub mod correction_loop;
-pub mod correction_signals;
-pub mod improvement_controller;
 pub mod learning;
 pub mod learning_admission;
-pub mod learning_monitor;
 pub mod learning_review;
-pub mod lesson_inference;
-pub mod meta_improvement;
 pub mod provenance;
 pub mod refinement_authority;
 pub mod refinement_migration;
 mod refinement_persistence;
-pub mod regression_replay;
 pub mod retrieval;
 pub mod scoped_memory;
-pub mod solution_selection;
-pub mod tool_learning;
 pub use implementation::*;

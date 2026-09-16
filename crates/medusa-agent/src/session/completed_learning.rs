@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -10,15 +9,6 @@ use medusa_context::refinement::{
 };
 use medusa_core::{MedusaResult, learning_policy::LearningAdmissionPolicy};
 use medusa_improvement::{
-    behavioral_outcome::{
-        BehavioralOutcomeV1, BehavioralTerminalStatus, project_behavioral_outcome,
-    },
-    correction_loop::{
-        CorrectionLoopEngine, CorrectionLoopRequest, DeterministicProductionReplayRunner,
-    },
-    correction_signals::{ConversationRole, ConversationTurn},
-    learning_monitor::{CohortKey, LearningMonitorStore, OutcomeRecord, OutcomeStatus},
-    meta_improvement::MetaImprovementStore,
     provenance::{
         ProvenanceGraph, ProvenanceGraphStore, ProvenanceOutcome, ProvenanceSource,
         repository_identity, repository_revision,
@@ -26,7 +16,6 @@ use medusa_improvement::{
     refinement_authority::RefinementAuthorityStore,
 };
 use medusa_protocol::{Actor, EventPayload};
-use medusa_provider::{MessageBlock, Role};
 use serde_json::{Value, json};
 
 use super::{AgentSession, lessons, skill_drafts, skill_probation};
@@ -40,15 +29,6 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
     }
 
     let provenance = persist_provenance(session, &policy)?;
-    let correction_report = if session.completed {
-        process_correction_loop(session, &policy, provenance.clone())?
-    } else {
-        medusa_improvement::correction_loop::CorrectionLoopReport::default()
-    };
-    if session.completed {
-        record_monitor_outcome(session, &policy, &provenance)?;
-        record_meta_improvement_feedback(session, &policy, &provenance)?;
-    }
     if !session.completed {
         return Ok(());
     }
@@ -62,8 +42,7 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
         return Ok(());
     }
 
-    if correction_report.episodes.is_empty()
-        && policy.automatic_proposals_enabled()
+    if policy.automatic_proposals_enabled()
         && let Some(proposal_path) = lessons::extract_completed_session(session)?
     {
         let canonical_path = admit_to_canonical_memory(session, &proposal_path)?;
@@ -82,305 +61,11 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
             "completed": true,
             "authoritative_success": true,
             "automatic_proposals_enabled": policy.automatic_proposals_enabled(),
-            "telemetry_enabled": policy.telemetry_enabled(),
             "provenance_head_digest": provenance.head_digest,
             "provenance_observation_count": provenance.observations.len(),
             "authority_receipts": authority_receipts(session),
         }),
     )
-}
-
-fn canonical_behavioral_outcome(session: &AgentSession) -> MedusaResult<BehavioralOutcomeV1> {
-    project_behavioral_outcome(
-        session.id.as_str(),
-        repository_revision(&session.repo),
-        format!("medusa-agent/{}", env!("CARGO_PKG_VERSION")),
-        &session.events,
-    )
-    .map_err(|error| {
-        medusa_core::MedusaError::new(
-            medusa_core::ErrorCode::PersistenceFailed,
-            medusa_core::ErrorCategory::Persistence,
-            format!("canonical behavioral outcome projection failed: {error}"),
-        )
-    })
-}
-
-fn behavioral_route(outcome: &BehavioralOutcomeV1) -> (String, String, String) {
-    let execution = outcome
-        .contributing_execution()
-        .or_else(|| outcome.model_executions.last());
-    (
-        execution
-            .map(|execution| execution.model.clone())
-            .unwrap_or_else(|| "unknown-model".to_owned()),
-        execution
-            .map(|execution| execution.provider.clone())
-            .unwrap_or_else(|| "unknown-provider".to_owned()),
-        execution
-            .and_then(|execution| execution.request_fingerprint.clone())
-            .unwrap_or_else(|| "unknown-request".to_owned()),
-    )
-}
-
-fn behavioral_status(outcome: &BehavioralOutcomeV1) -> OutcomeStatus {
-    match outcome.terminal_status {
-        BehavioralTerminalStatus::VerifiedSuccess => OutcomeStatus::Positive,
-        BehavioralTerminalStatus::VerifiedFailure
-        | BehavioralTerminalStatus::Partial
-        | BehavioralTerminalStatus::Invalidated => OutcomeStatus::Negative,
-        BehavioralTerminalStatus::Cancelled => OutcomeStatus::Censored,
-        BehavioralTerminalStatus::Inconclusive => OutcomeStatus::Inconclusive,
-    }
-}
-
-fn behavioral_tool_cohort(outcome: &BehavioralOutcomeV1) -> String {
-    let mut tools = outcome
-        .tool_executions
-        .iter()
-        .map(|execution| execution.tool.clone())
-        .collect::<Vec<_>>();
-    tools.sort();
-    tools.dedup();
-    if tools.is_empty() {
-        "none".to_owned()
-    } else {
-        tools.join(",")
-    }
-}
-
-fn behavioral_retry_count(outcome: &BehavioralOutcomeV1) -> u32 {
-    let model_retries = outcome
-        .model_executions
-        .iter()
-        .filter(|execution| execution.failed || execution.attempt_ordinal > 1)
-        .count() as u32;
-    model_retries.saturating_add(outcome.failed_verification_attempts)
-}
-
-fn record_meta_improvement_feedback(
-    session: &AgentSession,
-    policy: &LearningAdmissionPolicy,
-    provenance: &ProvenanceGraph,
-) -> MedusaResult<()> {
-    if !policy.telemetry_enabled() {
-        return Ok(());
-    }
-    let behavioral = canonical_behavioral_outcome(session)?;
-    let (model, provider, _) = behavioral_route(&behavioral);
-    let harness = behavioral.harness_version.clone();
-    let mut store = MetaImprovementStore::open(&session.repo).map_err(|error| {
-        medusa_core::MedusaError::new(
-            medusa_core::ErrorCode::PersistenceFailed,
-            medusa_core::ErrorCategory::Persistence,
-            format!("meta-improvement store unavailable: {error}"),
-        )
-    })?;
-    store
-        .record_provenance(
-            &session.repo,
-            provenance,
-            &model,
-            &provider,
-            &harness,
-            behavioral
-                .last_event_unix_ms
-                .unwrap_or_else(|| session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000),
-        )
-        .map_err(|error| {
-            medusa_core::MedusaError::new(
-                medusa_core::ErrorCode::PersistenceFailed,
-                medusa_core::ErrorCategory::Persistence,
-                format!("meta-improvement feedback persistence failed: {error}"),
-            )
-        })?;
-    Ok(())
-}
-
-fn record_monitor_outcome(
-    session: &AgentSession,
-    policy: &LearningAdmissionPolicy,
-    provenance: &ProvenanceGraph,
-) -> MedusaResult<()> {
-    if !policy.telemetry_enabled() {
-        return Ok(());
-    }
-    let behavioral = canonical_behavioral_outcome(session)?;
-    let status = behavioral_status(&behavioral);
-    let recorded_at_unix_ms = behavioral
-        .last_event_unix_ms
-        .unwrap_or_else(|| session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000);
-    let repository_revision = behavioral
-        .repository_revision
-        .clone()
-        .unwrap_or_else(|| "unknown".to_owned());
-    let mut authoritative_receipt_ids = behavioral.verification_receipt_ids.clone();
-    authoritative_receipt_ids.extend(behavioral.integration_receipt_ids.iter().cloned());
-    authoritative_receipt_ids.sort();
-    authoritative_receipt_ids.dedup();
-    if authoritative_receipt_ids.is_empty() && status != OutcomeStatus::Positive {
-        authoritative_receipt_ids.extend(session.events.iter().filter_map(|event| {
-            matches!(
-                &event.payload,
-                EventPayload::SessionFailed { .. }
-                    | EventPayload::RuntimeFailed { .. }
-                    | EventPayload::CancellationCompleted
-            )
-            .then(|| event.event_id.to_string())
-        }));
-    }
-    let evidence_ids = provenance
-        .observations
-        .iter()
-        .map(|observation| observation.id.clone())
-        .chain(behavioral.source_event_ids.iter().cloned())
-        .take(64)
-        .collect();
-    let task_features = session
-        .objective
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|term| term.len() >= 2)
-        .map(str::to_ascii_lowercase)
-        .collect::<BTreeSet<_>>();
-    let (model, provider, request_fingerprint) = behavioral_route(&behavioral);
-    let outcome = OutcomeRecord {
-        // Monitor ingestion is retried on every completed-session persistence. Keep its
-        // deduplication identity stable when the session later receives lifecycle events.
-        id: format!("learning-outcome-{}", behavioral.session_id),
-        root_task_id: behavioral.root_task_id.clone(),
-        trajectory_id: behavioral.trajectory_id.clone(),
-        session_id: behavioral.session_id.clone(),
-        exposure_ids: Vec::new(),
-        status,
-        authoritative_receipt_ids,
-        evidence_ids,
-        task_features,
-        repository_revision: repository_revision.clone(),
-        cohort: CohortKey {
-            model,
-            provider,
-            harness: behavioral.harness_version.clone(),
-            prompt_fingerprint: request_fingerprint,
-            repository_revision,
-            tool_cohort: behavioral_tool_cohort(&behavioral),
-            simultaneous_exposures: Vec::new(),
-        },
-        authoritative_correct: match behavioral.terminal_status {
-            BehavioralTerminalStatus::VerifiedSuccess => Some(true),
-            BehavioralTerminalStatus::VerifiedFailure
-            | BehavioralTerminalStatus::Partial
-            | BehavioralTerminalStatus::Invalidated => Some(false),
-            BehavioralTerminalStatus::Cancelled | BehavioralTerminalStatus::Inconclusive => None,
-        },
-        verification_passed: behavioral.verification_passed,
-        user_correction_count: provenance
-            .observations
-            .iter()
-            .filter(|observation| observation.source == ProvenanceSource::UserCorrection)
-            .count() as u32,
-        parent_review_revisions: 0,
-        retries: behavioral_retry_count(&behavioral),
-        tool_failures: behavioral
-            .tool_executions
-            .iter()
-            .filter(|execution| {
-                execution.denied
-                    || execution.completed && execution.exit_code.is_some_and(|code| code != 0)
-            })
-            .count() as u32,
-        latency_millis: behavioral.latency_millis,
-        token_cost: behavioral.observed_token_usage,
-        privacy_violation: false,
-        safety_violation: false,
-        recorded_at_unix_ms,
-    };
-    let mut monitor = LearningMonitorStore::open(&session.repo).map_err(|error| {
-        medusa_core::MedusaError::new(
-            medusa_core::ErrorCode::PersistenceFailed,
-            medusa_core::ErrorCategory::Persistence,
-            format!("learning effectiveness monitor unavailable: {error}"),
-        )
-    })?;
-    monitor
-        .record_session_outcome(&session.repo, outcome)
-        .map_err(|error| {
-            medusa_core::MedusaError::new(
-                medusa_core::ErrorCode::PersistenceFailed,
-                medusa_core::ErrorCategory::Persistence,
-                format!("learning effectiveness outcome persistence failed: {error}"),
-            )
-        })?;
-    Ok(())
-}
-
-fn process_correction_loop(
-    session: &AgentSession,
-    policy: &LearningAdmissionPolicy,
-    provenance: ProvenanceGraph,
-) -> MedusaResult<medusa_improvement::correction_loop::CorrectionLoopReport> {
-    let turns = correction_turns(session);
-    if turns.is_empty() {
-        return Ok(medusa_improvement::correction_loop::CorrectionLoopReport::default());
-    }
-    let tool_capabilities = provenance
-        .tool_observations()
-        .filter_map(|observation| observation.tool_name.clone())
-        .collect::<Vec<_>>();
-    let request = CorrectionLoopRequest {
-        session_id: session.id.to_string(),
-        objective: session.objective.clone(),
-        turns,
-        provenance,
-        policy: policy.clone(),
-        repository_fixture: format!(
-            "repository revision {}",
-            repository_revision(&session.repo).unwrap_or_else(|| "unknown".to_owned())
-        ),
-        tool_capabilities,
-        now_unix_ms: session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000,
-    };
-    let report = CorrectionLoopEngine::default()
-        .run(&session.repo, request, &DeterministicProductionReplayRunner)
-        .map_err(|error| {
-            medusa_core::MedusaError::new(
-                medusa_core::ErrorCode::PersistenceFailed,
-                medusa_core::ErrorCategory::Persistence,
-                format!("correction-to-improvement loop failed: {error}"),
-            )
-        })?;
-    Ok(report)
-}
-
-fn correction_turns(session: &AgentSession) -> Vec<ConversationTurn> {
-    session
-        .messages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| {
-            let mut text = String::new();
-            for block in &message.content {
-                let MessageBlock::Text { text: value } = block else {
-                    return None;
-                };
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(value);
-            }
-            if text.trim().is_empty() {
-                return None;
-            }
-            let role = match message.role {
-                Role::User => ConversationRole::User,
-                Role::Assistant => ConversationRole::Assistant,
-            };
-            Some(ConversationTurn {
-                id: format!("message-{index}"),
-                role,
-                content: text,
-            })
-        })
-        .collect()
 }
 
 pub(super) fn provenance_graph(session: &AgentSession) -> MedusaResult<ProvenanceGraph> {
@@ -944,96 +629,6 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_completion_persists_an_unattributed_monitor_outcome() {
-        let repo = tempfile::tempdir().expect("repo");
-        update_privacy(
-            repo.path(),
-            medusa_core::learning_policy::LearningPrivacyPolicy {
-                capture_enabled: true,
-                user_persistence_enabled: false,
-                cross_repository_reuse_enabled: false,
-                telemetry_enabled: true,
-                automatic_proposals_enabled: false,
-            },
-        );
-        let mut session = session(repo.path());
-        process(&session).expect("process");
-        append_event(
-            &mut session,
-            Actor::Coordinator,
-            EventPayload::SessionReset {
-                reason: "new task after completion".to_owned(),
-            },
-        )
-        .expect("post-terminal event");
-        process(&session).expect("reprocess after post-terminal event");
-        let state: Value = serde_json::from_slice(
-            &fs::read(repo.path().join(".medusa/learning-monitor/state.json"))
-                .expect("monitor state"),
-        )
-        .expect("monitor json");
-        assert_eq!(
-            state["unattributed_outcomes"]
-                .as_array()
-                .map(|items| items.len()),
-            Some(1)
-        );
-        assert_eq!(state["unattributed_outcomes"][0]["status"], "positive");
-    }
-
-    #[test]
-    fn telemetry_failure_routes_typed_friction_to_meta_improvement_store() {
-        let repo = tempfile::tempdir().expect("repo");
-        update_privacy(
-            repo.path(),
-            medusa_core::learning_policy::LearningPrivacyPolicy {
-                capture_enabled: true,
-                user_persistence_enabled: false,
-                cross_repository_reuse_enabled: false,
-                telemetry_enabled: true,
-                automatic_proposals_enabled: false,
-            },
-        );
-        let mut session = session(repo.path());
-        session.events.clear();
-        append_event(
-            &mut session,
-            Actor::System("test".to_owned()),
-            EventPayload::VerificationCompleted {
-                passed: false,
-                evidence: vec!["cargo test failed".into()],
-            },
-        )
-        .expect("failed verification event");
-        append_event(
-            &mut session,
-            Actor::Coordinator,
-            EventPayload::SessionCompleted {
-                report_ref: "failed-report".into(),
-            },
-        )
-        .expect("completion event");
-        process(&session).expect("process");
-        let state: Value = serde_json::from_slice(
-            &fs::read(
-                repo.path()
-                    .join(".medusa/improvements/meta-proposals/state.json"),
-            )
-            .expect("meta-improvement state"),
-        )
-        .expect("meta-improvement json");
-        assert_eq!(
-            state["signals"].as_object().map(|items| items.len()),
-            Some(1)
-        );
-        assert!(
-            state["proposals"]
-                .as_object()
-                .is_some_and(|items| items.is_empty())
-        );
-    }
-
-    #[test]
     fn completed_session_without_authoritative_verification_is_ineligible() {
         let repo = tempfile::tempdir().expect("repo");
         let mut session = session(repo.path());
@@ -1174,44 +769,5 @@ mod tests {
         let value: Value = serde_json::from_str(&content).expect("memory json");
         assert_eq!(value["lifecycle"]["status"], "rejected");
         assert!(!content.contains("do-not-store"));
-    }
-
-    #[test]
-    fn user_correction_creates_reviewable_candidate_without_activation() {
-        let repo = tempfile::tempdir().expect("repo");
-        let mut session = session(repo.path());
-        session.messages = vec![
-            medusa_provider::Message {
-                role: medusa_provider::Role::Assistant,
-                content: vec![medusa_provider::MessageBlock::Text {
-                    text: "I claimed the source inventory was complete.".into(),
-                }],
-            },
-            medusa_provider::Message {
-                role: medusa_provider::Role::User,
-                content: vec![medusa_provider::MessageBlock::Text {
-                    text: "You missed coverage of the authoritative sources.".into(),
-                }],
-            },
-        ];
-        append_event(
-            &mut session,
-            Actor::User,
-            EventPayload::UserPromptReceived {
-                text: "You missed coverage of the authoritative sources.".into(),
-            },
-        )
-        .expect("correction event");
-        process(&session).expect("correction loop");
-        let state: serde_json::Value = serde_json::from_slice(
-            &fs::read(repo.path().join(".medusa/correction-loop/state.json"))
-                .expect("correction-loop state"),
-        )
-        .expect("state json");
-        assert_eq!(state["episodes"][0]["state"], "awaiting_review");
-        let authority = RefinementAuthorityStore::open(repo.path()).expect("authority");
-        let snapshot = authority.snapshot().expect("authority snapshot");
-        assert_eq!(snapshot.records.len(), 1);
-        assert!(snapshot.active.is_empty());
     }
 }

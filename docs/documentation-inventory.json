@@ -36,7 +36,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "6c94ce6bd991dbf36ce3af01cd89221819103112e0661f61a38d90f15a1cf59e"
+      "sha256": "c30f51530fa96ed3a65ec58c052e4fb6acac202090ebd2f86b5c8272f9ab22cb"
     },
     {
       "path": "SECURITY.md",
@@ -91,7 +91,7 @@
     {
       "path": "docs/ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "d77b955bcd8fa0feb5540c78f5bdbb1964c10d81869ef7a915bed327584a4cb9"
+      "sha256": "564b900952fae819714f98b55cf3abb21f8790f8a4f5e38a055a0d9d202eec78"
     },
     {
       "path": "docs/AUTOMATIC-LESSON-EXTRACTION.md",
@@ -217,11 +217,6 @@
       "path": "docs/LIVE-PROVIDER-DOGFOOD.md",
       "disposition": "current",
       "sha256": "930579c5fab0222591e99f8b40fc4f5d5eb02de38efc4e2cfaf8b677f9dfe715"
-    },
-    {
-      "path": "docs/LIVE-SELF-IMPROVEMENT-ACCEPTANCE.md",
-      "disposition": "current",
-      "sha256": "1a3373442aec127cf800e90022c2ee5074f87d8f815a38511311228f1f0856f4"
     },
     {
       "path": "docs/MULTIMODAL-TESTING.md",
@@ -451,7 +446,7 @@
     {
       "path": "docs/architecture/UNSAFE-RUST-BOUNDARY.md",
       "disposition": "current",
-      "sha256": "b75da639a0bce4bf6fe7616dc2434c86f8c9e6dfc0d9129283044a73df8fda46"
+      "sha256": "18a1caee681be5513e9150c12d9099e96ae85c8b98df33033ca80db1b7feff93"
     },
     {
       "path": "docs/architecture/decisions/0001-architecture-v2-reset.md",
@@ -501,12 +496,12 @@
     {
       "path": "docs/architecture/decisions/0010-typed-non-authority-service-providers.md",
       "disposition": "current",
-      "sha256": "da729b18ff2b49828e619ff0dc24774aba704146801f6f2bce88974a3004f25c"
+      "sha256": "925deb618a2fd841baeb648baec9b56e8c2964c9560ca5a32dcc8fa6c2547aa4"
     },
     {
       "path": "docs/architecture/decisions/0011-transactional-component-runtime.md",
       "disposition": "current",
-      "sha256": "feb8cbb4e0d7bb0696b6a913f361562f2b05fef22f78a8ebd0b5563f2b3f707c"
+      "sha256": "0c01a9669b922020704d1dafcacef9dcc40335aaa9d4907bf127cbcc2b0e4c3d"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",
@@ -756,7 +751,7 @@
     {
       "path": "docs/turn-memory-pipeline.md",
       "disposition": "current",
-      "sha256": "58b21482c784452200435299d84a86b0d93967138054d1bed5b17591e5199115"
+      "sha256": "f89ec11db724fac6c354d0e97c0c3ba54e311bc16969a0af196f575e62db74fa"
     },
     {
       "path": "docs/usability/README.md",
