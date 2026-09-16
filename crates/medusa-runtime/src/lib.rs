@@ -75,7 +75,6 @@ pub mod learning_review;
 mod memory_retrieval;
 mod mutation_transaction;
 pub mod observer;
-pub mod openai_realtime;
 pub mod prompt;
 mod repository_context;
 pub mod review;
@@ -87,8 +86,6 @@ pub mod skill_dependency_locks;
 mod support;
 #[cfg(test)]
 mod tests;
-pub mod voice;
-pub mod voice_agent_bridge;
 pub mod wakeup_action_bridge;
 
 #[rustfmt::skip]
@@ -97,8 +94,6 @@ mod parent_reviewer;
 mod parallel_mutation;
 mod parallel_mutation_batch;
 
-pub mod openai_realtime_session;
-pub mod openai_realtime_websocket;
 pub mod workspace;
 
 pub use crate::coordination::team_control::{

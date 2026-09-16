@@ -5,9 +5,6 @@ pub use medusa_runtime::commands::{
     ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand, TeamCommand, Verbosity,
 };
 
-#[path = "voice.rs"]
-pub mod voice;
-
 pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
     let trimmed = input.trim();
     if trimmed.eq_ignore_ascii_case("/settings") {

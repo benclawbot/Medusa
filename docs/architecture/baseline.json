@@ -16,7 +16,6 @@
     ["headless-cli", "medusa run", "crates/medusa-cli", "runtime commands and canonical journal"],
     ["daemon", "medusa __daemon-serve", "crates/medusa-daemon", "protocol v2 and canonical replay"],
     ["desktop", "apps/medusa-desktop", "apps/medusa-desktop", "daemon protocol v2 and canonical replay"],
-    ["telegram", "medusa telegram", "crates/medusa-daemon", "daemon-client protocol v2; transport-only local state"],
     ["github-operations", "medusa github / medusa-capabilities", "crates/medusa-github", "typed guarded operation contract"],
     ["self-update", "medusa update", "crates/medusa-update", "Ed25519-verified prebuilt release; explicit source developer channel"]
   ],
@@ -30,7 +29,6 @@
       "medusa-testkit": "preserve",
       "medusa-provider": "preserve",
       "medusa-external-provider": "preserve",
-      "medusa-openai-realtime": "preserve",
       "medusa-intelligence": "preserve",
       "medusa-world-model": "preserve",
       "medusa-progress": "preserve",
@@ -81,7 +79,7 @@
     "owner_groups": {
       "foundation": ["medusa-config", "medusa-core", "medusa-external-contracts", "medusa-protocol", "medusa-testkit"],
       "runtime": ["medusa-agent", "medusa-skill", "medusa-runtime", "medusa-cli", "medusa-tui", "medusa-daemon"],
-      "provider": ["medusa-external-provider", "medusa-openai-realtime", "medusa-provider"],
+      "provider": ["medusa-external-provider", "medusa-provider"],
       "coordination": ["medusa-workers", "medusa-multi-agent-scheduler", "medusa-worker-leases", "medusa-transaction-coordinator", "medusa-review-model"],
       "safety": ["medusa-process-containment", "medusa-process-registry", "medusa-tool-policy", "medusa-tool-control", "medusa-hardening"],
       "integrations": ["medusa-capabilities", "medusa-extensions", "medusa-github"],
@@ -103,7 +101,6 @@
     ["multi-agent-execution", "production", "certified-production", "preserve", "bounded teammates and dedicated durable parent reviewer", []],
     ["browser-tools", "preview", "certified-production", "preserve", "medusa-agent::ToolManager -> medusa-browserd", []],
     ["plugins-and-extensions", "managed", "preview", "adapt", "managed plugin manifest plus instruction-only SKILL.md", ["executable handlers require capability-specific certification"]],
-    ["telegram-remote-frontend", "partial", "quarantined", "quarantine", "daemon gateway", ["authenticated microphone/audio and live Telegram evidence"]],
     ["unsafe-ffi-boundary", "production", "certified-production", "preserve", "medusa-process-containment crate-local allowlist", []],
     ["evidence-verification-authority", "production", "certified-production", "preserve", "medusa-evidence::VerificationPlanner and VerificationReceipt", []]
   ],
@@ -119,7 +116,6 @@
     "multi-agent-execution": ["crates/medusa-runtime", "crates/medusa-agent", "crates/medusa-workers", "crates/medusa-multi-agent-scheduler"],
     "browser-tools": ["crates/medusa-capabilities", "crates/medusa-agent/src/tools", "crates/medusa-browser-client", "crates/medusa-browserd", "crates/medusa-agent/tests/browser_dispatch.rs", ".github/workflows/browser-dispatch-certification.yml"],
     "plugins-and-extensions": ["crates/medusa-extensions"],
-    "telegram-remote-frontend": ["crates/medusa-daemon"],
     "unsafe-ffi-boundary": ["crates/medusa-process-containment"],
     "evidence-verification-authority": ["crates/medusa-evidence", "crates/medusa-agent/src/verification_authority.rs", "crates/medusa-runtime/src/mutation_transaction_state.rs", "crates/medusa-workers/src/lib.rs"]
   },

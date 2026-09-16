@@ -25,7 +25,6 @@ medusa-improvement = { path = "../medusa-improvement" }
 medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
-medusa-openai-realtime = { path = "../medusa-openai-realtime" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { package = "medusa-external-provider", path = "../medusa-external-provider" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
@@ -37,8 +36,6 @@ medusa-tool-policy = { path = "../medusa-tool-policy" }
 medusa-wakeup = { path = "../medusa-wakeup" }
 medusa-git-workers = { package = "medusa-workers", path = "../medusa-workers" }
 png = "0.17"
-# Trusted runtime-only HTTP client for bounded Realtime client-secret minting.
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -46,7 +43,6 @@ toml.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tracing.workspace = true
-tungstenite.workspace = true
 
 [dev-dependencies]
 medusa-testkit.workspace = true

@@ -21,7 +21,6 @@ The independent repository audit found no unresolved architecture-v2 metadata or
 ## Truthful exclusions
 
 - Browser tools remain `quarantined` until authenticated live dispatcher and permission evidence exists.
-- Telegram remote behavior remains `quarantined` for microphone/audio and live operator evidence.
 - Managed instruction-only plugins remain `preview`; executable handlers require capability-specific certification.
 
 These exclusions do not own execution state and do not restore a v1 compatibility authority.

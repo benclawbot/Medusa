@@ -27,7 +27,7 @@ impl Effort {
     }
 }
 
-/// Display verbosity for tool-progress activity, mirroring the Telegram
+/// Display verbosity for tool-progress activity, mirroring the text frontend
 /// `/verbose <off|new|all|verbose>` levels: `off` hides tool, progress,
 /// and verification rows; `new` keeps only the latest such row; `all`
 /// shows every row; `verbose` additionally expands row details.

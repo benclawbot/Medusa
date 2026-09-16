@@ -45,9 +45,9 @@ Read-only planner/risk-review teammate coordination is independent of Git. Git i
 
 Architecture-v2 migration and certification are governed only by [`architecture/INDEX.md`](architecture/INDEX.md) and [`architecture/baseline.json`](architecture/baseline.json). This legacy availability ledger no longer reproduces a second certification table or migration-status narrative; doing so previously left completed work described as pending.
 
-The architecture authority records the certified shared runtime, durable state, guarded mutation lifecycle, provider health, release trust, containment, frontend projection, and other production boundaries. It also records the current exceptions: model-executable browser actions remain quarantined, plugins/extensions remain preview unless individually certified, and Telegram duplex/audio behavior remains quarantined pending real external evidence.
+The architecture authority records the certified shared runtime, durable state, guarded mutation lifecycle, provider health, release trust, containment, frontend projection, and other production boundaries. Model-executable browser actions remain quarantined and plugins/extensions remain preview unless individually certified.
 
-Provider route, dogfood, credential, and Realtime status are separately governed by [`provider-support.json`](provider-support.json). A legacy `production` availability entry here cannot promote a route or capability beyond either machine-readable authority.
+Provider route, dogfood, and credential status are separately governed by [`provider-support.json`](provider-support.json). A legacy `production` availability entry here cannot promote a route or capability beyond either machine-readable authority.
 
 ## Planned and scaffolding behavior
 

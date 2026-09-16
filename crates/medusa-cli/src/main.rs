@@ -1,7 +1,6 @@
 mod config_command;
 mod config_profiles;
 mod headless_approval;
-mod telegram_command;
 mod update_command;
 
 use super::uninstall_command;
@@ -151,11 +150,6 @@ enum CommandKind {
     },
     /// Remove the installed binary, repository state, channel marker, and locks.
     Uninstall,
-    /// Run the Telegram remote frontend over the repository daemon authority.
-    Telegram {
-        #[command(flatten)]
-        args: Box<telegram_command::TelegramArgs>,
-    },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
 }
@@ -302,7 +296,6 @@ fn run() -> MedusaResult<()> {
     }
 
     let command = match command {
-        CommandKind::Telegram { args } => return telegram_command::run(&repo, *args),
         CommandKind::Uninstall => {
             return uninstall_command::run(&repo, &[]).map_err(|error| {
                 MedusaError::new(ErrorCode::PersistenceFailed, ErrorCategory::Execution, error)
@@ -414,7 +407,6 @@ fn run() -> MedusaResult<()> {
             drain_headless_runtime(&runtime, &repo, None)
         }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
-        CommandKind::Telegram { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::Uninstall => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }

@@ -125,7 +125,7 @@ Git recovery can prove prior integration through ancestry/tree identity. Directo
 
 | Boundary | Current ownership | Requirement |
 |---|---|---|
-| Provider routes/readiness | `crates/medusa-provider`, `crates/medusa-openai-realtime`, `crates/medusa-config` | Exact capability/wire agreement, abortable requests, durable route health. |
+| Provider routes/readiness | `crates/medusa-provider`, `crates/medusa-config` | Exact capability/wire agreement, abortable requests, durable route health. |
 | GitHub OAuth/operations | `crates/medusa-github`, `crates/medusa-capabilities` | Typed, approval-gated service; not general workspace authority. |
 | Browser sidecar | `crates/medusa-browser-client`, `crates/medusa-browserd` | No model-executable advertisement before dispatcher, permissions, behavioral proof. |
 | Plugins/extensions | `crates/medusa-extensions` | Versioned manifest, least privilege, isolation, lifecycle, durable result. |

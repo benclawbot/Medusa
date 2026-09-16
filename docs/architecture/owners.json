@@ -27,7 +27,6 @@
     "medusa-intelligence": "intelligence",
     "medusa-memory": "state",
     "medusa-multi-agent-scheduler": "coordination",
-    "medusa-openai-realtime": "provider",
     "medusa-process-containment": "safety",
     "medusa-process-registry": "safety",
     "medusa-skill": "runtime",

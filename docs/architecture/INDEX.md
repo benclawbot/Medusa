@@ -6,7 +6,7 @@ This is the change-governance root and final certification record for Medusa arc
 
 Architecture v2 migration is complete. The phase-0 feature freeze is inactive, every production mutation follows one review-before-integration state machine, and no production entrypoint can select the retired conversational review or integrate-before-review compatibility path.
 
-A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree. Browser tools have a certified production dispatcher while the product surface remains a readiness-gated, explicit opt-in preview. Telegram duplex/audio behavior remains quarantined where external behavioral evidence is still incomplete; neither status creates a legacy execution authority.
+A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree. Browser tools have a certified production dispatcher while the product surface remains a readiness-gated, explicit opt-in preview.
 
 ## How to use this index
 
@@ -64,11 +64,10 @@ V2 invariants:
 | Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal projected through `medusa-protocol` |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | protocol v2 routes shared frontend commands and canonical replay batches |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | daemon protocol v2 commands, artifacts, transient events, and canonical replay |
-| Telegram | `medusa telegram` | `medusa-daemon::telegram` | daemon-client protocol v2 commands, bounded artifacts, canonical replay, and transport-only durable state |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | typed guarded operation request, confirmation tiers, normalized receipts, and audit evidence |
 | Update | `medusa update` | `crates/medusa-update` | Exact-revision rolling prebuilt main artifact with cached local-build fallback; verified stable release via explicit `--release` |
 
-CLI, TUI, daemon, desktop, and remote adapters share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics. Telegram microphone/audio and live operator evidence remain separately tracked external certification work; the gateway does not own execution state.
+CLI, TUI, daemon, and desktop share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics.
 
 ## Capability certification
 
@@ -90,7 +89,6 @@ Executable skill packages are owned by `crates/medusa-skill` and dispatched thro
 | Multi-agent execution | production | certified-production | preserve bounded teammates, isolated mutation, dedicated review, and durable completion | none |
 | Browser tools | preview | certified-production | readiness-gated, explicit opt-in via `medusa-agent::ToolManager` -> `medusa-browserd`; see [`0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md) | none for certified dispatcher; product remains preview |
 | Plugins/extensions | managed | preview | managed manifests and instruction-only `SKILL.md`; executable handlers require certification | handler-specific evidence |
-| Telegram remote frontend | partial | quarantined | shared daemon path is authoritative; duplex/audio claims remain withheld | authenticated microphone/audio and live Telegram evidence |
 | Unsafe/FFI boundary | production | certified-production | preserve crate-local allowlist and cross-platform containment proof | none |
 | TypeScript/JavaScript code intelligence | production read-only; guarded rename under certification | certification-pending | `medusa-intelligence` owns workspace/LSP normalization; `medusa-agent` owns dispatch; `PatchTransaction` owns mutation | final cross-platform and exhaustive issue-closing evidence |
 

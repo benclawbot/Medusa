@@ -14,7 +14,6 @@ mod process;
 mod protocol;
 mod scheduler;
 mod server;
-pub mod telegram;
 mod transport;
 
 use medusa_config::Config;
@@ -35,7 +34,7 @@ pub use live_session::{
 };
 pub use medusa_process_containment::{ConfinedDir, ConfinedReadError};
 pub use observability::initialize_observability;
-pub use operational_alerts::{OperationalAlertDispatcher, render_telegram_alert};
+pub use operational_alerts::{OperationalAlertDispatcher, render_operational_alert};
 pub use paths::DaemonPaths;
 pub use protocol::{
     DAEMON_PROTOCOL_VERSION, FrontendArtifactKind, FrontendArtifactUpload,

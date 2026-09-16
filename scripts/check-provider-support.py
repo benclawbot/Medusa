@@ -39,8 +39,6 @@ def load_manifest(root: Path) -> dict[str, Any]:
         dogfood = provider.get("dogfood")
         require(isinstance(dogfood, dict), f"missing dogfood declaration for {provider_id}")
         require(dogfood.get("status") in dogfood_statuses, f"unknown dogfood status for {provider_id}")
-        require(provider.get("realtime_voice") in {"unavailable", "external-acceptance-pending"},
-                f"unknown realtime voice status for {provider_id}")
         if dogfood["status"] == "primary":
             primary.append(provider)
 
@@ -59,18 +57,18 @@ def render_markdown(manifest: dict[str, Any]) -> str:
         "",
         "This file is generated from `docs/provider-support.json`. The manifest is the reviewed support and live-dogfood authority; `medusa-config` tests keep the selectable Rust catalog synchronized with it.",
         "",
-        "| Provider | Support tier | Runtime protocol | Credential | Live dogfood | Realtime voice |",
-        "|---|---|---|---|---|---|",
+        "| Provider | Support tier | Runtime protocol | Credential | Live dogfood |",
+        "|---|---|---|---|---|",
     ]
     for provider in manifest["providers"]:
         credential = provider["credential_environment"] or "external/local route"
         lines.append(
             f"| `{provider['id']}` | `{provider['support_tier']}` | `{provider['runtime_protocol']}` | "
-            f"`{credential}` | `{provider['dogfood']['status']}` | `{provider['realtime_voice']}` |"
+            f"`{credential}` | `{provider['dogfood']['status']}` |"
         )
     lines.extend([
         "",
-        "`production-supported` describes the selectable text/provider route; it does not promote a separate realtime or remote-frontend capability. Custom, managed, and local routes retain operator-owned endpoint dependencies.",
+        "`production-supported` describes the selectable provider route. Custom, managed, and local routes retain operator-owned endpoint dependencies.",
         "",
         "The scheduled cross-platform live dogfood gate resolves its provider, model, protocol, endpoint, authentication mode, and credential environment from the single `primary` entry. Other selectable routes remain configurable but are not represented as having passed that gate.",
         "",
@@ -81,7 +79,6 @@ def render_markdown(manifest: dict[str, Any]) -> str:
         lines.append(f"- `{capability['id']}`: {capability['reason']}")
     lines.extend([
         "",
-        "The desktop application does not expose Realtime voice. ChatGPT OAuth remains a text-provider route because the Codex app-server does not provide the Realtime session credential required by a desktop microphone/WebRTC client.",
         "",
         "See `docs/LIVE-PROVIDER-DOGFOOD.md` for the bounded evidence contract and `docs/PROVIDER-DELIVERY.md` for first-run diagnostics.",
         "",

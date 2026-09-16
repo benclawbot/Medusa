@@ -71,7 +71,6 @@ fn eager_model_command_for(args: impl IntoIterator<Item = String>) -> bool {
         "shell",
         "checkpoint",
         "request-audit",
-        "telegram",
         "__daemon-serve",
         "run",
         "resume",

@@ -18,7 +18,7 @@ Every tracked Markdown document and its current or historical disposition is rec
 ## Capabilities and releases
 
 - [Capability evidence](CAPABILITY-EVIDENCE.md) — auditable mapping from shipped capabilities to implementation and validation gates.
-- [Provider support authority](provider-support.json) and [rendered guide](PROVIDER-SUPPORT.md) — selectable provider, dogfood, credential, and Realtime status.
+- [Provider support authority](provider-support.json) and [rendered guide](PROVIDER-SUPPORT.md) — selectable provider, dogfood, and credential status.
 - [Release process](RELEASE.md) — versioning, validation, packaging, provenance, and draft-release workflow.
 
 ## Architecture and maintenance
