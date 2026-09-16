@@ -11,7 +11,6 @@ hex.workspace = true
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-extensions = { path = "../medusa-extensions" }
-medusa-github = { path = "../medusa-github" }
 medusa-improvement = { path = "../medusa-improvement" }
 medusa-provider = { path = "../medusa-provider" }
 medusa-transaction-coordinator = { path = "../medusa-transaction-coordinator" }

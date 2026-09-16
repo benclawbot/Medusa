@@ -36,13 +36,6 @@
       "required_checks": ["architecture-policy", "architecture-conformance"]
     },
     {
-      "id": "github-operation-authority",
-      "authority_paths": ["crates/medusa-github/**"],
-      "governed_paths": ["crates/medusa-cli/src/github_operation.rs", "crates/*github*/**", "docs/architecture/**"],
-      "parallel_authority_policy": "reject",
-      "required_checks": ["github-authority"]
-    },
-    {
       "id": "durable-journal-authority",
       "authority_paths": ["crates/medusa-agent/src/journal.rs"],
       "governed_paths": ["crates/**/journal*.rs", "crates/**/state*.rs", "crates/**/migration*.rs", "crates/**/recovery*.rs", "crates/**/schema*.rs"],
@@ -59,7 +52,6 @@
     "evidence-authority": {"kind": "command", "command": ["python3", "scripts/check-evidence-authority.py"]},
     "architecture-policy": {"kind": "inline"},
     "architecture-conformance": {"kind": "workflow", "workflow_name": "Architecture v2 Baseline"},
-    "github-authority": {"kind": "command", "command": ["python3", "scripts/github-authority-policy.py"]},
     "containment-linux": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
     "containment-macos": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
     "containment-windows": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
@@ -126,8 +118,8 @@
       "id": "architecture-boundary",
       "description": "Architecture authority and dependency-boundary changes require architecture conformance.",
       "include": [".github/architecture-policy.json", "scripts/architecture-policy.py", "scripts/architecture-conformance.py", "scripts/check-architecture-index.py", "docs/architecture/**", "Cargo.toml", "crates/*/Cargo.toml"],
-      "required_checks": ["architecture-policy", "architecture-conformance", "github-authority"],
-      "canonical_authorities": ["architecture-ownership", "github-operation-authority"],
+      "required_checks": ["architecture-policy", "architecture-conformance"],
+      "canonical_authorities": ["architecture-ownership"],
       "policy_sources": [".github/architecture-policy.json", "docs/architecture/owners.json", "docs/architecture/baseline.json"],
       "promotion": "protected-review",
       "protected": true

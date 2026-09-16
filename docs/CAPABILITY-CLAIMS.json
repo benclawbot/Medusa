@@ -126,50 +126,6 @@
       "dependencies": []
     },
     {
-      "id": "github-service",
-      "maturity": "production",
-      "summary": "Guarded GitHub authentication and repository workflow operations are exposed through a service boundary.",
-      "owner": "integration maintainers",
-      "production_paths": [
-        "crates/medusa-github"
-      ],
-      "test_paths": [
-        "crates/medusa-github"
-      ],
-      "gates": [
-        "CI",
-        "Release Gates"
-      ],
-      "entrypoints": [
-        "medusa GitHub workflows"
-      ],
-      "supported_platforms": [
-        "linux",
-        "macos",
-        "windows"
-      ],
-      "external_dependencies": [
-        "GitHub API"
-      ],
-      "observability": [
-        "docs/OBSERVABILITY.md"
-      ],
-      "documentation": [
-        "docs/CAPABILITY-EVIDENCE.md"
-      ],
-      "promotion_checklist": [
-        "owner assigned",
-        "entrypoint identified",
-        "behavioral tests present",
-        "supported platforms declared",
-        "observability documented",
-        "public documentation linked"
-      ],
-      "default_enabled": true,
-      "opt_in": null,
-      "dependencies": []
-    },
-    {
       "id": "provider-context-resilience",
       "maturity": "production",
       "summary": "Provider configuration, role routing, retries, failover, capability authority, typed reasoning exchange, context accounting, and compaction are runtime concerns.",

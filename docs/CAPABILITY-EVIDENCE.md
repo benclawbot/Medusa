@@ -21,7 +21,6 @@ Architecture v2 adds a separate certification status: `certified-production`, `l
 |---|---|---|---|---|---|
 | `shared-runtime` | `production` | runtime maintainers | `medusa`, desktop app | Linux, macOS, Windows | none |
 | `durable-sessions-memory` | `production` | agent runtime maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
-| `github-service` | `production` | integration maintainers | guarded GitHub workflows | Linux, macOS, Windows | GitHub API |
 | `provider-context-resilience` | `production` | provider maintainers | `medusa`, `medusa run`, `medusa quickstart` | Linux, macOS, Windows | configured model provider |
 | `identity-approval-transactions` | `production` | safety maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
 | `daemon` | `production` | daemon maintainers | daemon and desktop adapter | Linux, macOS, Windows | none |

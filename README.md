@@ -486,7 +486,6 @@ Scheduled timer/heartbeat/file/process/external-signal wakeups enter the same du
 | `medusa-agent` | Agent Orchestrator: session lifecycle, planning, policy, completion verification, and the shared Tool Manager |
 | `medusa-capabilities` | Capability Manager: one discovered capability matrix for CLI, TUI, desktop, and model context |
 | `medusa-provider` | Provider Manager: provider-neutral contracts, bounded retry/failover, response cache, and health snapshots |
-| `medusa-github` | GitHub Manager: authenticated repository, pull request, issue, and Actions operations via GitHub CLI credential storage |
 | `medusa-update` | Update Manager: release discovery, provenance/checksum verification, platform installation, rollback, and restart |
 | `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
 | `medusa-memory` | Markdown storage, retrieval, provenance, and lifecycle |

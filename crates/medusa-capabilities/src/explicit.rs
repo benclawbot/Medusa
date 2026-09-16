@@ -4,7 +4,6 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_github::{AuthStatus, CommandExecutor, GitHubService};
 use medusa_improvement::ImprovementProposal;
 use medusa_transaction_coordinator::{
     CoordinatorError, Decision, Participant, TransactionCoordinator, TransactionPhase, Vote,
@@ -30,25 +29,6 @@ pub struct CapabilityDescriptor {
     pub description: String,
     pub permissions: BTreeSet<CapabilityPermission>,
     pub explicit_approval: BTreeSet<CapabilityPermission>,
-}
-
-#[must_use]
-pub fn github_descriptor() -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        id: "github_operations".into(),
-        capability: Capability::GitHub,
-        description:
-            "Authenticated GitHub reads and explicitly approved writes through medusa-github".into(),
-        permissions: BTreeSet::from([
-            CapabilityPermission::Read,
-            CapabilityPermission::Write,
-            CapabilityPermission::RepositoryMutation,
-        ]),
-        explicit_approval: BTreeSet::from([
-            CapabilityPermission::Write,
-            CapabilityPermission::RepositoryMutation,
-        ]),
-    }
 }
 
 #[must_use]
@@ -149,13 +129,6 @@ impl CapabilityAuthorizer {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PendingGitHubIssue {
-    pub id: String,
-    pub title: String,
-    pub body: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ImprovementPatchProposal {
     pub proposal: ImprovementProposal,
     pub rationale: String,
@@ -218,78 +191,20 @@ pub struct CapabilityDiagnostics {
     pub audit_events: Vec<CapabilityAuditEvent>,
 }
 
-pub struct ExplicitCapabilityRuntime<E> {
+pub struct ExplicitCapabilityRuntime {
     authorizer: CapabilityAuthorizer,
-    github: GitHubService<E>,
     coordinator: TransactionCoordinator,
-    pending_github_issues: BTreeMap<String, PendingGitHubIssue>,
     pending_improvements: BTreeMap<String, ImprovementPatchProposal>,
 }
 
-impl<E: CommandExecutor> ExplicitCapabilityRuntime<E> {
+impl ExplicitCapabilityRuntime {
     #[must_use]
-    pub fn new(
-        registry: CapabilityRegistry,
-        grants: Vec<CapabilityGrant>,
-        github: GitHubService<E>,
-    ) -> Self {
+    pub fn new(registry: CapabilityRegistry, grants: Vec<CapabilityGrant>) -> Self {
         Self {
             authorizer: CapabilityAuthorizer::new(registry, grants),
-            github,
             coordinator: TransactionCoordinator::default(),
-            pending_github_issues: BTreeMap::new(),
             pending_improvements: BTreeMap::new(),
         }
-    }
-    pub fn github_auth_status(&mut self) -> MedusaResult<AuthStatus> {
-        self.authorizer
-            .require(&github_descriptor(), CapabilityPermission::Read, false)?;
-        self.github.auth_status()
-    }
-    pub fn propose_github_issue(
-        &mut self,
-        id: impl Into<String>,
-        title: impl Into<String>,
-        body: impl Into<String>,
-    ) -> MedusaResult<PendingGitHubIssue> {
-        self.authorizer
-            .require(&github_descriptor(), CapabilityPermission::Read, false)?;
-        let proposal = PendingGitHubIssue {
-            id: id.into(),
-            title: title.into(),
-            body: body.into(),
-        };
-        if proposal.id.trim().is_empty()
-            || proposal.title.trim().is_empty()
-            || proposal.body.trim().is_empty()
-        {
-            return Err(invalid("GitHub issue proposal is incomplete"));
-        }
-        if self.pending_github_issues.contains_key(&proposal.id) {
-            return Err(invalid("GitHub issue proposal id must be unique"));
-        }
-        self.pending_github_issues
-            .insert(proposal.id.clone(), proposal.clone());
-        Ok(proposal)
-    }
-    pub fn approve_github_issue(
-        &mut self,
-        proposal_id: &str,
-        explicit_approval: bool,
-    ) -> MedusaResult<String> {
-        self.authorizer.require(
-            &github_descriptor(),
-            CapabilityPermission::Write,
-            explicit_approval,
-        )?;
-        let proposal = self
-            .pending_github_issues
-            .get(proposal_id)
-            .cloned()
-            .ok_or_else(|| invalid("GitHub issue proposal does not exist"))?;
-        let output = self.github.create_issue(&proposal.title, &proposal.body)?;
-        self.pending_github_issues.remove(proposal_id);
-        Ok(output)
     }
     pub fn stage_improvement(
         &mut self,
@@ -431,7 +346,7 @@ impl<E: CommandExecutor> ExplicitCapabilityRuntime<E> {
     pub fn diagnostics(&self) -> CapabilityDiagnostics {
         CapabilityDiagnostics {
             states: self.authorizer.registry().capabilities.clone(),
-            descriptors: vec![github_descriptor(), self_improvement_descriptor()],
+            descriptors: vec![self_improvement_descriptor()],
             audit_events: self.authorizer.events().to_vec(),
         }
     }
@@ -511,69 +426,26 @@ fn policy_denied(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use medusa_github::CommandOutput;
     use medusa_improvement::{ImprovementRisk, ImprovementTarget};
-    use std::{
-        path::PathBuf,
-        sync::{Arc, Mutex},
-    };
-    type RecordedCommands = Arc<Mutex<Vec<(String, Vec<String>)>>>;
-    #[derive(Clone, Default)]
-    struct FakeExecutor(RecordedCommands);
-    impl CommandExecutor for FakeExecutor {
-        fn run(
-            &self,
-            program: &str,
-            arguments: &[String],
-            _: Option<&Path>,
-        ) -> MedusaResult<CommandOutput> {
-            self.0
-                .lock()
-                .expect("commands")
-                .push((program.into(), arguments.to_vec()));
-            Ok(CommandOutput {
-                success: true,
-                stdout: "ok".into(),
-                stderr: String::new(),
-            })
-        }
-    }
+    use std::path::PathBuf;
     struct FakeProbe;
     impl crate::CommandProbe for FakeProbe {
         fn available(&self, program: &str, _: &[&str]) -> bool {
-            matches!(program, "gh" | "git" | "node" | "sh" | "cmd")
+            matches!(program, "git" | "node" | "sh" | "cmd")
         }
     }
-    fn runtime() -> ExplicitCapabilityRuntime<FakeExecutor> {
+    fn runtime() -> ExplicitCapabilityRuntime {
         let directory = tempfile::tempdir().expect("tempdir").keep();
         let registry =
             CapabilityRegistry::discover_with(directory.clone(), &FakeProbe).expect("registry");
-        let grants = vec![
-            CapabilityGrant {
-                capability: Capability::GitHub,
-                permissions: BTreeSet::from([
-                    CapabilityPermission::Read,
-                    CapabilityPermission::Write,
-                ]),
-            },
-            CapabilityGrant {
-                capability: Capability::SelfImprovement,
-                permissions: BTreeSet::from([
-                    CapabilityPermission::Read,
-                    CapabilityPermission::RepositoryMutation,
-                ]),
-            },
-        ];
-        ExplicitCapabilityRuntime::new(
-            registry,
-            grants,
-            GitHubService::with_executor(
-                "owner/repo",
-                "github.com",
-                Some(directory),
-                FakeExecutor::default(),
-            ),
-        )
+        let grants = vec![CapabilityGrant {
+            capability: Capability::SelfImprovement,
+            permissions: BTreeSet::from([
+                CapabilityPermission::Read,
+                CapabilityPermission::RepositoryMutation,
+            ]),
+        }];
+        ExplicitCapabilityRuntime::new(registry, grants)
     }
     fn patch(id: &str, path: &str) -> ImprovementPatchProposal {
         ImprovementPatchProposal {

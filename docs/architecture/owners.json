@@ -21,7 +21,6 @@
     "medusa-external-contracts": "foundation",
     "medusa-external-provider": "provider",
     "medusa-failure": "recovery",
-    "medusa-github": "integrations",
     "medusa-hardening": "safety",
     "medusa-improvement": "intelligence",
     "medusa-intelligence": "intelligence",

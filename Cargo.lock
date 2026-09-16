@@ -1524,7 +1524,6 @@ dependencies = [
  "medusa-config",
  "medusa-core",
  "medusa-extensions",
- "medusa-github",
  "medusa-improvement",
  "medusa-provider",
  "medusa-transaction-coordinator",
@@ -1556,7 +1555,6 @@ dependencies = [
  "medusa-core",
  "medusa-daemon",
  "medusa-extensions",
- "medusa-github",
  "medusa-hardening",
  "medusa-memory",
  "medusa-protocol",
@@ -1757,17 +1755,6 @@ version = "1.0.9"
 dependencies = [
  "serde",
  "time",
-]
-
-[[package]]
-name = "medusa-github"
-version = "1.0.9"
-dependencies = [
- "medusa-core",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
 ]
 
 [[package]]

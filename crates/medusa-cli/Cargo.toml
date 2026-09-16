@@ -22,10 +22,6 @@ path = "src/capabilities.rs"
 doc = false
 
 [[bin]]
-name = "medusa-github-operation"
-path = "src/github_operation.rs"
-
-[[bin]]
 name = "medusa-clarity"
 path = "src/clarity.rs"
 
@@ -57,7 +53,6 @@ medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
-medusa-github = { path = "../medusa-github" }
 medusa-hardening = { path = "../medusa-hardening" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-protocol.workspace = true

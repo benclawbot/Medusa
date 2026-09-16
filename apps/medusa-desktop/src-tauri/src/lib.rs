@@ -4,18 +4,6 @@ mod desktop_command;
 mod desktop_update;
 mod diffs;
 mod dto;
-mod github_actions;
-mod github_audit;
-mod github_auth;
-mod github_checks;
-mod github_issue_mutations;
-mod github_issues;
-mod github_logs;
-#[rustfmt::skip]
-mod github_merge;
-mod github_private_repository;
-mod github_pull_request_mutations;
-mod github_repository;
 mod learning;
 mod memories;
 mod model_registry;
@@ -23,7 +11,6 @@ mod mutations;
 mod permissions;
 mod preview;
 mod provider_auth;
-mod pull_requests;
 mod review;
 mod runtime {
     include!("runtime.rs");
@@ -46,19 +33,6 @@ use desktop_update::{
     desktop_update_from_main, desktop_update_renderer_ready, desktop_update_status,
 };
 use diffs::runtime_read_diff;
-use github_actions::runtime_retry_github_actions_job;
-use github_audit::runtime_persist_github_mutation_audit;
-use github_auth::runtime_github_auth_status;
-use github_checks::runtime_github_commit_checks;
-use github_issue_mutations::{runtime_create_github_issue, runtime_update_github_issue};
-use github_issues::runtime_github_issues;
-use github_logs::runtime_github_actions_job_log;
-use github_merge::runtime_merge_github_pull_request;
-use github_private_repository::{runtime_clone_github_repository, runtime_fetch_github_repository};
-use github_pull_request_mutations::{
-    runtime_review_github_pull_request, runtime_update_github_pull_request,
-};
-use github_repository::runtime_github_repository_access;
 use learning::{
     runtime_learning_evaluate, runtime_learning_export, runtime_learning_inspect,
     runtime_learning_privacy, runtime_learning_propose, runtime_learning_redaction_preview,
@@ -72,7 +46,6 @@ use mutations::{
 use permissions::{desktop_permission_mode, desktop_permission_modes, desktop_set_permission_mode};
 use preview::{PreviewRegistry, preview_runtime_close, preview_runtime_find_web_artifact};
 use provider_auth::{desktop_browser_oauth, desktop_ensure_browser_oauth};
-use pull_requests::runtime_create_draft_pull_request;
 use review::{runtime_apply_review_action, runtime_export_review_audit, runtime_read_review};
 use runtime::{
     RuntimeRegistry, runtime_begin_wakeups, runtime_cancel, runtime_command,
@@ -140,21 +113,6 @@ pub fn run() -> tauri::Result<()> {
             runtime_create_checkpoint,
             runtime_commit_changes,
             runtime_push_branch,
-            runtime_create_draft_pull_request,
-            runtime_github_auth_status,
-            runtime_github_repository_access,
-            runtime_clone_github_repository,
-            runtime_fetch_github_repository,
-            runtime_github_commit_checks,
-            runtime_github_issues,
-            runtime_create_github_issue,
-            runtime_update_github_issue,
-            runtime_update_github_pull_request,
-            runtime_review_github_pull_request,
-            runtime_persist_github_mutation_audit,
-            runtime_github_actions_job_log,
-            runtime_retry_github_actions_job,
-            runtime_merge_github_pull_request,
             runtime_list_memories,
             runtime_learning_review,
             runtime_learning_transition,
