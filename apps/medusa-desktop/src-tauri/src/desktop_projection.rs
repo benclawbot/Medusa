@@ -32,6 +32,14 @@ impl DesktopCanonicalPresentation {
         self.pending.push_back(map_transient_event(event));
     }
 
+    /// Make the accepted submission visible immediately, even while the first durable replay
+    /// batch is still being produced by the runtime worker.
+    fn push_started(&mut self) {
+        if let Some(event) = canonical_start_event(&mut self.run_active) {
+            self.pending.push_back(event);
+        }
+    }
+
     fn try_event(&mut self) -> Option<DesktopRuntimeEvent> {
         self.pending.pop_front()
     }
@@ -524,6 +532,18 @@ mod desktop_projection_tests {
             canonical_start_event(&mut run_active),
             Some(DesktopRuntimeEvent::Started)
         ));
+    }
+
+    #[test]
+    fn accepted_submission_queues_one_immediate_start_signal() {
+        let mut presentation = DesktopCanonicalPresentation::new();
+        presentation.push_started();
+        assert!(matches!(
+            presentation.try_event(),
+            Some(DesktopRuntimeEvent::Started)
+        ));
+        presentation.push_started();
+        assert!(presentation.try_event().is_none());
     }
 
     #[test]

@@ -105,6 +105,8 @@ interface WorkLogEntry {
   activityId?: string;
 }
 
+type LiveTurnPhase = "submitting" | "starting" | "waiting" | "responding" | "queued";
+
 interface UsageState {
   input: number;
   output: number;
@@ -288,22 +290,41 @@ function activityStatusClass(entry: WorkLogEntry): string {
   return entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : "";
 }
 
+function liveTurnPhaseLabel(phase: LiveTurnPhase | undefined): string {
+  switch (phase) {
+    case "submitting":
+      return "Submitting request…";
+    case "starting":
+      return "Starting runtime turn…";
+    case "waiting":
+      return "Waiting for the first runtime action…";
+    case "responding":
+      return "Preparing the response…";
+    case "queued":
+      return "Queued behind the active turn…";
+    default:
+      return "Waiting for runtime activity…";
+  }
+}
+
 function LiveActivityTrail({
   entries,
   verboseDetails,
   elapsedSeconds,
   activeEntry,
+  phase,
 }: {
   entries: WorkLogEntry[];
   verboseDetails: boolean;
   elapsedSeconds: number;
   activeEntry?: WorkLogEntry;
+  phase?: LiveTurnPhase;
 }) {
   return (
     <section className="activity-summary live-activity-trail" aria-label="Actions in progress">
       <div className="activity-summary-heading">
         <span><Activity size={15} aria-hidden="true" /> Working for {formatWorkedDuration(elapsedSeconds)}</span>
-        <small>{activeEntry?.text ?? "Starting turn…"}</small>
+        <small>{activeEntry?.text ?? liveTurnPhaseLabel(phase)}</small>
       </div>
       {entries.map((entry) => (
         <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={entry.status === "Working" || verboseDetails || undefined}>
@@ -548,6 +569,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const [partialResult, setPartialResult] = useState(false);
   const [turnSummary, setTurnSummary] = useState<TurnSummaryState>();
   const [liveElapsedSeconds, setLiveElapsedSeconds] = useState(0);
+  const [liveTurnPhase, setLiveTurnPhase] = useState<LiveTurnPhase>();
   const turnStartedAt = useRef<number>();
   const assistantResponseInTurn = useRef(false);
   const assistantStream = useRef<{ id: number; raw: string; text: string; createdAt: number }>();
@@ -792,6 +814,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setBusy(true);
         setError(undefined);
         setPartialResult(false);
+        setTurn((current) => Math.max(current, 1));
+        setLiveTurnPhase("waiting");
         turnStartedAt.current = Date.now();
         setTurnSummary(undefined);
         terminalEventHandled.current = false;
@@ -800,9 +824,11 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         lastTransportError.current = undefined;
         break;
       case "assistantText":
+        setLiveTurnPhase("responding");
         appendAssistantDelta(event.text);
         break;
       case "activity": {
+        setLiveTurnPhase("waiting");
         const activity = { ...event.activity, details: event.activity.details ?? [] };
         setActivities((current) => {
           if (!activity.id) return appendBounded(current, activity, MAX_ACTIVITY_ENTRIES);
@@ -843,6 +869,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         break;
       }
       case "plan":
+        setLiveTurnPhase("waiting");
         setPlan(event.steps);
         break;
       case "question":
@@ -860,6 +887,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         });
         break;
       case "progress":
+        setLiveTurnPhase("waiting");
         setTurn(event.turn);
         break;
       case "settings":
@@ -895,6 +923,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setWebArtifact(undefined);
         setTurnSummary(undefined);
         turnStartedAt.current = undefined;
+        setLiveTurnPhase(undefined);
         setPartialResult(false);
         setSidePanelView("work");
         terminalEventHandled.current = false;
@@ -911,6 +940,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         terminalEventHandled.current = true;
         flushAssistantStream();
         setBusy(false);
+        setLiveTurnPhase(undefined);
         setActivities((current) => finishActivities(current, "done", "Turn completed."));
         appendWorkLog({ kind: "status", text: "Final response ready", status: "Done" });
         setTurnSummary({ status: "completed", elapsedSeconds: Math.max(0, Math.round((Date.now() - (turnStartedAt.current ?? Date.now())) / 1000)) });
@@ -924,6 +954,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         terminalEventHandled.current = true;
         flushAssistantStream();
         setBusy(false);
+        setLiveTurnPhase(undefined);
         setActivities((current) => finishActivities(current, "done", "Turn finished."));
         appendWorkLog({ kind: "status", text: "Turn finished", status: "Done" });
         setTurnSummary({ status: "completed", elapsedSeconds: Math.max(0, Math.round((Date.now() - (turnStartedAt.current ?? Date.now())) / 1000)) });
@@ -934,6 +965,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         break;
       case "cancelled":
         setBusy(false);
+        setLiveTurnPhase(undefined);
         setActivities((current) => finishActivities(current, "error", "Stopped because the turn was cancelled."));
         appendWorkLog({ kind: "status", text: "Turn stopped", status: "Stopped" });
         setTurnSummary({ status: "cancelled", elapsedSeconds: Math.max(0, Math.round((Date.now() - (turnStartedAt.current ?? Date.now())) / 1000)) });
@@ -942,6 +974,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         break;
       case "failed":
         setBusy(false);
+        setLiveTurnPhase(undefined);
         setActivities((current) => finishActivities(current, "error", `Stopped because the runtime failed: ${event.message}`));
         setError(event.message);
         setPartialResult(false);
@@ -1392,6 +1425,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     if (submitsTurn) {
       setBusy(true);
       setPendingSubmit(true);
+      setLiveTurnPhase("submitting");
     }
     if (submitsTurn) {
       assistantResponseInTurn.current = false;
@@ -1448,6 +1482,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         setMessages((current) => current.map((message) => message.id === userMessageId
             ? { ...message, queued: disposition === "queued", failed: false }
             : message));
+        setLiveTurnPhase(disposition === "queued" ? "queued" : "starting");
         failedMessage.current = undefined;
         clearAcceptedComposer(submittedComposer);
       }
@@ -1455,6 +1490,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
       if (submitsTurn) {
         setBusy(false);
         setPendingSubmit(false);
+        setLiveTurnPhase(undefined);
       }
       const message = toUserError(cause);
       setError(message);
@@ -1974,7 +2010,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                   )}
                 </article>
               ))}
-              {busy && <LiveActivityTrail entries={liveActivityEntries} verboseDetails={verboseDetails} elapsedSeconds={liveElapsedSeconds} activeEntry={activeWorkEntry} />}
+              {busy && <LiveActivityTrail entries={liveActivityEntries} verboseDetails={verboseDetails} elapsedSeconds={liveElapsedSeconds} activeEntry={activeWorkEntry} phase={liveTurnPhase} />}
               {!busy && turnSummary && (
                 <FinalTurnSummary
                   summary={turnSummary}

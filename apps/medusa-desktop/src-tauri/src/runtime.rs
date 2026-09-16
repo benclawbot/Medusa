@@ -558,6 +558,12 @@ pub async fn runtime_submit(
                 return Err("daemon returned an unexpected submission result".to_owned());
             };
             entry.session_id = Some(session_id);
+            if !queued {
+                // The runtime worker emits Started too, but its first durable replay can lag the
+                // submission acknowledgement. Queue one canonical start event now so the
+                // renderer never sits at turn 0 with only an elapsed-time counter.
+                entry.presentation.push_started();
+            }
             Ok(if queued {
                 DesktopSubmitDisposition::Queued
             } else {

@@ -513,9 +513,33 @@ it("switches to the stop button while Enter submission is still in flight", asyn
   fireEvent.keyDown(composer, { key: "Enter", shiftKey: false });
 
   expect(await screen.findByRole("button", { name: "Stop active turn" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Actions in progress" })).toHaveTextContent("Submitting request…");
   expect(composer).toHaveValue("");
   resolveSubmit("started");
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveValue(""));
+});
+
+it("promotes the visible turn when the runtime reports its start", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-started", repo: "" });
+  vi.mocked(submitRuntime).mockResolvedValue("started");
+  let deliverStarted = false;
+  let startedDelivered = false;
+  vi.mocked(pollRuntime).mockImplementation(async () => {
+    if (deliverStarted && !startedDelivered) {
+      startedDelivered = true;
+      return [{ type: "started" }];
+    }
+    return [];
+  });
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  fireEvent.change(composer, { target: { value: "Show the active turn" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  deliverStarted = true;
+
+  expect(await screen.findByText("Working · turn 1")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Actions in progress" })).toHaveTextContent("Waiting for the first runtime action…");
 });
 
 it("ignores duplicate submit events while the first request is in flight", async () => {
