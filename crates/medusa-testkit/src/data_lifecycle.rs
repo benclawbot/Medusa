@@ -314,8 +314,8 @@ pub const LIFECYCLE: &[LifecycleEntry] = &[
         "owning user/repository memory scope",
     ),
     entry(
-        "prompt_mcp_and_context_caches",
-        "medusa-prompt-cache / medusa-mcp-cache / medusa-context-retrieval",
+        "prompt_and_repository_context_caches",
+        "medusa-prompt-cache / medusa-intelligence repository index",
         Authority::Derived,
         "bounded cache/index state",
         "authorized source content and cache keys",
@@ -399,7 +399,7 @@ mod tests {
         "configuration_history_and_redacted_audit_records",
         "crash_support_and_diagnostic_bundles",
         "memory_markdown_authority_and_rebuildable_index",
-        "prompt_mcp_and_context_caches",
+        "prompt_and_repository_context_caches",
         "temporary_worktrees_files_and_resource_pool_state",
     ];
 
@@ -482,7 +482,7 @@ mod tests {
 
         let caches = LIFECYCLE
             .iter()
-            .find(|entry| entry.data_class == "prompt_mcp_and_context_caches")
+            .find(|entry| entry.data_class == "prompt_and_repository_context_caches")
             .expect("cache lifecycle entry");
         assert!(caches.visibility.contains("never authorization"));
     }
