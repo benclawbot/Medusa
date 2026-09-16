@@ -20,18 +20,13 @@ use crate::{
 };
 
 mod browser_assisted_escalation;
-mod completed_learning;
 mod escalation_state;
 #[path = "journal.rs"]
 pub(crate) mod journal;
-mod lessons;
 mod manual_escalation;
 mod recall;
 #[path = "secure_state.rs"]
 mod secure_state;
-mod skill_drafts;
-mod skill_outcomes;
-mod skill_probation;
 #[path = "usage.rs"]
 mod usage;
 
@@ -48,25 +43,6 @@ pub use usage::{
     EstimatedCost, SessionUsage, TurnCost, TurnUsage, UsageProvenance, append_turn_cost,
     estimated_cost, load_turn_costs, query_turn_cost, session_usage,
 };
-
-pub(crate) fn record_loaded_skills(session: &AgentSession) -> MedusaResult<()> {
-    if !completed_learning::telemetry_allowed(&session.repo)? {
-        return Ok(());
-    }
-    skill_outcomes::record_loaded_skills(session)
-}
-
-pub(crate) fn record_terminal_skill_outcome(
-    session: &AgentSession,
-    error: &MedusaError,
-    decision: &medusa_failure::FailureDecision,
-    reason: &str,
-) -> MedusaResult<Option<PathBuf>> {
-    if !completed_learning::telemetry_allowed(&session.repo)? {
-        return Ok(None);
-    }
-    skill_outcomes::record_terminal_skill_outcome(session, error, decision, reason)
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NonFatalDiagnostic {
@@ -257,37 +233,12 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
     let committed = journal::commit_snapshot_with(session, persist_compatibility_snapshot)?;
-    if committed.events.last().is_some_and(|event| {
-        matches!(
-            &event.payload,
-            medusa_protocol::EventPayload::ModelRequestStarted { .. }
-        )
-    }) {
-        if let Err(error) = record_loaded_skills(&committed) {
-            record_nonfatal(
-                &session.repo,
-                Some(&session.id),
-                "learning",
-                "record_loaded_skills",
-                &error.to_string(),
-            );
-        }
-    }
     if let Err(error) = recall::persist_completed_session(&committed) {
         record_nonfatal(
             &session.repo,
             Some(&session.id),
             "memory",
             "persist_completed_session",
-            &error.to_string(),
-        );
-    }
-    if let Err(error) = completed_learning::process(&committed) {
-        record_nonfatal(
-            &session.repo,
-            Some(&session.id),
-            "learning",
-            "process_completed_session",
             &error.to_string(),
         );
     }

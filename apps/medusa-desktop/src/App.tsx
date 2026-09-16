@@ -5,7 +5,6 @@ import { ComposerProjectBadge } from "./ComposerProjectBadge";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
-import { LearningDock } from "./LearningDock";
 import { MemoryDock } from "./MemoryDock";
 import { PermissionModeControl } from "./PermissionModeControl";
 
@@ -40,7 +39,6 @@ export function App() {
       )}
       <DiffDock />
       <MemoryDock />
-      <LearningDock />
     </>
   );
 }

@@ -445,15 +445,12 @@ Authoritative verification executes dependency-aware DAG waves, persists restart
 
 Live coding evidence preserves committed product diffs, not only dirty working-tree state. Verification/tooling byproducts such as narrowly defined npm log residue are separated from product mutation scope without weakening arbitrary out-of-scope write enforcement.
 
-### Memory and learning
+### Memory and recovery
 
-Medusa supports workspace-scoped Markdown memory, bounded recall with provenance, verified-session learning/probationary lessons, failure history, and a rule that optimistic or unverified completion cannot become accepted positive experience.
-
-Continual refinement is evidence-gated: typed proposals preserve provenance, explicit approval precedes activation, security/authority roots stay outside refinable content, activation history is append-only, and exact rollback is retained. User corrections and accepted runtime signals feed a privacy-filtered typed provenance graph and canonical refinement authority rather than self-activating directly.
-
-Verified learning follows one result-authoritative lifecycle:
-
-**execute -> independently verify -> propose -> review -> activate or reject**
+Medusa supports workspace-scoped Markdown memory, bounded recall with provenance, verified-session
+recall, failure history, and a rule that optimistic or unverified completion cannot become accepted
+positive experience. Durable memory is explicit and user-visible; it is never silently rewritten by
+runtime telemetry.
 
 Model or worker claims such as “fixed,” “tests pass,” or confidence are observations, not correctness authority; independently verified root-task outcomes are the ground truth. Failed, cancelled, partial, censored, and inconclusive runs remain evidence, and monetary cost remains unknown unless an authoritative cost observation exists.
 
@@ -552,10 +549,10 @@ delegated worker only: sealed DelegationContract before session creation
 | **Runtime authority** | Session lifecycle, commands, events, coordination, completion, cancellation, and agent scopes | `medusa-runtime`, `medusa-agent`, `medusa-daemon` |
 | **Internal coordination submodules** | Multi-agent preflight, mutating worker execution, delegation contract, production orchestrator, and team control live under `medusa-runtime/src/coordination/` so coverage and visibility can be measured per sub-module | `medusa-runtime/src/coordination/` |
 | **Multi-agent execution** | Task contracts, immutable delegation, scheduling, leases, mutation DAGs, isolated implementation, barriers, parent review | `medusa-multi-agent-scheduler`, `medusa-workers`, `medusa-worker-leases`, runtime coordinators |
-| **Context and intelligence** | Workspace context, retrieval, turn assembly, goals, progress, confidence, failure | context and intelligence crate families |
-| **Tools and policy** | Capability discovery, authorization, certified execution, Git/browser/extensions, engineering policy | capability, policy, control, extension, GitHub, and browser crates |
+| **Context and intelligence** | Workspace retrieval, goals, progress, confidence, failure | intelligence and state crate families |
+| **Tools and policy** | Capability discovery, authorization, certified execution, extensions, engineering policy | capability, policy, control, and extension crates |
 | **State and recovery** | Sessions, request manifests, checkpoints, replay, time travel, continuity, transactions, recovery | agent/session, checkpoint, replay, time-travel, continuity, transaction, recovery crates |
-| **Memory and improvement** | Markdown memory, learning, behavioral outcomes/cohorts, refinement monitoring, hardening | memory, improvement, and hardening crate families |
+| **Memory and recovery** | Markdown memory, bounded recall, failure history, and hardening | memory, recovery, and hardening crate families |
 | **Containment** | Platform sandboxing, process ownership, limits, cleanup | `medusa-process-containment`, `medusa-process-registry`, `medusa-runtime-supervisor` |
 | **Protocol and providers** | Typed frontend/event contracts, model routes, role routing, reasoning exchange, streaming | `medusa-protocol`, `medusa-provider` |
 
@@ -617,7 +614,7 @@ Workspace-local state lives under `.medusa`. Durable authority or rebuildable pr
 - transactional agent-scope contracts, generations, lifecycle, revocations, and owned-resource state;
 - coding trajectory checkpoints, structured repair ledgers, compaction manifests, and fingerprint-bound advisory summaries;
 - verification DAG checkpoints, exact-state reusable receipts, warm-resource descriptors, and repository-drift invalidation evidence;
-- continual-refinement proposals/activation history, privacy-filtered provenance, and rollback state;
+- verified recall records and bounded memory provenance;
 - scheduled trigger occurrence/dispatch provenance admitted into durable session actions;
 - worker leases, epochs, isolated candidates, Git commit or directory snapshot receipts;
 - checkpoints, replay, time travel, transaction/review/authorization/rollback records;
@@ -650,7 +647,7 @@ Platform support does not imply identical containment, browser, credential-store
 GitHub issues are the source of truth for active work; the README does not treat closed implementation issues as future roadmap items.
 
 Current architecture work focuses on simplifying the shipped runtime around its canonical session,
-verification, memory, refinement, and recovery authorities.
+verification, memory, and recovery authorities.
 
 ## Project documentation
 
@@ -670,7 +667,6 @@ verification, memory, refinement, and recovery authorities.
 - [Durable journal policy](docs/durable-journal-policy.md)
 - [Repository indexing](docs/repository-indexing.md)
 - [Tool execution pipeline](docs/TOOL-EXECUTION-PIPELINE.md)
-- [Refinement authority migration](docs/refinement-authority-migration.md)
 - [Resilience certification](docs/resilience-certification.md)
 - [Data lifecycle certification](docs/data-lifecycle-certification.md)
 - [Benchmarks](docs/BENCHMARKS.md)

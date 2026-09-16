@@ -216,9 +216,9 @@ Schema field names such as `prepared_commit` and `prepared_tree` remain stable f
 
 ### Learning and improvement authority
 
-Verified completed sessions can produce provenance-bound refinement candidates. The canonical
-refinement authority owns review, activation, suspension, rollback, and export; frontends only
-project that state. No telemetry cohort, dashboard, or model claim can activate behavior.
+Verified completed sessions persist durable recall and failure evidence. The canonical memory
+authority owns Markdown memory and bounded retrieval; frontends only project state and submit
+explicit user actions.
 
 ## Capability evidence and drift control
 

@@ -6,6 +6,3 @@ mod registry;
 mod verification_route;
 
 pub use registry::*;
-
-pub mod explicit;
-pub use explicit::*;

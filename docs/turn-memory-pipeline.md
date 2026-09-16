@@ -14,9 +14,8 @@ closed and surface a truthful runtime notice. `medusa-memory` remains the Markdo
 frontmatter carries scope, lifecycle, validation, expiry, provenance, and supersession metadata;
 the SQLite index is disposable.
 
-Completed-session learning remains a separate approval-controlled path. It is admitted to the
-refinement authority as a probationary candidate and must not be treated as active project memory
-until the existing review/graduation lifecycle activates it.
+Completed sessions contribute only to durable recall after a verified terminal outcome. They are
+not promoted into active project memory automatically.
 
 The runtime intentionally has one implementation for each stage. The former experimental
 `medusa-markdown-memory`, `medusa-turn-assembly`, `medusa-memory-consolidation`,

@@ -1465,14 +1465,12 @@ dependencies = [
  "medusa-clearops",
  "medusa-confidence",
  "medusa-config",
- "medusa-context",
  "medusa-continuation",
  "medusa-core",
  "medusa-escalation",
  "medusa-evidence",
  "medusa-extensions",
  "medusa-failure",
- "medusa-improvement",
  "medusa-intelligence",
  "medusa-memory",
  "medusa-multi-agent-scheduler",
@@ -1524,9 +1522,7 @@ dependencies = [
  "medusa-config",
  "medusa-core",
  "medusa-extensions",
- "medusa-improvement",
  "medusa-provider",
- "medusa-transaction-coordinator",
  "serde",
  "serde_json",
  "sha2",
@@ -1594,17 +1590,6 @@ dependencies = [
  "serial_test",
  "tempfile",
  "toml",
-]
-
-[[package]]
-name = "medusa-context"
-version = "1.0.9"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "time",
 ]
 
 [[package]]
@@ -1773,24 +1758,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-improvement"
-version = "1.0.9"
-dependencies = [
- "hex",
- "medusa-context",
- "medusa-core",
- "medusa-protocol",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "time",
- "tracing",
- "ulid",
-]
-
-[[package]]
 name = "medusa-intelligence"
 version = "1.0.9"
 dependencies = [
@@ -1930,13 +1897,11 @@ dependencies = [
  "medusa-agent",
  "medusa-capabilities",
  "medusa-config",
- "medusa-context",
  "medusa-core",
  "medusa-evidence",
  "medusa-execution-checkpoint",
  "medusa-execution-replay",
  "medusa-external-provider",
- "medusa-improvement",
  "medusa-intelligence",
  "medusa-memory",
  "medusa-multi-agent-scheduler",

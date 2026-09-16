@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 export const DESKTOP_TOOL_EVENT = "medusa:open-tool";
 
-export type DesktopTool = "sessions" | "review" | "memory" | "learning";
+export type DesktopTool = "sessions" | "review" | "memory";
 
 export function requestDesktopTool(tool: DesktopTool): void {
   window.dispatchEvent(new CustomEvent<DesktopTool>(DESKTOP_TOOL_EVENT, { detail: tool }));

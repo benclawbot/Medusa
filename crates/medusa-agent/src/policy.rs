@@ -2,15 +2,18 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     process::Output,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
-    },
+    sync::atomic::AtomicBool,
     time::Duration,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::atomic::Ordering;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering as AtomicOrdering},
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{

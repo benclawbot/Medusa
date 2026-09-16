@@ -4,7 +4,6 @@ mod desktop_command;
 mod desktop_update;
 mod diffs;
 mod dto;
-mod learning;
 mod memories;
 mod model_registry;
 mod mutations;
@@ -33,11 +32,6 @@ use desktop_update::{
     desktop_update_from_main, desktop_update_renderer_ready, desktop_update_status,
 };
 use diffs::runtime_read_diff;
-use learning::{
-    runtime_learning_evaluate, runtime_learning_export, runtime_learning_inspect,
-    runtime_learning_privacy, runtime_learning_propose, runtime_learning_redaction_preview,
-    runtime_learning_review, runtime_learning_transition,
-};
 use memories::runtime_list_memories;
 use model_registry::desktop_model_registry;
 use mutations::{
@@ -114,14 +108,6 @@ pub fn run() -> tauri::Result<()> {
             runtime_commit_changes,
             runtime_push_branch,
             runtime_list_memories,
-            runtime_learning_review,
-            runtime_learning_transition,
-            runtime_learning_inspect,
-            runtime_learning_propose,
-            runtime_learning_evaluate,
-            runtime_learning_privacy,
-            runtime_learning_redaction_preview,
-            runtime_learning_export,
             desktop_update_status,
             desktop_update_renderer_ready,
             desktop_update_from_main,

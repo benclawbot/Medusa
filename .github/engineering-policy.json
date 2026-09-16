@@ -70,7 +70,6 @@
     "release-evidence": {"kind": "command", "command": ["python3", "scripts/check-desktop-version-sync.py"]},
     "release-build-evidence": {"kind": "command", "command": ["python3", "scripts/release-evidence.py", "self-test"]},
     "verified-prebuilt-update": {"kind": "workflow", "workflow_name": "Verified Prebuilt Update"},
-    "protected-improvement": {"kind": "workflow", "workflow_name": "Live Self Improvement"},
     "independent-verification": {"kind": "workflow", "workflow_name": "Continuous Verification Certification"},
     "engineering-policy-base": {"kind": "inline"}
   },
@@ -192,15 +191,6 @@
       "source_of_truth": ["release-version-authority"],
       "platforms": ["linux", "macos", "windows"],
       "policy_sources": ["Cargo.toml", "scripts/check-desktop-version-sync.py", "scripts/release-evidence.py"],
-      "promotion": "protected-review",
-      "protected": true
-    },
-    {
-      "id": "self-improvement",
-      "description": "Evaluator and self-improvement changes require protected engineering review lanes.",
-      "include": ["crates/**/learning*.rs", "crates/**/improvement*.rs", "crates/**/evaluator*.rs"],
-      "required_checks": ["protected-improvement", "independent-verification"],
-      "policy_sources": [".github/workflows/live-self-improvement.yml", ".github/workflows/continuous-verification-certification.yml"],
       "promotion": "protected-review",
       "protected": true
     },
