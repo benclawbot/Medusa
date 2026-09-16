@@ -22,8 +22,6 @@ The product model is **Plan, Execute Safely, Recover**:
 
 The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
 
-The runtime also contains an accepted **transactional component-runtime contract** for safe incremental harness evolution: stable component generations, scoped host context, resource ownership, reversible effect journals, declarative dependencies, committed-versus-target provider views, ordered retirement, versioned desired state with compare-and-swap updates, health-validated replacement, containment-bound capabilities, validated self-modification proposals, explicit external-commit semantics, and deterministic fault/invariant checks. This is an adoption seam, not a claim that every production subsystem has already been migrated to component lifecycle management.
-
 ---
 
 
@@ -424,26 +422,6 @@ The production capability claims are recorded in [`docs/CAPABILITY-CLAIMS.json`]
 - dedicated zero-tool parent review, independent verification, authorization, guarded integration, and reconciliation;
 - authoritative primary-workspace verification gate.
 
-### Transactional component runtime
-
-`medusa-runtime::component_runtime` is the accepted reference contract for safe component lifecycle and incremental self-evolution. It currently provides:
-
-- stable logical component IDs and monotonic generations;
-- explicit lifecycle state and scoped host context;
-- resource/registration attribution to exact component generations;
-- reverse-order, idempotent reversible effect journals with inspectable cleanup debt;
-- declarative `requires`, `provides`, and host-capability specifications;
-- deterministic dependency resolution, ambiguity/cycle rejection, and committed-versus-target dependency views;
-- consumer-before-provider retirement with explicit blocked-retirement state;
-- authoritative versioned desired state with compare-and-swap updates and idempotency records;
-- health-validated candidate replacement that keeps the previous healthy generation available on failure;
-- one normalized capability intent feeding host authority and containment policy construction where supported;
-- self-modification through typed, validated desired-state proposals with source provenance and stale-conflict handling rather than direct agent registry mutation;
-- explicit separation of reversible Medusa-owned effects from irreversible/external commits with idempotency, uncertain-commit, and compensation-required states;
-- deterministic fault injection and runtime invariant checks for lifecycle, ownership, dependency, capability, and recovery boundaries.
-
-This contract is intentionally being adopted incrementally. Its presence does not mean all existing runtime services are dynamically replaceable, and fixed Medusa authorities remain non-pluggable.
-
 ### Provider routing and context
 
 Provider selection is explicit and role-aware. `model.role_routes` can pin planner, implementer, reviewer, repair, summarization, or formatting phases to configured primary/fallback profiles without silently replacing a user-pinned route. Cross-model context uses provider-neutral bounded reasoning exchange; provider-native continuation state remains separately bound to its exact provider/protocol/route/model/session and fails closed when incompatible.
@@ -581,31 +559,12 @@ delegated worker only: sealed DelegationContract before session creation
   -> on mutating retry: create a fresh StepCapsule bound to prior authority/lineage
 ```
 
-For component lifecycle and controlled self-evolution, the reference contract is separate from the coding-session orchestration path:
-
-```text
-versioned Desired Component State
-  -> validate graph / dependencies / capabilities
-  -> compare-and-swap commit
-  -> Reconciler plan
-  -> ComponentRuntime generations
-       -> scoped context + resource ownership
-       -> committed/target dependency views
-       -> reversible EffectJournal
-       -> health-validated replacement
-       -> ordered retirement
-       -> ExternalCommitLedger for irreversible effects
-  -> deterministic invariant/fault evidence
-```
-
-The component contract is an incremental adoption seam. `RuntimeController`, capability readiness truth, execution policy, approval authority, containment, mutation provenance, parent review, verification, integration, journal authority, and protected evaluator authority are not made dynamically replaceable by this mechanism.
-
 ### Major layers
 
 | Layer | Responsibilities | Principal crates |
 |---|---|---|
 | **Interfaces** | CLI parsing, terminal interaction, desktop UI, Telegram command/rendering | `medusa-cli`, `medusa-tui`, `apps/medusa-desktop`, daemon Telegram modules |
-| **Runtime authority** | Session lifecycle, commands, events, coordination, completion, cancellation, agent scopes, component lifecycle contract | `medusa-runtime`, `medusa-agent`, `medusa-daemon` |
+| **Runtime authority** | Session lifecycle, commands, events, coordination, completion, cancellation, and agent scopes | `medusa-runtime`, `medusa-agent`, `medusa-daemon` |
 | **Internal coordination submodules** | Multi-agent preflight, mutating worker execution, delegation contract, production orchestrator, and team control live under `medusa-runtime/src/coordination/` so coverage and visibility can be measured per sub-module | `medusa-runtime/src/coordination/` |
 | **Multi-agent execution** | Task contracts, immutable delegation, scheduling, leases, mutation DAGs, isolated implementation, barriers, parent review | `medusa-multi-agent-scheduler`, `medusa-workers`, `medusa-worker-leases`, runtime coordinators |
 | **Context and intelligence** | Workspace context, retrieval, turn assembly, goals, progress, confidence, failure | context and intelligence crate families |

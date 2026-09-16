@@ -69,7 +69,6 @@ pub mod checkpoint_store;
 mod coding_trajectory;
 mod command_router;
 pub mod commands;
-pub mod component_runtime;
 mod config_command;
 mod error;
 pub mod execution_history;
