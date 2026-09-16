@@ -41,8 +41,6 @@
       "medusa-prompt-cache": "preserve",
       "medusa-clearops": "preserve",
       "medusa-agent": "preserve",
-      "medusa-browser-client": "preserve",
-      "medusa-browserd": "preserve",
       "medusa-process-containment": "preserve",
       "medusa-daemon": "preserve",
       "medusa-runtime": "preserve",
@@ -50,12 +48,10 @@
       "medusa-workers": "preserve",
       "medusa-memory": "preserve",
       "medusa-extensions": "preserve",
-      "medusa-improvement": "preserve",
       "medusa-hardening": "preserve",
       "medusa-update": "preserve",
       "medusa-capabilities": "preserve",
       "medusa-cli": "preserve",
-      "medusa-context": "preserve",
       "medusa-tool-policy": "preserve",
       "medusa-tool-control": "preserve",
       "medusa-multi-agent-scheduler": "preserve",
@@ -83,7 +79,7 @@
       "integrations": ["medusa-capabilities", "medusa-extensions"],
       "release": ["medusa-update"],
       "state-and-recovery": ["medusa-failure", "medusa-continuation", "medusa-wakeup", "medusa-memory", "medusa-execution-replay", "medusa-runtime-supervisor", "medusa-execution-checkpoint", "medusa-time-travel", "medusa-recovery-coordinator", "medusa-session-continuity"],
-      "intelligence": ["medusa-intelligence", "medusa-world-model", "medusa-progress", "medusa-confidence", "medusa-escalation", "medusa-prompt-cache", "medusa-clearops", "medusa-improvement", "medusa-context"],
+      "intelligence": ["medusa-intelligence", "medusa-world-model", "medusa-progress", "medusa-confidence", "medusa-escalation", "medusa-prompt-cache", "medusa-clearops"],
       "evidence": ["medusa-evidence"]
     }
   },
@@ -96,7 +92,6 @@
     ["release-trust", "production", "certified-production", "preserve", "signed release manifest v2 and protected release-signing workflow", []],
     ["self-update", "production", "certified-production", "preserve", "medusa update verified release channel", []],
     ["multi-agent-execution", "production", "certified-production", "preserve", "bounded teammates and dedicated durable parent reviewer", []],
-    ["browser-tools", "preview", "certified-production", "preserve", "medusa-agent::ToolManager -> medusa-browserd", []],
     ["plugins-and-extensions", "managed", "preview", "adapt", "managed plugin manifest plus instruction-only SKILL.md", ["executable handlers require capability-specific certification"]],
     ["unsafe-ffi-boundary", "production", "certified-production", "preserve", "medusa-process-containment crate-local allowlist", []],
     ["evidence-verification-authority", "production", "certified-production", "preserve", "medusa-evidence::VerificationPlanner and VerificationReceipt", []]
@@ -110,7 +105,6 @@
     "release-trust": [".github/workflows/publish-release.yml", ".github/workflows/sign-release-manifest.yml", "scripts/release-evidence.py", "release/keys"],
     "self-update": ["crates/medusa-update", "crates/medusa-cli/src/update_command.rs", "docs/architecture/PREBUILT-UPDATES.md"],
     "multi-agent-execution": ["crates/medusa-runtime", "crates/medusa-agent", "crates/medusa-workers", "crates/medusa-multi-agent-scheduler"],
-    "browser-tools": ["crates/medusa-capabilities", "crates/medusa-agent/src/tools", "crates/medusa-browser-client", "crates/medusa-browserd", "crates/medusa-agent/tests/browser_dispatch.rs", ".github/workflows/browser-dispatch-certification.yml"],
     "plugins-and-extensions": ["crates/medusa-extensions"],
     "unsafe-ffi-boundary": ["crates/medusa-process-containment"],
     "evidence-verification-authority": ["crates/medusa-evidence", "crates/medusa-agent/src/verification_authority.rs", "crates/medusa-runtime/src/mutation_transaction_state.rs", "crates/medusa-workers/src/lib.rs"]
@@ -138,7 +132,6 @@
     ["process-containment", "medusa-process-containment", ["deny by default", "platform evidence", "crate-local unsafe allowlist"]],
     ["secrets", "configuration and integrations", ["OS keyring or process environment", "redacted evidence", "no model-visible secrets"]],
     ["provider-network", "medusa-provider", ["exact route capabilities", "abortable requests", "bounded retries", "durable health"]],
-    ["browser-sidecar", "medusa-agent ToolManager and medusa-browserd", ["readiness-gated model projection", "model cannot author verification authority", "exact verification-origin loopback pinning", "browser_evaluate verifier-internal", "bounded lifecycle cleanup"]],
     ["plugins", "extension service", ["versioned manifest", "least privilege", "isolation", "durable results"]],
     ["release-update", "release maintainers and medusa-update trust store", ["signature before metadata", "exact platform selection", "signed size and SHA-256", "confined extraction", "health-checked rollback"]]
   ],
@@ -182,7 +175,6 @@
     "authority": "crates/medusa-capabilities",
     "plugin_authority": "crates/medusa-extensions/src/plugins.rs",
     "model_projection": "medusa-capabilities::CapabilityRegistry::model_tools",
-    "protocol_projection": "medusa-capabilities::CapabilityRegistry::protocol_report",
-    "browser_policy": "production browser handlers project to the model only after browser sidecar, Node.js, and Medusa verification-route readiness; arbitrary JavaScript evaluation remains verifier-internal"
+    "protocol_projection": "medusa-capabilities::CapabilityRegistry::protocol_report"
   }
 }

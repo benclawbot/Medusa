@@ -2,10 +2,8 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
-use medusa_browser_client::BrowserClient;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_intelligence::{CodeIndex, IndexRefresh, IndexSnapshot};
 use medusa_protocol::EventEnvelope;
@@ -141,54 +139,6 @@ fn repository_key(repo: &Path) -> String {
     format!("{hash:016x}")
 }
 
-#[derive(Clone, Debug)]
-pub struct SessionBrowserConfig {
-    pub enabled: bool,
-    pub path: Option<PathBuf>,
-    pub timeout: Duration,
-}
-
-impl Default for SessionBrowserConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            path: None,
-            timeout: Duration::from_secs(30),
-        }
-    }
-}
-
-pub struct SessionBrowser {
-    client: Option<BrowserClient>,
-}
-
-impl SessionBrowser {
-    pub fn connect(config: &SessionBrowserConfig) -> MedusaResult<Self> {
-        if !config.enabled {
-            return Ok(Self { client: None });
-        }
-        let path = resolve_path(config.path.as_deref())?;
-        if !path.exists() {
-            return Ok(Self { client: None });
-        }
-        let client = BrowserClient::spawn(path.to_str().ok_or_else(|| invalid("non-utf8 path"))?)?;
-        Ok(Self {
-            client: Some(client),
-        })
-    }
-
-    #[must_use]
-    pub fn is_enabled(&self) -> bool {
-        self.client.is_some()
-    }
-
-    pub fn client(&mut self) -> MedusaResult<&mut BrowserClient> {
-        self.client
-            .as_mut()
-            .ok_or_else(|| unavailable("browser is not enabled in this session"))
-    }
-}
-
 /// Repository index cache with deterministic invalidation semantics.
 #[derive(Debug)]
 pub struct RepositoryIndexCache {
@@ -241,64 +191,11 @@ impl RepositoryIndexCache {
     }
 }
 
-fn resolve_path(configured: Option<&Path>) -> MedusaResult<PathBuf> {
-    if let Some(path) = configured {
-        return Ok(path.to_path_buf());
-    }
-    let exe_name = if cfg!(windows) {
-        "medusa-browserd.exe"
-    } else {
-        "medusa-browserd"
-    };
-    let agent_exe =
-        std::env::current_exe().map_err(|error| unavailable(format!("current_exe: {error}")))?;
-    let adjacent = agent_exe.parent().map(|parent| parent.join(exe_name));
-    if let Some(adjacent) = &adjacent
-        && adjacent.exists()
-    {
-        return Ok(adjacent.clone());
-    }
-    if let Ok(found) = which(exe_name) {
-        return Ok(found);
-    }
-    Err(unavailable(format!(
-        "{exe_name} not found on PATH and not adjacent to the agent binary"
-    )))
-}
-
-fn which(command: &str) -> Result<PathBuf, ()> {
-    let path = std::env::var_os("PATH").ok_or(())?;
-    for entry in std::env::split_paths(&path) {
-        let candidate = entry.join(command);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    Err(())
-}
-
 fn disposed_error(session_id: &str) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
         ErrorCategory::Persistence,
         format!("session {session_id} has been disposed"),
-    )
-}
-
-fn unavailable(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        ErrorCategory::Transient,
-        message,
-    )
-    .with_retryable(true)
-}
-
-fn invalid(message: &'static str) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::InvalidConfiguration,
-        ErrorCategory::Validation,
-        message,
     )
 }
 
@@ -319,28 +216,6 @@ mod tests {
         fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
             unreachable!("session creation does not call the provider")
         }
-    }
-
-    #[test]
-    fn session_browser_disabled_when_path_missing() {
-        let config = SessionBrowserConfig {
-            enabled: true,
-            path: Some(PathBuf::from("/nonexistent/medusa-browserd")),
-            timeout: Duration::from_secs(5),
-        };
-        let session = SessionBrowser::connect(&config).expect("browser configuration");
-        assert!(!session.is_enabled());
-    }
-
-    #[test]
-    fn session_browser_disabled_when_flag_false() {
-        let config = SessionBrowserConfig {
-            enabled: false,
-            path: None,
-            timeout: Duration::from_secs(5),
-        };
-        let session = SessionBrowser::connect(&config).expect("browser configuration");
-        assert!(!session.is_enabled());
     }
 
     #[test]

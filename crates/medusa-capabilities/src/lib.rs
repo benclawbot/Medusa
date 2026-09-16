@@ -1,8 +1,7 @@
 //! Versioned capability authority shared by model, CLI, UI, protocol, and documentation surfaces.
 
-extern crate self as medusa_browser_client;
-
+mod network_policy;
 mod registry;
-mod verification_route;
 
+pub use network_policy::{ResolvedTarget, is_public_ip, resolve_public_target};
 pub use registry::*;

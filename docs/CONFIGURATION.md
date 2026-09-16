@@ -32,7 +32,6 @@ format = "markdown"
 
 [verification]
 required = true
-browser_on_ui_change = true
 ```
 
 Configuration precedence is CLI overrides, environment overrides, project TOML, user TOML, then built-in defaults.
@@ -93,37 +92,13 @@ Delete these keys from user and project configuration files. Medusa now reports 
 
 Provider-profile `speed` and `reasoning` values remain readable for compatibility with the provider-settings file, but they are not part of the public runtime TOML schema and are not projected into runtime configuration.
 
-## Browser verification policy
+## UI verification policy
 
-When `verification.browser_on_ui_change` is enabled, effective UI changes automatically require browser verification. Documentation-only, generated, snapshot-only, lockfile, and build-output changes are skipped. Set `MEDUSA_BROWSER_VERIFY=force` or `MEDUSA_BROWSER_VERIFY=skip` for an explicit audited override. A runnable route must be supplied through `MEDUSA_BROWSER_VERIFY_URL`; `MEDUSA_BROWSERD` may override the browser daemon executable. Evidence records the override, tested route, HTTP status, snapshot assertions, screenshot path, console errors, and final browser result.
+Effective UI changes require a bounded static HTTP smoke check. The verifier serves the generated
+`index.html` from the repository's configured output, confirms a successful response and non-empty
+document, and checks common accessibility failures such as images without `alt` text or unlabeled
+form controls. The result is recorded as ordinary verification evidence; no browser daemon, Node.js,
+Playwright installation, or environment-specific route is required.
 
-## Model browser actions: readiness-gated preview
-
-Model-executable browser actions are an explicit-opt-in, readiness-gated preview. Their dispatcher is certified, but they are not enabled by default. This is separate from authoritative browser verification: model actions cannot create or replace verification authority, and `browser_evaluate` remains verifier-internal rather than model-executable.
-
-The runtime projects browser actions only when every prerequisite is satisfied:
-
-- `MEDUSA_BROWSER_ENABLED=true` explicitly enables the preview;
-- `MEDUSA_BROWSER_PATH` names the `medusa-browserd` sidecar executable and its readiness check succeeds;
-- Node.js is available for the Playwright sidecar;
-- `MEDUSA_BROWSER_VERIFY_URL` names a Medusa-owned route accepted by the browser verification-route policy.
-
-Example:
-
-```bash
-export MEDUSA_BROWSER_ENABLED=true
-export MEDUSA_BROWSER_PATH=/absolute/path/to/medusa-browserd
-export MEDUSA_BROWSER_VERIFY_URL=http://127.0.0.1:4173/app
-export MEDUSA_BROWSER_TIMEOUT_MS=30000
-medusa
-```
-
-`MEDUSA_BROWSER_TIMEOUT_MS` is the bounded request timeout in milliseconds. It must be a positive integer; invalid values fail readiness rather than silently widening execution. Timeout configuration never bypasses route admission, permissions, output bounds, or lifecycle cleanup.
-
-The verification route is also the allowed navigation authority for the model browser session. Loopback access is pinned to the admitted origin; configuring one local application does not grant access to unrelated localhost services. Model tool input cannot provide verification/trust metadata or select an arbitrary navigation origin.
-
-Browser sessions are scoped by repository and admitted route, serialized through the runtime browser session, and closed explicitly or after bounded inactivity. Screenshots and other binary outputs use Medusa's bounded output-envelope/artifact path rather than being returned as unbounded inline data.
-
-Troubleshooting is fail-closed: if browser tools do not appear, check the explicit enable flag, sidecar path/readiness, Node.js availability, and verification URL admission in that order. A missing or invalid prerequisite means the model receives no browser tools; it is not treated as a partially ready browser session.
-
-The architecture decision and status contract are recorded in `docs/architecture/decisions/0009-browser-preview-certification.md`.
+This keeps UI verification deterministic and portable while leaving interactive browser inspection to
+frontend development tools and release certification when those are explicitly needed.

@@ -47,9 +47,8 @@ for the full diagram and prose.
 | Windows 11 | Composable sandbox (`Experimental_CreateProcessInSandbox`) | [`docs/issue-308-windows-sandbox.md`](issue-308-windows-sandbox.md) |
 
 Shell execution **fails closed** when the required containment backend is unavailable on
-the host. Required UI-change verification uses the Node.js browser sidecar as an
-internal verification boundary; model-executable browser actions remain quarantined until
-their dispatcher, permissions, and authenticated behavioral evidence are certified.
+the host. Required UI-change verification uses a bounded static HTTP artifact check and does not
+depend on a browser sidecar or host-specific browser installation.
 
 ## 4. Verification gate
 

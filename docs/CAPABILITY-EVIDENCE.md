@@ -44,7 +44,7 @@ Read-only planner/risk-review teammate coordination is independent of Git. Git i
 
 Architecture-v2 migration and certification are governed only by [`architecture/INDEX.md`](architecture/INDEX.md) and [`architecture/baseline.json`](architecture/baseline.json). This legacy availability ledger no longer reproduces a second certification table or migration-status narrative; doing so previously left completed work described as pending.
 
-The architecture authority records the certified shared runtime, durable state, guarded mutation lifecycle, provider health, release trust, containment, frontend projection, and other production boundaries. Model-executable browser actions remain quarantined and plugins/extensions remain preview unless individually certified.
+The architecture authority records the certified shared runtime, durable state, guarded mutation lifecycle, provider health, release trust, containment, frontend projection, and other production boundaries. Managed plugins/extensions remain preview unless individually certified.
 
 Provider route, dogfood, and credential status are separately governed by [`provider-support.json`](provider-support.json). A legacy `production` availability entry here cannot promote a route or capability beyond either machine-readable authority.
 
@@ -56,7 +56,7 @@ The current coordinated path supports bounded Git multi-implementer mutation and
 
 The contained analysis-workspace/recursive-delegation roadmap must not be read as evidence that recursive delegation is already active. Current implementation children cannot spawn implementation children or widen their own contracts.
 
-Browser and plugin structure must not be presented as active capability merely because crates, schemas, or tool definitions exist. Architecture v2 requires definition → readiness → permission → dispatch → side effect → evidence → event delivery → cleanup conformance.
+Plugin structure must not be presented as active capability merely because crates, schemas, or tool definitions exist. Architecture v2 requires definition → readiness → permission → dispatch → side effect → evidence → event delivery → cleanup conformance.
 
 ## Canonical gates
 

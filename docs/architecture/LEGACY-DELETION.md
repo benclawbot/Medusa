@@ -30,7 +30,7 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 
 ## Known-defect deletion targets
 
-- [ ] #631: remove browser tool advertisement without dispatch, or replace it with certified dispatch and permission evidence.
+- [x] #631: remove the retired browser tool advertisement, sidecar, and permission surface.
 - [x] #632: remove integration-before-review ordering and any recovery path that assumes it.
 - [ ] #633: remove verification APIs and receipts that omit changed paths.
 - [ ] #634: remove decorative task, worker, reviewer, or verifier projections without durable execution evidence.

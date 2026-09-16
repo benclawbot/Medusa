@@ -5,7 +5,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_browser_client::verification_route::VerificationRoute;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_extensions::{DesktopCommanderSettings, ManagedPluginCatalog, PluginKind};
 use medusa_provider::ToolDefinition;
@@ -24,25 +23,22 @@ pub enum Capability {
     Shell,
     Git,
     GitHub,
-    SelfImprovement,
-    Browser,
+    #[serde(alias = "self_improvement")]
+    Extensions,
     DesktopMcp,
-    Playwright,
     Memory,
     Network,
 }
 
 impl Capability {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 9] = [
         Self::Filesystem,
         Self::CodeIntelligence,
         Self::Shell,
         Self::Git,
         Self::GitHub,
-        Self::SelfImprovement,
-        Self::Browser,
+        Self::Extensions,
         Self::DesktopMcp,
-        Self::Playwright,
         Self::Memory,
         Self::Network,
     ];
@@ -55,10 +51,8 @@ impl Capability {
             Self::Shell => "Shell",
             Self::Git => "Git",
             Self::GitHub => "GitHub",
-            Self::SelfImprovement => "Self-improvement",
-            Self::Browser => "Browser",
+            Self::Extensions => "Extensions",
             Self::DesktopMcp => "Desktop MCP",
-            Self::Playwright => "Playwright",
             Self::Memory => "Memory",
             Self::Network => "Network",
         }
@@ -352,12 +346,6 @@ impl CapabilityRegistry {
             probe.available("gh", &["auth", "status"]),
             "GitHub CLI authentication probe",
         );
-        let browser = medusa_config::BrowserConfig::default();
-        let verification_route = std::env::var("MEDUSA_BROWSER_VERIFY_URL").ok();
-        capabilities.insert(
-            Capability::Browser,
-            browser_capability_state(&browser, verification_route.as_deref(), probe),
-        );
         let desktop_enabled = desktop.enabled();
         insert_state(
             &mut capabilities,
@@ -369,12 +357,6 @@ impl CapabilityRegistry {
                 "Desktop Commander MCP is disabled"
             },
         );
-        insert_state(
-            &mut capabilities,
-            Capability::Playwright,
-            probe.available("node", &["--version"]),
-            "Node.js executable probe",
-        );
         let memory = filesystem && writable_state_directory(&repository)?;
         insert_state(
             &mut capabilities,
@@ -384,16 +366,6 @@ impl CapabilityRegistry {
                 "repository state directory is writable"
             } else {
                 "repository state directory is unavailable or read-only"
-            },
-        );
-        insert_state(
-            &mut capabilities,
-            Capability::SelfImprovement,
-            memory,
-            if memory {
-                "self-improvement proposals can be staged for review"
-            } else {
-                "self-improvement requires writable repository state"
             },
         );
         let network = !matches!(
@@ -437,7 +409,7 @@ impl CapabilityRegistry {
                     id.clone(),
                     RegistryEntry {
                         id,
-                        capability: Capability::SelfImprovement,
+                        capability: Capability::Extensions,
                         kind: RegistryKind::Plugin,
                         status: CapabilityStatus::Experimental,
                         description: plugin.manifest.description.clone(),
@@ -543,7 +515,6 @@ impl CapabilityRegistry {
         self.entries
             .values()
             .filter(|entry| entry.projected_to(CapabilitySurface::Model))
-            .filter(|entry| !read_only || entry.capability != Capability::Browser)
             .filter(|entry| !read_only || !mutating(entry))
             .filter_map(|entry| entry.tool.clone())
             .collect()
@@ -575,76 +546,6 @@ impl CapabilityRegistry {
     }
 }
 
-fn browser_capability_state(
-    browser: &medusa_config::BrowserConfig,
-    verification_route: Option<&str>,
-    probe: &impl CommandProbe,
-) -> CapabilityState {
-    if !browser.enabled {
-        return CapabilityState {
-            available: false,
-            detail: "browser model actions are explicitly disabled".into(),
-        };
-    }
-    let Some(path) = browser.path.as_ref() else {
-        return CapabilityState {
-            available: false,
-            detail: "browser model actions require an explicit MEDUSA_BROWSER_PATH sidecar".into(),
-        };
-    };
-    let Some(program) = path.to_str() else {
-        return CapabilityState {
-            available: false,
-            detail: "browser sidecar path is not UTF-8".into(),
-        };
-    };
-    let Some(raw_route) = verification_route else {
-        return CapabilityState {
-            available: false,
-            detail: "browser model actions require a Medusa-owned verification route".into(),
-        };
-    };
-    let route = match VerificationRoute::parse(raw_route) {
-        Ok(route) => route,
-        Err(error) => {
-            return CapabilityState {
-                available: false,
-                detail: format!("invalid browser verification route: {error}"),
-            };
-        }
-    };
-    // Re-resolve the admitted route now: a hostname that was public at
-    // admission may rebind to private space by probe time. This is defense in
-    // depth only -- `medusa-browserd --check` below remains the authoritative
-    // readiness gate, and DNS can still change between this check and use
-    // (documented TOCTOU in verification_route).
-    if let Err(error) = route.resolve_probe_targets() {
-        return CapabilityState {
-            available: false,
-            detail: format!("browser verification route failed DNS re-validation: {error}"),
-        };
-    }
-    if !probe.available(program, &["--check"]) {
-        return CapabilityState {
-            available: false,
-            detail: "configured browser sidecar failed its readiness probe".into(),
-        };
-    }
-    if !probe.available("node", &["--version"]) {
-        return CapabilityState {
-            available: false,
-            detail: "browser sidecar requires Node.js for the Playwright bridge".into(),
-        };
-    }
-    CapabilityState {
-        available: true,
-        detail: format!(
-            "browser sidecar is bound to an admitted Medusa-owned verification route ({})",
-            route.safe_fingerprint()
-        ),
-    }
-}
-
 fn build_entries(
     states: &BTreeMap<Capability, CapabilityState>,
     desktop: &DesktopCommanderSettings,
@@ -653,102 +554,6 @@ fn build_entries(
     for entry in builtin_tool_entries(states, desktop) {
         entries.insert(entry.id.clone(), entry);
     }
-    for name in [
-        "browser_navigate",
-        "browser_snapshot",
-        "browser_click",
-        "browser_fill",
-        "browser_press",
-        "browser_screenshot",
-        "browser_tabs",
-        "browser_close",
-        "browser_ping",
-    ] {
-        let (description, input_schema) = match name {
-            "browser_navigate" => (
-                "Navigate the isolated verification browser to Medusa's configured verification route.",
-                json!({"type":"object","properties":{},"additionalProperties":false}),
-            ),
-            "browser_snapshot" => (
-                "Read a bounded text/accessibility snapshot from the isolated verification browser.",
-                json!({"type":"object","properties":{},"additionalProperties":false}),
-            ),
-            "browser_click" => (
-                "Click one element in the isolated verification browser by snapshot ref or selector.",
-                json!({"type":"object","properties":{"ref":{"type":"integer","minimum":0},"selector":{"type":"string"}},"additionalProperties":false}),
-            ),
-            "browser_fill" => (
-                "Fill one control in the isolated verification browser by snapshot ref or selector.",
-                json!({"type":"object","properties":{"ref":{"type":"integer","minimum":0},"selector":{"type":"string"},"value":{"type":"string"}},"required":["value"],"additionalProperties":false}),
-            ),
-            "browser_press" => (
-                "Press one keyboard key in the isolated verification browser.",
-                json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}),
-            ),
-            "browser_screenshot" => (
-                "Capture a screenshot artifact from the isolated verification browser.",
-                json!({"type":"object","properties":{"full_page":{"type":"boolean"}},"additionalProperties":false}),
-            ),
-            "browser_tabs" => (
-                "List tabs in the isolated verification browser.",
-                json!({"type":"object","properties":{},"additionalProperties":false}),
-            ),
-            "browser_close" => (
-                "Close and forget the repository-scoped isolated verification browser.",
-                json!({"type":"object","properties":{},"additionalProperties":false}),
-            ),
-            "browser_ping" => (
-                "Check that the isolated verification browser sidecar is responsive.",
-                json!({"type":"object","properties":{},"additionalProperties":false}),
-            ),
-            _ => continue,
-        };
-        let handler = format!("medusa-agent::tools::browser::{name}");
-        let mut entry = tool_entry(
-            ToolIdentity { states, name },
-            Capability::Browser,
-            description,
-            input_schema,
-            &handler,
-            [
-                RegistryPermission::Read,
-                RegistryPermission::Network,
-                RegistryPermission::ProcessSpawn,
-                RegistryPermission::RuntimeMutation,
-            ],
-            false,
-        );
-        entry.status = CapabilityStatus::Production;
-        entry.provenance = Some("verified-browser production".into());
-        entries.insert(entry.id.clone(), entry);
-    }
-    let evaluate = RegistryEntry {
-        id: "tool.browser_evaluate".into(),
-        capability: Capability::Browser,
-        kind: RegistryKind::Tool,
-        status: CapabilityStatus::Partial,
-        description:
-            "Arbitrary JavaScript evaluation is reserved for Medusa's authoritative verifier".into(),
-        owner: "browser maintainers".into(),
-        lifecycle_owner: "medusa-browserd".into(),
-        surfaces: BTreeSet::from([
-            CapabilitySurface::Protocol,
-            CapabilitySurface::Documentation,
-        ]),
-        permissions: BTreeSet::from([RegistryPermission::Read, RegistryPermission::Network]),
-        explicit_approval: BTreeSet::new(),
-        dependencies: vec!["browser sidecar".into()],
-        supported_platforms: supported_platforms(),
-        readiness: ReadinessContract {
-            ready: false,
-            detail: "browser_evaluate is verifier-internal and never model-executable".into(),
-            evidence: vec!["authoritative verifier owns JavaScript evaluation".into()],
-        },
-        handler: None,
-        tool: None,
-        provenance: Some("verified-browser least-privilege boundary".into()),
-    };
-    entries.insert(evaluate.id.clone(), evaluate);
     entries
 }
 
@@ -1226,29 +1031,6 @@ mod tests {
         .expect("registry")
     }
 
-    fn registry_with_browser_state(state: CapabilityState) -> CapabilityRegistry {
-        let mut registry = ready_registry();
-        registry.capabilities.insert(Capability::Browser, state);
-        registry.entries = build_entries(
-            &registry.capabilities,
-            &DesktopCommanderSettings::from_env(),
-        );
-        registry.validate().expect("browser registry");
-        registry
-    }
-
-    fn configured_browser() -> medusa_config::BrowserConfig {
-        medusa_config::BrowserConfig {
-            enabled: true,
-            path: Some(PathBuf::from("test-browserd")),
-            timeout_ms: 30_000,
-        }
-    }
-
-    fn browser_probe() -> FakeProbe {
-        FakeProbe(BTreeSet::from(["test-browserd".into(), "node".into()]))
-    }
-
     #[test]
     fn every_model_tool_has_one_ready_handler() {
         let registry = ready_registry();
@@ -1360,151 +1142,6 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "symbol_rename")
         );
-    }
-
-    #[test]
-    fn browser_tools_remain_quarantined_without_medusa_verification_route() {
-        let state = browser_capability_state(&configured_browser(), None, &browser_probe());
-        assert!(!state.available);
-        let registry = registry_with_browser_state(state);
-        assert!(
-            registry
-                .model_tools(false)
-                .iter()
-                .all(|tool| !tool.name.starts_with("browser_"))
-        );
-    }
-
-    #[test]
-    fn invalid_browser_routes_never_project_model_tools() {
-        for route in [
-            " ",
-            "not a url",
-            "file:///tmp/index.html",
-            "http://user:secret@localhost:4173/app",
-            "http://localhost:4173/app#fragment",
-            "http://10.0.0.1/verify",
-            "C:\\work\\app\\index.html",
-        ] {
-            let state =
-                browser_capability_state(&configured_browser(), Some(route), &browser_probe());
-            assert!(!state.available, "accepted {route}: {}", state.detail);
-            assert!(state.detail.contains("verification route"));
-            let registry = registry_with_browser_state(state);
-            assert!(
-                registry
-                    .model_tools(false)
-                    .iter()
-                    .all(|tool| !tool.name.starts_with("browser_")),
-                "projected browser tool for {route}"
-            );
-        }
-    }
-
-    #[test]
-    fn verified_browser_state_exposes_only_bounded_model_actions() {
-        let route = " HTTP://LOCALHOST:4173/app?mode=verify ";
-        let admitted = VerificationRoute::parse(route).expect("admitted route");
-        let state = browser_capability_state(&configured_browser(), Some(route), &browser_probe());
-        assert!(state.available);
-        assert!(state.detail.contains(&admitted.safe_fingerprint()));
-        assert!(!state.detail.contains("mode=verify"));
-        let registry = registry_with_browser_state(state);
-        let names = registry
-            .model_tools(false)
-            .into_iter()
-            .filter(|tool| tool.name.starts_with("browser_"))
-            .map(|tool| tool.name)
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            names,
-            BTreeSet::from([
-                "browser_close".to_owned(),
-                "browser_click".to_owned(),
-                "browser_fill".to_owned(),
-                "browser_navigate".to_owned(),
-                "browser_ping".to_owned(),
-                "browser_press".to_owned(),
-                "browser_screenshot".to_owned(),
-                "browser_snapshot".to_owned(),
-                "browser_tabs".to_owned(),
-            ])
-        );
-        assert!(!names.contains("browser_evaluate"));
-        assert!(
-            registry
-                .model_tools(true)
-                .iter()
-                .all(|tool| !tool.name.starts_with("browser_"))
-        );
-        for name in &names {
-            let entry = registry
-                .entry(&format!("tool.{name}"))
-                .expect("browser entry");
-            assert!(entry.readiness.ready);
-            assert_eq!(entry.status, CapabilityStatus::Production);
-            assert!(entry.handler.is_some());
-            assert!(
-                entry
-                    .readiness
-                    .evidence
-                    .iter()
-                    .any(|item| item.contains(&admitted.safe_fingerprint()))
-            );
-            assert!(
-                entry
-                    .readiness
-                    .evidence
-                    .iter()
-                    .all(|item| !item.contains("mode=verify"))
-            );
-            let schema = &entry.tool.as_ref().expect("tool schema").input_schema;
-            assert_eq!(
-                schema.get("additionalProperties"),
-                Some(&Value::Bool(false))
-            );
-            assert!(
-                !schema
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .is_some_and(|properties| properties.contains_key("verified"))
-            );
-        }
-    }
-
-    #[test]
-    fn browser_readiness_requires_sidecar_and_node_probes() {
-        assert!(
-            !browser_capability_state(
-                &configured_browser(),
-                Some("http://127.0.0.1:4173"),
-                &FakeProbe(BTreeSet::from(["node".into()])),
-            )
-            .available
-        );
-        assert!(
-            !browser_capability_state(
-                &configured_browser(),
-                Some("http://127.0.0.1:4173"),
-                &FakeProbe(BTreeSet::from(["test-browserd".into()])),
-            )
-            .available
-        );
-    }
-
-    #[test]
-    fn unresolvable_verification_hostnames_fail_closed_at_probe_time() {
-        // Admitted at parse time (public shape) but refused once probe-time
-        // DNS resolution fails; `.invalid` never resolves, so this is
-        // hermetic. `medusa-browserd --check` stays authoritative for the
-        // success path.
-        let state = browser_capability_state(
-            &configured_browser(),
-            Some("https://medusa-unresolvable.invalid/verify"),
-            &browser_probe(),
-        );
-        assert!(!state.available);
-        assert!(state.detail.contains("DNS re-validation"));
     }
 
     #[test]

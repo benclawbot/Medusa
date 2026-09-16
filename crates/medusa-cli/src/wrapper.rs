@@ -8,10 +8,6 @@ use std::{
 mod first_run;
 mod oauth_preflight;
 mod report_command;
-mod skill_dependencies;
-mod skill_graduation;
-mod skill_lifecycle;
-mod skill_probation;
 #[cfg_attr(not(test), allow(unused_imports))]
 mod skills;
 mod uninstall_command;
@@ -98,36 +94,7 @@ fn main() {
     }
     if let Some(skill_args) = subcommand_arguments(&args, "skills") {
         let command_args = strip_repository_argument(&skill_args);
-        let dependencies = skill_dependencies::try_run(&repo, &command_args);
-        let graduation = dependencies
-            .is_none()
-            .then(|| skill_graduation::try_run(&repo, &command_args))
-            .flatten();
-        let lifecycle = (dependencies.is_none() && graduation.is_none())
-            .then(|| skill_lifecycle::try_run(&repo, &command_args))
-            .flatten();
-        let probation = (dependencies.is_none() && graduation.is_none() && lifecycle.is_none())
-            .then(|| skill_probation::try_run(&repo, &command_args))
-            .flatten();
-        let usage = if dependencies.is_some() {
-            Some(skill_dependencies::usage_lines())
-        } else if graduation.is_some() {
-            Some(skill_graduation::usage_line())
-        } else if lifecycle.is_some() {
-            Some(skill_lifecycle::usage_lines())
-        } else if probation.is_some() {
-            Some(skill_probation::usage_line())
-        } else {
-            None
-        };
-        let result = match (dependencies, graduation, lifecycle, probation) {
-            (Some(result), _, _, _)
-            | (_, Some(result), _, _)
-            | (_, _, Some(result), _)
-            | (_, _, _, Some(result)) => result,
-            (None, None, None, None) => skills::run(&skill_args),
-        };
-        finish(result, usage);
+        finish(skills::run(&skill_args), None::<&str>);
         return;
     }
     if let Some(recall_args) = subcommand_arguments(&args, "recall") {

@@ -144,8 +144,6 @@ pub struct MemoryConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct VerificationConfig {
     pub required: bool,
-    /// Automatically run browser verification for effective UI changes.
-    pub browser_on_ui_change: bool,
 }
 
 impl Default for Config {
@@ -208,10 +206,7 @@ impl Default for MemoryConfig {
 
 impl Default for VerificationConfig {
     fn default() -> Self {
-        Self {
-            required: true,
-            browser_on_ui_change: true,
-        }
+        Self { required: true }
     }
 }
 
@@ -627,57 +622,26 @@ mod tests {
         config.model.retry_max_delay_ms = config.model.retry_base_delay_ms - 1;
         assert!(config.validate().is_err());
 
-        // Agent modes and verification flags are fail-closed by type: every
-        // representable value must validate.
+        // Agent modes and the verification flag are fail-closed by type.
         for mode in [Mode::Yolo, Mode::Review, Mode::ReadOnly] {
             let mut config = Config::default();
             config.agent.mode = mode;
             config.validate().expect("agent mode must validate");
         }
-        for (required, browser) in [(true, true), (true, false), (false, true), (false, false)] {
+        for required in [true, false] {
             let mut config = Config::default();
             config.verification.required = required;
-            config.verification.browser_on_ui_change = browser;
             config.validate().expect("verification flags must validate");
         }
     }
 }
 
-/// Environment-variable overrides for browser and envelope configuration.
+/// Environment-variable overrides for envelope configuration.
 ///
 /// All functions are pure reads of the current process environment; tests
 /// are responsible for unsetting the variables they touch so they don't
 /// leak state between cases.
 pub mod env {
-    use std::path::PathBuf;
-    use std::time::Duration;
-
-    #[must_use]
-    pub fn browser_enabled() -> bool {
-        match std::env::var("MEDUSA_BROWSER_ENABLED") {
-            Ok(s) => matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
-            Err(_) => false,
-        }
-    }
-
-    #[must_use]
-    pub fn browser_path() -> Option<PathBuf> {
-        std::env::var("MEDUSA_BROWSER_PATH").ok().map(PathBuf::from)
-    }
-
-    #[must_use]
-    pub fn browser_timeout() -> Duration {
-        Duration::from_millis(browser_timeout_ms())
-    }
-
-    #[must_use]
-    pub fn browser_timeout_ms() -> u64 {
-        std::env::var("MEDUSA_BROWSER_TIMEOUT_MS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(30_000)
-    }
-
     #[must_use]
     pub fn envelope_head_bytes() -> usize {
         std::env::var("MEDUSA_ENVELOPE_HEAD_BYTES")
@@ -692,24 +656,6 @@ pub mod env {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(4_096)
-    }
-}
-
-/// Browser-sidecar configuration assembled from the environment.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BrowserConfig {
-    pub enabled: bool,
-    pub path: Option<std::path::PathBuf>,
-    pub timeout_ms: u64,
-}
-
-impl Default for BrowserConfig {
-    fn default() -> Self {
-        Self {
-            enabled: env::browser_enabled(),
-            path: env::browser_path(),
-            timeout_ms: env::browser_timeout_ms(),
-        }
     }
 }
 
@@ -737,7 +683,6 @@ impl Default for EnvelopeSettings {
 /// Top-level runtime configuration assembled from environment variables.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MedusaConfig {
-    pub browser: BrowserConfig,
     pub envelope: EnvelopeSettings,
     pub daemon_max_artifact_bytes: usize,
 }
@@ -749,7 +694,6 @@ impl MedusaConfig {
     #[must_use]
     pub fn from_env() -> Self {
         Self {
-            browser: BrowserConfig::default(),
             envelope: EnvelopeSettings::default(),
             daemon_max_artifact_bytes: std::env::var("MEDUSA_DAEMON_MAX_ARTIFACT_BYTES")
                 .ok()

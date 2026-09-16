@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "e2adbfcdf100ca2532c6deb8e9ee75fbf84e38e43b8b5ca8775e473388b67431"
+      "sha256": "7a1172e9366eda40f99ac7bf9422a75ea1c06093a5782f3def6a4c52726ec09e"
     },
     {
       "path": "SECURITY.md",
@@ -81,7 +81,7 @@
     {
       "path": "docs/ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "65dcf5329a98f8a64e6ca63e319ed5c84484e8fb041ecb51b50141fd79b5160a"
+      "sha256": "5031b7ef0021542885abcb145ed82efd28780a9ed2141e8b961ba44a07d6b405"
     },
     {
       "path": "docs/BENCHMARKS.md",
@@ -91,7 +91,7 @@
     {
       "path": "docs/CAPABILITY-EVIDENCE.md",
       "disposition": "current",
-      "sha256": "303c7444fbbfbdaab85c316c91281be243eebc7eabdecfcdfc59deb92ab02fec"
+      "sha256": "e427ce2c78849885b488ded1aa18f5a4bda624cddf74bd93f67166a5bd24ab1b"
     },
     {
       "path": "docs/CHATGPT-OAUTH.md",
@@ -116,17 +116,17 @@
     {
       "path": "docs/COMPATIBILITY.md",
       "disposition": "current",
-      "sha256": "e41f08dc30d1851fa17b27bfef72a6349e343257e5ba2b5b81bdcb68ab3a0616"
+      "sha256": "9a220d6d0e738fd02590eff36e502f6a9ffe1e928113ef2121a9d80a892e33b6"
     },
     {
       "path": "docs/CONFIGURATION.md",
       "disposition": "current",
-      "sha256": "b6fd23d414c883a91643fcecd4548230f55dbb83b4b32fc538bd591f83967c82"
+      "sha256": "bf6ead4277e43a0833746354129ac24b5430fa4573b752ab3c0127a1a0dbdb51"
     },
     {
       "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "a88eb8ef9f57c626522531401fb2986d2eaa9229e663e0f13ff9a4e84fe659d3"
+      "sha256": "bfd930f4fbe412b91187d09219357c93254ae54ca99da0399fee4fbb484f64ac"
     },
     {
       "path": "docs/CONTRIBUTOR-WORKFLOWS.md",
@@ -141,7 +141,7 @@
     {
       "path": "docs/DEPENDENCY-HYGIENE.md",
       "disposition": "historical",
-      "sha256": "b5ab5cf53c94c8af01508b4f8fb91b5d814741b2dcaa999c28c6e1ff0bbf8b61"
+      "sha256": "9ac6e12114a9489421dfbea3e0692a678ff92d9fa24af0a416d15b0afe75f454"
     },
     {
       "path": "docs/DESKTOP-DISTRIBUTION.md",
@@ -196,7 +196,7 @@
     {
       "path": "docs/MULTI_AGENT_EXECUTION.md",
       "disposition": "current",
-      "sha256": "e5514fbb48ca073b4cdef09522d5cf2d4e86181b5307eb8c3a010044cd5460c6"
+      "sha256": "189597d4414893fe489c715e7e2c34be39d80decea1ea8531fe83f73ff397584"
     },
     {
       "path": "docs/MUTATING-WORKTREE-INTEGRATION.md",
@@ -216,7 +216,7 @@
     {
       "path": "docs/PRODUCTION-EXECUTION-TRACE.md",
       "disposition": "current",
-      "sha256": "a54d23dfc7c79362bb5f06f4b7623246bd33ca727888e1b78910c744f2181832"
+      "sha256": "28a6cd47ffcd0b980d1a6e8b9b5824fd94987270cb88088ae3624257e2588fe6"
     },
     {
       "path": "docs/PRODUCT_EVIDENCE_ROADMAP.md",
@@ -261,7 +261,7 @@
     {
       "path": "docs/RELEASE.md",
       "disposition": "current",
-      "sha256": "4348873363d44e9cb12c4bb8609bf5dfdcaad40809790504763d79177dc7f784"
+      "sha256": "c5f2c5a2852a579dee89d32ed3003da0591e74ae1bde99cb406a7761f2f1728c"
     },
     {
       "path": "docs/SAFETY-RECOVERY-PROOF.md",
@@ -281,7 +281,7 @@
     {
       "path": "docs/SECURITY-MODEL.md",
       "disposition": "current",
-      "sha256": "1942e04ae08b8ca3121ffefae801f4dbaae31ef8d7962ce4fc46932c8cce7b95"
+      "sha256": "fc4889fca4bb2315957bc82eef564b52b27ec70086c17163a0c2205322c8a534"
     },
     {
       "path": "docs/SELF-UPDATE.md",
@@ -316,7 +316,7 @@
     {
       "path": "docs/TOOL-EXECUTION-PIPELINE.md",
       "disposition": "current",
-      "sha256": "9aaefdb7f2dd2bc9d8da6102f5aa7605700f55a566d02026724a741f2beda101"
+      "sha256": "65fa6aa88dff03a670a448a767e3676c6345999a777b3f1e0c21042cd688ecf8"
     },
     {
       "path": "docs/TRANSACTIONAL-PATCH-RECOVERY.md",
@@ -341,22 +341,22 @@
     {
       "path": "docs/architecture-policy.md",
       "disposition": "current",
-      "sha256": "a9d4be28b2aae6506ec451d4897408be92a0dfb752f86f93099de39a4afd9ca6"
+      "sha256": "5e0d173c0a90986567917fb92beffa04adc939df661f08c34aa8c76b587e1c2d"
     },
     {
       "path": "docs/architecture/FINAL-CERTIFICATION-AUDIT.md",
       "disposition": "historical",
-      "sha256": "a1786d7eaf987a67b48d24ce1e96f3ccac6246bd64e58897939b33ea7432c208"
+      "sha256": "1883ce39e390037583196f98f5bf5be4e0adead198825233e9c7f90c4459ec23"
     },
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "f97001fe48c54b581cfae675f75b1568f0ccb85f19a77e815582ee018d4072b3"
+      "sha256": "48b5679a08c1bde24dc183c89bbe49aa8c10a29f388f44349bbee89b6aca480d"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
       "disposition": "current",
-      "sha256": "ab60ce8c431b1ad407f5d9412008603d8fb915373d4908f0411e24a2b13ff06e"
+      "sha256": "f175d4aa06113add3610ab8678bfb214fcc38f048854a67e3b80a5ad29f94a46"
     },
     {
       "path": "docs/architecture/PREBUILT-UPDATES.md",
@@ -401,7 +401,7 @@
     {
       "path": "docs/architecture/decisions/0006-authoritative-evidence-artifacts-and-verification.md",
       "disposition": "current",
-      "sha256": "fcc7f6126878afcaebb30ff5f119aefe9165a6a58f06d08028f3d813fe625855"
+      "sha256": "1a5992f4e377d348725e89bb4da522f1ab663784851bd03d7d30ef0dd317f271"
     },
     {
       "path": "docs/architecture/decisions/0007-canonical-frontend-projection.md",
@@ -412,11 +412,6 @@
       "path": "docs/architecture/decisions/0008-main-default-explicit-release-updates.md",
       "disposition": "current",
       "sha256": "977db2f86813fdbfd25ead3dbd139e65b2a77dcd9a0782b6d4d0d392b186d509"
-    },
-    {
-      "path": "docs/architecture/decisions/0009-browser-preview-certification.md",
-      "disposition": "current",
-      "sha256": "d251aa949c7060aeb88c6724b49343f2588f8503c1bbe0ba76b7869938fc3b88"
     },
     {
       "path": "docs/architecture/decisions/0010-typed-non-authority-service-providers.md",
@@ -541,7 +536,7 @@
     {
       "path": "docs/quickstart.md",
       "disposition": "current",
-      "sha256": "2939d9b3ce7d8b53de75754217347cc346ee710d155645764606351dc8fd7688"
+      "sha256": "51afea459dbbad690b0cd0d663a342014c71e588b64b0eb13a309508731ef21e"
     },
     {
       "path": "docs/repository-indexing.md",

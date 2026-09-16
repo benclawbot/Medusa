@@ -4,13 +4,11 @@
     "medusa-daemon",
     "medusa-tui",
     "medusa-runtime",
-    "medusa-agent",
-    "medusa-browserd"
+    "medusa-agent"
   ],
   "expected_binary_targets": [
     "medusa",
-    "medusa-tui",
-    "medusa-browserd"
+    "medusa-tui"
   ],
   "test_support_crates": [
     "medusa-testkit"

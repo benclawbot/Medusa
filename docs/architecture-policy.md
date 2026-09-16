@@ -4,7 +4,7 @@ Medusa treats a production capability as integrated only when its crate is reach
 
 ## Shipped roots
 
-The reviewed root set lives in `.github/architecture-policy.json`. It currently contains `medusa-cli`, `medusa-daemon`, `medusa-tui`, `medusa-runtime`, `medusa-agent`, and `medusa-browserd`.
+The reviewed root set lives in `.github/architecture-policy.json`. It currently contains `medusa-cli`, `medusa-daemon`, `medusa-tui`, `medusa-runtime`, and `medusa-agent`.
 
 ## Integration baseline
 

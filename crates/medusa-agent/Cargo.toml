@@ -8,7 +8,6 @@ repository.workspace = true
 
 [dependencies]
 hex.workspace = true
-medusa-browser-client = { path = "../medusa-browser-client" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-clearops = { path = "../medusa-clearops" }
 medusa-config = { path = "../medusa-config" }

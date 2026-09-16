@@ -14,10 +14,7 @@ Generated SBOM and release-manifest evidence records the SHA-256 identity of the
 
 This document records the conservative dependency-pruning increment delivered through PR #52. The goal was to remove proven-unused direct manifest edges without refreshing unrelated transitive versions or claiming build improvements that the resolved graph does not support.
 
-The complete production source of the two affected crates was inspected before changing their manifests:
-
-- `medusa-browser-client` uses `medusa-core`, `serde`, and `serde_json`; it does not use its former direct `thiserror` or `ulid` declarations.
-- `medusa-browserd` uses `medusa-browser-client`, `serde_json`, and `url`; it does not use its former direct `medusa-core`, `serde`, or `thiserror` declarations.
+The complete production source of the affected crates was inspected before changing their manifests.
 
 The lockfile was preserved from the base branch and updated only for the five workspace-package dependency entries. A full lock regeneration was explicitly rejected after metrics showed that it would add unrelated transitive versions.
 
@@ -40,16 +37,7 @@ The permanent dependency-policy job measures the pull-request head and base with
 | Enabled feature selections | 632 | 632 | 0 |
 | Packages with enabled features | 169 | 169 | 0 |
 
-Removed external edges:
-
-- `medusa-browser-client` → `thiserror`
-- `medusa-browser-client` → `ulid`
-- `medusa-browserd` → `serde`
-- `medusa-browserd` → `thiserror`
-
-Removed internal workspace edge:
-
-- `medusa-browserd` → `medusa-core`
+Removed external and internal edges are recorded in the original dependency-pruning receipt.
 
 No direct edge was added.
 
@@ -59,7 +47,6 @@ The resolved package set, registry package count, duplicate-version count, and e
 
 The practical benefits are narrower:
 
-- each browser crate declares only libraries it directly uses
 - future source changes cannot accidentally rely on undeclared transitive availability hidden by stale manifest entries
 - dependency reviews have five fewer direct relationships to audit
 - exact base/current graph metrics now run on every pull request in the existing read-only dependency-policy job

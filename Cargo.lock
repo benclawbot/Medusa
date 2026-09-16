@@ -1460,7 +1460,6 @@ name = "medusa-agent"
 version = "1.0.9"
 dependencies = [
  "hex",
- "medusa-browser-client",
  "medusa-capabilities",
  "medusa-clearops",
  "medusa-confidence",
@@ -1493,25 +1492,6 @@ dependencies = [
  "time",
  "ulid",
  "walkdir",
-]
-
-[[package]]
-name = "medusa-browser-client"
-version = "1.0.9"
-dependencies = [
- "medusa-core",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "medusa-browserd"
-version = "1.0.9"
-dependencies = [
- "medusa-browser-client",
- "serde_json",
- "url",
 ]
 
 [[package]]

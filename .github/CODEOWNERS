@@ -38,8 +38,6 @@
 /crates/medusa-workers/ @benclawbot
 /crates/medusa-process-containment/ @benclawbot
 /crates/medusa-update/ @benclawbot
-/crates/medusa-browser-client/ @benclawbot
-/crates/medusa-browserd/ @benclawbot
 /crates/medusa-daemon/ @benclawbot
 /crates/medusa-cli/ @benclawbot
 /crates/medusa-tui/ @benclawbot

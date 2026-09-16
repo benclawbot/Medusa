@@ -15,7 +15,7 @@ const MAX_REQUEST_BYTES: usize = 8 * 1024;
 
 /// A short-lived, loopback-only server for generated static web artifacts.
 ///
-/// This keeps browser verification self-contained for a generated `index.html` without asking
+/// This keeps static UI verification self-contained for a generated `index.html` without asking
 /// the user to install or configure a separate development server. The server is deliberately
 /// scoped to the verified worktree and rejects traversal outside it.
 pub(crate) struct StaticVerificationServer {
@@ -27,29 +27,26 @@ pub(crate) struct StaticVerificationServer {
 impl StaticVerificationServer {
     pub(crate) fn start(root: &Path) -> Result<Option<Self>, String> {
         let root = fs::canonicalize(root)
-            .map_err(|error| format!("cannot inspect browser verification root: {error}"))?;
+            .map_err(|error| format!("cannot inspect static UI verification root: {error}"))?;
         if !root.join("index.html").is_file() {
             return Ok(None);
         }
 
-        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
-            format!("cannot start automatic browser verification server: {error}")
-        })?;
-        listener.set_nonblocking(true).map_err(|error| {
-            format!("cannot configure automatic browser verification server: {error}")
-        })?;
-        let address = listener.local_addr().map_err(|error| {
-            format!("cannot read automatic browser verification address: {error}")
-        })?;
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .map_err(|error| format!("cannot start static UI verification server: {error}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("cannot configure static UI verification server: {error}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|error| format!("cannot read static UI verification address: {error}"))?;
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let thread_root = root.clone();
         let thread = thread::Builder::new()
             .name("medusa-static-verifier".to_owned())
             .spawn(move || run_server(listener, thread_root, thread_stop))
-            .map_err(|error| {
-                format!("cannot launch automatic browser verification server: {error}")
-            })?;
+            .map_err(|error| format!("cannot launch static UI verification server: {error}"))?;
 
         Ok(Some(Self {
             address,
@@ -58,17 +55,15 @@ impl StaticVerificationServer {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn route(&self) -> String {
         format!("http://127.0.0.1:{}/", self.address.port())
     }
 
-    /// Probe the generated artifact without requiring the optional Playwright
-    /// sidecar. This is intentionally limited to the loopback server owned by
-    /// this value and only establishes that the document is reachable and
-    /// non-empty; full browser checks still take precedence when available.
+    /// Probe the generated artifact through the loopback server owned by this value.
     pub(crate) fn probe(&self) -> Result<(u16, String), String> {
         let mut stream = TcpStream::connect_timeout(&self.address, Duration::from_secs(2))
-            .map_err(|error| format!("cannot connect to automatic verification server: {error}"))?;
+            .map_err(|error| format!("cannot connect to static UI verification server: {error}"))?;
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .map_err(|error| format!("cannot configure automatic verification probe: {error}"))?;

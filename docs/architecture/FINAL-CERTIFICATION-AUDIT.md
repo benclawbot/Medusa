@@ -20,7 +20,7 @@ The independent repository audit found no unresolved architecture-v2 metadata or
 
 ## Truthful exclusions
 
-- Browser tools remain `quarantined` until authenticated live dispatcher and permission evidence exists.
+- The retired browser sidecar and model-executable browser tools are absent; UI verification uses the static artifact path.
 - Managed instruction-only plugins remain `preview`; executable handlers require capability-specific certification.
 
 These exclusions do not own execution state and do not restore a v1 compatibility authority.

@@ -276,24 +276,6 @@ fn warm_authoritative_resources(
         }
     }
 
-    if let Ok(route) = std::env::var("MEDUSA_BROWSER_VERIFY_URL") {
-        let browserd =
-            std::env::var("MEDUSA_BROWSERD").unwrap_or_else(|_| "medusa-browserd".to_owned());
-        let fixture = format!("route={route}\nbrowserd={browserd}\n");
-        warm_bytes(
-            &pool,
-            key(WarmResourceKind::BrowserFixture),
-            fixture.as_bytes(),
-            &mut metrics,
-        );
-        warm_bytes(
-            &pool,
-            key(WarmResourceKind::Sidecar),
-            browserd.as_bytes(),
-            &mut metrics,
-        );
-    }
-
     match pool.prune() {
         Ok(pruned) => metrics.pruned = pruned as u64,
         Err(_) => metrics.errors = metrics.errors.saturating_add(1),

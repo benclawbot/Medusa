@@ -66,9 +66,6 @@ pub(crate) fn resolve_delegation(
             .iter()
             .any(|tool| matches!(tool.as_str(), "web_search" | "web_fetch"));
         let process_allowed = allowed_tools.iter().any(|tool| tool == "shell_run");
-        let browser_allowed = allowed_tools
-            .iter()
-            .any(|tool| tool.starts_with("browser_"));
         let authority = DelegationContractMaterial {
             root_execution_id: request.root_execution_id.to_owned(),
             parent_worker_id: "lead".to_owned(),
@@ -94,7 +91,7 @@ pub(crate) fn resolve_delegation(
             approval_policy: DelegatedApprovalPolicy::Never,
             network_allowed,
             process_allowed,
-            browser_allowed,
+            browser_allowed: false,
             credentialed_actions_allowed: false,
             model: request.config.model.clone(),
             mode: request.mode,

@@ -858,19 +858,19 @@ mod tests {
         let mut source = MedusaError::new(
             ErrorCode::ToolExecutionFailed,
             ErrorCategory::Transient,
-            "browser deadline exceeded",
+            "tool deadline exceeded",
         )
         .with_retryable(true);
         source
             .context
-            .insert("browser_error_kind".to_owned(), json!("timeout"));
+            .insert("tool_error_kind".to_owned(), json!("timeout"));
         source
             .context
-            .insert("browser_sidecar_reset".to_owned(), json!(true));
+            .insert("retryable".to_owned(), json!(true));
         let expected = source.clone();
 
         let outcome = ToolExecutionPipeline::new().execute(
-            ToolPipelineRequest::built_in("browser_click", &json!({"selector":"#missing"})),
+            ToolPipelineRequest::built_in("fs_read", &json!({"path":"missing"})),
             &AtomicBool::new(false),
             |_| Err(source),
         )

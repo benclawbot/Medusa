@@ -18,7 +18,7 @@ Complete bounded artifacts are stored under stable content-addressed IDs with me
 
 Changed-component scope preserves additions, modifications, renames, deletions, generated files, package ownership, and effective UI impact from preparation through review, verification receipts, authorization, integration, and reconciliation.
 
-An extensible verification planner maps that exact scope to required checks for formatting, linting, type checking, unit and integration tests, builds, browser behavior, accessibility, packaging, security, and artifact semantics. Adapters support repository-defined commands and common Cargo, npm, pnpm, yarn, bun, pytest, Go, Maven/Gradle, .NET, and CMake layouts. Effective UI changes require real browser behavior checks unless a durable reviewed exemption is bound to the exact scope. Missing adapters, unresolved ownership, failed checks, corrupt artifacts, or incomplete coverage fail closed.
+An extensible verification planner maps that exact scope to required checks for formatting, linting, type checking, unit and integration tests, builds, static UI behavior, accessibility, packaging, security, and artifact semantics. Adapters support repository-defined commands and common Cargo, npm, pnpm, yarn, bun, pytest, Go, Maven/Gradle, .NET, and CMake layouts. Effective UI changes require the bounded static HTTP artifact check. Missing adapters, unresolved ownership, failed checks, corrupt artifacts, or incomplete coverage fail closed.
 
 Direct and isolated mutation paths use the same planner and evidence authority for the same changed files. Verification receipts contain exact scope, planner inputs, selected checks, exemptions, command and artifact outputs, coverage, and terminal decision.
 

@@ -161,7 +161,7 @@ The desktop app is a Tauri/React shell over the same Medusa runtime. It provides
 - Rust 1.88 or newer for source builds; the repository pins Rust 1.88.0
 - A supported model connection for model-dependent work
 - The platform containment backend required for guarded shell execution
-- Node.js 22 for UI-change browser verification, desktop development, or desktop packaging (the Codex app-server OAuth route does not require Node.js)
+- Node.js 22 for desktop development or desktop packaging (the Codex app-server OAuth route does not require Node.js)
 - **Git only when needed:** source installation/cloning and Git-backed mutation require Git; packaged Medusa can perform ordinary-directory and ephemeral workspace work without a Git repository
 
 ### Install the CLI
@@ -344,7 +344,6 @@ format = "markdown"
 
 [verification]
 required = true
-browser_on_ui_change = true
 ```
 
 `agent.parallel_workers` controls bounded parallel **tool work** in configuration schema v1. It does not authorize autonomous agent recursion and is not the Git mutation-DAG child limit. The conflict-aware mutation implementation has a separate hard safety bound of three mutating children and activates only after typed risk/confidence/scope/resource checks.
@@ -354,7 +353,6 @@ Command-line overrides use `--set key=value`:
 ```bash
 medusa --set agent.mode=read-only
 medusa --set agent.max_turns=100
-medusa --set verification.browser_on_ui_change=false
 ```
 
 Configuration commands include `medusa config init`, `show`, `edit`, `get`, `set`, `unset`, `validate`, `doctor`, `reset`, and named profile management. Interactive TUI and Desktop configuration consume the same provider catalog/model registry and revisioned profile authority.
@@ -431,7 +429,7 @@ Provider HTTP handling bounds retained error bodies and successful JSON response
 - a contained per-session analysis workspace for bounded persistent analytical state and fixed-reducer execution without granting repository mutation, credentials, ambient network, or independent provider authority;
 - safe non-authority service/provider seams where implementation substitution is allowed without making policy, verification, journal, approval, containment, or integration authorities pluggable;
 - validated project plugin metadata discovery that does not itself grant executable authority;
-- required UI-change browser verification through the internal sidecar; model browser actions remain readiness-gated explicit opt-in preview;
+- required UI-change static HTTP verification with bounded accessibility checks;
 - image/file prompt attachments when provider capabilities permit;
 - MCP and extension boundaries;
 - provider routing/fallback chains;
@@ -489,8 +487,6 @@ Scheduled timer/heartbeat/file/process/external-signal wakeups enter the same du
 | `medusa-workers` | Parallel worktrees and deterministic merge coordination |
 | `medusa-extensions` | Skills, hooks, MCP isolation, and Desktop Commander integration |
 | `medusa-hardening` | Observability, migrations, archives, chaos recovery, and release evidence |
-| `medusa-browser-client` | Browser sidecar client and protocol |
-| `medusa-browserd` | Node.js and Playwright browser sidecar process |
 
 The manager boundaries are deliberately one-way: frontends depend on `medusa-runtime`; runtime composes capability, provider, and agent managers; the agent consumes the Tool Manager and capability context; service managers stay independent of presentation. This keeps future GitLab, Bitbucket, Azure DevOps, package sources, MCP servers, and model providers additive rather than changes to a monolithic runtime.
 
@@ -628,7 +624,7 @@ Canonical workflows test the Rust workspace and daemon behavior across Linux, ma
 
 Repository gates cover formatting, production lint, changed-package tests, documentation, dependency/security policy, architecture and engineering-policy drift, containment regressions, adversarial cases, migration/recovery checks, package smoke tests, selected live-provider scenarios, and path-triggered specialized certifications. Exhaustive all-target/workspace validation remains available in deeper nightly/manual/release contexts rather than being duplicated after every merge.
 
-Platform support does not imply identical containment, browser, credential-store, or operating-system signing behavior.
+Platform support does not imply identical containment, credential-store, or operating-system signing behavior.
 
 ## Current limitations
 
@@ -637,7 +633,7 @@ Platform support does not imply identical containment, browser, credential-store
 - Directory mutation fails closed on symlink-bearing workspaces; use Git mutation when symlink semantics must be preserved.
 - The canonical tool-result migration is incomplete across all tool families; shell/output-envelope and related projections are migrated foundations, while remaining consumers continue to move toward one typed canonical result contract.
 - ChatGPT OAuth depends on the installed Codex CLI and its authenticated ChatGPT account; Node.js is not required for this route.
-- browser actions are readiness-gated preview: they are explicit opt-in, dispatched through the certified-production browser route, and not default-enabled. Set `MEDUSA_BROWSER_ENABLED=true` only with an approved `MEDUSA_BROWSER_PATH` and verified `MEDUSA_BROWSER_VERIFY_URL`; route admission, permissions, and required verification authority remain enforced.
+- UI changes use a deterministic static HTTP verification pass; interactive browser inspection remains an explicit frontend/release concern.
 - Screenshot input is accepted only when the selected provider declares compatible image support and limits.
 - Desktop release packages are unsigned at the operating-system level.
 - Windows command containment requires the Windows 11 composable sandbox API.
