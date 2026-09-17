@@ -1,0 +1,81 @@
+name: Release Controller v2.0.0
+
+on:
+  push:
+    branches:
+      - release-controller-v2.0.0
+    paths:
+      - ".github/workflows/release-controller-v2.0.0.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TAG: v2.0.0
+      TARGET_SHA: 2b9b4a58739325492031ef2c0a9c5fbb6b24f254
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Verify target is current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+      - name: Create immutable release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            remote_sha=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk '{print $1}')
+            if [[ -z "$remote_sha" ]]; then
+              remote_sha=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
+            fi
+            test "$remote_sha" = "$TARGET_SHA"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" "$TARGET_SHA" -m "Medusa 2.0.0"
+            git push origin "refs/tags/$TAG"
+          fi
+      - name: Wait for canonical release build and verify draft assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 9600))
+          while (( SECONDS < deadline )); do
+            if json=$(gh release view "$TAG" --json isDraft,url,assets 2>/dev/null); then
+              is_draft=$(jq -r '.isDraft' <<<"$json")
+              if [[ "$is_draft" == "true" ]]; then
+                mapfile -t names < <(jq -r '.assets[].name' <<<"$json")
+                required=(
+                  medusa-desktop-windows.exe
+                  medusa-desktop-macos.dmg
+                  medusa-desktop-linux.AppImage
+                  medusa-desktop-linux.deb
+                  medusa-release-manifest.json
+                  SHA256SUMS
+                )
+                for asset in "${required[@]}"; do
+                  printf '%s\n' "${names[@]}" | grep -Fx "$asset" >/dev/null
+                done
+                exit 0
+              fi
+            fi
+            sleep 30
+          done
+          echo "Timed out waiting for validated draft release $TAG" >&2
+          exit 1
+      - name: Publish verified release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false --latest
+          test "$(gh release view "$TAG" --json isDraft -q .isDraft)" = "false"
