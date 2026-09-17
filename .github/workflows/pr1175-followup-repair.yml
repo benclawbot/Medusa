@@ -33,6 +33,25 @@ jobs:
           replace("apps/medusa-desktop/package.json", '"version": "1.0.9"', '"version": "2.0.0"', 1)
           replace("apps/medusa-desktop/src-tauri/Cargo.toml", 'version = "1.0.9"', 'version = "2.0.0"', 1)
           replace("apps/medusa-desktop/src-tauri/tauri.conf.json", '"version": "1.0.9"', '"version": "2.0.0"', 1)
+          replace(
+              "crates/medusa-testkit/Cargo.toml",
+              'medusa-transaction-coordinator = { path = "../medusa-transaction-coordinator" }\n',
+              "",
+              1,
+          )
+          test_path = Path("crates/medusa-testkit/tests/authority_fault_campaign.rs")
+          test = test_path.read_text(encoding="utf-8")
+          test = test.replace(
+              "use medusa_transaction_coordinator::{Participant, TransactionCoordinator, TransactionPhase, Vote};\n",
+              "",
+              1,
+          )
+          start = test.find("#[test]\nfn fault_plans_drive_transaction_promotion_authority()")
+          next_test = test.find("#[test]\nfn fault_plans_drive_checkpoint_snapshot_recovery", start)
+          if start < 0 or next_test < 0:
+              raise SystemExit("transaction coordinator test block not found")
+          test = test[:start] + test[next_test:]
+          test_path.write_text(test, encoding="utf-8")
           PY
           rm -rf crates/medusa-transaction-coordinator
           npm --prefix apps/medusa-desktop install --package-lock-only --ignore-scripts
@@ -51,7 +70,8 @@ jobs:
           python3 scripts/architecture-policy.py check --root . --policy .github/architecture-policy.json --report /tmp/architecture-policy-report.md
           cargo metadata --locked --format-version 1 >/dev/null
           cargo test -p medusa-cli --bin medusa-provider-diagnostic --locked
-          npm --prefix apps/medusa-desktop test -- --runInBand=false
+          cargo test -p medusa-testkit --locked
+          npm --prefix apps/medusa-desktop test
 
       - name: Commit repaired state
         shell: bash
