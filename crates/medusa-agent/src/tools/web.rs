@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, io::Read, time::Duration};
 
-use medusa_browser_client::network_policy::{ResolvedTarget, resolve_public_target};
+use medusa_capabilities::{ResolvedTarget, resolve_public_target};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{
     Url,
@@ -379,7 +379,7 @@ fn web_error(message: impl Into<String>) -> MedusaError {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    use medusa_browser_client::network_policy::is_public_ip;
+    use medusa_capabilities::is_public_ip;
 
     use super::*;
 

@@ -20,8 +20,6 @@ pub enum WarmResourceKind {
     BuildMetadata,
     DependencyCache,
     Worktree,
-    BrowserFixture,
-    Sidecar,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -468,8 +466,8 @@ mod tests {
     fn corrupted_object_is_invalidated_instead_of_reused() {
         let directory = tempfile::tempdir().expect("directory");
         let pool = pool(directory.path(), 4, 1024);
-        let key = key(WarmResourceKind::BrowserFixture, "browser-a");
-        pool.put(key.clone(), b"browser-binary").expect("put");
+        let key = key(WarmResourceKind::Worktree, "worktree-a");
+        pool.put(key.clone(), b"worktree-bytes").expect("put");
         let entry_id = key_fingerprint(&key).expect("entry id");
         fs::write(pool.object_path(&entry_id), b"tampered").expect("corrupt");
 
@@ -500,7 +498,7 @@ mod tests {
     fn incomplete_pairs_are_cleaned_and_never_reused() {
         let directory = tempfile::tempdir().expect("directory");
         let pool = pool(directory.path(), 4, 1024);
-        let key = key(WarmResourceKind::Sidecar, "sidecar-a");
+        let key = key(WarmResourceKind::DependencyCache, "dependency-a");
         let entry_id = key_fingerprint(&key).expect("entry id");
         fs::write(pool.object_path(&entry_id), b"orphan").expect("orphan object");
 

@@ -45,10 +45,7 @@ use medusa_provider::{
 use tracing::{error, info};
 
 use crate::{
-    commands::{
-        Effort, LearningCommand, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand,
-        Verbosity,
-    },
+    commands::{Effort, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand, Verbosity},
     invariants::{
         RuntimeInvariantContext, RuntimeInvariantRegistry, RuntimeInvariantRegistryError,
     },
@@ -56,32 +53,22 @@ use crate::{
 };
 
 pub mod analysis_contained;
+mod analysis_tool;
 pub mod analysis_workspace;
 pub mod attachment;
-pub mod behavioral_outcome;
-pub mod behavioral_health {
-    //! Runtime-facing re-export of the canonical cross-surface behavioral health contract.
-    pub use medusa_improvement::behavioral_health::*;
-}
-mod analysis_tool;
 pub mod checkpoint_payload;
 pub mod checkpoint_store;
 mod coding_trajectory;
 mod command_router;
 pub mod commands;
-pub mod component_runtime;
 mod config_command;
 mod error;
 pub mod execution_history;
 pub mod frontend;
 pub mod invariants;
-mod learning_authority;
-pub mod learning_retrieval;
-pub mod learning_review;
 mod memory_retrieval;
 mod mutation_transaction;
 pub mod observer;
-pub mod openai_realtime;
 pub mod prompt;
 mod repository_context;
 pub mod review;
@@ -93,8 +80,6 @@ pub mod skill_dependency_locks;
 mod support;
 #[cfg(test)]
 mod tests;
-pub mod voice;
-pub mod voice_agent_bridge;
 pub mod wakeup_action_bridge;
 
 #[rustfmt::skip]
@@ -103,8 +88,6 @@ mod parent_reviewer;
 mod parallel_mutation;
 mod parallel_mutation_batch;
 
-pub mod openai_realtime_session;
-pub mod openai_realtime_websocket;
 pub mod workspace;
 
 pub use crate::coordination::team_control::{
@@ -3025,9 +3008,6 @@ fn run_prompt(
         "Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.",
         verification_plan.requirements, verification_plan.rationale
     );
-    let session_id = state.session.as_ref().map(|session| session.id.as_str());
-    let learning_context =
-        crate::learning_retrieval::select(&state.repo, &draft, session_id, events);
     let memory_context = if general_chat {
         crate::memory_retrieval::RuntimeMemoryContext::default()
     } else {
@@ -3050,9 +3030,6 @@ fn run_prompt(
         && let Some(evidence) = coordinator_evidence.as_ref()
     {
         task_context.push(evidence.parent_context());
-    }
-    if let Some(learning) = learning_context.prompt_context {
-        task_context.push(learning);
     }
     if let Some(memory) = &memory_context.prompt_context {
         task_context.push(memory.clone());
@@ -3523,23 +3500,6 @@ fn run_prompt(
             session.plan = projected.clone();
             send_runtime_event(events, submission, RuntimeEvent::Plan(projected));
         }
-    }
-    let failed = result.is_err();
-    if let Err(error) = crate::coordination::production_orchestrator::persist_outcome(
-        &state.repo,
-        &draft,
-        &execution_plan,
-        verified,
-        failed,
-    ) {
-        send_runtime_event(
-            events,
-            submission,
-            RuntimeEvent::Notice {
-                title: "Runtime learning record unavailable".to_owned(),
-                details: vec![error.to_string()],
-            },
-        );
     }
     if verified {
         crate::memory_retrieval::record_reuse(

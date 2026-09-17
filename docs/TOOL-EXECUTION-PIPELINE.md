@@ -47,7 +47,7 @@ The design rule is: **extensibility attaches to certified seams; authorities are
 
 `crates/medusa-agent/src/tool_pipeline.rs` defines the versioned typed lifecycle and immutable terminal outcome. `crates/medusa-agent/src/tools/mod.rs` composes capability readiness and `AgentExecutionPolicy` into ordered monotonic guards, then invokes existing tool handlers. `crates/medusa-agent/src/engine.rs` passes the active execution policy through normal calls, early streamed read-only dispatch, approval/retry, mutation-provenance execution, and parallel tool-DAG dispatch.
 
-Specialized handlers keep their existing ownership. Browser calls still use the verified sidecar/session policy, executable skills retain containment, compound tools retain their internal authorities, and filesystem mutation remains on the transaction/provenance path.
+Specialized handlers keep their existing ownership. Executable skills retain containment, compound tools retain their internal authorities, and filesystem mutation remains on the transaction/provenance path.
 
 ## Invariants for new executable handlers
 
@@ -65,4 +65,4 @@ A subordinate execution mechanism is permitted only when the parent certified in
 
 ## Conformance
 
-Repository CI must cover normal, early-stream, approved, browser, executable-skill, compound, and parallel/DAG paths. Cross-platform production entrypoints must preserve the same ordering and fail-closed behavior on Linux, macOS, and Windows.
+Repository CI must cover normal, early-stream, approved, executable-skill, compound, and parallel/DAG paths. Cross-platform production entrypoints must preserve the same ordering and fail-closed behavior on Linux, macOS, and Windows.

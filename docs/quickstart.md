@@ -6,7 +6,7 @@ After installing Medusa, run one command:
 medusa quickstart
 ```
 
-The command performs platform and containment preflight checks, verifies Git and Node.js sidecar prerequisites, detects an authenticated direct provider or a local/custom route, validates the required tool-calling capability, creates a harmless temporary Git repository when `--repo` is not supplied, executes one bounded repository-local proof task, verifies the exact result, and prints a single success or failure report.
+The command performs platform and containment preflight checks, verifies required local tools, detects an authenticated direct provider or a local/custom route, validates the required tool-calling capability, creates a harmless temporary Git repository when `--repo` is not supplied, executes one bounded repository-local proof task, verifies the exact result, and prints a single success or failure report.
 
 Provider and gateway credentials are read only from the process environment. The quickstart flow never writes API keys or gateway credentials to disk.
 

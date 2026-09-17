@@ -33,13 +33,13 @@ Unsupported, oversized, non-UTF-8, non-file, traversal, or symlink-escaping payl
 
 ## Multi-client continuity
 
-TUI, desktop, Telegram, daemon, and future frontends attach to the same session and replay the same canonical journal. Continuity storage does not contain a second transcript or task state. It records only client attachment metadata needed for one mutable owner, read-only observers, explicit handoff/detach, revision conflicts, idempotent commands, and durable cursor acknowledgement.
+TUI, desktop, daemon, and future frontends attach to the same session and replay the same canonical journal. Continuity storage does not contain a second transcript or task state. It records only client attachment metadata needed for one mutable owner, read-only observers, explicit handoff/detach, revision conflicts, idempotent commands, and durable cursor acknowledgement.
 
 Clients reconnect by attaching with their last acknowledged cursor. They receive only the canonical tail after the maximum of the requested cursor and the durable acknowledged cursor. A client cannot silently switch sessions, regress its cursor, or mutate through a stale revision.
 
 ## Redaction and retention
 
-Durable events and recovery artifacts contain safe structured summaries, fingerprints, receipts, and evidence references. Credentials, OAuth tokens, Telegram bot tokens, hidden model reasoning, live process handles, channels, and unrestricted private tool inputs are not recoverable state and must not be persisted.
+Durable events and recovery artifacts contain safe structured summaries, fingerprints, receipts, and evidence references. Credentials, OAuth tokens, hidden model reasoning, live process handles, channels, and unrestricted private tool inputs are not recoverable state and must not be persisted.
 
 Retention must preserve the journal ancestry and evidence required by every retained checkpoint. Presentation-only preferences may be removed independently because they are not authoritative execution state.
 

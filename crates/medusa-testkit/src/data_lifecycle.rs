@@ -105,7 +105,7 @@ pub const LIFECYCLE: &[LifecycleEntry] = &[
     ),
     entry(
         "compaction_manifests_and_semantic_summaries",
-        "medusa-agent::compaction_v2 / medusa-context",
+        "medusa-agent::compaction_v2",
         Authority::Derived,
         "session compaction state",
         "bounded source ranges from session history",
@@ -194,21 +194,6 @@ pub const LIFECYCLE: &[LifecycleEntry] = &[
         "owning workspace/session",
     ),
     entry(
-        "refinement_proposals_activation_history_evaluations_and_rollbacks",
-        "medusa-improvement",
-        Authority::Authoritative,
-        "user/repository refinement state",
-        "reviewed refinement proposals and activation receipts",
-        Retention::UserScoped,
-        None,
-        "explicit learned/refined-state disposition, preserving required rollback/security evidence",
-        true,
-        Redaction::ExcludeSecrets,
-        Deletion::TombstoneThenGc,
-        "rollback lineage may not silently recreate deleted proposal content",
-        "owning user/repository",
-    ),
-    entry(
         "executable_skill_packages_execution_artifacts_and_provenance",
         "medusa-extensions / runtime skill authorities",
         Authority::Derived,
@@ -252,21 +237,6 @@ pub const LIFECYCLE: &[LifecycleEntry] = &[
         Deletion::Immediate,
         "backups must exclude credentials and raw secret values",
         "owning user/repository configuration scope",
-    ),
-    entry(
-        "telegram_voice_realtime_transcripts_media_metadata_and_acceptance_evidence",
-        "medusa-runtime::voice / medusa-openai-realtime / frontend adapters",
-        Authority::Derived,
-        "session transcript projection and sanitized acceptance evidence",
-        "authorized live-session events; raw audio is ephemeral unless an explicit feature requires otherwise",
-        Retention::SessionScoped,
-        None,
-        "owning session disposition; raw live buffers are released at turn/session end",
-        true,
-        Redaction::Redacted,
-        Deletion::ScopeBoundGc,
-        "raw microphone/audio is not part of durable backup state by default",
-        "owning session/user",
     ),
     entry(
         "configuration_history_and_redacted_audit_records",
@@ -314,8 +284,8 @@ pub const LIFECYCLE: &[LifecycleEntry] = &[
         "owning user/repository memory scope",
     ),
     entry(
-        "prompt_mcp_and_context_caches",
-        "medusa-prompt-cache / medusa-mcp-cache / medusa-context-retrieval",
+        "prompt_and_repository_context_caches",
+        "medusa-prompt-cache / medusa-intelligence repository index",
         Authority::Derived,
         "bounded cache/index state",
         "authorized source content and cache keys",
@@ -391,15 +361,13 @@ mod tests {
         "tool_model_outputs_and_content_addressed_artifacts",
         "repository_evidence_receipts_diffs_diagnostics_and_logs",
         "analysis_workspace_snapshots_and_exports",
-        "refinement_proposals_activation_history_evaluations_and_rollbacks",
         "executable_skill_packages_execution_artifacts_and_provenance",
         "scheduled_and_session_action_records",
         "provider_and_oauth_metadata",
-        "telegram_voice_realtime_transcripts_media_metadata_and_acceptance_evidence",
         "configuration_history_and_redacted_audit_records",
         "crash_support_and_diagnostic_bundles",
         "memory_markdown_authority_and_rebuildable_index",
-        "prompt_mcp_and_context_caches",
+        "prompt_and_repository_context_caches",
         "temporary_worktrees_files_and_resource_pool_state",
     ];
 
@@ -482,7 +450,7 @@ mod tests {
 
         let caches = LIFECYCLE
             .iter()
-            .find(|entry| entry.data_class == "prompt_mcp_and_context_caches")
+            .find(|entry| entry.data_class == "prompt_and_repository_context_caches")
             .expect("cache lifecycle entry");
         assert!(caches.visibility.contains("never authorization"));
     }

@@ -1,9 +1,8 @@
-//! Threshold-driven operational-health alerting with a Telegram render path.
+//! Threshold-driven operational-health alerting.
 //!
 //! Evaluation lives in `medusa_hardening::evaluate_alerts` (what fires); this
 //! module owns the daemon side: deduplicating repeats across polls, emitting a
-//! process log, and rendering Telegram-ready message text that the Telegram
-//! service layer can forward to operators.
+//! process log, and rendering concise operator-facing text.
 
 use std::collections::BTreeSet;
 
@@ -12,10 +11,8 @@ use medusa_hardening::{
     evaluate_alerts,
 };
 
-use crate::telegram::telegram_markdown_v2;
-
 /// Daemon alert dispatcher: polls health state, deduplicates repeats, and
-/// renders newly-firing alerts as Telegram message text.
+/// renders newly-firing alerts as plain text.
 pub struct OperationalAlertDispatcher {
     thresholds: AlertThresholds,
     delivered: BTreeSet<String>,
@@ -66,15 +63,15 @@ impl OperationalAlertDispatcher {
         fresh
     }
 
-    /// Renders newly-firing alerts as Telegram-ready message text.
-    pub fn poll_telegram(
+    /// Renders newly-firing alerts as operator-facing text.
+    pub fn poll_text(
         &mut self,
         report: &HealthReport,
         resources: &[ResourceSnapshot],
     ) -> Vec<String> {
         self.poll(report, resources)
             .iter()
-            .map(render_telegram_alert)
+            .map(render_operational_alert)
             .collect()
     }
 }
@@ -83,15 +80,14 @@ fn alert_key(alert: &OperationalAlert) -> String {
     format!("{:?}:{}:{}", alert.severity, alert.scope, alert.message)
 }
 
-/// Renders one alert as Telegram MarkdownV2 text for the operator channel.
+/// Renders one alert for any text frontend.
 #[must_use]
-pub fn render_telegram_alert(alert: &OperationalAlert) -> String {
+pub fn render_operational_alert(alert: &OperationalAlert) -> String {
     let header = match alert.severity {
         AlertSeverity::Warning => "⚠️ Medusa operational warning",
         AlertSeverity::Critical => "🚨 Medusa operational alert",
     };
-    let body = format!("{header}\nScope: `{}`\n{}", alert.scope, alert.message);
-    telegram_markdown_v2(&body)
+    format!("{header}\nScope: {}\n{}", alert.scope, alert.message)
 }
 
 #[cfg(test)]
@@ -118,11 +114,11 @@ mod tests {
             entries: 1,
             pressure: ResourcePressure::Warning,
         };
-        let first = dispatcher.poll_telegram(&report(), &[warning.clone()]);
+        let first = dispatcher.poll_text(&report(), &[warning.clone()]);
         assert_eq!(first.len(), 2);
         assert!(first.iter().all(|message| message.contains("journal")));
         // Re-polling the same state stays silent.
-        assert!(dispatcher.poll_telegram(&report(), &[warning]).is_empty());
+        assert!(dispatcher.poll_text(&report(), &[warning]).is_empty());
     }
 
     #[test]

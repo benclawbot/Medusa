@@ -9,7 +9,6 @@ members = [
   "crates/medusa-testkit",
   "crates/medusa-provider",
   "crates/medusa-external-provider",
-  "crates/medusa-openai-realtime",
   "crates/medusa-intelligence",
   "crates/medusa-world-model",
   "crates/medusa-progress",
@@ -21,13 +20,8 @@ members = [
   "crates/medusa-skill",
   "crates/medusa-wakeup",
   "crates/medusa-prompt-cache",
-  "crates/medusa-mcp-cache",
-  "crates/medusa-markdown-memory",
-  "crates/medusa-memory-consolidation",
   "crates/medusa-clearops",
   "crates/medusa-agent",
-  "crates/medusa-browser-client",
-  "crates/medusa-browserd",
   "crates/medusa-process-containment",
   "crates/medusa-daemon",
   "crates/medusa-runtime",
@@ -35,16 +29,10 @@ members = [
   "crates/medusa-workers",
   "crates/medusa-memory",
   "crates/medusa-extensions",
-  "crates/medusa-improvement",
   "crates/medusa-hardening",
   "crates/medusa-update",
-  "crates/medusa-github",
   "crates/medusa-capabilities",
   "crates/medusa-cli",
-  "crates/medusa-context",
-  "crates/medusa-context-retrieval",
-  "crates/medusa-turn-assembly",
-  "crates/medusa-memory-writeback",
   "crates/medusa-tool-policy",
   "crates/medusa-tool-control",
   "crates/medusa-multi-agent-scheduler",
@@ -79,7 +67,6 @@ verification_gate = "typed-evidence-and-changed-component-authority"
 
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
-medusa-context = { path = "crates/medusa-context" }
 medusa-evidence = { path = "crates/medusa-evidence" }
 medusa-external-contracts = { path = "crates/medusa-external-contracts" }
 medusa-protocol = { path = "crates/medusa-protocol" }

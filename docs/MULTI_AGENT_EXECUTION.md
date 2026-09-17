@@ -44,7 +44,7 @@ The shipped parallel implementation path is **bounded orchestration**, not auton
 
 Read-only teammate coordination and general artifact work do not require Git. Medusa can use an ordinary directory for documentation, analysis, supplied-source research, reports, and other bounded work. Programmatic clients can also create an explicit ephemeral workspace. See [Workspace modes](WORKSPACES.md).
 
-A non-Git workspace does not add ambient network or browser authority. External research depends on separately supported and authorized source/integration capabilities. Model-executable browser actions remain quarantined until their dedicated production evidence is complete.
+A non-Git workspace does not add ambient network authority. External research depends on separately supported and authorized source/integration capabilities.
 
 ## Production evidence
 

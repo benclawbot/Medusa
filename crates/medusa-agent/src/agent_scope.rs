@@ -95,7 +95,6 @@ pub enum AgentScopeResourceKind {
     TeamContext,
     AnalysisWorkspace,
     DesktopCommander,
-    Browser,
     Process,
     Pty,
     BackgroundJob,
@@ -1254,14 +1253,6 @@ mod tests {
             vec!["fs_read".into()],
         )
         .expect("publish");
-        register_agent_scope_resource(
-            repo.path(),
-            session.as_str(),
-            &scope,
-            "browser-1",
-            AgentScopeResourceKind::Browser,
-        )
-        .expect("register");
         stop_agent_scope_generation(repo.path(), session.as_str(), &scope, "done").expect("stop");
         let state = load_state(&state_path(repo.path(), session.as_str())).expect("state");
         assert!(

@@ -28,8 +28,7 @@
         "protocol": "anthropic",
         "base_url": "https://api.minimax.io/anthropic",
         "auth": "api-key"
-      },
-      "realtime_voice": "unavailable"
+      }
     },
     {
       "id": "anthropic",
@@ -40,8 +39,7 @@
       "runtime_protocol": "anthropic",
       "credential_environment": "ANTHROPIC_API_KEY",
       "default_model": "claude-sonnet-4-6",
-      "dogfood": { "status": "configurable" },
-      "realtime_voice": "unavailable"
+      "dogfood": { "status": "configurable" }
     },
     {
       "id": "anthropic-compatible",
@@ -52,8 +50,7 @@
       "runtime_protocol": "anthropic",
       "credential_environment": "MEDUSA_API_KEY",
       "default_model": "custom-model",
-      "dogfood": { "status": "not-enabled" },
-      "realtime_voice": "unavailable"
+      "dogfood": { "status": "not-enabled" }
     },
     {
       "id": "openai",
@@ -64,8 +61,7 @@
       "runtime_protocol": "openai",
       "credential_environment": "OPENAI_API_KEY",
       "default_model": "gpt-5.1-codex",
-      "dogfood": { "status": "configurable" },
-      "realtime_voice": "unavailable"
+      "dogfood": { "status": "configurable" }
     },
     {
       "id": "openai-oauth",
@@ -76,8 +72,7 @@
       "runtime_protocol": "openai",
       "credential_environment": null,
       "default_model": "gpt-5.6-luna",
-      "dogfood": { "status": "not-enabled" },
-      "realtime_voice": "unavailable"
+      "dogfood": { "status": "not-enabled" }
     },
     {
       "id": "openai-compatible",
@@ -88,8 +83,7 @@
       "runtime_protocol": "openai",
       "credential_environment": "MEDUSA_API_KEY",
       "default_model": "custom-model",
-      "dogfood": { "status": "not-enabled" },
-      "realtime_voice": "unavailable"
+      "dogfood": { "status": "not-enabled" }
     },
     {
       "id": "omniroute",
@@ -100,8 +94,7 @@
       "runtime_protocol": "openai",
       "credential_environment": null,
       "default_model": "auto/coding",
-      "dogfood": { "status": "configurable" },
-      "realtime_voice": "unavailable"
+      "dogfood": { "status": "configurable" }
     },
     {
       "id": "local",
@@ -112,17 +105,11 @@
       "runtime_protocol": "openai",
       "credential_environment": null,
       "default_model": "MiniMax-M3",
-      "dogfood": { "status": "not-enabled" },
-      "realtime_voice": "unavailable"
+      "dogfood": { "status": "not-enabled" }
     }
   ],
   "non_selectable_status": {
     "test_scaffolding_only": [],
-    "quarantined": [
-      {
-        "id": "telegram-live-evidence",
-        "reason": "Repository tests are complete; real bot, chat, Mini App, and sanitized live evidence are still required."
-      }
-    ]
+    "quarantined": []
   }
 }

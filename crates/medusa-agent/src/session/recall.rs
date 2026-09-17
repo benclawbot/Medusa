@@ -6,7 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 
-use super::{AgentSession, completed_learning, secure_state};
+use super::{AgentSession, secure_state};
 
 #[derive(Serialize)]
 struct RecallEvent {
@@ -29,8 +29,7 @@ struct RecallRecord {
 }
 
 pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<()> {
-    let policy = completed_learning::policy_for(&session.repo)?;
-    if !policy.capture_enabled() || !completed_learning::authoritative_success(session) {
+    if !session.completed {
         return Ok(());
     }
 
@@ -80,7 +79,7 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
         })?,
         repository_fingerprint: repository_fingerprint(&session.repo),
         repository_revision: git_output(&session.repo, &["rev-parse", "HEAD"]),
-        outcome: "authoritatively_verified".to_owned(),
+        outcome: "completed".to_owned(),
         events,
     };
 
@@ -173,7 +172,6 @@ mod tests {
 
     use medusa_core::SessionId;
     use medusa_protocol::{Actor, EventPayload};
-    use serde_json::json;
     use time::OffsetDateTime;
 
     use crate::evidence::append_event;
@@ -234,40 +232,6 @@ mod tests {
         let value: Value = serde_json::from_slice(&fs::read(path).expect("inbox record"))
             .expect("valid recall record");
         assert_eq!(value["session_id"], session.id.to_string());
-        assert_eq!(value["outcome"], "authoritatively_verified");
-    }
-
-    #[test]
-    fn capture_disabled_leaves_no_recall_content() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let root = directory.path().join(".medusa/learning-review");
-        fs::create_dir_all(&root).expect("privacy root");
-        fs::write(
-            root.join("state.json"),
-            serde_json::to_vec_pretty(&json!({
-                "schema_version": 1,
-                "revision": 1,
-                "privacy": {
-                    "capture_enabled": false,
-                    "user_persistence_enabled": false,
-                    "cross_repository_reuse_enabled": false,
-                    "telemetry_enabled": false,
-                    "automatic_proposals_enabled": false
-                },
-                "items": [],
-                "audit_head": "0000000000000000000000000000000000000000000000000000000000000000"
-            }))
-            .expect("privacy json"),
-        )
-        .expect("privacy");
-        let mut session = verified_session(directory.path());
-        session.objective = "SEEDED_PRIVATE_CONTENT".to_owned();
-        persist_completed_session(&session).expect("privacy block");
-        assert!(
-            !directory
-                .path()
-                .join(".medusa/session-recall-inbox")
-                .exists()
-        );
+        assert_eq!(value["outcome"], "completed");
     }
 }

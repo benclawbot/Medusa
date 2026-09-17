@@ -14,7 +14,7 @@ use medusa_failure::{
 use medusa_provider::{Message, MessageBlock, Role};
 use time::OffsetDateTime;
 
-use crate::session::{AgentPlanStepStatus, AgentSession, persist, record_terminal_skill_outcome};
+use crate::session::{AgentPlanStepStatus, AgentSession, persist};
 
 pub(crate) enum RuntimeFailureAction {
     Retry,
@@ -73,20 +73,13 @@ pub(crate) fn handle(
             persist(session)?;
             Ok(RuntimeFailureAction::Replan)
         }
-        ContinuationAction::Stop { reason } | ContinuationAction::Block { reason } => {
-            record_terminal_skill_outcome(session, error, &decision, &reason)?;
+        ContinuationAction::Stop { .. } | ContinuationAction::Block { .. } => {
             persist(session)?;
             Ok(RuntimeFailureAction::Stop)
         }
         ContinuationAction::Complete
         | ContinuationAction::Resume { .. }
         | ContinuationAction::Spike(_) => {
-            record_terminal_skill_outcome(
-                session,
-                error,
-                &decision,
-                "failure continuation produced an unsafe terminal action",
-            )?;
             persist(session)?;
             Ok(RuntimeFailureAction::Stop)
         }
@@ -133,14 +126,7 @@ pub(crate) fn record_terminal(
     error: &MedusaError,
     reason: &str,
 ) -> MedusaResult<()> {
-    let decision = FailureDecision {
-        disposition: medusa_failure::FailureDisposition::Terminal,
-        reason: reason.to_owned(),
-        attempt: 1,
-        remaining_attempts: 0,
-        backoff_ms: None,
-    };
-    record_terminal_skill_outcome(session, error, &decision, reason)?;
+    let _ = (session, error, reason);
     Ok(())
 }
 

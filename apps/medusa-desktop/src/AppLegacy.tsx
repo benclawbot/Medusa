@@ -1,6 +1,5 @@
 import {
   Activity,
-  BarChart3,
   Bot,
   CheckCircle2,
   Check,
@@ -13,7 +12,6 @@ import {
   FilePlus2,
   FolderOpen,
   Gauge,
-  GraduationCap,
   ImagePlus,
   Info,
   ListChecks,
@@ -1819,8 +1817,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         </section>
         <section className="rail-tools">
           <SessionDock />
-          <button className="nav-item" onClick={() => openDesktopTool("learning")} title="Learning"><GraduationCap size={17} /><span className="rail-label">Learning</span></button>
-          <button className="nav-item" onClick={() => openDesktopTool("engineering")} title="Engineering"><BarChart3 size={17} /><span className="rail-label">Engineering</span></button>
         </section>
         <div className="sidebar-spacer" />
         <div className="security-note"><ShieldCheck size={15} /><span className="rail-label">Medusa policy remains authoritative</span></div>

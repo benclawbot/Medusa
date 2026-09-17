@@ -6,7 +6,7 @@ This is the change-governance root and final certification record for Medusa arc
 
 Architecture v2 migration is complete. The phase-0 feature freeze is inactive, every production mutation follows one review-before-integration state machine, and no production entrypoint can select the retired conversational review or integrate-before-review compatibility path.
 
-A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree. Browser tools have a certified production dispatcher while the product surface remains a readiness-gated, explicit opt-in preview. Telegram duplex/audio behavior remains quarantined where external behavioral evidence is still incomplete; neither status creates a legacy execution authority.
+A capability is `certified-production` only when its owner, versioned contract, dispatcher, permissions, conformance evidence, observability, recovery behavior, and supported production entrypoints agree.
 
 ## How to use this index
 
@@ -64,11 +64,9 @@ V2 invariants:
 | Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal projected through `medusa-protocol` |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | protocol v2 routes shared frontend commands and canonical replay batches |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | daemon protocol v2 commands, artifacts, transient events, and canonical replay |
-| Telegram | `medusa telegram` | `medusa-daemon::telegram` | daemon-client protocol v2 commands, bounded artifacts, canonical replay, and transport-only durable state |
-| GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | typed guarded operation request, confirmation tiers, normalized receipts, and audit evidence |
 | Update | `medusa update` | `crates/medusa-update` | Exact-revision rolling prebuilt main artifact with cached local-build fallback; verified stable release via explicit `--release` |
 
-CLI, TUI, daemon, desktop, and remote adapters share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics. Telegram microphone/audio and live operator evidence remain separately tracked external certification work; the gateway does not own execution state.
+CLI, TUI, daemon, and desktop share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics.
 
 ## Capability certification
 
@@ -80,7 +78,6 @@ Executable skill packages are owned by `crates/medusa-skill` and dispatched thro
 |---|---|---|---|---|
 | Shared runtime | production | certified-production | preserve `medusa-runtime::RuntimeController` and one production lifecycle | none |
 | Durable sessions and memory | production | certified-production | preserve durable session aggregate and reconstructable projections | none |
-| GitHub service | production | certified-production | preserve typed guarded operations and normalized receipts | none |
 | Provider/context resilience | production | certified-production | preserve exact route capability and durable health authority | none |
 | Identity, approvals, transactions | production | certified-production | preserve typed policy, review, authorization, and transaction receipts | none |
 | Evidence, artifacts, verification | production | certified-production | preserve typed source-bound receipts and content-addressed artifacts | none |
@@ -88,9 +85,7 @@ Executable skill packages are owned by `crates/medusa-skill` and dispatched thro
 | Release trust | production | certified-production | preserve signed manifest v2, protected signer, and reviewed keyring | none |
 | Self-update | production | certified-production | preserve exact-revision rolling prebuilt main updates, cached local fallback, and explicit verified release updates | none |
 | Multi-agent execution | production | certified-production | preserve bounded teammates, isolated mutation, dedicated review, and durable completion | none |
-| Browser tools | preview | certified-production | readiness-gated, explicit opt-in via `medusa-agent::ToolManager` -> `medusa-browserd`; see [`0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md) | none for certified dispatcher; product remains preview |
 | Plugins/extensions | managed | preview | managed manifests and instruction-only `SKILL.md`; executable handlers require certification | handler-specific evidence |
-| Telegram remote frontend | partial | quarantined | shared daemon path is authoritative; duplex/audio claims remain withheld | authenticated microphone/audio and live Telegram evidence |
 | Unsafe/FFI boundary | production | certified-production | preserve crate-local allowlist and cross-platform containment proof | none |
 | TypeScript/JavaScript code intelligence | production read-only; guarded rename under certification | certification-pending | `medusa-intelligence` owns workspace/LSP normalization; `medusa-agent` owns dispatch; `PatchTransaction` owns mutation | final cross-platform and exhaustive issue-closing evidence |
 
@@ -110,7 +105,6 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 | Provider route/readiness | selected provider profile plus durable `ProviderHealthStore` | frontend readiness | claims equal actual wire and cancellation behavior |
 | Capability availability | generated versioned registry snapshot | model, CLI, UI, protocol, and docs projections | no advertised action lacks certified dispatch |
 | Evidence/artifacts | typed `EvidenceBundle` and content-addressed `ArtifactStore` | reports and UI | conclusions resolve exact sources and durable read receipts |
-| GitHub operations | `medusa-github` guarded operation lifecycle | CLI presentation | credentials never enter receipts |
 | Updates/releases | signed manifest v2 and protected signing workflow | release metadata | signature is verified before metadata is trusted |
 
 ## Dataflows
@@ -118,14 +112,13 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 - **Session:** frontend command → versioned runtime envelope → session aggregate and journal → durable projection → frontend event.
 - **Execution:** plan aggregate → immutable task contract → lease → isolated implementation → changed-path verification → dedicated review receipt → independent verification → authorization → integration → reconciliation → canonical terminal completion.
 - **Provider:** selected route → capability preflight → abortable request → normalized response and usage event → durable route-health update.
-- **External operation:** typed GitHub operation request → capability and confirmation checks → `medusa-github` dispatch → redacted normalized receipt → durable audit record.
-- **Evidence:** exact changed components → selected checks → raw command, browser, and artifact outputs → content-addressed artifacts and read receipts → typed claims and decisions → review, scheduler, authorization, integration, report, and UI consumers.
+- **Evidence:** exact changed components → selected checks → raw command, UI, and artifact outputs → content-addressed artifacts and read receipts → typed claims and decisions → review, scheduler, authorization, integration, report, and UI consumers.
 - **Persistence:** every mutable concern identifies one journal or aggregate; caches and UI projections are reconstructable and never authoritative.
 - **TypeScript intelligence:** confined target → deterministic workspace discovery and content fingerprints → disposable LSP → normalized semantic result → optional guarded snapshot-bound transaction.
 
 ## Trust boundaries
 
-The indexed boundaries are repository mutation, platform containment, unsafe/FFI, secrets, provider network, GitHub OAuth/API, browser sidecar, plugins, and release/update artifacts.
+The indexed boundaries are repository mutation, platform containment, unsafe/FFI, secrets, provider network, plugins, and release/update artifacts.
 
 Repository mutation fails closed unless the prepared commit, exact changed-component scope, typed worktree verification, dedicated review, independent verification, authorization, integration, and reconciliation receipts agree. Raw native FFI remains isolated in the allowlisted containment crate. Secrets are excluded from model-visible context and receipts. Release metadata is trusted only after Ed25519 signature verification.
 
@@ -181,7 +174,6 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Decision: [`decisions/0006-authoritative-evidence-artifacts-and-verification.md`](decisions/0006-authoritative-evidence-artifacts-and-verification.md)
 - Decision: [`decisions/0007-canonical-frontend-projection.md`](decisions/0007-canonical-frontend-projection.md)
 - Decision: [`decisions/0008-main-default-explicit-release-updates.md`](decisions/0008-main-default-explicit-release-updates.md)
-- Decision: [`decisions/0009-browser-preview-certification.md`](decisions/0009-browser-preview-certification.md)
 - Decision: [`decisions/0010-typed-non-authority-service-providers.md`](decisions/0010-typed-non-authority-service-providers.md)
 - Decision: [`decisions/0011-transactional-component-runtime.md`](decisions/0011-transactional-component-runtime.md)
 - Final independent audit: [`FINAL-CERTIFICATION-AUDIT.md`](FINAL-CERTIFICATION-AUDIT.md)
@@ -192,8 +184,6 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Capability evidence: [`../CAPABILITY-EVIDENCE.md`](../CAPABILITY-EVIDENCE.md)
 - Architecture checker: `python scripts/check-architecture-index.py`
 - Adversarial checker fixtures: `python scripts/test-architecture-index.py`
-- Browser status checker: `python scripts/check-browser-status.py`
-- Browser status fixtures: `python scripts/test-browser-status.py`
 - Headless conformance harness: `python scripts/architecture-conformance.py --all --binary <medusa> --json`
 
 The architecture baseline workflow runs governance checks on Linux, macOS, and Windows.

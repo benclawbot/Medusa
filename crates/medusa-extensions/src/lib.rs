@@ -1,6 +1,5 @@
-//! Audited skills, managed plugins, hooks, MCP subprocesses, and browser evidence contracts.
+//! Audited skills, managed plugins, hooks, MCP subprocesses, and Desktop Commander integration.
 
-mod browser;
 mod desktop_commander;
 mod hooks;
 mod mcp;
@@ -9,7 +8,6 @@ mod redaction;
 mod skills;
 mod support;
 
-pub use browser::{BrowserEvidence, verify_browser};
 pub use desktop_commander::{
     DesktopCommanderClient, DesktopCommanderSettings, desktop_commander_tool_is_mutating,
 };

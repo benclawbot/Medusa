@@ -94,11 +94,10 @@ pub fn run_contained_analysis_command(
 }
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
-    AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus, EstimatedCost,
-    SessionEscalation, SessionUsage, TurnCost, TurnUsage, UsageProvenance, append_turn_cost,
-    bootstrap, estimated_cost, export_manual_escalation, import_manual_advice,
-    launch_browser_assisted_escalation, load_escalation_journal, load_turn_costs,
-    persist_escalation_journal, query_turn_cost, render_chatgpt_prompt, session_usage,
+    AgentSession, EscalationJournal, EscalationStatus, EstimatedCost, SessionEscalation,
+    SessionUsage, TurnCost, TurnUsage, UsageProvenance, append_turn_cost, bootstrap,
+    estimated_cost, export_manual_escalation, import_manual_advice, load_escalation_journal,
+    load_turn_costs, persist_escalation_journal, query_turn_cost, session_usage,
 };
 pub use team::{
     AgentExecutionPolicy, TeamMember, TeamMemberContext, TeamMemberLifecycle, TeamRole, TeamRuntime,

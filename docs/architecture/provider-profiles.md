@@ -47,4 +47,4 @@ Profile catalog tests cover isolation, active selection, deletion safety, and co
 
 ## Follow-up boundary
 
-This slice does not add provider secrets, OAuth login/logout commands, generic runtime-policy mutation, TUI or desktop forms, Telegram callbacks, configuration revisions, or cross-frontend change events. Those surfaces must consume the same catalog and validation APIs rather than create independent profile state.
+This slice does not add provider secrets, OAuth login/logout commands, generic runtime-policy mutation, TUI or desktop forms, configuration revisions, or cross-frontend change events. Those surfaces must consume the same catalog and validation APIs rather than create independent profile state.

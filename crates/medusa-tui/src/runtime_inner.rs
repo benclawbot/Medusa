@@ -33,8 +33,8 @@ use crate::app::{
 };
 use crate::clipboard::{PromptAttachment, PromptDraft};
 use crate::commands::{
-    ConfigCommand, Effort, LearningCommand, ModelCommand, ModelConfiguration, ReviewCommand,
-    SlashCommand, TeamCommand,
+    ConfigCommand, Effort, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand,
+    TeamCommand,
 };
 
 pub use medusa_runtime::{
@@ -1062,38 +1062,6 @@ fn recovery_operation_name(operation: RecoveryOperation) -> &'static str {
 fn slash_command_input(command: &SlashCommand) -> String {
     match command {
         SlashCommand::Help => "/help".to_owned(),
-        SlashCommand::Learning { action } => match action {
-            LearningCommand::Show { filter } => option_command("/learning show", filter.as_deref()),
-            LearningCommand::Inspect { id } => format!("/learning inspect {id}"),
-            LearningCommand::Propose { scope, key, value } => {
-                format!("/learning propose {scope} {key} {value}")
-            }
-            LearningCommand::Evaluate {
-                id,
-                validation_passed,
-                regression_passed,
-                effectiveness_passed,
-            } => format!(
-                "/learning evaluate {id} {} {} {}",
-                if *validation_passed { "pass" } else { "fail" },
-                if *regression_passed { "pass" } else { "fail" },
-                if *effectiveness_passed {
-                    "pass"
-                } else {
-                    "fail"
-                }
-            ),
-            LearningCommand::Approve { id } => format!("/learning approve {id}"),
-            LearningCommand::Reject { id } => format!("/learning reject {id}"),
-            LearningCommand::Defer { id } => format!("/learning defer {id}"),
-            LearningCommand::Validate { id } => format!("/learning validate {id}"),
-            LearningCommand::Activate { id } => format!("/learning activate {id}"),
-            LearningCommand::Suspend { id } => format!("/learning suspend {id}"),
-            LearningCommand::Rollback { id } => format!("/learning rollback {id}"),
-            LearningCommand::Delete { id } => format!("/learning delete {id}"),
-            LearningCommand::Privacy => "/learning privacy".to_owned(),
-            LearningCommand::Export => "/learning export".to_owned(),
-        },
         SlashCommand::Review { action } => match action {
             ReviewCommand::Show { filter } => option_command("/review show", filter.as_deref()),
             ReviewCommand::AcceptFile { path } => format!("/review accept {path}"),
@@ -1774,17 +1742,6 @@ mod tests {
         assert_eq!(
             slash_command_input(&SlashCommand::Config(ConfigCommand::Explain)),
             "/config explain"
-        );
-        assert_eq!(
-            slash_command_input(&SlashCommand::Learning {
-                action: LearningCommand::Evaluate {
-                    id: "proposal-1".to_owned(),
-                    validation_passed: true,
-                    regression_passed: false,
-                    effectiveness_passed: true,
-                },
-            }),
-            "/learning evaluate proposal-1 pass fail pass"
         );
         assert_eq!(
             slash_command_input(&SlashCommand::Model(ModelCommand::SetApiKey(

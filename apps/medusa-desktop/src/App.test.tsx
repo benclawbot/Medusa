@@ -816,7 +816,6 @@ it("consolidates desktop tools in the session rail", async () => {
   expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sessions" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Learning" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Engineering" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Review changes" })).not.toBeInTheDocument();
@@ -832,11 +831,9 @@ it("routes every Tools rail item through the shared desktop-tool event", async (
 
   await screen.findByRole("textbox");
   fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
-  for (const name of ["Learning", "Engineering"]) {
-    fireEvent.click(screen.getByRole("button", { name }));
-  }
+  fireEvent.click(screen.getByRole("button", { name: "Learning" }));
 
-  expect(requested).toEqual(["learning", "engineering"]);
+  expect(requested).toEqual(["learning"]);
   window.removeEventListener(DESKTOP_TOOL_EVENT, onToolRequest);
 });
 

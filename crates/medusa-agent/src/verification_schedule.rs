@@ -166,7 +166,7 @@ pub(crate) fn execute_command_wave(
             if matches!(
                 check.kind,
                 VerificationCheckKind::ArtifactSemantic
-                    | VerificationCheckKind::BrowserBehavior
+                    | VerificationCheckKind::UiBehavior
                     | VerificationCheckKind::Accessibility
             ) {
                 continue;
@@ -239,7 +239,7 @@ fn expected_duration_ms(kind: VerificationCheckKind) -> u64 {
         VerificationCheckKind::Integration => 30_000,
         VerificationCheckKind::Build => 30_000,
         VerificationCheckKind::ArtifactSemantic => 500,
-        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => 15_000,
+        VerificationCheckKind::UiBehavior | VerificationCheckKind::Accessibility => 15_000,
         VerificationCheckKind::Packaging => 30_000,
         VerificationCheckKind::Security => 15_000,
         VerificationCheckKind::RepositoryDefined => 10_000,
@@ -262,7 +262,7 @@ fn dependencies(plan: &VerificationPlan, check: &VerificationCheck) -> BTreeSet<
     if matches!(
         check.kind,
         VerificationCheckKind::Integration
-            | VerificationCheckKind::BrowserBehavior
+            | VerificationCheckKind::UiBehavior
             | VerificationCheckKind::Accessibility
             | VerificationCheckKind::Packaging
     ) {
@@ -287,7 +287,7 @@ fn resource_class(check: &VerificationCheck) -> &'static str {
         VerificationCheckKind::Integration => "cpu-large",
         VerificationCheckKind::Build => "cpu-large",
         VerificationCheckKind::ArtifactSemantic => "io-small",
-        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => "browser",
+        VerificationCheckKind::UiBehavior | VerificationCheckKind::Accessibility => "ui",
         VerificationCheckKind::Packaging => "cpu-large",
         VerificationCheckKind::Security => "network-small",
         VerificationCheckKind::RepositoryDefined => "cpu-medium",
@@ -331,7 +331,7 @@ mod tests {
             VerificationCheckKind::Integration,
             VerificationCheckKind::Build,
             VerificationCheckKind::ArtifactSemantic,
-            VerificationCheckKind::BrowserBehavior,
+            VerificationCheckKind::UiBehavior,
             VerificationCheckKind::Accessibility,
             VerificationCheckKind::Packaging,
             VerificationCheckKind::Security,

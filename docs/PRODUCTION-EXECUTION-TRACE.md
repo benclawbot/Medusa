@@ -81,4 +81,4 @@ Teammate output and an immutable candidate are evidence, not completion. The ded
 
 ## Remaining promotion boundary
 
-Autonomous nested delegation, model-driven unconstrained team expansion, consensus voting, distributed multi-host/multi-process mutation transactions, and non-Git parallel mutation require separate production evidence. Browser actions also remain quarantined from model-executable surfaces until their dispatcher and permission evidence are certified.
+Autonomous nested delegation, model-driven unconstrained team expansion, consensus voting, distributed multi-host/multi-process mutation transactions, and non-Git parallel mutation require separate production evidence.

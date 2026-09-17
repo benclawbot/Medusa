@@ -76,8 +76,6 @@ jobs:
             --root . \
             --policy .github/architecture-policy.json \
             --report architecture-policy-report.md
-      - name: Enforce sole GitHub operation authority
-        run: python3 scripts/github-authority-policy.py
       - name: Enforce certified tool execution pipeline
         run: python3 scripts/check-certified-tool-pipeline.py
       - name: Enforce resolved engineering checks

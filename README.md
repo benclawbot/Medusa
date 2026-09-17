@@ -6,9 +6,9 @@
 
 
 
-> **One-line pitch:** Local-first Rust coding agent. Plan, Execute Safely, Recover — across CLI, TUI, desktop, daemon, and Telegram. Bounded multi-agent mutation with a typed verification gate. Workspace-aware (Git with a conflict-aware DAG, or directory with isolated snapshots). Durable authority under `.medusa/`.
+> **One-line pitch:** Local-first Rust coding agent. Plan, Execute Safely, Recover — across CLI, TUI, desktop, and daemon. Bounded multi-agent mutation with a typed verification gate. Workspace-aware (Git with a conflict-aware DAG, or directory with isolated snapshots). Durable authority under `.medusa/`.
 
-A local-first, workspace-aware agent written in Rust. Medusa can work in Git repositories, ordinary directories, or explicit ephemeral workspaces. It turns objectives into explicit plans, coordinates bounded specialist agents, isolates mutation, runs guarded commands, verifies results, preserves durable evidence, and resumes work across the CLI, terminal UI, desktop app, daemon, and Telegram.
+A local-first, workspace-aware agent written in Rust. Medusa can work in Git repositories, ordinary directories, or explicit ephemeral workspaces. It turns objectives into explicit plans, coordinates bounded specialist agents, isolates mutation, runs guarded commands, verifies results, preserves durable evidence, and resumes work across the CLI, terminal UI, desktop app, and daemon.
 
 The product model is **Plan, Execute Safely, Recover**:
 
@@ -17,12 +17,10 @@ The product model is **Plan, Execute Safely, Recover**:
 - **Recover.** Sessions, plans, events, approvals, worker leases, immutable candidates, delegation contracts, agent scopes, effective model-request manifests, transactions, verification, and recovery state live under `.medusa` as durable authority. Interruption, cancellation, or crash never gets rewritten as success.
 
 **Status (v1.0.6, `main`):
-- **CLI, TUI, desktop application, daemon, telegram access, shared runtime**
+- **CLI, TUI, desktop application, daemon, and shared runtime**
 - Bounded multi-agent execution, conflict-aware parallel Git mutation, non-Git directory mutation, platform containment, durable sessions, immutable worker delegation contracts, transactional per-agent scopes, durable worker instruction delivery, effective model-request manifests, deterministic request reconstruction, certified tool execution, verified self-update, and repository-enforced engineering policy are shipped.
 
 The canonical status authorities are `docs/CAPABILITY-CLAIMS.json`, `docs/architecture/baseline.json`, and `docs/provider-support.json`.
-
-The runtime also contains an accepted **transactional component-runtime contract** for safe incremental harness evolution: stable component generations, scoped host context, resource ownership, reversible effect journals, declarative dependencies, committed-versus-target provider views, ordered retirement, versioned desired state with compare-and-swap updates, health-validated replacement, containment-bound capabilities, validated self-modification proposals, explicit external-commit semantics, and deterministic fault/invariant checks. This is an adoption seam, not a claim that every production subsystem has already been migrated to component lifecycle management.
 
 ---
 
@@ -70,7 +68,7 @@ Medusa combines an interactive agent product with explicit execution boundaries.
 - **Safe by default.** Writes are path-checked and transactional. Git workspaces use worktree isolation; directory workspaces use immutable content-addressed snapshots, primary-drift detection, and rollback-protected integration. Commands are policy-checked and execute through platform containment that fails closed when unavailable.
 - **Durable and inspectable.** Effective model requests are persisted before provider calls with request/provider/scope/configuration fingerprints, source-event linkage, delivered session actions, compaction provenance, and tool-schema fingerprints. A versioned reconstruction path can independently rebuild model-visible requests from durable sources and detect divergence.
 - **Result-authoritative learning.** Behavioral learning uses independently verified root-task outcomes rather than model self-report. Failed, cancelled, partial, censored, and inconclusive runs remain evidence.
-- **One runtime, multiple frontends.** CLI, TUI, desktop, daemon clients, and Telegram use the same shared runtime and protocol authorities instead of creating separate agents.
+- **One runtime, focused frontends.** CLI, TUI, desktop, and daemon clients use the same shared runtime and protocol authorities instead of creating separate agents.
 - **Cross-platform Rust core.** The workspace and platform-specific authority paths are tested across Linux, macOS, and Windows.
 
 ## Interfaces
@@ -82,9 +80,7 @@ The interface changes presentation and interaction style; it does not create a s
 | **CLI** | Shipped | Automation, CI/CD, scripts, diagnostics, workspace utilities, headless objectives. |
 | **Terminal UI (TUI)** | Shipped | Interactive coding, general chat, documentation, analysis, plans, approvals, activity, sessions, recovery, metrics, keyboard-first workflows. |
 | **Desktop application** | Shipped | Graphical workspace with sessions, chat, plans, activity, settings, review, attachments, and usage. |
-| **Telegram frontend** | Shipped | Remote session attachment, mobile status/control, approvals, progressive rendering, files, voice notes, Mini App voice surface. |
 | **Daemon** | Shipped | Bounded concurrency, reconnect, cancel-and-drain, IPC control plane for other clients. |
-| **Full-duplex voice** | Shipped | Provider-neutral realtime core; microphone streaming remains gated to an established supported route. |
 
 ### CLI
 
@@ -149,23 +145,13 @@ medusa --fresh
 
 `--repo` is retained as the CLI flag for compatibility; the selected path is a **workspace root** and does not need to contain `.git`.
 
-The TUI presents the shared runtime event stream as a conversation and activity timeline. It supports plans, questions, approvals, queued follow-ups, cancellation, session resume, settings, usage metrics, clipboard/file/image attachments, recovery views, team activity, provider/model/effort selection, and realtime voice controls. First-run provider setup and `/settings` use the shared provider/model catalog and revision-aware configuration authority rather than a terminal-only configuration store.
+The TUI presents the shared runtime event stream as a conversation and activity timeline. It supports plans, questions, approvals, queued follow-ups, cancellation, session resume, settings, usage metrics, clipboard/file/image attachments, recovery views, team activity, and provider/model/effort selection. First-run provider setup and `/settings` use the shared provider/model catalog and revision-aware configuration authority rather than a terminal-only configuration store.
 
 General-chat turns can avoid repository indexing/scanning when the task does not need workspace context. Repository-aware paths still activate the normal workspace intelligence, policy, verification, and durable evidence machinery.
 
 ### Desktop application
 
-The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, chat, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and usage telemetry. Desktop ChatGPT OAuth is text-only: the Codex app-server route does not provide the Realtime session credential required for microphone/WebRTC voice, so the desktop voice UI and live-evidence route are intentionally not included. Guided onboarding and model discovery consume the same canonical provider/model metadata used by the runtime.
-
-### Telegram
-
-Telegram is a frontend to the same authoritative Medusa session, not a separate bot-owned agent. The repository implementation includes progressive rendering, action cards, approvals, durable session attachment/control, files and voice-note handling, and the Mini App voice surface.
-
-See [Telegram](docs/TELEGRAM.md) for setup, service operation, and Mini App wiring.
-
-### Full-duplex voice
-
-Medusa has one provider-neutral realtime voice model rather than a separate voice agent for each frontend. It includes bounded input/output audio queues, partial/final transcripts, voice activity, tool/approval states, reconnect behavior, deterministic resource cleanup, and barge-in that stops spoken output without implicitly cancelling the coding task.
+The desktop app is a Tauri/React shell over the same Medusa runtime. It provides session navigation, a central execution timeline, chat, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and usage telemetry. Guided onboarding and model discovery consume the same canonical provider/model metadata used by the runtime.
 
 
 ## Installation
@@ -175,7 +161,7 @@ Medusa has one provider-neutral realtime voice model rather than a separate voic
 - Rust 1.88 or newer for source builds; the repository pins Rust 1.88.0
 - A supported model connection for model-dependent work
 - The platform containment backend required for guarded shell execution
-- Node.js 22 for UI-change browser verification, desktop development, or desktop packaging (the Codex app-server OAuth route does not require Node.js)
+- Node.js 22 for desktop development or desktop packaging (the Codex app-server OAuth route does not require Node.js)
 - **Git only when needed:** source installation/cloning and Git-backed mutation require Git; packaged Medusa can perform ordinary-directory and ephemeral workspace work without a Git repository
 
 ### Install the CLI
@@ -358,7 +344,6 @@ format = "markdown"
 
 [verification]
 required = true
-browser_on_ui_change = true
 ```
 
 `agent.parallel_workers` controls bounded parallel **tool work** in configuration schema v1. It does not authorize autonomous agent recursion and is not the Git mutation-DAG child limit. The conflict-aware mutation implementation has a separate hard safety bound of three mutating children and activates only after typed risk/confidence/scope/resource checks.
@@ -368,7 +353,6 @@ Command-line overrides use `--set key=value`:
 ```bash
 medusa --set agent.mode=read-only
 medusa --set agent.max_turns=100
-medusa --set verification.browser_on_ui_change=false
 ```
 
 Configuration commands include `medusa config init`, `show`, `edit`, `get`, `set`, `unset`, `validate`, `doctor`, `reset`, and named profile management. Interactive TUI and Desktop configuration consume the same provider catalog/model registry and revisioned profile authority.
@@ -424,26 +408,6 @@ The production capability claims are recorded in [`docs/CAPABILITY-CLAIMS.json`]
 - dedicated zero-tool parent review, independent verification, authorization, guarded integration, and reconciliation;
 - authoritative primary-workspace verification gate.
 
-### Transactional component runtime
-
-`medusa-runtime::component_runtime` is the accepted reference contract for safe component lifecycle and incremental self-evolution. It currently provides:
-
-- stable logical component IDs and monotonic generations;
-- explicit lifecycle state and scoped host context;
-- resource/registration attribution to exact component generations;
-- reverse-order, idempotent reversible effect journals with inspectable cleanup debt;
-- declarative `requires`, `provides`, and host-capability specifications;
-- deterministic dependency resolution, ambiguity/cycle rejection, and committed-versus-target dependency views;
-- consumer-before-provider retirement with explicit blocked-retirement state;
-- authoritative versioned desired state with compare-and-swap updates and idempotency records;
-- health-validated candidate replacement that keeps the previous healthy generation available on failure;
-- one normalized capability intent feeding host authority and containment policy construction where supported;
-- self-modification through typed, validated desired-state proposals with source provenance and stale-conflict handling rather than direct agent registry mutation;
-- explicit separation of reversible Medusa-owned effects from irreversible/external commits with idempotency, uncertain-commit, and compensation-required states;
-- deterministic fault injection and runtime invariant checks for lifecycle, ownership, dependency, capability, and recovery boundaries.
-
-This contract is intentionally being adopted incrementally. Its presence does not mean all existing runtime services are dynamically replaceable, and fixed Medusa authorities remain non-pluggable.
-
 ### Provider routing and context
 
 Provider selection is explicit and role-aware. `model.role_routes` can pin planner, implementer, reviewer, repair, summarization, or formatting phases to configured primary/fallback profiles without silently replacing a user-pinned route. Cross-model context uses provider-neutral bounded reasoning exchange; provider-native continuation state remains separately bound to its exact provider/protocol/route/model/session and fails closed when incompatible.
@@ -465,7 +429,7 @@ Provider HTTP handling bounds retained error bodies and successful JSON response
 - a contained per-session analysis workspace for bounded persistent analytical state and fixed-reducer execution without granting repository mutation, credentials, ambient network, or independent provider authority;
 - safe non-authority service/provider seams where implementation substitution is allowed without making policy, verification, journal, approval, containment, or integration authorities pluggable;
 - validated project plugin metadata discovery that does not itself grant executable authority;
-- required UI-change browser verification through the internal sidecar; model browser actions remain readiness-gated explicit opt-in preview;
+- required UI-change static HTTP verification with bounded accessibility checks;
 - image/file prompt attachments when provider capabilities permit;
 - MCP and extension boundaries;
 - provider routing/fallback chains;
@@ -479,19 +443,14 @@ Authoritative verification executes dependency-aware DAG waves, persists restart
 
 Live coding evidence preserves committed product diffs, not only dirty working-tree state. Verification/tooling byproducts such as narrowly defined npm log residue are separated from product mutation scope without weakening arbitrary out-of-scope write enforcement.
 
-### Memory and learning
+### Memory and recovery
 
-Medusa supports workspace-scoped Markdown memory, bounded recall with provenance, memory consolidation/writeback, verified-session learning/probationary lessons, failure history/negative outcomes, and a rule that optimistic or unverified completion cannot become accepted positive experience.
-
-Continual refinement is evidence-gated: typed proposals preserve provenance, deterministic evaluation and explicit approval precede activation, security/authority roots stay outside refinable content, activation history is append-only, and exact rollback is retained. User corrections and accepted runtime signals feed a privacy-filtered typed provenance graph and evaluated correction loop rather than self-activating directly.
-
-Production behavioral learning follows one result-authoritative lifecycle:
-
-**execute -> independently verify -> record outcome -> compare comparable cohorts -> detect improvement/regression -> test bounded adaptation -> independently re-verify -> promote or roll back**
+Medusa supports workspace-scoped Markdown memory, bounded recall with provenance, verified-session
+recall, failure history, and a rule that optimistic or unverified completion cannot become accepted
+positive experience. Durable memory is explicit and user-visible; it is never silently rewritten by
+runtime telemetry.
 
 Model or worker claims such as “fixed,” “tests pass,” or confidence are observations, not correctness authority; independently verified root-task outcomes are the ground truth. Failed, cancelled, partial, censored, and inconclusive runs remain evidence, and monetary cost remains unknown unless an authoritative cost observation exists.
-
-The repository ships typed foundations for canonical behavioral outcomes, replayable/concurrency-safe learning projections, task-aware cohorts, drift reporting, bounded adaptive policy/controller contracts, Code Mode presentation, canonical tool results, model-experience/cache accounting, and runtime-loop configuration. README wording intentionally does **not** claim full end-to-end autonomous behavioral optimization acceptance until the corresponding production/live evidence is complete.
 
 ### Engineering policy
 
@@ -501,7 +460,7 @@ Policy resolution is protected against self-weakening: changes to the policy/eva
 
 ### Observability and resilience
 
-Typed runtime events cover usage, progress, activity, team, plan, question, completion, cancellation, failure, and recovery state. Shared execution reporting collapses low-level activity into deterministic semantic updates across Headless, TUI, Desktop, Telegram, and future frontends. Read-only live-session observation reconstructs bounded stage/plan/tool/file/verification/blocker state from the durable journal, and side questions over that snapshot cannot steer, mutate, approve, or cancel the primary run.
+Typed runtime events cover usage, progress, activity, team, plan, question, completion, cancellation, failure, and recovery state. Shared execution reporting collapses low-level activity into deterministic semantic updates across Headless, TUI, Desktop, and daemon clients. Read-only live-session observation reconstructs bounded stage/plan/tool/file/verification/blocker state from the durable journal, and side questions over that snapshot cannot steer, mutate, approve, or cancel the primary run.
 
 Scheduled timer/heartbeat/file/process/external-signal wakeups enter the same durable session-action authority with idempotent occurrence provenance and explicit busy-session semantics instead of creating a scheduler-owned prompt queue. Process registry/supervision, generation-bound process identity, checkpoints, replay, time travel, transactions, continuity, deterministic cancellation/resource cleanup, operational health/support bundles, repository-wide lifecycle/privacy certification, and resilience fault campaigns provide the recovery foundation.
 
@@ -522,15 +481,12 @@ Scheduled timer/heartbeat/file/process/external-signal wakeups enter the same du
 | `medusa-agent` | Agent Orchestrator: session lifecycle, planning, policy, completion verification, and the shared Tool Manager |
 | `medusa-capabilities` | Capability Manager: one discovered capability matrix for CLI, TUI, desktop, and model context |
 | `medusa-provider` | Provider Manager: provider-neutral contracts, bounded retry/failover, response cache, and health snapshots |
-| `medusa-github` | GitHub Manager: authenticated repository, pull request, issue, and Actions operations via GitHub CLI credential storage |
 | `medusa-update` | Update Manager: release discovery, provenance/checksum verification, platform installation, rollback, and restart |
 | `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
 | `medusa-memory` | Markdown storage, retrieval, provenance, and lifecycle |
 | `medusa-workers` | Parallel worktrees and deterministic merge coordination |
 | `medusa-extensions` | Skills, hooks, MCP isolation, and Desktop Commander integration |
 | `medusa-hardening` | Observability, migrations, archives, chaos recovery, and release evidence |
-| `medusa-browser-client` | Browser sidecar client and protocol |
-| `medusa-browserd` | Node.js and Playwright browser sidecar process |
 
 The manager boundaries are deliberately one-way: frontends depend on `medusa-runtime`; runtime composes capability, provider, and agent managers; the agent consumes the Tool Manager and capability context; service managers stay independent of presentation. This keeps future GitLab, Bitbucket, Azure DevOps, package sources, MCP servers, and model providers additive rather than changes to a monolithic runtime.
 
@@ -551,7 +507,7 @@ The desktop app uses the same session controller, provider configuration, skills
 The canonical coding path is:
 
 ```text
-CLI / TUI / Desktop / daemon frontend / Telegram
+CLI / TUI / Desktop / daemon frontend
   -> typed frontend command
   -> RuntimeController
   -> production task contracts
@@ -581,41 +537,22 @@ delegated worker only: sealed DelegationContract before session creation
   -> on mutating retry: create a fresh StepCapsule bound to prior authority/lineage
 ```
 
-For component lifecycle and controlled self-evolution, the reference contract is separate from the coding-session orchestration path:
-
-```text
-versioned Desired Component State
-  -> validate graph / dependencies / capabilities
-  -> compare-and-swap commit
-  -> Reconciler plan
-  -> ComponentRuntime generations
-       -> scoped context + resource ownership
-       -> committed/target dependency views
-       -> reversible EffectJournal
-       -> health-validated replacement
-       -> ordered retirement
-       -> ExternalCommitLedger for irreversible effects
-  -> deterministic invariant/fault evidence
-```
-
-The component contract is an incremental adoption seam. `RuntimeController`, capability readiness truth, execution policy, approval authority, containment, mutation provenance, parent review, verification, integration, journal authority, and protected evaluator authority are not made dynamically replaceable by this mechanism.
-
 ### Major layers
 
 | Layer | Responsibilities | Principal crates |
 |---|---|---|
-| **Interfaces** | CLI parsing, terminal interaction, desktop UI, Telegram command/rendering | `medusa-cli`, `medusa-tui`, `apps/medusa-desktop`, daemon Telegram modules |
-| **Runtime authority** | Session lifecycle, commands, events, coordination, completion, cancellation, agent scopes, component lifecycle contract | `medusa-runtime`, `medusa-agent`, `medusa-daemon` |
+| **Interfaces** | CLI parsing, terminal interaction, desktop UI, daemon IPC | `medusa-cli`, `medusa-tui`, `apps/medusa-desktop`, `medusa-daemon` |
+| **Runtime authority** | Session lifecycle, commands, events, coordination, completion, cancellation, and agent scopes | `medusa-runtime`, `medusa-agent`, `medusa-daemon` |
 | **Internal coordination submodules** | Multi-agent preflight, mutating worker execution, delegation contract, production orchestrator, and team control live under `medusa-runtime/src/coordination/` so coverage and visibility can be measured per sub-module | `medusa-runtime/src/coordination/` |
 | **Multi-agent execution** | Task contracts, immutable delegation, scheduling, leases, mutation DAGs, isolated implementation, barriers, parent review | `medusa-multi-agent-scheduler`, `medusa-workers`, `medusa-worker-leases`, runtime coordinators |
-| **Context and intelligence** | Workspace context, retrieval, turn assembly, goals, progress, confidence, failure | context and intelligence crate families |
-| **Tools and policy** | Capability discovery, authorization, certified execution, Git/browser/extensions, engineering policy | capability, policy, control, extension, GitHub, and browser crates |
+| **Context and intelligence** | Workspace retrieval, goals, progress, confidence, failure | intelligence and state crate families |
+| **Tools and policy** | Capability discovery, authorization, certified execution, extensions, engineering policy | capability, policy, control, and extension crates |
 | **State and recovery** | Sessions, request manifests, checkpoints, replay, time travel, continuity, transactions, recovery | agent/session, checkpoint, replay, time-travel, continuity, transaction, recovery crates |
-| **Memory and improvement** | Markdown memory, learning, behavioral outcomes/cohorts, refinement monitoring, hardening | memory, improvement, and hardening crate families |
+| **Memory and recovery** | Markdown memory, bounded recall, failure history, and hardening | memory, recovery, and hardening crate families |
 | **Containment** | Platform sandboxing, process ownership, limits, cleanup | `medusa-process-containment`, `medusa-process-registry`, `medusa-runtime-supervisor` |
-| **Protocol and providers** | Typed frontend/event contracts, model routes, role routing, reasoning exchange, streaming, Realtime voice contracts | `medusa-protocol`, `medusa-provider`, `medusa-openai-realtime` |
+| **Protocol and providers** | Typed frontend/event contracts, model routes, role routing, reasoning exchange, streaming | `medusa-protocol`, `medusa-provider` |
 
-For source-level ownership, see [Product architecture](docs/ARCHITECTURE.md), [Production execution trace](docs/PRODUCTION-EXECUTION-TRACE.md), [Contributor architecture](docs/CONTRIBUTOR-ARCHITECTURE.md), [Workspace modes](docs/WORKSPACES.md), and [ADR-0011: transactional component runtime](docs/architecture/decisions/0011-transactional-component-runtime.md).
+For source-level ownership, see [Product architecture](docs/ARCHITECTURE.md), [Production execution trace](docs/PRODUCTION-EXECUTION-TRACE.md), [Contributor architecture](docs/CONTRIBUTOR-ARCHITECTURE.md), and [Workspace modes](docs/WORKSPACES.md).
 
 ## Safety and containment
 
@@ -655,7 +592,7 @@ Component-scoped host context is similarly explicit: a component generation rece
 
 ### Approvals
 
-Approvals bind to structured actions and current runtime state. Exact command allowlists, interactive approve-once decisions, Telegram callback foundations, expiry, idempotency, and plan fingerprints do not weaken policy or containment.
+Approvals bind to structured actions and current runtime state. Exact command allowlists, interactive approve-once decisions, expiry, idempotency, and plan fingerprints do not weaken policy or containment.
 
 ### Cancellation and cleanup
 
@@ -673,14 +610,11 @@ Workspace-local state lives under `.medusa`. Durable authority or rebuildable pr
 - transactional agent-scope contracts, generations, lifecycle, revocations, and owned-resource state;
 - coding trajectory checkpoints, structured repair ledgers, compaction manifests, and fingerprint-bound advisory summaries;
 - verification DAG checkpoints, exact-state reusable receipts, warm-resource descriptors, and repository-drift invalidation evidence;
-- continual-refinement proposals/activation history, correction-loop episodes, privacy-filtered provenance/effectiveness evidence, and rollback state;
-- canonical behavioral outcomes and rebuildable learning/cohort/drift projections where the corresponding contracts are active;
+- verified recall records and bounded memory provenance;
 - scheduled trigger occurrence/dispatch provenance admitted into durable session actions;
 - worker leases, epochs, isolated candidates, Git commit or directory snapshot receipts;
 - checkpoints, replay, time travel, transaction/review/authorization/rollback records;
 - failure/recovery decisions, memory/learning, and frontend continuity.
-
-The transactional component-runtime desired state, proposal records, effect ownership, cleanup debt, external-commit state, and reconciliation evidence use explicit version/revision semantics. The component runtime is an adoption seam and must not be confused with a second session journal or a replacement for existing canonical runtime authorities.
 
 Resume and recovery never treat display text or an optimistic model response as authoritative execution evidence. Model-visible worker instructions are tied to durable session/action state and effective request evidence rather than a standalone mailbox boolean.
 
@@ -690,19 +624,16 @@ Canonical workflows test the Rust workspace and daemon behavior across Linux, ma
 
 Repository gates cover formatting, production lint, changed-package tests, documentation, dependency/security policy, architecture and engineering-policy drift, containment regressions, adversarial cases, migration/recovery checks, package smoke tests, selected live-provider scenarios, and path-triggered specialized certifications. Exhaustive all-target/workspace validation remains available in deeper nightly/manual/release contexts rather than being duplicated after every merge.
 
-Platform support does not imply identical containment, audio, browser, credential-store, or operating-system signing behavior.
+Platform support does not imply identical containment, credential-store, or operating-system signing behavior.
 
 ## Current limitations
 
 - Autonomous nested delegation, unconstrained dynamic agent teams, consensus voting, and distributed multi-host mutation transactions are not supported.
 - Conflict-aware parallel **mutation** currently requires a Git workspace; directory/ephemeral workspaces deliberately use one isolated snapshot implementer.
 - Directory mutation fails closed on symlink-bearing workspaces; use Git mutation when symlink semantics must be preserved.
-- The transactional component runtime is an accepted and tested reference contract under incremental adoption; not every existing production service is component-managed or hot-replaceable.
 - The canonical tool-result migration is incomplete across all tool families; shell/output-envelope and related projections are migrated foundations, while remaining consumers continue to move toward one typed canonical result contract.
-- The full behavioral self-optimization loop is not claimed as end-to-end production-accepted until real canary/promotion/rollback evidence and cross-surface release integration are complete.
-- Telegram end-to-end voice acceptance still requires real bot/chat/Mini App access, audio hardware, and sanitized evidence under issue [#719](https://github.com/benclawbot/Medusa/issues/719). Desktop ChatGPT OAuth voice is not shipped because the Codex app-server route does not provide the Realtime session credential required by the desktop WebRTC path.
 - ChatGPT OAuth depends on the installed Codex CLI and its authenticated ChatGPT account; Node.js is not required for this route.
-- browser actions are readiness-gated preview: they are explicit opt-in, dispatched through the certified-production browser route, and not default-enabled. Set `MEDUSA_BROWSER_ENABLED=true` only with an approved `MEDUSA_BROWSER_PATH` and verified `MEDUSA_BROWSER_VERIFY_URL`; route admission, permissions, and required verification authority remain enforced.
+- UI changes use a deterministic static HTTP verification pass; interactive browser inspection remains an explicit frontend/release concern.
 - Screenshot input is accepted only when the selected provider declares compatible image support and limits.
 - Desktop release packages are unsigned at the operating-system level.
 - Windows command containment requires the Windows 11 composable sandbox API.
@@ -711,13 +642,8 @@ Platform support does not imply identical containment, audio, browser, credentia
 
 GitHub issues are the source of truth for active work; the README does not treat closed implementation issues as future roadmap items.
 
-Current architecture work is focused on **adoption and completion**, not designing the component contract from scratch. The transactional component-runtime foundation is present on `main`; follow-on work should migrate appropriate non-authority runtime services to that contract without making fixed authorities pluggable, preserve cross-platform containment, and keep deterministic invariant/fault coverage authoritative.
-
-The behavioral-learning/Harness-inspired tracks also have substantial foundations on `main`—canonical outcome contracts, rebuildable projections, cohorts/drift foundations, Code Mode and canonical-result foundations, Model Experience/cache accounting, runtime configuration, and machine-checkable engineering policy—but remaining issue acceptance criteria must be completed before the README can claim every closed-loop adaptive behavior as production-proven.
-
-The remaining manual/live acceptance tracked for shipped-but-quarantined remote voice functionality is:
-
-- [#719](https://github.com/benclawbot/Medusa/issues/719) — Telegram Mini App and voice-note end-to-end proof using real bot/chat access, microphone/audio hardware, and sanitized evidence.
+Current architecture work focuses on simplifying the shipped runtime around its canonical session,
+verification, memory, and recovery authorities.
 
 ## Project documentation
 
@@ -737,7 +663,6 @@ The remaining manual/live acceptance tracked for shipped-but-quarantined remote 
 - [Durable journal policy](docs/durable-journal-policy.md)
 - [Repository indexing](docs/repository-indexing.md)
 - [Tool execution pipeline](docs/TOOL-EXECUTION-PIPELINE.md)
-- [Refinement authority migration](docs/refinement-authority-migration.md)
 - [Resilience certification](docs/resilience-certification.md)
 - [Data lifecycle certification](docs/data-lifecycle-certification.md)
 - [Benchmarks](docs/BENCHMARKS.md)
@@ -746,8 +671,6 @@ The remaining manual/live acceptance tracked for shipped-but-quarantined remote 
 - [Desktop distribution](docs/DESKTOP-DISTRIBUTION.md)
 - [Release process](docs/RELEASE.md)
 - [Release compatibility](docs/COMPATIBILITY.md)
-- [Telegram](docs/TELEGRAM.md)
-- [Live self-improvement acceptance](docs/LIVE-SELF-IMPROVEMENT-ACCEPTANCE.md)
 
 ## Development
 

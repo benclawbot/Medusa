@@ -21,7 +21,6 @@ Architecture v2 adds a separate certification status: `certified-production`, `l
 |---|---|---|---|---|---|
 | `shared-runtime` | `production` | runtime maintainers | `medusa`, desktop app | Linux, macOS, Windows | none |
 | `durable-sessions-memory` | `production` | agent runtime maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
-| `github-service` | `production` | integration maintainers | guarded GitHub workflows | Linux, macOS, Windows | GitHub API |
 | `provider-context-resilience` | `production` | provider maintainers | `medusa`, `medusa run`, `medusa quickstart` | Linux, macOS, Windows | configured model provider |
 | `identity-approval-transactions` | `production` | safety maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
 | `daemon` | `production` | daemon maintainers | daemon and desktop adapter | Linux, macOS, Windows | none |
@@ -45,9 +44,9 @@ Read-only planner/risk-review teammate coordination is independent of Git. Git i
 
 Architecture-v2 migration and certification are governed only by [`architecture/INDEX.md`](architecture/INDEX.md) and [`architecture/baseline.json`](architecture/baseline.json). This legacy availability ledger no longer reproduces a second certification table or migration-status narrative; doing so previously left completed work described as pending.
 
-The architecture authority records the certified shared runtime, durable state, guarded mutation lifecycle, provider health, release trust, containment, frontend projection, and other production boundaries. It also records the current exceptions: model-executable browser actions remain quarantined, plugins/extensions remain preview unless individually certified, and Telegram duplex/audio behavior remains quarantined pending real external evidence.
+The architecture authority records the certified shared runtime, durable state, guarded mutation lifecycle, provider health, release trust, containment, frontend projection, and other production boundaries. Managed plugins/extensions remain preview unless individually certified.
 
-Provider route, dogfood, credential, and Realtime status are separately governed by [`provider-support.json`](provider-support.json). A legacy `production` availability entry here cannot promote a route or capability beyond either machine-readable authority.
+Provider route, dogfood, and credential status are separately governed by [`provider-support.json`](provider-support.json). A legacy `production` availability entry here cannot promote a route or capability beyond either machine-readable authority.
 
 ## Planned and scaffolding behavior
 
@@ -57,7 +56,7 @@ The current coordinated path supports bounded Git multi-implementer mutation and
 
 The contained analysis-workspace/recursive-delegation roadmap must not be read as evidence that recursive delegation is already active. Current implementation children cannot spawn implementation children or widen their own contracts.
 
-Browser and plugin structure must not be presented as active capability merely because crates, schemas, or tool definitions exist. Architecture v2 requires definition → readiness → permission → dispatch → side effect → evidence → event delivery → cleanup conformance.
+Plugin structure must not be presented as active capability merely because crates, schemas, or tool definitions exist. Architecture v2 requires definition → readiness → permission → dispatch → side effect → evidence → event delivery → cleanup conformance.
 
 ## Canonical gates
 

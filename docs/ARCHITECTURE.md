@@ -91,7 +91,7 @@ Workspace writes are path-checked, symlink-aware where supported, and transactio
 
 For Git parallel mutation, each child owns an exact path/resource contract. Resource conflicts include manifests, lockfiles, migrations, snapshots, and generated outputs. The coordinator runs only conflict-free waves, independently accepts children, establishes an `IntegrationBarrier`, stages them in deterministic dependency order, verifies the aggregate, and submits a single immutable aggregate transaction for final review. High-risk, ambiguous, oversized, low-confidence, or conflicting plans fall back to one implementer.
 
-Platform note: Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox`. Required UI-change verification uses the Node.js browser sidecar as an internal verification boundary; model-executable browser actions remain quarantined until their dispatcher, permissions, and authenticated behavioral evidence are certified.
+Platform note: Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox`. Required UI-change verification uses a bounded static HTTP artifact check, so it does not depend on a browser daemon or host-specific browser installation.
 
 ## Orchestration and parent/subagent responsibility
 
@@ -205,7 +205,7 @@ Workspace-local durable state lives under `.medusa`. Exact filenames and schemas
 |---|---|---|
 | Plans | Persisted session plan, task contracts, mutation DAG where applicable, and current plan fingerprint | Execution must bind to the active plan. |
 | Execution | Runtime event log, team state, leases, isolated-worker state, changed components, immutable candidates, transactions, and process records | Proposed text is not execution evidence. |
-| Verification | Candidate checks, independent immutable-candidate checks, primary workspace checks, browser evidence, overrides, and completion status | Required verification decides completion. |
+| Verification | Candidate checks, independent immutable-candidate checks, primary workspace checks, UI evidence, overrides, and completion status | Required verification decides completion. |
 | Reports | Final session report derived from teammate, transaction, integration, and verification evidence | Reports summarize records; they do not override them. |
 | Learning | Provenance-bearing Markdown lessons, recall records, and skill outcomes | Only verified outcomes can become accepted positive learning. |
 | Recovery | Checkpoints, worker epochs, integration receipts, failure history, Git commits or directory snapshots, replay and recovery decisions | Recovery preserves failed and interrupted states rather than rewriting them as success. |
@@ -214,11 +214,11 @@ Persisted schedule or role labels alone must not be rendered as proof of dispatc
 
 Schema field names such as `prepared_commit` and `prepared_tree` remain stable for durable compatibility. In directory workspaces those fields contain content-addressed snapshot and tree identifiers, not Git object IDs.
 
-### Behavioral learning and improvement authority
+### Learning and improvement authority
 
-Canonical runtime evidence produces versioned behavioral outcomes, task-aware cohort reports, and drift reports. These are rebuildable projections: they may be discarded and reconstructed from durable evidence, and they do not replace execution, verification, approval, capability, or integration authority. The shared behavioral-health snapshot is presentation-neutral so CLI, TUI, Desktop, daemon, and remote frontends consume the same success, latency, repair, cost-coverage, drift, and missing-data values instead of recalculating them.
-
-The improvement controller accepts source-linked drift triggers and emits deterministic candidate and evaluation receipts. Automatic promotion is limited to runtime-safe refinement targets after independent frozen-oracle evidence, comparable control coverage, practical-effect and correctness guardrails, and an exact predecessor are present. Safety, privacy, integrity, evaluator, metric, permission, capability, or protected-boundary changes are escalated to the engineering lane. Canary rollback restores that exact predecessor; replayed experiment receipts are idempotent. Unknown cost, sparse cohorts, corrupt projections, and insufficient evidence remain explicitly unknown or degraded rather than being rendered as healthy zeros.
+Verified completed sessions persist durable recall and failure evidence. The canonical memory
+authority owns Markdown memory and bounded retrieval; frontends only project state and submit
+explicit user actions.
 
 ## Capability evidence and drift control
 

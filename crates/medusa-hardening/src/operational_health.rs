@@ -225,7 +225,7 @@ impl ResourceSnapshot {
 
 /// Threshold configuration for operational-health alerting. Unlike the raw
 /// counters, thresholds decide when a Warning or capacity pressure becomes a
-/// daemon/Telegram alert.
+/// daemon alert.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AlertThresholds {
     /// Emit alerts for warning-level pressure (Warning resources, degraded health).

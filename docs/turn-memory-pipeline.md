@@ -14,19 +14,11 @@ closed and surface a truthful runtime notice. `medusa-memory` remains the Markdo
 frontmatter carries scope, lifecycle, validation, expiry, provenance, and supersession metadata;
 the SQLite index is disposable.
 
-Completed-session learning remains a separate approval-controlled path. It is admitted to the
-refinement authority as a probationary candidate and must not be treated as active project memory
-until the existing review/graduation lifecycle activates it.
+Completed sessions contribute only to durable recall after a verified terminal outcome. They are
+not promoted into active project memory automatically.
 
-The preserved crates are deliberately not all wired into this path:
-
-- `medusa-markdown-memory` is an older in-memory chunk index and is superseded for canonical memory
-  by `medusa-memory`.
-- `medusa-turn-assembly` overlaps the live request assembly and prompt-cache provenance owners;
-  only a demonstrated unique budget/provenance behavior should be migrated from it.
-- `medusa-memory-consolidation` and `medusa-memory-writeback` do not understand the current
-  refinement-authority lifecycle and must not write active memory independently.
-- `medusa-context-retrieval` still lacks an authoritative `ContextLedger` projection in the
-  shipped runtime; repository retrieval and turn budgeting currently own those boundaries.
-- `medusa-mcp-cache` still needs a bridge to the actual `DesktopCommanderClient` schemas, tool
-  policy, repository/session scope, and cacheability rules before it can safely cache results.
+The runtime intentionally has one implementation for each stage. The former experimental
+`medusa-markdown-memory`, `medusa-turn-assembly`, `medusa-memory-consolidation`,
+`medusa-memory-writeback`, `medusa-context-retrieval`, and `medusa-mcp-cache` crates were removed:
+none was reachable from a shipped binary, and each overlapped an authority named above. New work
+must extend the canonical owner instead of adding a parallel pipeline.

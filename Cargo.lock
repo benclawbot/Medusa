@@ -291,15 +291,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "block-buffer"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
-dependencies = [
- "hybrid-array",
-]
-
-[[package]]
 name = "block-padding"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -408,7 +399,7 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
- "crypto-common 0.1.7",
+ "crypto-common",
  "inout",
 ]
 
@@ -481,12 +472,6 @@ checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
 ]
-
-[[package]]
-name = "const-oid"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "convert_case"
@@ -603,15 +588,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crypto-common"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
-dependencies = [
- "hybrid-array",
-]
-
-[[package]]
 name = "ctrlc"
 version = "3.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -621,12 +597,6 @@ dependencies = [
  "nix 0.31.3",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "data-encoding"
-version = "2.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "dbus"
@@ -706,20 +676,9 @@ version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
- "block-buffer 0.10.4",
- "crypto-common 0.1.7",
+ "block-buffer",
+ "crypto-common",
  "subtle",
-]
-
-[[package]]
-name = "digest"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
-dependencies = [
- "block-buffer 0.12.1",
- "const-oid",
- "crypto-common 0.2.2",
 ]
 
 [[package]]
@@ -1112,7 +1071,7 @@ version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
- "digest 0.10.7",
+ "digest",
 ]
 
 [[package]]
@@ -1155,15 +1114,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
-name = "hybrid-array"
-version = "0.4.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
-dependencies = [
- "typenum",
-]
-
-[[package]]
 name = "hyper"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1196,7 +1146,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.9",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -1510,19 +1460,16 @@ name = "medusa-agent"
 version = "1.0.9"
 dependencies = [
  "hex",
- "medusa-browser-client",
  "medusa-capabilities",
  "medusa-clearops",
  "medusa-confidence",
  "medusa-config",
- "medusa-context",
  "medusa-continuation",
  "medusa-core",
  "medusa-escalation",
  "medusa-evidence",
  "medusa-extensions",
  "medusa-failure",
- "medusa-improvement",
  "medusa-intelligence",
  "medusa-memory",
  "medusa-multi-agent-scheduler",
@@ -1548,25 +1495,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-browser-client"
-version = "1.0.9"
-dependencies = [
- "medusa-core",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "medusa-browserd"
-version = "1.0.9"
-dependencies = [
- "medusa-browser-client",
- "serde_json",
- "url",
-]
-
-[[package]]
 name = "medusa-capabilities"
 version = "1.0.9"
 dependencies = [
@@ -1574,10 +1502,7 @@ dependencies = [
  "medusa-config",
  "medusa-core",
  "medusa-extensions",
- "medusa-github",
- "medusa-improvement",
  "medusa-provider",
- "medusa-transaction-coordinator",
  "serde",
  "serde_json",
  "sha2",
@@ -1606,7 +1531,6 @@ dependencies = [
  "medusa-core",
  "medusa-daemon",
  "medusa-extensions",
- "medusa-github",
  "medusa-hardening",
  "medusa-memory",
  "medusa-protocol",
@@ -1646,29 +1570,6 @@ dependencies = [
  "serial_test",
  "tempfile",
  "toml",
-]
-
-[[package]]
-name = "medusa-context"
-version = "1.0.9"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "time",
-]
-
-[[package]]
-name = "medusa-context-retrieval"
-version = "1.0.9"
-dependencies = [
- "hex",
- "medusa-context",
- "serde",
- "serde_json",
- "sha2",
- "time",
 ]
 
 [[package]]
@@ -1822,17 +1723,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-github"
-version = "1.0.9"
-dependencies = [
- "medusa-core",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
 name = "medusa-hardening"
 version = "1.0.9"
 dependencies = [
@@ -1844,24 +1734,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "time",
- "ulid",
-]
-
-[[package]]
-name = "medusa-improvement"
-version = "1.0.9"
-dependencies = [
- "hex",
- "medusa-context",
- "medusa-core",
- "medusa-protocol",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "time",
- "tracing",
  "ulid",
 ]
 
@@ -1881,26 +1753,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-markdown-memory"
-version = "1.0.9"
-dependencies = [
- "hex",
- "serde",
- "sha2",
-]
-
-[[package]]
-name = "medusa-mcp-cache"
-version = "1.0.9"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "time",
-]
-
-[[package]]
 name = "medusa-memory"
 version = "1.0.9"
 dependencies = [
@@ -1916,28 +1768,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-memory-consolidation"
-version = "1.0.9"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "time",
-]
-
-[[package]]
-name = "medusa-memory-writeback"
-version = "1.0.9"
-dependencies = [
- "hex",
- "medusa-memory-consolidation",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "medusa-multi-agent-scheduler"
 version = "1.0.9"
 dependencies = [
@@ -1947,15 +1777,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
-]
-
-[[package]]
-name = "medusa-openai-realtime"
-version = "1.0.9"
-dependencies = [
- "reqwest",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2056,17 +1877,14 @@ dependencies = [
  "medusa-agent",
  "medusa-capabilities",
  "medusa-config",
- "medusa-context",
  "medusa-core",
  "medusa-evidence",
  "medusa-execution-checkpoint",
  "medusa-execution-replay",
  "medusa-external-provider",
- "medusa-improvement",
  "medusa-intelligence",
  "medusa-memory",
  "medusa-multi-agent-scheduler",
- "medusa-openai-realtime",
  "medusa-protocol",
  "medusa-recovery-coordinator",
  "medusa-review-model",
@@ -2078,7 +1896,6 @@ dependencies = [
  "medusa-wakeup",
  "medusa-workers",
  "png",
- "reqwest",
  "serde",
  "serde_json",
  "sha2",
@@ -2087,7 +1904,6 @@ dependencies = [
  "time",
  "toml",
  "tracing",
- "tungstenite",
 ]
 
 [[package]]
@@ -2199,18 +2015,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "time",
-]
-
-[[package]]
-name = "medusa-turn-assembly"
-version = "1.0.9"
-dependencies = [
- "hex",
- "medusa-context",
- "serde",
- "sha2",
- "time",
- "tracing",
 ]
 
 [[package]]
@@ -2928,7 +2732,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 1.0.9",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3247,18 +3051,7 @@ checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "sha1"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.0",
- "digest 0.11.3",
+ "digest",
 ]
 
 [[package]]
@@ -3269,7 +3062,7 @@ checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
- "digest 0.10.7",
+ "digest",
 ]
 
 [[package]]
@@ -3832,25 +3625,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
-name = "tungstenite"
-version = "0.30.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e48ac77174b19c110a50ab2128b24215ac9cb40e0e12e093fb602d175c569d22"
-dependencies = [
- "bytes",
- "data-encoding",
- "http",
- "httparse",
- "log",
- "rand 0.10.2",
- "rustls",
- "rustls-pki-types",
- "sha1 0.11.0",
- "thiserror",
- "webpki-roots 0.26.11",
-]
-
-[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4079,15 +3853,6 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -4529,7 +4294,7 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "serde_repr",
- "sha1 0.10.7",
+ "sha1",
  "static_assertions",
  "tracing",
  "uds_windows",

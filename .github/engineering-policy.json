@@ -36,13 +36,6 @@
       "required_checks": ["architecture-policy", "architecture-conformance"]
     },
     {
-      "id": "github-operation-authority",
-      "authority_paths": ["crates/medusa-github/**"],
-      "governed_paths": ["crates/medusa-cli/src/github_operation.rs", "crates/*github*/**", "docs/architecture/**"],
-      "parallel_authority_policy": "reject",
-      "required_checks": ["github-authority"]
-    },
-    {
       "id": "durable-journal-authority",
       "authority_paths": ["crates/medusa-agent/src/journal.rs"],
       "governed_paths": ["crates/**/journal*.rs", "crates/**/state*.rs", "crates/**/migration*.rs", "crates/**/recovery*.rs", "crates/**/schema*.rs"],
@@ -59,7 +52,6 @@
     "evidence-authority": {"kind": "command", "command": ["python3", "scripts/check-evidence-authority.py"]},
     "architecture-policy": {"kind": "inline"},
     "architecture-conformance": {"kind": "workflow", "workflow_name": "Architecture v2 Baseline"},
-    "github-authority": {"kind": "command", "command": ["python3", "scripts/github-authority-policy.py"]},
     "containment-linux": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
     "containment-macos": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
     "containment-windows": {"kind": "workflow", "workflow_name": "Unsafe Rust Boundary"},
@@ -78,7 +70,6 @@
     "release-evidence": {"kind": "command", "command": ["python3", "scripts/check-desktop-version-sync.py"]},
     "release-build-evidence": {"kind": "command", "command": ["python3", "scripts/release-evidence.py", "self-test"]},
     "verified-prebuilt-update": {"kind": "workflow", "workflow_name": "Verified Prebuilt Update"},
-    "protected-improvement": {"kind": "workflow", "workflow_name": "Live Self Improvement"},
     "independent-verification": {"kind": "workflow", "workflow_name": "Continuous Verification Certification"},
     "engineering-policy-base": {"kind": "inline"}
   },
@@ -126,8 +117,8 @@
       "id": "architecture-boundary",
       "description": "Architecture authority and dependency-boundary changes require architecture conformance.",
       "include": [".github/architecture-policy.json", "scripts/architecture-policy.py", "scripts/architecture-conformance.py", "scripts/check-architecture-index.py", "docs/architecture/**", "Cargo.toml", "crates/*/Cargo.toml"],
-      "required_checks": ["architecture-policy", "architecture-conformance", "github-authority"],
-      "canonical_authorities": ["architecture-ownership", "github-operation-authority"],
+      "required_checks": ["architecture-policy", "architecture-conformance"],
+      "canonical_authorities": ["architecture-ownership"],
       "policy_sources": [".github/architecture-policy.json", "docs/architecture/owners.json", "docs/architecture/baseline.json"],
       "promotion": "protected-review",
       "protected": true
@@ -200,15 +191,6 @@
       "source_of_truth": ["release-version-authority"],
       "platforms": ["linux", "macos", "windows"],
       "policy_sources": ["Cargo.toml", "scripts/check-desktop-version-sync.py", "scripts/release-evidence.py"],
-      "promotion": "protected-review",
-      "protected": true
-    },
-    {
-      "id": "self-improvement",
-      "description": "Evaluator and self-improvement changes require protected engineering review lanes.",
-      "include": ["crates/**/learning*.rs", "crates/**/improvement*.rs", "crates/**/evaluator*.rs"],
-      "required_checks": ["protected-improvement", "independent-verification"],
-      "policy_sources": [".github/workflows/live-self-improvement.yml", ".github/workflows/continuous-verification-certification.yml"],
       "promotion": "protected-review",
       "protected": true
     },

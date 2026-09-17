@@ -25,7 +25,7 @@ A real end-to-end OAuth test requires a user-authorized Codex account. Private O
 
 ChatGPT OAuth is text-only in the desktop application. The Codex app-server provides the authenticated coding/chat route, but it does not provide the Realtime session credential required by the desktop microphone/WebRTC transport.
 
-The desktop voice button, Realtime WebRTC transport, and live-evidence screen have therefore been removed. Medusa does not show or store a separate voice API-key field, and selecting ChatGPT OAuth cannot start desktop voice. Realtime voice surfaces in the TUI and Telegram gateway are separate capabilities with their own provider and live-acceptance requirements.
+The desktop voice button and WebRTC transport are not part of the focused product surface. ChatGPT OAuth is a text-provider route and does not expose a separate voice API-key field.
 
 ## OpenAI API alternative
 

@@ -27,7 +27,7 @@ impl Effort {
     }
 }
 
-/// Display verbosity for tool-progress activity, mirroring the Telegram
+/// Display verbosity for tool-progress activity, mirroring the text frontend
 /// `/verbose <off|new|all|verbose>` levels: `off` hides tool, progress,
 /// and verification rows; `new` keeps only the latest such row; `all`
 /// shows every row; `verbose` additionally expands row details.
@@ -100,9 +100,6 @@ impl std::fmt::Debug for ModelConfiguration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SlashCommand {
     Help,
-    Learning {
-        action: LearningCommand,
-    },
     Review {
         action: ReviewCommand,
     },
@@ -154,53 +151,6 @@ pub enum TeamCommand {
         worker_id: String,
     },
     StopTeam,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LearningCommand {
-    Show {
-        filter: Option<String>,
-    },
-    Inspect {
-        id: String,
-    },
-    Propose {
-        scope: String,
-        key: String,
-        value: String,
-    },
-    Evaluate {
-        id: String,
-        validation_passed: bool,
-        regression_passed: bool,
-        effectiveness_passed: bool,
-    },
-    Approve {
-        id: String,
-    },
-    Reject {
-        id: String,
-    },
-    Defer {
-        id: String,
-    },
-    Validate {
-        id: String,
-    },
-    Activate {
-        id: String,
-    },
-    Suspend {
-        id: String,
-    },
-    Rollback {
-        id: String,
-    },
-    Delete {
-        id: String,
-    },
-    Privacy,
-    Export,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -333,11 +283,6 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "request graceful coordinated-team shutdown",
     },
     CommandSpec {
-        name: "learning",
-        usage: "/learning [show [filter]|inspect <id>|propose <scope> <key> <value>|evaluate <id> <validation> <regression> <effectiveness>|approve|reject|defer|validate|activate|suspend|rollback|delete <id>|privacy|export]",
-        description: "review and control the authoritative learning lifecycle",
-    },
-    CommandSpec {
         name: "review",
         usage: "/review [show [filter]|accept <path>|accept-all|revert <path>|revert-hunk <path> <hunk-id>|export]",
         description: "inspect, filter, accept, revert, or export repository review state",
@@ -421,15 +366,6 @@ fn require_no_extra<'a>(
         Ok(())
     } else {
         Err(format!("usage: {usage}"))
-    }
-}
-
-fn parse_pass_fail(value: Option<&str>, usage: &str) -> Result<bool, String> {
-    match value {
-        Some("pass") | Some("passed") | Some("true") => Ok(true),
-        Some("fail") | Some("failed") | Some("false") => Ok(false),
-        Some(other) => Err(format!("{usage}; got {other}")),
-        None => Err(format!("usage: {usage}")),
     }
 }
 
@@ -540,92 +476,6 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
                 }))
             }
         }
-        "learning" => {
-            let mut parts = remainder.split_whitespace();
-            let required_id = |value: Option<&str>, action: &str| {
-                value
-                    .map(str::to_owned)
-                    .ok_or_else(|| format!("/learning {action} expects an item id"))
-            };
-            let action = match parts.next() {
-                None => LearningCommand::Show { filter: None },
-                Some("show") => {
-                    let filter = parts.next().map(str::to_owned);
-                    require_no_extra(&mut parts, "/learning show [filter]")?;
-                    LearningCommand::Show { filter }
-                }
-                Some("inspect") => {
-                    let id = required_id(parts.next(), "inspect")?;
-                    require_no_extra(&mut parts, "/learning inspect <id>")?;
-                    LearningCommand::Inspect { id }
-                }
-                Some("propose") => parse_learning_propose(remainder)?,
-                Some("evaluate") => {
-                    let id = required_id(parts.next(), "evaluate")?;
-                    let usage = "/learning evaluate <id> <validation pass|fail> <regression pass|fail> <effectiveness pass|fail>";
-                    let validation_passed = parse_pass_fail(parts.next(), usage)?;
-                    let regression_passed = parse_pass_fail(parts.next(), usage)?;
-                    let effectiveness_passed = parse_pass_fail(parts.next(), usage)?;
-                    require_no_extra(&mut parts, usage)?;
-                    LearningCommand::Evaluate {
-                        id,
-                        validation_passed,
-                        regression_passed,
-                        effectiveness_passed,
-                    }
-                }
-                Some("approve") => {
-                    let id = required_id(parts.next(), "approve")?;
-                    require_no_extra(&mut parts, "/learning approve <id>")?;
-                    LearningCommand::Approve { id }
-                }
-                Some("reject") => {
-                    let id = required_id(parts.next(), "reject")?;
-                    require_no_extra(&mut parts, "/learning reject <id>")?;
-                    LearningCommand::Reject { id }
-                }
-                Some("defer") => {
-                    let id = required_id(parts.next(), "defer")?;
-                    require_no_extra(&mut parts, "/learning defer <id>")?;
-                    LearningCommand::Defer { id }
-                }
-                Some("validate") => {
-                    let id = required_id(parts.next(), "validate")?;
-                    require_no_extra(&mut parts, "/learning validate <id>")?;
-                    LearningCommand::Validate { id }
-                }
-                Some("activate") => {
-                    let id = required_id(parts.next(), "activate")?;
-                    require_no_extra(&mut parts, "/learning activate <id>")?;
-                    LearningCommand::Activate { id }
-                }
-                Some("suspend") => {
-                    let id = required_id(parts.next(), "suspend")?;
-                    require_no_extra(&mut parts, "/learning suspend <id>")?;
-                    LearningCommand::Suspend { id }
-                }
-                Some("rollback") => {
-                    let id = required_id(parts.next(), "rollback")?;
-                    require_no_extra(&mut parts, "/learning rollback <id>")?;
-                    LearningCommand::Rollback { id }
-                }
-                Some("delete") => {
-                    let id = required_id(parts.next(), "delete")?;
-                    require_no_extra(&mut parts, "/learning delete <id>")?;
-                    LearningCommand::Delete { id }
-                }
-                Some("privacy") => {
-                    require_no_extra(&mut parts, "/learning privacy")?;
-                    LearningCommand::Privacy
-                }
-                Some("export") => {
-                    require_no_extra(&mut parts, "/learning export")?;
-                    LearningCommand::Export
-                }
-                Some(other) => return Err(format!("unknown /learning action: {other}")),
-            };
-            Ok(Some(SlashCommand::Learning { action }))
-        }
         "review" => {
             let mut parts = remainder.split_whitespace();
             let action = match parts.next() {
@@ -713,32 +563,6 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
     }
-}
-
-fn parse_learning_propose(remainder: &str) -> Result<LearningCommand, String> {
-    let rest = remainder
-        .strip_prefix("propose")
-        .ok_or_else(|| "/learning propose expects scope, key, and value".to_owned())?
-        .trim_start();
-    let mut fields = rest.splitn(3, char::is_whitespace);
-    let scope = fields
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "/learning propose expects a scope".to_owned())?;
-    let key = fields
-        .next()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "/learning propose expects a key".to_owned())?;
-    let value = fields
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "/learning propose expects a value".to_owned())?;
-    Ok(LearningCommand::Propose {
-        scope: scope.to_owned(),
-        key: key.to_owned(),
-        value: value.to_owned(),
-    })
 }
 
 #[must_use]
@@ -924,53 +748,11 @@ mod tests {
                 effort: Some(Effort::High)
             }))
         );
-        assert_eq!(
-            parse_slash_command("/learning inspect proposal-1"),
-            Ok(Some(SlashCommand::Learning {
-                action: LearningCommand::Inspect {
-                    id: "proposal-1".into()
-                }
-            }))
-        );
-        assert_eq!(
-            parse_slash_command("/learning propose repository workflow collect all CI failures"),
-            Ok(Some(SlashCommand::Learning {
-                action: LearningCommand::Propose {
-                    scope: "repository".into(),
-                    key: "workflow".into(),
-                    value: "collect all CI failures".into()
-                }
-            }))
-        );
-        assert_eq!(
-            parse_slash_command("/learning evaluate proposal-1 pass pass fail"),
-            Ok(Some(SlashCommand::Learning {
-                action: LearningCommand::Evaluate {
-                    id: "proposal-1".into(),
-                    validation_passed: true,
-                    regression_passed: true,
-                    effectiveness_passed: false,
-                }
-            }))
-        );
     }
 
     #[test]
     fn lifecycle_and_review_commands_reject_ambiguous_trailing_arguments() {
         for input in [
-            "/learning show filter extra",
-            "/learning inspect proposal-1 extra",
-            "/learning evaluate proposal-1 pass pass pass extra",
-            "/learning approve proposal-1 extra",
-            "/learning reject proposal-1 extra",
-            "/learning defer proposal-1 extra",
-            "/learning validate proposal-1 extra",
-            "/learning activate proposal-1 extra",
-            "/learning suspend proposal-1 extra",
-            "/learning rollback proposal-1 extra",
-            "/learning delete proposal-1 extra",
-            "/learning privacy extra",
-            "/learning export extra",
             "/review show file extra",
             "/review accept file.rs extra",
             "/review accept-all extra",
@@ -980,8 +762,6 @@ mod tests {
         ] {
             assert!(parse_slash_command(input).is_err(), "{input}");
         }
-        assert!(parse_slash_command("/learning evaluate proposal-1 pass").is_err());
-        assert!(parse_slash_command("/learning evaluate proposal-1 pass maybe pass").is_err());
     }
 
     #[test]

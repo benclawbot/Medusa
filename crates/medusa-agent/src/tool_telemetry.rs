@@ -93,7 +93,7 @@ impl ToolExecutionTrace {
         }
     }
 
-    /// Generic completion record for non-shell tools (browser, skill, compound, delegation).
+    /// Generic completion record for non-shell tools (skill, compound, delegation).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn for_tool(
         tool: &str,
@@ -125,27 +125,6 @@ impl ToolExecutionTrace {
             expansion_handle: None,
             verification_state: VerificationState::NotApplicable,
         }
-    }
-
-    pub(crate) fn for_browser(
-        action: &str,
-        target: &str,
-        success: bool,
-        latency: Duration,
-        raw_bytes: usize,
-        retained_bytes: usize,
-        operation_id: &str,
-    ) -> Self {
-        Self::for_tool(
-            "browser",
-            action,
-            &[target.to_owned()],
-            success,
-            latency,
-            raw_bytes,
-            retained_bytes,
-            operation_id,
-        )
     }
 
     pub(crate) fn for_skill(
@@ -607,19 +586,6 @@ mod tests {
     #[test]
     fn non_shell_constructors_carry_args_latency_and_bytes() {
         let latency = Duration::from_millis(42);
-        let browser = ToolExecutionTrace::for_browser(
-            "navigate",
-            "https://example.test/",
-            true,
-            latency,
-            1024,
-            256,
-            "op-browser-1",
-        );
-        assert_eq!(browser.tool, "browser");
-        assert_eq!(browser.latency_ms, 42);
-        assert_eq!(browser.raw_bytes, 1024);
-        assert_eq!(browser.retained_bytes, 256);
         let skill = ToolExecutionTrace::for_skill(
             "release",
             &["--dry-run".to_owned()],

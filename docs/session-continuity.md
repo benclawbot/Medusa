@@ -5,7 +5,7 @@ Medusa frontends share one canonical session journal and one production runtime 
 ## Supported workflow
 
 1. The first client attaches as the mutable owner.
-2. Additional TUI, desktop, Telegram, daemon, or future clients attach read-only to the same session.
+2. Additional TUI, desktop, daemon, or future clients attach read-only to the same session.
 3. Each attachment replays canonical journal events after the maximum of its requested cursor and its durable acknowledged cursor.
 4. A client acknowledges only monotonically increasing cursors.
 5. The owner may explicitly hand ownership to another already attached client.
@@ -29,6 +29,6 @@ A daemon or frontend restart does not require reconstructing a parallel transcri
 
 ## Presentation state
 
-Frontend layout, Telegram formatting, local panel state, typing indicators, streaming preview message IDs, and similar presentation preferences remain client-local. They may use journal cursors for idempotent delivery but never become execution authority.
+Frontend layout, local panel state, typing indicators, streaming preview message IDs, and similar presentation preferences remain client-local. They may use journal cursors for idempotent delivery but never become execution authority.
 
 See [Runtime durability, replay, and recovery](EXECUTION-DURABILITY.md) for journal, checkpoint, restore, retention, and diagnostic guarantees.

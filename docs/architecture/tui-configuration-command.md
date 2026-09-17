@@ -34,7 +34,7 @@ Configuration changes preserve process-only state such as the current effort set
 
 ## Redaction and provider behavior
 
-`/config` shows the active profile, profile path, stored route, effective route, protocol, authentication mode, base URL, and configured status. It never shows API keys, OAuth credentials, Telegram tokens, or secret-store values.
+`/config` shows the active profile, profile path, stored route, effective route, protocol, authentication mode, base URL, and configured status. It never shows API keys, OAuth credentials, or secret-store values.
 
 `/config validate` performs no provider request and therefore cannot incur model usage. It validates the same layered configuration that the runtime would use for the next turn.
 
@@ -42,4 +42,4 @@ Focused regression coverage proves that invalid effective mutations do not repla
 
 ## Follow-up boundary
 
-This slice does not add desktop settings, Telegram callbacks, secret-store login/logout, configuration revision conflicts, or cross-frontend change subscriptions. Those surfaces must consume the same shared catalog and effective-config validation APIs.
+This slice does not add secret-store login/logout, configuration revision conflicts, or cross-frontend change subscriptions. Those surfaces must consume the same shared catalog and effective-config validation APIs.

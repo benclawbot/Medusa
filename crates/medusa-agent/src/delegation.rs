@@ -70,6 +70,9 @@ pub struct DelegationContractMaterial {
     pub approval_policy: DelegatedApprovalPolicy,
     pub network_allowed: bool,
     pub process_allowed: bool,
+    /// Retained in the contract schema so persisted v1 contracts remain readable.
+    /// Browser execution is no longer an exposed capability and this is always false.
+    #[serde(default)]
     pub browser_allowed: bool,
     pub credentialed_actions_allowed: bool,
     pub model: ModelConfig,

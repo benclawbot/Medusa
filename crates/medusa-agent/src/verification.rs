@@ -8,7 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command};
 use medusa_process_containment::OwnedProcessTree;
 
@@ -54,221 +53,64 @@ pub(crate) fn execute_verification_command_cancellable(
     })
 }
 
-pub(crate) fn required_browser_verification(repo: &Path) -> MedusaResult<VerificationResult> {
-    let automatic_server = if std::env::var_os("MEDUSA_BROWSER_VERIFY_URL").is_none() {
-        static_verification_server::StaticVerificationServer::start(repo).map_err(|error| {
-            MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                format!("UI changes require automatic browser verification: {error}"),
-            )
+pub(crate) fn required_ui_verification(repo: &Path) -> MedusaResult<VerificationResult> {
+    let server = static_verification_server::StaticVerificationServer::start(repo)
+        .map_err(|error| {
+            dependency_error(format!("UI changes require a static artifact: {error}"))
         })?
-    } else {
-        None
-    };
-    let automatic_route = automatic_server.as_ref().map(|server| server.route());
-    let route = match std::env::var("MEDUSA_BROWSER_VERIFY_URL") {
-        Ok(route) => route,
-        Err(_) => automatic_route.ok_or_else(|| {
-            MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                "UI changes require browser verification, but MEDUSA_BROWSER_VERIFY_URL is not set and no generated index.html was found to serve automatically",
-            )
-        })?,
-    };
-    let command = std::env::var("MEDUSA_BROWSERD").unwrap_or_else(|_| "medusa-browserd".into());
-    let mut client = match BrowserClient::spawn_with_env(&command, &browserd_environment(&route)) {
-        Ok(client) => client,
-        Err(error) if automatic_server.is_some() => {
-            let server = automatic_server.as_ref().ok_or_else(|| {
-                MedusaError::new(
-                    ErrorCode::InternalInvariant,
-                    ErrorCategory::Internal,
-                    "automatic static verification fallback was selected without a server",
-                )
-            })?;
-            let (status, body) = server.probe().map_err(|probe_error| {
-                MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Environment,
-                    format!(
-                        "UI changes require browser verification, but {command} could not start ({error}); automatic static verification also failed: {probe_error}"
-                    ),
-                )
-            })?;
-            return Ok(VerificationResult {
-                passed: status < 400 && !body.trim().is_empty(),
-                evidence: vec![
-                    format!("browser_requested_route={route}"),
-                    "browser_verification_mode=automatic_static_server_http_fallback".to_owned(),
-                    format!("browser_status={status}"),
-                    format!("browser_snapshot_nonempty={}", !body.trim().is_empty()),
-                    format!("browser_sidecar_unavailable={error}"),
-                ],
-            });
-        }
-        Err(error) => {
-            return Err(MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                format!(
-                    "UI changes require browser verification, but {command} could not start: {error}"
-                ),
-            ));
-        }
-    };
-    let mut result = VerificationResult {
-        passed: true,
-        evidence: vec![format!("browser_requested_route={route}")],
-    };
-    if automatic_server.is_some() {
-        result
-            .evidence
-            .push("browser_verification_mode=automatic_static_server".to_owned());
-    }
+        .ok_or_else(|| dependency_error("UI changes require a generated index.html"))?;
+    let (status, body) = server
+        .probe()
+        .map_err(|error| dependency_error(format!("static UI verification failed: {error}")))?;
+    let document_nonempty = !body.trim().is_empty();
+    let missing_alt = count_missing_alt(&body);
+    let unlabeled_controls = count_unlabeled_controls(&body);
+    let passed = status < 400 && document_nonempty && missing_alt == 0 && unlabeled_controls == 0;
+    Ok(VerificationResult {
+        passed,
+        evidence: vec![
+            "ui_verification_mode=static_http".to_owned(),
+            format!("ui_status={status}"),
+            format!("ui_document_nonempty={document_nonempty}"),
+            format!(
+                "ui_accessibility=missing_alt:{missing_alt},unlabeled_controls:{unlabeled_controls}"
+            ),
+            format!("ui_result={}", if passed { "passed" } else { "failed" }),
+        ],
+    })
+}
 
-    match client.request(BrowserRequest::Navigate { url: route })? {
-        BrowserResponse::Navigate { final_url, status } => {
-            result.evidence.push(format!("browser_route={final_url}"));
-            result.evidence.push(format!("browser_status={status}"));
-            result.passed &= status < 400;
-        }
-        BrowserResponse::Error { code, message } => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_error={code}:{message}"));
-            return Ok(result);
-        }
-        other => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_unexpected_navigation={other:?}"));
-            return Ok(result);
-        }
-    }
+fn count_missing_alt(document: &str) -> usize {
+    document
+        .split('<')
+        .filter(|fragment| fragment.trim_start().starts_with("img") && !fragment.contains("alt="))
+        .count()
+}
 
-    match client.request(BrowserRequest::Snapshot)? {
-        BrowserResponse::Snapshot { text, refs } => {
-            let nonempty = !text.trim().is_empty();
-            result
-                .evidence
-                .push(format!("browser_snapshot_nonempty={nonempty}"));
-            result
-                .evidence
-                .push(format!("browser_snapshot_refs={}", refs.len()));
-            result.passed &= nonempty;
-        }
-        BrowserResponse::Error { code, message } => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_snapshot_error={code}:{message}"));
-        }
-        other => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_unexpected_snapshot={other:?}"));
-        }
-    }
+fn count_unlabeled_controls(document: &str) -> usize {
+    ["button", "input", "select", "textarea"]
+        .into_iter()
+        .map(|tag| {
+            document
+                .split('<')
+                .filter(|fragment| {
+                    let fragment = fragment.trim_start();
+                    fragment.starts_with(tag)
+                        && !fragment.contains("aria-label=")
+                        && !fragment.contains("aria-labelledby=")
+                        && !fragment.contains("title=")
+                })
+                .count()
+        })
+        .sum()
+}
 
-    match client.request(BrowserRequest::Evaluate {
-        expression: "JSON.stringify(globalThis.__MEDUSA_CONSOLE_ERRORS__ || [])".to_owned(),
-    })? {
-        BrowserResponse::Evaluate { value } => {
-            let serialized = value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| value.to_string());
-            let clean = serialized == "[]" || serialized == "\"[]\"" || serialized == "null";
-            result
-                .evidence
-                .push(format!("browser_console_errors={serialized}"));
-            result.passed &= clean;
-        }
-        BrowserResponse::Error { code, message } => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_console_probe_error={code}:{message}"));
-        }
-        other => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_unexpected_console_probe={other:?}"));
-        }
-    }
-
-    match client.request(BrowserRequest::Evaluate {
-        expression: r#"JSON.stringify({missing_alt:document.querySelectorAll('img:not([alt])').length,unlabeled_controls:Array.from(document.querySelectorAll('button,input,select,textarea,a[href]')).filter((element)=>!(element.getAttribute('aria-label')||element.getAttribute('aria-labelledby')||element.textContent?.trim()||element.getAttribute('title'))).length})"#.to_owned(),
-    })? {
-        BrowserResponse::Evaluate { value } => {
-            let report = value
-                .as_str()
-                .and_then(|serialized| serde_json::from_str::<serde_json::Value>(serialized).ok())
-                .unwrap_or(value);
-            let missing_alt = report
-                .get("missing_alt")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(u64::MAX);
-            let unlabeled_controls = report
-                .get("unlabeled_controls")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(u64::MAX);
-            result.evidence.push(format!(
-                "browser_accessibility=missing_alt:{missing_alt},unlabeled_controls:{unlabeled_controls}"
-            ));
-            result.passed &= missing_alt == 0 && unlabeled_controls == 0;
-        }
-        BrowserResponse::Error { code, message } => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_accessibility_error={code}:{message}"));
-        }
-        other => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_unexpected_accessibility={other:?}"));
-        }
-    }
-
-    match client.request(BrowserRequest::Screenshot { full_page: true })? {
-        BrowserResponse::Screenshot {
-            format,
-            bytes_base64,
-        } => {
-            let directory = repo.join(".medusa/verification/screenshots");
-            fs::create_dir_all(&directory)?;
-            let path = directory.join(format!("{}.{}", ulid::Ulid::new(), format));
-            fs::write(&path, decode_base64(&bytes_base64)?)?;
-            result
-                .evidence
-                .push(format!("browser_screenshot={}", path.display()));
-        }
-        BrowserResponse::Error { code, message } => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_screenshot_error={code}:{message}"));
-        }
-        other => {
-            result.passed = false;
-            result
-                .evidence
-                .push(format!("browser_unexpected_screenshot={other:?}"));
-        }
-    }
-    result.evidence.push(format!(
-        "browser_result={}",
-        if result.passed { "passed" } else { "failed" }
-    ));
-    Ok(result)
+fn dependency_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        message,
+    )
 }
 
 fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
@@ -336,52 +178,6 @@ fn read_and_remove(path: &Path) -> MedusaResult<Vec<u8>> {
     File::open(path)?.read_to_end(&mut bytes)?;
     let _ = fs::remove_file(path);
     Ok(bytes)
-}
-
-fn browserd_environment(route: &str) -> [(&str, &str); 2] {
-    [
-        ("MEDUSA_BROWSER_VERIFY_URL", route),
-        ("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route),
-    ]
-}
-
-fn decode_base64(input: &str) -> MedusaResult<Vec<u8>> {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = Vec::new();
-    let mut chunk = [0u8; 4];
-    let mut length = 0;
-    for byte in input.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
-        if byte == b'=' {
-            chunk[length] = 64;
-        } else if let Some(index) = TABLE.iter().position(|candidate| *candidate == byte) {
-            chunk[length] = index as u8;
-        } else {
-            return Err(MedusaError::new(
-                ErrorCode::InvalidConfiguration,
-                ErrorCategory::Validation,
-                "browser screenshot returned invalid base64",
-            ));
-        }
-        length += 1;
-        if length == 4 {
-            output.push((chunk[0] << 2) | (chunk[1] >> 4));
-            if chunk[2] != 64 {
-                output.push((chunk[1] << 4) | (chunk[2] >> 2));
-            }
-            if chunk[3] != 64 {
-                output.push((chunk[2] << 6) | chunk[3]);
-            }
-            length = 0;
-        }
-    }
-    if length != 0 {
-        return Err(MedusaError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorCategory::Validation,
-            "browser screenshot base64 was truncated",
-        ));
-    }
-    Ok(output)
 }
 
 #[cfg(windows)]
@@ -504,12 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_truncated_base64() {
-        assert!(decode_base64("abc").is_err());
-    }
-
-    #[test]
-    fn automatic_browser_verification_serves_generated_index_without_environment() {
+    fn static_ui_verification_serves_generated_index_without_environment() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(
             directory.path().join("index.html"),
@@ -534,17 +325,6 @@ mod tests {
                 200,
                 "<!doctype html><title>Medusa test page</title>".to_owned()
             )
-        );
-    }
-
-    #[test]
-    fn browserd_environment_forwards_the_route_as_both_url_and_origin() {
-        let route = "http://127.0.0.1:4173/";
-        let environment = browserd_environment(route);
-        assert_eq!(environment[0], ("MEDUSA_BROWSER_VERIFY_URL", route));
-        assert_eq!(
-            environment[1],
-            ("MEDUSA_BROWSER_VERIFICATION_ORIGIN", route)
         );
     }
 }

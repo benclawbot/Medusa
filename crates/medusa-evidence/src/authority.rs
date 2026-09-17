@@ -236,7 +236,7 @@ fn requires_durable_artifact_evidence(
     plan: &VerificationPlan,
 ) -> bool {
     match kind {
-        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => true,
+        VerificationCheckKind::UiBehavior | VerificationCheckKind::Accessibility => true,
         VerificationCheckKind::ArtifactSemantic => plan.components.iter().any(|component| {
             component.kind != ChangeKind::Deleted
                 && (component.generated

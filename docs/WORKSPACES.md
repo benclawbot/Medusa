@@ -29,8 +29,7 @@ Workspace semantics are shared across every production frontend rather than impl
 | **Headless CLI** | `medusa --repo /path/to/workspace run ...` | The compatibility-named `--repo` argument is resolved as a filesystem root and passed directly to `RuntimeController`; `.git` is not required. |
 | **TUI** | `medusa --repo /path/to/workspace` or launch from the current directory | `TuiOptions` scopes daemon/session state under `<workspace>/.medusa` and uses the same runtime backend. |
 | **Desktop** | Selected directory, or no directory for General Chat | `runtime_start` canonicalizes any directory. General Chat creates a Medusa-owned non-Git application-data workspace. |
-| **Daemon** | Workspace root supplied by CLI, TUI, Desktop, or Telegram | `DaemonPaths` scopes IPC and durable state under `<workspace>/.medusa/daemon`; startup does not inspect Git metadata. |
-| **Telegram** | The workspace root used to start `medusa telegram` | Telegram creates transport state under `<workspace>/.medusa/telegram` and attaches to the same workspace-scoped daemon. |
+| **Daemon** | Workspace root supplied by CLI, TUI, or Desktop | `DaemonPaths` scopes IPC and durable state under `<workspace>/.medusa/daemon`; startup does not inspect Git metadata. |
 
 Git-specific actions remain capability-specific. For example, creating branches, commits, pull requests, Git diffs, or GitHub repository operations require a Git workspace even though the conversation, research, documentation, file, artifact, and directory-mutation paths do not.
 

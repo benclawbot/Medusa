@@ -5,18 +5,10 @@ on:
     paths:
       - 'crates/medusa-agent/**'
       - 'crates/medusa-config/**'
-      - 'crates/medusa-context/**'
-      - 'crates/medusa-context-retrieval/**'
       - 'crates/medusa-evidence/**'
       - 'crates/medusa-execution-checkpoint/**'
       - 'crates/medusa-execution-replay/**'
-      - 'crates/medusa-improvement/**'
-      - 'crates/medusa-markdown-memory/**'
-      - 'crates/medusa-mcp-cache/**'
       - 'crates/medusa-memory/**'
-      - 'crates/medusa-memory-consolidation/**'
-      - 'crates/medusa-memory-writeback/**'
-      - 'crates/medusa-openai-realtime/**'
       - 'crates/medusa-prompt-cache/**'
       - 'crates/medusa-protocol/**'
       - 'crates/medusa-runtime/**'
@@ -30,18 +22,10 @@ on:
     paths:
       - 'crates/medusa-agent/**'
       - 'crates/medusa-config/**'
-      - 'crates/medusa-context/**'
-      - 'crates/medusa-context-retrieval/**'
       - 'crates/medusa-evidence/**'
       - 'crates/medusa-execution-checkpoint/**'
       - 'crates/medusa-execution-replay/**'
-      - 'crates/medusa-improvement/**'
-      - 'crates/medusa-markdown-memory/**'
-      - 'crates/medusa-mcp-cache/**'
       - 'crates/medusa-memory/**'
-      - 'crates/medusa-memory-consolidation/**'
-      - 'crates/medusa-memory-writeback/**'
-      - 'crates/medusa-openai-realtime/**'
       - 'crates/medusa-prompt-cache/**'
       - 'crates/medusa-protocol/**'
       - 'crates/medusa-runtime/**'
@@ -78,10 +62,6 @@ jobs:
           command: "metadata --locked --format-version 1"
       - name: Validate lifecycle inventory
         run: cargo test -p medusa-testkit data_lifecycle --locked -- --nocapture
-      - name: Certify single refinement authority policy
-        run: cargo test -p medusa-testkit refinement_authority_policy --locked -- --nocapture
-      - name: Certify canonical refinement lifecycle
-        run: cargo test -p medusa-improvement --test refinement_authority --locked -- --nocapture
       - name: Certify content-addressed evidence semantics
         run: cargo test -p medusa-evidence artifact::tests --locked -- --nocapture
       - name: Certify memory authority and derived indexes

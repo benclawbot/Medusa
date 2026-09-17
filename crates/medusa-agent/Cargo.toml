@@ -8,7 +8,6 @@ repository.workspace = true
 
 [dependencies]
 hex.workspace = true
-medusa-browser-client = { path = "../medusa-browser-client" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-clearops = { path = "../medusa-clearops" }
 medusa-config = { path = "../medusa-config" }
@@ -16,13 +15,11 @@ medusa-config = { path = "../medusa-config" }
 medusa-confidence = { path = "../medusa-confidence" }
 medusa-continuation = { path = "../medusa-continuation" }
 medusa-core.workspace = true
-medusa-context.workspace = true
 medusa-evidence.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
 medusa-failure = { path = "../medusa-failure" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-intelligence = { path = "../medusa-intelligence" }
-medusa-improvement = { path = "../medusa-improvement" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-process-containment.workspace = true

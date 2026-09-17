@@ -28,7 +28,7 @@ mod verification_schedule;
 use crate::{
     repository_boundary::is_revisioned_git_repository_root,
     verification::{
-        ExecutedVerificationCommand, execute_verification_command, required_browser_verification,
+        ExecutedVerificationCommand, execute_verification_command, required_ui_verification,
     },
     verification_dag::{VerificationDag, VerificationNodeState, VerificationReceipt as DagReceipt},
 };
@@ -66,7 +66,7 @@ impl VerificationExecutionCheckpoint {
         commands: &[CommandReceipt],
         records: &[EvidenceRecord],
         materials: &BTreeMap<String, CheckMaterial>,
-        browser_material: &Option<CheckMaterial>,
+        ui_material: &Option<CheckMaterial>,
     ) -> Self {
         Self {
             artifacts: artifacts.values().cloned().collect(),
@@ -74,7 +74,7 @@ impl VerificationExecutionCheckpoint {
             commands: commands.to_vec(),
             records: records.to_vec(),
             materials: materials.clone(),
-            browser_material: browser_material.clone(),
+            browser_material: ui_material.clone(),
         }
     }
 }
@@ -330,7 +330,7 @@ pub fn authoritative_verification_for_components_at(
     let mut commands = Vec::<CommandReceipt>::new();
     let mut records = Vec::<EvidenceRecord>::new();
     let mut materials = BTreeMap::<String, CheckMaterial>::new();
-    let mut browser_material: Option<CheckMaterial> = None;
+    let mut ui_material: Option<CheckMaterial> = None;
     let mut recovery_summary = None;
 
     if let Some((checkpoint, summary)) = restore_verification_checkpoint(
@@ -349,7 +349,7 @@ pub fn authoritative_verification_for_components_at(
         commands = checkpoint.commands;
         records = checkpoint.records;
         materials = checkpoint.materials;
-        browser_material = checkpoint.browser_material;
+        ui_material = checkpoint.browser_material;
         recovery_summary = Some(summary);
     }
 
@@ -391,7 +391,7 @@ pub fn authoritative_verification_for_components_at(
             &commands,
             &records,
             &materials,
-            &browser_material,
+            &ui_material,
         )?;
 
         let mut command_results = execute_command_wave(repo, &ready_checks);
@@ -408,11 +408,11 @@ pub fn authoritative_verification_for_components_at(
                     &mut reads,
                     &mut records,
                 )?,
-                VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => {
-                    if let Some(material) = browser_material.clone() {
+                VerificationCheckKind::UiBehavior | VerificationCheckKind::Accessibility => {
+                    if let Some(material) = ui_material.clone() {
                         material
                     } else {
-                        let material = browser_material_for(
+                        let material = ui_material_for(
                             repo,
                             repository_fingerprint,
                             commit,
@@ -421,7 +421,7 @@ pub fn authoritative_verification_for_components_at(
                             &mut reads,
                             &mut records,
                         )?;
-                        browser_material = Some(material.clone());
+                        ui_material = Some(material.clone());
                         material
                     }
                 }
@@ -474,7 +474,7 @@ pub fn authoritative_verification_for_components_at(
                 &commands,
                 &records,
                 &materials,
-                &browser_material,
+                &ui_material,
             )?;
         }
     }
@@ -558,7 +558,7 @@ fn persist_verification_checkpoint(
     commands: &[CommandReceipt],
     records: &[EvidenceRecord],
     materials: &BTreeMap<String, CheckMaterial>,
-    browser_material: &Option<CheckMaterial>,
+    ui_material: &Option<CheckMaterial>,
 ) -> MedusaResult<()> {
     let payload = VerificationExecutionCheckpoint::from_runtime(
         artifacts,
@@ -566,7 +566,7 @@ fn persist_verification_checkpoint(
         commands,
         records,
         materials,
-        browser_material,
+        ui_material,
     );
     let checkpoint =
         VerificationCheckpoint::new(repository_state_fingerprint, dag.clone(), payload)
@@ -1115,7 +1115,7 @@ fn materialize_command(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn browser_material_for(
+fn ui_material_for(
     repo: &Path,
     repository_fingerprint: &str,
     commit: &str,
@@ -1124,7 +1124,7 @@ fn browser_material_for(
     reads: &mut Vec<ArtifactReadReceipt>,
     records: &mut Vec<EvidenceRecord>,
 ) -> MedusaResult<CheckMaterial> {
-    let result = match required_browser_verification(repo) {
+    let result = match required_ui_verification(repo) {
         Ok(result) => result,
         Err(error) => return Ok(rejected_material(error.to_string())),
     };
@@ -1132,38 +1132,19 @@ fn browser_material_for(
     let (evidence_id, source) = store_bytes(
         store,
         "text/plain; charset=utf-8",
-        "medusa-browser-verification",
+        "medusa-ui-verification",
         &evidence_bytes,
-        "medusa-browser-verification-review",
+        "medusa-ui-verification-review",
         artifacts,
         reads,
     )?;
-    let mut artifact_ids = vec![evidence_id];
-    for line in &result.evidence {
-        let Some(path) = line.strip_prefix("browser_screenshot=") else {
-            continue;
-        };
-        let screenshot = PathBuf::from(path);
-        if screenshot.is_file() {
-            let bytes = fs::read(&screenshot)?;
-            let (id, _) = store_bytes(
-                store,
-                media_type_for_path(&screenshot),
-                "medusa-browser-screenshot",
-                &bytes,
-                "medusa-browser-screenshot-review",
-                artifacts,
-                reads,
-            )?;
-            artifact_ids.push(id);
-        }
-    }
+    let artifact_ids = vec![evidence_id];
     let record = EvidenceRecord::new(
         EvidenceKind::Observation,
-        "required browser and accessibility verification completed",
+        "required static UI and accessibility verification completed",
         repository_fingerprint,
         commit,
-        "medusa-browser-verifier",
+        "medusa-ui-verifier",
         if result.passed {
             VerificationStatus::Verified
         } else {

@@ -1,7 +1,6 @@
 mod config_command;
 mod config_profiles;
 mod headless_approval;
-mod telegram_command;
 mod update_command;
 
 use super::uninstall_command;
@@ -39,7 +38,6 @@ use medusa_hardening::{
 use headless_approval::{ApprovalMatch, HeadlessApprovalPolicy};
 use medusa_protocol::frontend::{FrontendEvent, FrontendKind};
 use medusa_runtime::{
-    behavioral_health::{build_behavioral_health_snapshot, BehavioralHealthStatus},
     frontend::CanonicalFrontendEventStream, prompt::PromptDraft, RuntimeController, RuntimeEvent,
 };
 use medusa_tui::{TuiOptions, run as run_tui};
@@ -152,11 +150,6 @@ enum CommandKind {
     },
     /// Remove the installed binary, repository state, channel marker, and locks.
     Uninstall,
-    /// Run the Telegram remote frontend over the repository daemon authority.
-    Telegram {
-        #[command(flatten)]
-        args: Box<telegram_command::TelegramArgs>,
-    },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
 }
@@ -303,7 +296,6 @@ fn run() -> MedusaResult<()> {
     }
 
     let command = match command {
-        CommandKind::Telegram { args } => return telegram_command::run(&repo, *args),
         CommandKind::Uninstall => {
             return uninstall_command::run(&repo, &[]).map_err(|error| {
                 MedusaError::new(ErrorCode::PersistenceFailed, ErrorCategory::Execution, error)
@@ -415,7 +407,6 @@ fn run() -> MedusaResult<()> {
             drain_headless_runtime(&runtime, &repo, None)
         }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
-        CommandKind::Telegram { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::Uninstall => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
@@ -731,25 +722,6 @@ fn health(
             "provider route is configured but live readiness was not probed"
         },
         Some("use `medusa config doctor` for redacted configuration checks; live provider work requires an explicit run".to_owned()),
-    )?);
-
-    let behavioral_health =
-        build_behavioral_health_snapshot(None, &[], None, None, None, None, None, None);
-    let behavioral_health_status = match behavioral_health.status {
-        BehavioralHealthStatus::Healthy => HealthStatus::HealthyReady,
-        BehavioralHealthStatus::Degraded => HealthStatus::DegradedSafe,
-        BehavioralHealthStatus::InsufficientEvidence | BehavioralHealthStatus::Rebuilding => {
-            HealthStatus::OptionalUnavailable
-        }
-    };
-    components.push(HealthComponent::new(
-        "behavioral_health",
-        behavioral_health_status,
-        format!(
-            "shared behavioral-health projection is {:?}; verified cohort evidence is not inferred by this bounded check",
-            behavioral_health.status
-        ),
-        None,
     )?);
 
     for (id, summary) in [

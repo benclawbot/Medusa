@@ -2,13 +2,19 @@
 
 ## Status
 
-Accepted for the component-runtime contract and its incremental adoption.
+Retired without production adoption on 2026-09-16.
 
 ## Date
 
 2026-08-23
 
 ## Context
+
+> Retirement note: the reference implementation was never called by a shipped entrypoint. The
+> production runtime continued to own lifecycle, containment, recovery, and mutation authority
+> directly, so retaining a second 4,000-line lifecycle model increased ambiguity without
+> providing product behavior. The module and its conformance-only tests were removed; this ADR is
+> retained as the historical decision record.
 
 The component-runtime epic (#1036) requires one lifecycle authority for components that can be
 activated, replaced, retired, and reconciled without leaving unowned resources or silently

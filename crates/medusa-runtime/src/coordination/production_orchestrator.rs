@@ -5,7 +5,7 @@ use std::{
 };
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};
-use medusa_core::{hidden_command, learning_policy::LearningAdmissionPolicy};
+use medusa_core::hidden_command;
 use medusa_intelligence::{RepositoryGraph, RepositoryGraphFreshness, ReviewImpact};
 use medusa_multi_agent_scheduler::{
     CancellationAuthority, ExecutionLane, ExecutionLedger, ExecutionStrategy, LedgerTaskState,
@@ -72,14 +72,6 @@ pub struct ProductionExecutionPlan {
     pub schedule: Option<Schedule>,
     pub contracts: Vec<AgentContract>,
     pub fingerprint: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PersistedOutcome {
-    pub objective_fingerprint: String,
-    pub plan_fingerprint: String,
-    pub verified: bool,
-    pub failed: bool,
 }
 
 pub fn plan(draft: &PromptDraft) -> Result<ProductionExecutionPlan, &'static str> {
@@ -452,41 +444,6 @@ pub fn projection(ledger: &ExecutionLedger) -> Vec<AgentPlanStep> {
             },
         })
         .collect()
-}
-
-pub fn persist_outcome(
-    repo: &Path,
-    draft: &PromptDraft,
-    plan: &ProductionExecutionPlan,
-    verified: bool,
-    failed: bool,
-) -> std::io::Result<PathBuf> {
-    let path = repo
-        .join(".medusa")
-        .join("learning")
-        .join("runtime-outcomes.jsonl");
-    let policy = LearningAdmissionPolicy::for_repository(repo).map_err(std::io::Error::other)?;
-    if !policy.telemetry_enabled() {
-        return Ok(path);
-    }
-    if let Some(directory) = path.parent() {
-        fs::create_dir_all(directory)?;
-    }
-    let outcome = PersistedOutcome {
-        objective_fingerprint: digest(&draft.text).map_err(std::io::Error::other)?,
-        plan_fingerprint: plan.fingerprint.clone(),
-        verified,
-        failed,
-    };
-    let mut line = serde_json::to_vec(&outcome).map_err(std::io::Error::other)?;
-    line.push(b'\n');
-    use std::io::Write;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
-    file.write_all(&line)?;
-    Ok(path)
 }
 
 fn read_only_objective(objective: &str, kind: TaskKind) -> String {
@@ -1057,18 +1014,5 @@ mod tests {
                 .take(2)
                 .all(|step| step.status == AgentPlanStepStatus::InProgress)
         );
-    }
-
-    #[test]
-    fn privacy_disabled_runtime_telemetry_is_not_persisted() {
-        let directory = tempfile::tempdir().unwrap();
-        let draft = PromptDraft {
-            text: "Analyze repository architecture without changing files".to_owned(),
-            ..PromptDraft::default()
-        };
-        let planned = plan_for_repository(directory.path(), &draft).unwrap();
-        let outcome_path =
-            persist_outcome(directory.path(), &draft, &planned, true, false).unwrap();
-        assert!(!outcome_path.exists());
     }
 }

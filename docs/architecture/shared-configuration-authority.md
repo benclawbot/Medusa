@@ -5,7 +5,7 @@ Issue #574 moves Medusa toward one configuration authority used by every fronten
 The first production slice retains the existing `provider.toml` compatibility format but changes ownership:
 
 ```text
-CLI / future TUI / desktop / Telegram
+CLI / TUI / desktop
   -> medusa-config::ProviderProfileStore
   -> validated, atomic provider profile persistence
   -> medusa-config::Config layered runtime resolution
@@ -35,7 +35,7 @@ The compatible keys are:
 - `base_url`
 - `configured`
 
-Unknown fields fail closed. Credentials, OAuth tokens, Telegram bot tokens, and API keys are not part of this document and cannot be returned by `show` or `get`.
+Unknown fields fail closed. Credentials, OAuth tokens, and API keys are not part of this document and cannot be returned by `show` or `get`.
 
 ## CLI surface in this slice
 
@@ -56,4 +56,4 @@ The focused implementation gate formats the workspace and runs tests and Clippy 
 
 ## Follow-up surfaces
 
-Profiles, generic `set`/`unset`, secret storage, TUI `/config`, desktop Settings, Telegram `/config`, doctor integration, configuration revisions, and cross-frontend change events remain follow-up slices. They must build on this shared store rather than reintroducing frontend-owned configuration state.
+Profiles, generic `set`/`unset`, secret storage, TUI `/config`, desktop Settings, doctor integration, configuration revisions, and cross-frontend change events remain follow-up slices. They must build on this shared store rather than reintroducing frontend-owned configuration state.

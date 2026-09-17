@@ -1,12 +1,9 @@
 use std::path::Path;
 
 pub use medusa_runtime::commands::{
-    COMMAND_SPECS, CommandSpec, CommandSuggestion, ConfigCommand, Effort, LearningCommand,
-    ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand, TeamCommand, Verbosity,
+    COMMAND_SPECS, CommandSpec, CommandSuggestion, ConfigCommand, Effort, ModelCommand,
+    ModelConfiguration, ReviewCommand, SlashCommand, TeamCommand, Verbosity,
 };
-
-#[path = "voice.rs"]
-pub mod voice;
 
 pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
     let trimmed = input.trim();

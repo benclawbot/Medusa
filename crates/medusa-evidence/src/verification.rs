@@ -22,7 +22,8 @@ pub enum VerificationCheckKind {
     Unit,
     Integration,
     Build,
-    BrowserBehavior,
+    #[serde(alias = "browser_behavior")]
+    UiBehavior,
     Accessibility,
     Packaging,
     Security,
@@ -168,8 +169,8 @@ impl VerificationPlanner {
         add_manifest_checks(repo, &components, &mut checks)?;
         if components.iter().any(|component| component.effective_ui) {
             checks.push(VerificationCheck::behavior(
-                VerificationCheckKind::BrowserBehavior,
-                "effective UI change requires real browser behavior",
+                VerificationCheckKind::UiBehavior,
+                "effective UI change requires a static UI smoke check",
             ));
             checks.push(VerificationCheck::behavior(
                 VerificationCheckKind::Accessibility,
@@ -987,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn ui_change_requires_browser_and_accessibility() {
+    fn ui_change_requires_ui_and_accessibility_checks() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(
             directory.path().join("package.json"),
@@ -1001,7 +1002,7 @@ mod tests {
         assert!(
             plan.checks
                 .iter()
-                .any(|check| check.kind == VerificationCheckKind::BrowserBehavior)
+                .any(|check| check.kind == VerificationCheckKind::UiBehavior)
         );
         assert!(
             plan.checks

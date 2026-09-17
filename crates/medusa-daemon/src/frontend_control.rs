@@ -106,7 +106,7 @@ impl FrontendControlPlane {
     }
 
     /// Evaluates operational health plus capacity pressure against thresholds
-    /// and returns newly-firing alerts as Telegram-ready message text. Repeats
+    /// and returns newly-firing alerts as operator-facing text. Repeats
     /// are suppressed until the alert clears and re-fires.
     pub fn check_operational_alerts(
         &mut self,
@@ -116,7 +116,7 @@ impl FrontendControlPlane {
         let dispatcher = self.alert_dispatcher.get_or_insert_with(
             crate::operational_alerts::OperationalAlertDispatcher::with_env_thresholds,
         );
-        dispatcher.poll_telegram(report, resources)
+        dispatcher.poll_text(report, resources)
     }
 
     pub fn dispatch(

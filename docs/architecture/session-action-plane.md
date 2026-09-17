@@ -34,4 +34,4 @@ Failure or cancellation may terminate only from the explicitly allowed intermedi
 
 Restart/reconnect reloads the action projection from the canonical journal. Superseded, rejected, failed, cancelled, and completed actions remain in history but are not recovered for delivery. Only surviving nonterminal actions are recoverable, so a pending replacement reconstructs as exactly one next action.
 
-Desktop, TUI, Telegram, headless, and other frontends consume the same canonical journal projection. Frontend-specific event identifiers may differ by suffix, but action state, lifecycle, rejection reason, authoritative revision, and final outcome are derived from the same journal records.
+Desktop, TUI, headless, and other frontends consume the same canonical journal projection. Frontend-specific event identifiers may differ by suffix, but action state, lifecycle, rejection reason, authoritative revision, and final outcome are derived from the same journal records.

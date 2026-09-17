@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ulid::Ulid;
 
-pub mod learning_policy;
 pub mod repository_mutation;
 pub mod storage;
 
