@@ -9,7 +9,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 jobs:
   release:
@@ -29,21 +29,26 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin main
           test "$(git rev-parse origin/main)" = "$TARGET_SHA"
-      - name: Create immutable release tag
+      - name: Verify immutable release tag
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            remote_sha=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk '{print $1}')
-            if [[ -z "$remote_sha" ]]; then
-              remote_sha=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
-            fi
-            test "$remote_sha" = "$TARGET_SHA"
+          test -n "$(git ls-remote --tags origin "refs/tags/$TAG")"
+          remote_sha=$(git ls-remote --tags origin "refs/tags/$TAG^{}" | awk '{print $1}')
+          if [[ -z "$remote_sha" ]]; then
+            remote_sha=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}')
+          fi
+          test "$remote_sha" = "$TARGET_SHA"
+      - name: Dispatch canonical release workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; no dispatch needed"
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" "$TARGET_SHA" -m "Medusa 2.0.0"
-            git push origin "refs/tags/$TAG"
+            gh workflow run publish-release.yml --ref main \
+              -f release_tag="$TAG" \
+              -f release_sha="$TARGET_SHA"
           fi
       - name: Wait for canonical release build and verify draft assets
         shell: bash
@@ -67,15 +72,24 @@ jobs:
                   printf '%s\n' "${names[@]}" | grep -Fx "$asset" >/dev/null
                 done
                 exit 0
+              elif [[ "$is_draft" == "false" ]]; then
+                echo "Release $TAG is already published"
+                exit 0
               fi
             fi
             sleep 30
           done
-          echo "Timed out waiting for validated draft release $TAG" >&2
+          echo "Timed out waiting for validated release $TAG" >&2
           exit 1
       - name: Publish verified release
         shell: bash
         run: |
           set -euo pipefail
-          gh release edit "$TAG" --draft=false --latest
+          if [[ "$(gh release view "$TAG" --json isDraft -q .isDraft)" == "true" ]]; then
+            gh release edit "$TAG" --draft=false --latest
+          fi
           test "$(gh release view "$TAG" --json isDraft -q .isDraft)" = "false"
+      - name: Cancel superseded controller attempt
+        if: always()
+        shell: bash
+        run: gh run cancel 35247431723 || true
