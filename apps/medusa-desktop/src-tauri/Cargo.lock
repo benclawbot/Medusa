@@ -2504,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "medusa-desktop"
-version = "1.0.9"
+version = "2.0.0"
 dependencies = [
  "base64 0.22.1",
  "image",

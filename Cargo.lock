@@ -1921,7 +1921,6 @@ dependencies = [
  "medusa-core",
  "medusa-execution-checkpoint",
  "medusa-protocol",
- "medusa-transaction-coordinator",
  "serde_json",
  "time",
 ]
@@ -1953,17 +1952,6 @@ name = "medusa-tool-policy"
 version = "2.0.0"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "medusa-transaction-coordinator"
-version = "2.0.0"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
 ]
 
 [[package]]
@@ -3567,9 +3555,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-language"
-version = "0.1.8"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
+checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
 
 [[package]]
 name = "tree-sitter-rust"
