@@ -815,26 +815,11 @@ it("consolidates desktop tools in the session rail", async () => {
   expect(screen.getByRole("button", { name: /New Chat/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Sessions" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Learning" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Learning" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Plan" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Review changes" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Memory" })).not.toBeInTheDocument();
-});
-
-it("routes every Tools rail item through the shared desktop-tool event", async () => {
-  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
-  const requested: DesktopTool[] = [];
-  const onToolRequest = (event: Event) => requested.push((event as CustomEvent<DesktopTool>).detail);
-  window.addEventListener(DESKTOP_TOOL_EVENT, onToolRequest);
-  render(<App />);
-
-  await screen.findByRole("textbox");
-  fireEvent.click(screen.getByRole("button", { name: "Sessions" }));
-  fireEvent.click(screen.getByRole("button", { name: "Learning" }));
-
-  expect(requested).toEqual(["learning"]);
-  window.removeEventListener(DESKTOP_TOOL_EVENT, onToolRequest);
 });
 
 it("renders tool work as collapsed activity rows", async () => {

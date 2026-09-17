@@ -299,11 +299,6 @@
       "sha256": "b7caace0f7cca84e3f91fad290ba88851b5e4279356811cd4d2a60a43976473f"
     },
     {
-      "path": "docs/SKILL-DEPENDENCIES.md",
-      "disposition": "current",
-      "sha256": "eccd13cf25b88f45b534281548a9d1742895e5e98c6d45c1e2def450b82f0882"
-    },
-    {
       "path": "docs/SKILL-DEPENDENCY-LOCKS.md",
       "disposition": "current",
       "sha256": "753a2df6b80789e4f2c7824025e45092c2de45d9887ee003f0e9e8729c9afeb8"
@@ -336,7 +331,7 @@
     {
       "path": "docs/WORKSPACES.md",
       "disposition": "current",
-      "sha256": "f5f91baa5665c2ee4ffdb2ee2f14cbb4ee1b1ee184a0775135e1e299fcfa9764"
+      "sha256": "c1df23f6b15eda8d128f0470818e2737081de5b5d4c2b6006553026ed77ae933"
     },
     {
       "path": "docs/architecture-policy.md",

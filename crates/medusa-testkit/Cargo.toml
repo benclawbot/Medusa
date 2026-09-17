@@ -17,5 +17,4 @@ time.workspace = true
 
 [dev-dependencies]
 medusa-execution-checkpoint = { path = "../medusa-execution-checkpoint" }
-medusa-transaction-coordinator = { path = "../medusa-transaction-coordinator" }
 serde_json.workspace = true

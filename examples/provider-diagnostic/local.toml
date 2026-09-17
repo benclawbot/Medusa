@@ -29,4 +29,3 @@ format = "markdown"
 
 [verification]
 required = true
-browser_on_ui_change = false

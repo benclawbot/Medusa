@@ -38,7 +38,6 @@
     "medusa-time-travel": "recovery",
     "medusa-tool-control": "safety",
     "medusa-tool-policy": "safety",
-    "medusa-transaction-coordinator": "coordination",
     "medusa-tui": "frontend",
     "medusa-update": "release",
     "medusa-wakeup": "recovery",
