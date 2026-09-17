@@ -33,7 +33,7 @@ Workspace semantics are shared across every production frontend rather than impl
 
 Git-specific actions remain capability-specific. For example, creating branches, commits, pull requests, Git diffs, or GitHub repository operations require a Git workspace even though the conversation, research, documentation, file, artifact, and directory-mutation paths do not.
 
-The repository contains an executable `scripts/check-workspace-surfaces.py` conformance gate. It verifies that all five entrypoints continue handing a filesystem root to the shared runtime/daemon without introducing a Git-only startup requirement. The Workspace Backend Certification runs this gate together with backend tests.
+The repository contains an executable `scripts/check-workspace-surfaces.py` conformance gate. It verifies that all four entrypoints continue handing a filesystem root to the shared runtime/daemon without introducing a Git-only startup requirement. The Workspace Backend Certification runs this gate together with backend tests.
 
 ## Git workspace mutation
 
@@ -103,7 +103,7 @@ Git is not required for read-only or artifact-oriented work. Examples include:
 - perform bounded multi-agent research over sources already available to Medusa;
 - generate structured artifacts in an ordinary or ephemeral workspace.
 
-A workspace mode does **not** grant new external capabilities. Browser actions remain unavailable to the model until the browser dispatcher and permission evidence are certified. Network research therefore depends on whichever explicitly supported, policy-authorized source or integration capabilities are available in the active Medusa build; a directory workspace alone does not create ambient network access.
+A workspace mode does **not** grant new external capabilities. Network research depends on explicitly supported, policy-authorized source or integration capabilities in the active Medusa build; a directory workspace alone does not create ambient network access.
 
 ## Safety invariants
 

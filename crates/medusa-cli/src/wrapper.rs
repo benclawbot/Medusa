@@ -94,7 +94,7 @@ fn main() {
     }
     if let Some(skill_args) = subcommand_arguments(&args, "skills") {
         let command_args = strip_repository_argument(&skill_args);
-        finish(skills::run(&skill_args), None::<&str>);
+        finish(skills::run(&command_args), None::<&str>);
         return;
     }
     if let Some(recall_args) = subcommand_arguments(&args, "recall") {

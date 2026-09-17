@@ -23,7 +23,6 @@ medusa-session-continuity = { path = "../medusa-session-continuity" }
 medusa-runtime-supervisor = { path = "../medusa-runtime-supervisor" }
 medusa-tool-policy = { path = "../medusa-tool-policy" }
 medusa-wakeup = { path = "../medusa-wakeup" }
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

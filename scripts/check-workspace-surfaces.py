@@ -12,7 +12,6 @@ CHECKS = {
             "let repo = repository_path(&cli.repo);",
             "TuiOptions::for_repo(repo)",
             "RuntimeController::start_with_config(repo.clone(), config)",
-            "telegram_command::run(&repo, *args)",
         ],
     ),
     "TUI": (
@@ -34,13 +33,6 @@ CHECKS = {
         "crates/medusa-daemon/src/paths.rs",
         [
             'let directory = repo.join(".medusa/daemon");',
-        ],
-    ),
-    "Telegram": (
-        "crates/medusa-cli/src/telegram_command.rs",
-        [
-            'fs::create_dir_all(repo.join(".medusa/telegram"))?;',
-            "DaemonSupervisor::new(repo, launch)",
         ],
     ),
 }
@@ -68,7 +60,7 @@ def main() -> int:
                 failures.append(f"{surface}: Git-only startup gate {forbidden!r} found in {relative}")
 
     workspace_doc = (ROOT / "docs/WORKSPACES.md").read_text(encoding="utf-8")
-    for term in ("CLI", "TUI", "Desktop", "Daemon", "Telegram", "ordinary directory", "Git"):
+    for term in ("CLI", "TUI", "Desktop", "Daemon", "ordinary directory", "Git"):
         if term not in workspace_doc:
             failures.append(f"docs/WORKSPACES.md does not document {term!r}")
 
