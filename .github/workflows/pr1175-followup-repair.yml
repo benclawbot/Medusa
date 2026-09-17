@@ -71,6 +71,7 @@ jobs:
           cargo metadata --locked --format-version 1 >/dev/null
           cargo test -p medusa-cli --bin medusa-provider-diagnostic --locked
           cargo test -p medusa-testkit --locked
+          npm --prefix apps/medusa-desktop ci
           npm --prefix apps/medusa-desktop test
 
       - name: Commit repaired state
@@ -78,6 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/workflows/pr1175-followup-repair.yml
+          rm -f .ci-followup-trigger .ci-followup-trigger-2
           git config user.name "BenClawBot CI Repair"
           git config user.email "benclawbot@gmail.com"
           git add -A
