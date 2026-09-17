@@ -37,12 +37,13 @@ jobs:
 
           root = Path("Cargo.toml")
           text = root.read_text(encoding="utf-8")
-          if '    "crates/medusa-transaction-coordinator",\n' not in text:
+          member = '  "crates/medusa-transaction-coordinator",\n'
+          if member not in text:
               raise SystemExit("transaction coordinator workspace member not found")
-          text = text.replace('    "crates/medusa-transaction-coordinator",\n', '', 1)
-          if 'version = "1.0.9"\nrust-version = "1.88"' not in text:
+          text = text.replace(member, '', 1)
+          if 'version = "1.0.9"' not in text:
               raise SystemExit("workspace version not found")
-          text = text.replace('version = "1.0.9"\nrust-version = "1.88"', 'version = "2.0.0"\nrust-version = "1.88"', 1)
+          text = text.replace('version = "1.0.9"', 'version = "2.0.0"', 1)
           root.write_text(text, encoding="utf-8")
 
           for path, line in [
@@ -122,6 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/workflows/post-simplification-repair.yml
+          rm -f .ci-repair-trigger
           git config user.name "BenClawBot CI Repair"
           git config user.email "benclawbot@gmail.com"
           git add -A
