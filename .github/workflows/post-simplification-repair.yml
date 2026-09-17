@@ -1,0 +1,135 @@
+name: Post-simplification repair
+
+on:
+  push:
+    branches:
+      - fix/post-simplification-ci
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Apply reconciliations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=-1):
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected text not found in {path}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          replace(
+              "crates/medusa-cli/src/wrapper.rs",
+              "medusa_cli::skills::run(skill_args).map_err(|error| error.to_string())?;",
+              "medusa_cli::skills::run(&command_args).map_err(|error| error.to_string())?;",
+          )
+
+          root = Path("Cargo.toml")
+          text = root.read_text(encoding="utf-8")
+          if '    "crates/medusa-transaction-coordinator",\n' not in text:
+              raise SystemExit("transaction coordinator workspace member not found")
+          text = text.replace('    "crates/medusa-transaction-coordinator",\n', '', 1)
+          if 'version = "1.0.9"\nrust-version = "1.88"' not in text:
+              raise SystemExit("workspace version not found")
+          text = text.replace('version = "1.0.9"\nrust-version = "1.88"', 'version = "2.0.0"\nrust-version = "1.88"', 1)
+          root.write_text(text, encoding="utf-8")
+
+          for path, line in [
+              ("crates/medusa-cli/Cargo.toml", 'ctrlc = "3.4"\n'),
+              ("crates/medusa-capabilities/Cargo.toml", 'hex.workspace = true\n'),
+              ("crates/medusa-capabilities/Cargo.toml", 'medusa-config = { path = "../medusa-config" }\n'),
+              ("crates/medusa-capabilities/Cargo.toml", 'sha2.workspace = true\n'),
+              ("crates/medusa-daemon/Cargo.toml", 'reqwest.workspace = true\n'),
+          ]:
+              p = Path(path)
+              value = p.read_text(encoding="utf-8")
+              if line not in value:
+                  raise SystemExit(f"expected dependency not found in {path}: {line!r}")
+              p.write_text(value.replace(line, '', 1), encoding="utf-8")
+
+          replace(
+              "examples/provider-diagnostic/local.toml",
+              "browser_on_ui_change = false\n",
+              "",
+          )
+
+          replace(
+              ".github/actions/setup-rust/action.yml",
+              "sudo apt-get install -y libdbus-1-dev pkg-config",
+              "sudo apt-get install -y bubblewrap libdbus-1-dev pkg-config",
+          )
+
+          workspace = Path("scripts/check-workspace-surfaces.py")
+          text = workspace.read_text(encoding="utf-8")
+          if '            "telegram_command::run(&repo, *args)",\n' not in text:
+              raise SystemExit("Telegram CLI invariant not found")
+          text = text.replace('            "telegram_command::run(&repo, *args)",\n', '', 1)
+          telegram_block = '''    "Telegram": (\n        "crates/medusa-cli/src/telegram_command.rs",\n        [\n            'fs::create_dir_all(repo.join(".medusa/telegram"))?;',\n            "DaemonSupervisor::new(repo, launch)",\n        ],\n    ),\n'''
+          if telegram_block not in text:
+              raise SystemExit("Telegram workspace check block not found")
+          text = text.replace(telegram_block, '', 1)
+          required_terms = '("CLI", "TUI", "Desktop", "Daemon", "Telegram", "ordinary directory", "Git")'
+          if required_terms not in text:
+              raise SystemExit("workspace documentation terms not found")
+          text = text.replace(required_terms, '("CLI", "TUI", "Desktop", "Daemon", "ordinary directory", "Git")', 1)
+          workspace.write_text(text, encoding="utf-8")
+
+          replace(
+              "docs/WORKSPACES.md",
+              "It verifies that all five entrypoints continue handing a filesystem root",
+              "It verifies that all four entrypoints continue handing a filesystem root",
+          )
+          replace(
+              "docs/WORKSPACES.md",
+              "Browser actions remain unavailable to the model until the browser dispatcher and permission evidence are certified. Network research therefore depends on whichever explicitly supported, policy-authorized source or integration capabilities are available in the active Medusa build; a directory workspace alone does not create ambient network access.",
+              "Network research depends on explicitly supported, policy-authorized source or integration capabilities in the active Medusa build; a directory workspace alone does not create ambient network access.",
+          )
+
+          app_test = Path("apps/medusa-desktop/src/App.test.tsx")
+          text = app_test.read_text(encoding="utf-8")
+          learning_expectation = '  expect(screen.getByRole("button", { name: "Learning" })).toBeInTheDocument();\n'
+          if learning_expectation not in text:
+              raise SystemExit("stale Learning expectation not found")
+          text = text.replace(
+              learning_expectation,
+              '  expect(screen.queryByRole("button", { name: "Learning" })).not.toBeInTheDocument();\n',
+              1,
+          )
+          stale_test = '''it("routes every Tools rail item through the shared desktop-tool event", async () => {\n  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });\n  const requested: DesktopTool[] = [];\n  const onToolRequest = (event: Event) => requested.push((event as CustomEvent<DesktopTool>).detail);\n  window.addEventListener(DESKTOP_TOOL_EVENT, onToolRequest);\n  render(<App />);\n\n  await screen.findByRole("textbox");\n  fireEvent.click(screen.getByRole("button", { name: "Sessions" }));\n  fireEvent.click(screen.getByRole("button", { name: "Learning" }));\n\n  expect(requested).toEqual(["learning"]);\n  window.removeEventListener(DESKTOP_TOOL_EVENT, onToolRequest);\n});\n\n'''
+          if stale_test not in text:
+              raise SystemExit("stale Learning route test not found")
+          text = text.replace(stale_test, '', 1)
+          app_test.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Regenerate derived metadata and lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-documentation.py --write
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          cargo fmt --all
+
+      - name: Remove temporary repair workflow and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/post-simplification-repair.yml
+          git config user.name "BenClawBot CI Repair"
+          git config user.email "benclawbot@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: reconcile simplification with repository gates"
+          git push origin HEAD:fix/post-simplification-ci
