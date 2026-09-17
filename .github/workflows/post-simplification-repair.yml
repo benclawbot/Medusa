@@ -31,8 +31,8 @@ jobs:
 
           replace(
               "crates/medusa-cli/src/wrapper.rs",
-              "medusa_cli::skills::run(skill_args).map_err(|error| error.to_string())?;",
-              "medusa_cli::skills::run(&command_args).map_err(|error| error.to_string())?;",
+              "finish(skills::run(&skill_args), None::<&str>);",
+              "finish(skills::run(&command_args), None::<&str>);",
           )
 
           root = Path("Cargo.toml")
@@ -58,12 +58,7 @@ jobs:
                   raise SystemExit(f"expected dependency not found in {path}: {line!r}")
               p.write_text(value.replace(line, '', 1), encoding="utf-8")
 
-          replace(
-              "examples/provider-diagnostic/local.toml",
-              "browser_on_ui_change = false\n",
-              "",
-          )
-
+          replace("examples/provider-diagnostic/local.toml", "browser_on_ui_change = false\n", "")
           replace(
               ".github/actions/setup-rust/action.yml",
               "sudo apt-get install -y libdbus-1-dev pkg-config",
