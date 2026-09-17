@@ -1,0 +1,66 @@
+name: PR1175 follow-up repair
+
+on:
+  push:
+    branches:
+      - fix/post-simplification-ci
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+      - name: Reconcile remaining simplification contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, count: int = -1) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected text not found in {path}: {old!r}")
+              p.write_text(text.replace(old, new, count), encoding="utf-8")
+
+          replace("apps/medusa-desktop/package.json", '"version": "1.0.9"', '"version": "2.0.0"', 1)
+          replace("apps/medusa-desktop/src-tauri/Cargo.toml", 'version = "1.0.9"', 'version = "2.0.0"', 1)
+          replace("apps/medusa-desktop/src-tauri/tauri.conf.json", '"version": "1.0.9"', '"version": "2.0.0"', 1)
+          PY
+          rm -rf crates/medusa-transaction-coordinator
+          npm --prefix apps/medusa-desktop install --package-lock-only --ignore-scripts
+          cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          cargo update -p tree-sitter-language --precise 0.1.7
+          if grep -q 'name = "tree-sitter-language"' apps/medusa-desktop/src-tauri/Cargo.lock; then
+            cargo update --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -p tree-sitter-language --precise 0.1.7
+          fi
+          cargo fmt --all
+
+      - name: Validate repaired contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-desktop-version-sync.py
+          python3 scripts/architecture-policy.py check --root . --policy .github/architecture-policy.json --report /tmp/architecture-policy-report.md
+          cargo metadata --locked --format-version 1 >/dev/null
+          cargo test -p medusa-cli --bin medusa-provider-diagnostic --locked
+          npm --prefix apps/medusa-desktop test -- --runInBand=false
+
+      - name: Commit repaired state
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/pr1175-followup-repair.yml
+          git config user.name "BenClawBot CI Repair"
+          git config user.email "benclawbot@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: complete simplification contract repair"
+          git push origin HEAD:fix/post-simplification-ci
