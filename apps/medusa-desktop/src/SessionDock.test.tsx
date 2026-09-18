@@ -89,7 +89,7 @@ it("offers rename, pin, archive, and delete without a share action", async () =>
   fireEvent.keyDown(rename, { key: "Enter" });
   expect(await screen.findByText("Pinned project chat")).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Pinned project chat" }));
+  fireEvent.click(screen.getByTitle("Pinned project chat"));
   expect(requestRuntimeResume).toHaveBeenCalledWith("session-alpha", "/repo");
 });
 
