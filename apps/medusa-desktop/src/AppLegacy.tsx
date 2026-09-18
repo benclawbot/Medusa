@@ -136,6 +136,7 @@ const nextMessageId = () => ++messageCounter;
 let workEntryCounter = 0;
 const nextWorkEntryId = () => `work-${++workEntryCounter}`;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_COMPOSER_HEIGHT = 160;
 const MAX_MESSAGE_HISTORY = 2000;
 const MAX_WORK_LOG_ENTRIES = 1000;
@@ -219,6 +220,39 @@ function readImage(file: File): Promise<DesktopAttachment> {
     reader.onerror = () => reject(new Error("The image could not be read."));
     reader.readAsDataURL(file);
   });
+}
+
+function readUploadedFile(file: File): Promise<DesktopAttachment> {
+  return new Promise((resolve, reject) => {
+    if (file.size === 0) {
+      reject(new Error(`${file.name || "File"} is empty.`));
+      return;
+    }
+    if (file.size > MAX_FILE_ATTACHMENT_BYTES) {
+      reject(new Error(`${file.name || "File"} is ${formatBytes(file.size)}; the maximum is 50 MB.`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error(`${file.name || "File"} could not be read.`));
+        return;
+      }
+      resolve({
+        kind: "upload",
+        name: file.name || "attachment.bin",
+        dataUrl: reader.result,
+        mediaType: file.type || undefined,
+        sizeBytes: file.size,
+      });
+    };
+    reader.onerror = () => reject(new Error(`${file.name || "File"} could not be read.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function readPickedFile(file: File): Promise<DesktopAttachment> {
+  return SUPPORTED_IMAGE_TYPES.has(file.type) ? readImage(file) : readUploadedFile(file);
 }
 
 function planIcon(status: PlanStep["status"]) {
@@ -489,9 +523,11 @@ function persistDesktopDraft(repo: string, text: string, attachments: DesktopAtt
   const persisted: PersistedDesktopDraft = {
     version: DESKTOP_DRAFT_VERSION,
     text,
-    // Image payloads are intentionally excluded: data URLs contain private content and can
-    // exceed storage quotas. The current send still retains them in memory for this turn.
-    attachments: attachments.filter((attachment): attachment is PersistedDraftAttachment => attachment.kind !== "image"),
+    // In-memory upload payloads are intentionally excluded: data URLs contain private content
+    // and can exceed storage quotas. The current send still retains them in memory for this turn.
+    attachments: attachments.filter((attachment): attachment is PersistedDraftAttachment =>
+      attachment.kind === "file" || attachment.kind === "text"
+    ),
   };
   if (!persisted.text.trim() && persisted.attachments.length === 0) {
     window.localStorage.removeItem(desktopDraftKey(repo));
@@ -595,6 +631,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   busyRef.current = busy;
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const composerSelectorRef = useRef<HTMLDivElement>(null);
   const previewDialogRef = useRef<HTMLDivElement>(null);
   const closeComposerSelector = useCallback(() => setComposerSelectorOpen(false), []);
@@ -1320,16 +1357,16 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     }
   };
 
-  const addFiles = async () => {
-    if (!repo) return;
-    const selected = await open({ multiple: true, directory: false, title: "Attach files" });
-    const paths = typeof selected === "string" ? [selected] : selected ?? [];
-    if (!paths.length) return;
-    markComposerEdited();
-    setAttachments((current) => [
-      ...current,
-      ...paths.map((path): DesktopAttachment => ({ kind: "file", path })),
-    ]);
+  const addPickedFiles = async (files: File[]) => {
+    if (!files.length) return;
+    try {
+      const next = await Promise.all(files.map(readPickedFile));
+      markComposerEdited();
+      setAttachments((current) => [...current, ...next]);
+      setError(undefined);
+    } catch (cause) {
+      setError(toUserError(cause));
+    }
   };
 
   const addImages = async (files: File[]) => {
@@ -2106,7 +2143,18 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                 <div className="composer-line">
                   <div className="composer-tools">
                     {composerToolsSlot}
-                    <button className="composer-icon-button" onClick={() => void addFiles()} disabled={!runtimeId || !repo} title="Add files" aria-label="Add files"><Plus size={21} /></button>
+                    <input
+                      ref={fileInputRef}
+                      className="visually-hidden"
+                      type="file"
+                      multiple
+                      aria-label="Attach files"
+                      onChange={(event) => {
+                        void addPickedFiles(Array.from(event.target.files ?? []));
+                        event.target.value = "";
+                      }}
+                    />
+                    <button className="composer-icon-button" onClick={() => fileInputRef.current?.click()} disabled={!runtimeId} title="Add files" aria-label="Add files"><Plus size={21} /></button>
                   </div>
                   <textarea
                     ref={composerRef}
