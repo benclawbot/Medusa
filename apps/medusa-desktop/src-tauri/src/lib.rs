@@ -47,8 +47,9 @@ use runtime::{
     runtime_recovery_action, runtime_resume, runtime_start, runtime_submit,
 };
 use sessions::{
-    runtime_list_sessions, runtime_list_sessions_page, runtime_read_session,
-    runtime_read_session_page,
+    runtime_archive_session, runtime_delete_sessions, runtime_list_sessions,
+    runtime_list_sessions_page, runtime_read_session, runtime_read_session_page,
+    runtime_rename_session, runtime_set_session_pinned,
 };
 use tauri::Manager;
 use worktree::runtime_read_worktree;
@@ -101,6 +102,10 @@ pub fn run() -> tauri::Result<()> {
             runtime_list_sessions_page,
             runtime_read_session,
             runtime_read_session_page,
+            runtime_rename_session,
+            runtime_set_session_pinned,
+            runtime_archive_session,
+            runtime_delete_sessions,
             runtime_read_diff,
             runtime_read_worktree,
             runtime_create_branch,
