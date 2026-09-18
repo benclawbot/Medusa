@@ -49,6 +49,18 @@ fn tui_envelope(
     }
 }
 
+fn headless_envelope(
+    sequence: u32,
+    client_id: &str,
+    session_id: Option<&str>,
+    command: FrontendCommand,
+) -> FrontendCommandEnvelope {
+    FrontendCommandEnvelope {
+        frontend: FrontendKind::Headless,
+        ..envelope(sequence, client_id, session_id, command)
+    }
+}
+
 fn create_session(repo: &std::path::Path) -> String {
     AgentEngine::new(UnusedProvider, Config::default())
         .create_session(repo, "Frontend control coverage".to_owned())
@@ -397,17 +409,18 @@ fn artifacts_and_read_only_frontends_fail_closed_without_provider_calls() {
 }
 
 #[test]
-fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
+fn interactive_bootstrap_stages_model_and_effort_but_other_frontends_remain_gated() {
     let repo = tempdir().expect("temporary repository");
     let mut control = FrontendControlPlane::new(repo.path().to_path_buf(), Config::default());
     let baseline_turns = control.agent_max_turns();
     let baseline_provider = control.model_provider();
 
-    // No session: the global mutation must be gated, not applied.
+    // Non-interactive frontends cannot mutate daemon-global model/effort
+    // state before a durable session exists.
     assert!(matches!(
-        control.dispatch(envelope(
+        control.dispatch(headless_envelope(
             101,
-            "anonymous-client",
+            "headless-client",
             None,
             FrontendCommand::SetEffort {
                 effort: "low".to_owned(),
@@ -418,9 +431,9 @@ fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
     assert_eq!(control.agent_max_turns(), baseline_turns);
 
     assert!(matches!(
-        control.dispatch(envelope(
+        control.dispatch(headless_envelope(
             102,
-            "anonymous-client",
+            "headless-client",
             None,
             FrontendCommand::ConfigureModel {
                 provider: Some("other-provider".to_owned()),
@@ -432,12 +445,46 @@ fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
     ));
     assert_eq!(control.model_provider(), baseline_provider);
 
-    // The interactive TUI setup flow may stage daemon-global model and
-    // effort state before any session exists; the staged values apply and
-    // no controller push is attempted without a session.
+    // Desktop must be able to apply the model picker before the first prompt
+    // creates a durable session.
+    let desktop_model = control
+        .dispatch(envelope(
+            103,
+            "desktop-setup-client",
+            None,
+            FrontendCommand::ConfigureModel {
+                provider: Some("desktop-provider".to_owned()),
+                model: "desktop-model".to_owned(),
+                base_url: None,
+            },
+        ))
+        .expect("desktop bootstrap model must stage");
+    assert!(matches!(
+        desktop_model.result,
+        FrontendControlResult::CommandAccepted { .. }
+    ));
+    assert_eq!(control.model_provider(), "desktop-provider");
+
+    let desktop_effort = control
+        .dispatch(envelope(
+            104,
+            "desktop-setup-client",
+            None,
+            FrontendCommand::SetEffort {
+                effort: "high".to_owned(),
+            },
+        ))
+        .expect("desktop bootstrap effort must stage");
+    assert!(matches!(
+        desktop_effort.result,
+        FrontendControlResult::CommandAccepted { .. }
+    ));
+    assert_eq!(control.agent_max_turns(), 500);
+
+    // TUI first-run setup remains supported.
     let staged = control
         .dispatch(tui_envelope(
-            104,
+            105,
             "tui-setup-client",
             None,
             FrontendCommand::SetEffort {
@@ -455,7 +502,7 @@ fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
     // daemon-global state changes.
     assert!(matches!(
         control.dispatch(envelope(
-            103,
+            106,
             "intruder-client",
             Some("missing-session"),
             FrontendCommand::SetEffort {
@@ -464,7 +511,5 @@ fn unauthenticated_effort_and_model_changes_do_not_mutate_daemon_globals() {
         )),
         Err(FrontendControlError::ReadOnlyClient(_))
     ));
-    // The intruder changed nothing: the previously staged TUI bootstrap
-    // budget is still in effect.
     assert_eq!(control.agent_max_turns(), 64);
 }
