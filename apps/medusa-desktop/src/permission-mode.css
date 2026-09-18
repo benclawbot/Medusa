@@ -41,6 +41,7 @@
 
 .permission-mode-menu {
   position: absolute;
+  text-align: left;
   z-index: 1000;
   left: 0;
   bottom: calc(100% + 10px);
@@ -57,9 +58,10 @@
 .permission-mode-menu-header {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: flex-start;
+  gap: 0;
   padding: 6px 10px 9px;
+  text-align: left;
 }
 
 .permission-mode-heading {
@@ -68,13 +70,6 @@
   font-weight: 500;
 }
 
-.permission-mode-learn-more {
-  color: var(--text-tertiary, #7b7f85);
-  font-size: 13px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  white-space: nowrap;
-}
 
 .permission-mode-option {
   width: 100%;
@@ -131,6 +126,7 @@
 
 .permission-mode-option-copy {
   display: flex;
+  text-align: left;
   min-width: 0;
   flex-direction: column;
   gap: 2px;
