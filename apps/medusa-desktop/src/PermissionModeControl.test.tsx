@@ -58,7 +58,7 @@ it("shows the backend-selected permission mode once loaded", async () => {
   await waitFor(() => expect(screen.getByRole("button", { name: "Ask for approval" })).toBeInTheDocument());
 });
 
-it("renders the Codex approval copy and puts the selected mark on the active option", async () => {
+it("renders Medusa approval copy without a learn-more link and marks the active option", async () => {
   vi.mocked(loadPermissionModes).mockResolvedValue([
     {
       id: "ask-for-approval",
@@ -84,9 +84,10 @@ it("renders the Codex approval copy and puts the selected mark on the active opt
   const trigger = await screen.findByRole("button", { name: "Full access" });
   fireEvent.click(trigger);
 
-  expect(screen.getByRole("menu", { name: "How should ChatGPT actions be approved?" })).toHaveTextContent(
-    "How should ChatGPT actions be approved?",
+  expect(screen.getByRole("menu", { name: "How should Medusa actions be approved?" })).toHaveTextContent(
+    "How should Medusa actions be approved?",
   );
+  expect(screen.queryByText("Learn more")).not.toBeInTheDocument();
   expect(screen.getByText("Always ask to edit external files and use the internet")).toBeInTheDocument();
   expect(screen.getByText("Only ask for actions detected as potentially unsafe")).toBeInTheDocument();
   expect(screen.getByText("Unrestricted access to the internet and any file on your computer")).toBeInTheDocument();
