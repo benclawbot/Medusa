@@ -655,16 +655,25 @@ pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, R
                         bytes: bytes.len(),
                     });
                 }
-                let text = String::from_utf8(bytes).map_err(|_| RuntimeError::BinaryFile {
-                    path: file.path.clone(),
-                })?;
-                blocks.push(MessageBlock::Text {
-                    text: format!(
-                        "<attached_file path=\"{}\">\n{}\n</attached_file>",
-                        file.path.display(),
-                        text
-                    ),
-                });
+                match String::from_utf8(bytes) {
+                    Ok(text) => blocks.push(MessageBlock::Text {
+                        text: format!(
+                            "<attached_file path=\"{}\">\n{}\n</attached_file>",
+                            file.path.display(),
+                            text
+                        ),
+                    }),
+                    Err(error) => {
+                        let bytes = error.into_bytes();
+                        blocks.push(MessageBlock::Text {
+                            text: format!(
+                                "<attached_binary_file path=\"{}\" encoding=\"base64\">\n{}\n</attached_binary_file>",
+                                file.path.display(),
+                                STANDARD.encode(bytes)
+                            ),
+                        });
+                    }
+                }
             }
         }
     }
