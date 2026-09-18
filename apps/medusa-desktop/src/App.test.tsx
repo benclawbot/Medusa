@@ -195,6 +195,21 @@ it("uses an unrestricted file input for the plus attachment button", async () =>
   expect(await screen.findByText("context.pdf")).toBeInTheDocument();
 });
 
+it("rejects oversized generic files before staging them", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  const input = await screen.findByLabelText("Attach files") as HTMLInputElement;
+  fireEvent.change(input, {
+    target: {
+      files: [new File([new Uint8Array(2 * 1024 * 1024 + 1)], "large.bin", { type: "application/octet-stream" })],
+    },
+  });
+
+  expect(await screen.findByText(/maximum is 2 MB/)).toBeInTheDocument();
+  expect(screen.queryByText("large.bin")).not.toBeInTheDocument();
+});
+
 it("resumes a saved session in place without reloading the window", async () => {
   vi.mocked(startRuntime)
     .mockResolvedValueOnce({ runtimeId: "runtime-general", repo: "/repo" });

@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           sudo bash scripts/disable-google-chrome-apt-source.sh
           sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          sudo apt-get install -y bubblewrap libdbus-1-dev pkg-config
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
