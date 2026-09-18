@@ -321,14 +321,12 @@
 }
 
 .recent-session-menu-trigger {
-  visibility: hidden;
   opacity: 0;
 }
 
 .recent-session-row:hover .recent-session-menu-trigger,
 .recent-session-menu-trigger[aria-expanded="true"],
 .recent-session-menu-trigger:focus-visible {
-  visibility: visible;
   opacity: 1;
 }
 
