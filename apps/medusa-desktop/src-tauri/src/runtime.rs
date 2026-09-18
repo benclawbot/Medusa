@@ -374,6 +374,24 @@ pub struct RuntimeRegistry {
 }
 
 impl RuntimeRegistry {
+    pub(crate) fn session_in_use(&self, repo: &Path, session_id: &str) -> Result<bool, String> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?;
+        for entry in entries.values() {
+            let Ok(entry) = entry.try_lock() else {
+                // A runtime request is currently using this entry. Fail closed rather
+                // than deleting session state underneath an in-flight operation.
+                return Ok(true);
+            };
+            if entry.repo == repo && entry.session_id.as_deref() == Some(session_id) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn insert(
         &self,
         repo: PathBuf,
@@ -1082,6 +1100,49 @@ mod tests {
             .expect("runtime entry");
 
         assert!(entry.lock().expect("entry lock").daemon.last_state.is_none());
+    }
+
+    #[test]
+    fn session_in_use_detects_attached_runtime_and_fails_closed_on_busy_entry() {
+        let directory = crate::tempdir().expect("tempdir");
+        let supervisor = DaemonSupervisor::observe_only(directory.path());
+        let entry = Arc::new(Mutex::new(RuntimeEntry {
+            repo: directory.path().to_path_buf(),
+            client_id: DESKTOP_CLIENT_ID.to_owned(),
+            session_id: Some("session-active".to_owned()),
+            replay_cursor: 0,
+            pending_ack_cursor: None,
+            web_artifact_baseline: BTreeMap::new(),
+            presentation: DesktopCanonicalPresentation::new(),
+            daemon: DesktopDaemon {
+                supervisor: supervisor.clone(),
+                last_state: Some(DaemonLifecycleState::Connected),
+            },
+        }));
+        let registry = RuntimeRegistry::default();
+        registry
+            .entries
+            .lock()
+            .expect("entries lock")
+            .insert("runtime-1".to_owned(), Arc::clone(&entry));
+
+        assert!(
+            registry
+                .session_in_use(directory.path(), "session-active")
+                .expect("active lookup")
+        );
+        assert!(
+            !registry
+                .session_in_use(directory.path(), "session-other")
+                .expect("other lookup")
+        );
+
+        let _busy = entry.lock().expect("entry lock");
+        assert!(
+            registry
+                .session_in_use(directory.path(), "session-other")
+                .expect("busy lookup")
+        );
     }
 
     #[test]

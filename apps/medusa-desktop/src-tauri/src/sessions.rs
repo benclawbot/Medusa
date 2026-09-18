@@ -7,8 +7,11 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::State;
+
+use crate::runtime::RuntimeRegistry;
 
 const MAX_DESKTOP_SESSIONS: usize = 2_000;
 const MAX_DESKTOP_SESSION_MESSAGES: usize = 2_000;
@@ -29,6 +32,8 @@ pub struct DesktopSessionSummary {
     pub completed: bool,
     pub waiting_for_user: bool,
     pub turn: u32,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -86,6 +91,151 @@ struct MessageIndex {
 
 static SUMMARY_INDEXES: OnceLock<Mutex<BTreeMap<PathBuf, RootIndex>>> = OnceLock::new();
 static MESSAGE_INDEXES: OnceLock<Mutex<BTreeMap<PathBuf, MessageIndex>>> = OnceLock::new();
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSessionAction {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    archived: bool,
+    #[serde(default)]
+    deleted: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSessionActions {
+    #[serde(default)]
+    sessions: BTreeMap<String, DesktopSessionAction>,
+}
+
+fn session_actions_path(repo: &Path) -> PathBuf {
+    repo.join(".medusa/desktop/session-actions.json")
+}
+
+fn load_session_actions(repo: &Path) -> Result<DesktopSessionActions, String> {
+    let path = session_actions_path(repo);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DesktopSessionActions::default());
+        }
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))
+}
+
+fn write_session_actions(repo: &Path, actions: &DesktopSessionActions) -> Result<(), String> {
+    let path = session_actions_path(repo);
+    let parent = path.parent().ok_or_else(|| "session actions path has no parent".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let bytes = serde_json::to_vec_pretty(actions)
+        .map_err(|error| format!("cannot serialize desktop session actions: {error}"))?;
+    fs::write(&temporary, bytes)
+        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| format!("cannot replace {}: {error}", path.display()))?;
+    }
+    fs::rename(&temporary, &path)
+        .map_err(|error| format!("cannot publish {}: {error}", path.display()))
+}
+
+fn apply_session_action(summary: &mut DesktopSessionSummary, action: Option<&DesktopSessionAction>) {
+    let Some(action) = action else {
+        return;
+    };
+    if let Some(title) = action.title.as_deref() {
+        summary.objective = title.to_owned();
+    }
+    summary.pinned = action.pinned;
+}
+
+fn validate_session_title(title: &str) -> Result<String, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("session title cannot be empty".to_owned());
+    }
+    if title.chars().count() > 120 {
+        return Err("session title cannot exceed 120 characters".to_owned());
+    }
+    if title.chars().any(char::is_control) {
+        return Err("session title cannot contain control characters".to_owned());
+    }
+    Ok(title.to_owned())
+}
+
+fn mutate_session_action(
+    repo: &Path,
+    session_id: &str,
+    mutation: impl FnOnce(&mut DesktopSessionAction),
+) -> Result<(), String> {
+    validate_session_id(session_id)?;
+    let _ = find_session_path(repo, session_id)?;
+    let mut actions = load_session_actions(repo)?;
+    mutation(actions.sessions.entry(session_id.to_owned()).or_default());
+    write_session_actions(repo, &actions)
+}
+
+fn remove_file_if_present(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot delete {}: {error}", path.display())),
+    }
+}
+
+fn fallback_journal_root(repo: &Path) -> PathBuf {
+    fallback_session_root(repo)
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join("journals").join(repository_key(repo)))
+        .unwrap_or_else(|| std::env::temp_dir().join("Medusa/journals").join(repository_key(repo)))
+}
+
+fn session_has_attached_frontends(repo: &Path, session_id: &str) -> Result<bool, String> {
+    let path = repo.join(".medusa/continuity").join(format!("{session_id}.json"));
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+    Ok(value
+        .get("attachments")
+        .and_then(Value::as_array)
+        .is_some_and(|attachments| !attachments.is_empty()))
+}
+
+fn remove_session_files(repo: &Path, session_id: &str) -> Result<(), String> {
+    validate_session_id(session_id)?;
+    for path in [
+        repo.join(".medusa/sessions").join(format!("{session_id}.json")),
+        fallback_session_root(repo).join(format!("{session_id}.json")),
+        repo.join(".medusa/journals").join(format!("{session_id}.events")),
+        fallback_journal_root(repo).join(format!("{session_id}.events")),
+        repo.join(".medusa/continuity").join(format!("{session_id}.json")),
+    ] {
+        remove_file_if_present(&path)?;
+    }
+    if let Ok(mut indexes) = summary_indexes().lock() {
+        for index in indexes.values_mut() {
+            index.entries.retain(|path, _| path.file_stem().and_then(|value| value.to_str()) != Some(session_id));
+        }
+    }
+    if let Ok(mut indexes) = message_indexes().lock() {
+        indexes.retain(|path, _| path.file_stem().and_then(|value| value.to_str()) != Some(session_id));
+    }
+    Ok(())
+}
+
 
 fn summary_indexes() -> &'static Mutex<BTreeMap<PathBuf, RootIndex>> {
     SUMMARY_INDEXES.get_or_init(|| Mutex::new(BTreeMap::new()))
@@ -153,6 +303,92 @@ pub async fn runtime_read_session_page(
     .await
 }
 
+#[tauri::command]
+pub async fn runtime_rename_session(
+    repo: String,
+    session_id: String,
+    title: String,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let repo = canonical_repo(&repo)?;
+        let title = validate_session_title(&title)?;
+        mutate_session_action(&repo, &session_id, |action| action.title = Some(title))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn runtime_set_session_pinned(
+    repo: String,
+    session_id: String,
+    pinned: bool,
+) -> Result<(), String> {
+    run_blocking(move || {
+        let repo = canonical_repo(&repo)?;
+        mutate_session_action(&repo, &session_id, |action| action.pinned = pinned)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn runtime_archive_session(repo: String, session_id: String) -> Result<(), String> {
+    run_blocking(move || {
+        let repo = canonical_repo(&repo)?;
+        mutate_session_action(&repo, &session_id, |action| action.archived = true)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn runtime_delete_sessions(
+    repo: String,
+    session_ids: Vec<String>,
+    registry: State<'_, RuntimeRegistry>,
+) -> Result<(), String> {
+    let repo = canonical_repo(&repo)?;
+    if session_ids.is_empty() {
+        return Ok(());
+    }
+    if session_ids.len() > MAX_PAGE_SIZE {
+        return Err(format!("cannot delete more than {MAX_PAGE_SIZE} sessions at once"));
+    }
+    let mut unique = BTreeSet::new();
+    for session_id in session_ids {
+        validate_session_id(&session_id)?;
+        if registry.session_in_use(&repo, &session_id)? {
+            return Err(format!("session {session_id} is currently active and cannot be deleted"));
+        }
+        unique.insert(session_id);
+    }
+
+    run_blocking(move || {
+        for session_id in &unique {
+            let _ = find_session_path(&repo, session_id)?;
+            if session_has_attached_frontends(&repo, session_id)? {
+                return Err(format!(
+                    "session {session_id} is attached to a frontend and cannot be deleted"
+                ));
+            }
+        }
+
+        // Publish the deletion tombstones before removing materialized state so
+        // an interrupted cleanup cannot make a deleted session reappear in Recent.
+        let mut actions = load_session_actions(&repo)?;
+        for session_id in &unique {
+            let action = actions.sessions.entry(session_id.clone()).or_default();
+            action.deleted = true;
+            action.archived = false;
+        }
+        write_session_actions(&repo, &actions)?;
+
+        for session_id in unique {
+            remove_session_files(&repo, &session_id)?;
+        }
+        Ok(())
+    })
+    .await
+}
+
 async fn run_blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -174,17 +410,32 @@ fn list_sessions_page_sync(
     let mut sessions = BTreeMap::new();
     collect_sessions_indexed(&repo.join(".medusa/sessions"), &mut sessions)?;
     collect_sessions_indexed(&fallback_session_root(&repo), &mut sessions)?;
-    let mut sessions = sessions.into_values().collect::<Vec<_>>();
+    let actions = load_session_actions(&repo)?;
+    let mut sessions = sessions
+        .into_values()
+        .filter_map(|mut session| {
+            let action = actions.sessions.get(&session.id);
+            if action.is_some_and(|action| action.archived || action.deleted) {
+                return None;
+            }
+            apply_session_action(&mut session, action);
+            Some(session)
+        })
+        .collect::<Vec<_>>();
     sessions.sort_by(|left, right| {
         right
-            .updated_at
-            .cmp(&left.updated_at)
+            .pinned
+            .cmp(&left.pinned)
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| left.id.cmp(&right.id))
     });
 
     if let Some(cursor) = cursor {
-        let (updated_at, id) = decode_session_cursor(cursor)?;
+        let (pinned, updated_at, id) = decode_session_cursor(cursor)?;
         sessions.retain(|session| {
+            if session.pinned != pinned {
+                return pinned && !session.pinned;
+            }
             session.updated_at.as_str() < updated_at
                 || (session.updated_at.as_str() == updated_at && session.id.as_str() > id)
         });
@@ -239,8 +490,11 @@ fn read_session_page_sync(
             .ok()
             .map(|metadata| fingerprint(&metadata));
         if current_fingerprint == Some(index.fingerprint) {
+            let actions = load_session_actions(&repo)?;
+            let mut summary = index.summary;
+            apply_session_action(&mut summary, actions.sessions.get(&summary.id));
             return Ok(DesktopSessionMessagePage {
-                summary: index.summary,
+                summary,
                 messages,
                 next_cursor: (start > 0).then(|| start.to_string()),
             });
@@ -432,15 +686,29 @@ fn fingerprint(metadata: &fs::Metadata) -> FileFingerprint {
 
 fn encode_session_cursor(summary: &DesktopSessionSummary) -> String {
     format!(
-        "{}{}{}",
-        summary.updated_at, SESSION_CURSOR_SEPARATOR, summary.id
+        "{}{}{}{}{}",
+        if summary.pinned { "1" } else { "0" },
+        SESSION_CURSOR_SEPARATOR,
+        summary.updated_at,
+        SESSION_CURSOR_SEPARATOR,
+        summary.id
     )
 }
 
-fn decode_session_cursor(cursor: &str) -> Result<(&str, &str), String> {
+fn decode_session_cursor(cursor: &str) -> Result<(bool, &str, &str), String> {
+    let mut parts = cursor.splitn(3, SESSION_CURSOR_SEPARATOR);
+    let first = parts.next().unwrap_or_default();
+    let second = parts.next().unwrap_or_default();
+    let third = parts.next();
+    if let Some(id) = third {
+        if matches!(first, "0" | "1") && !second.is_empty() && !id.is_empty() {
+            return Ok((first == "1", second, id));
+        }
+    }
     cursor
         .split_once(SESSION_CURSOR_SEPARATOR)
         .filter(|(updated_at, id)| !updated_at.is_empty() && !id.is_empty())
+        .map(|(updated_at, id)| (false, updated_at, id))
         .ok_or_else(|| "invalid session cursor".to_owned())
 }
 
@@ -455,6 +723,7 @@ fn summary_from_value(value: &Value) -> Option<DesktopSessionSummary> {
             .get("pending_question")
             .is_some_and(|question| !question.is_null()),
         turn: u32::try_from(value.get("turn")?.as_u64()?).ok()?,
+        pinned: false,
     })
 }
 
@@ -798,6 +1067,49 @@ mod tests {
             let _: Value = serde_json::from_slice(&value[start as usize..end as usize])
                 .expect("message slice remains valid json");
         }
+    }
+
+    #[test]
+    fn desktop_session_actions_rename_pin_archive_and_delete_without_mutating_other_sessions() {
+        let repo = crate::tempdir().expect("repo");
+        let root = repo.path().join(".medusa/sessions");
+        write_session(&root, "a", "2026-01-01T00:00:01Z", 1);
+        write_session(&root, "b", "2026-01-01T00:00:03Z", 1);
+        let repo_text = repo.path().to_string_lossy();
+
+        let canonical = canonical_repo(&repo_text).expect("canonical repo");
+        let title = validate_session_title("Pinned title").expect("valid title");
+        mutate_session_action(&canonical, "a", |action| {
+            action.title = Some(title);
+            action.pinned = true;
+        })
+        .expect("rename and pin");
+
+        let page = list_sessions_page_sync(&repo_text, None, 10).expect("actions page");
+        assert_eq!(page.sessions[0].id, "a");
+        assert_eq!(page.sessions[0].objective, "Pinned title");
+        assert!(page.sessions[0].pinned);
+
+        mutate_session_action(&canonical, "a", |action| action.archived = true)
+            .expect("archive");
+        let page = list_sessions_page_sync(&repo_text, None, 10).expect("archived page");
+        assert_eq!(page.sessions.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), vec!["b"]);
+
+        let mut actions = load_session_actions(&canonical).expect("actions");
+        actions.sessions.entry("b".to_owned()).or_default().deleted = true;
+        write_session_actions(&canonical, &actions).expect("persist delete");
+        remove_session_files(&canonical, "b").expect("remove files");
+        let page = list_sessions_page_sync(&repo_text, None, 10).expect("deleted page");
+        assert!(page.sessions.is_empty());
+        assert!(!root.join("b.json").exists());
+    }
+
+    #[test]
+    fn session_title_validation_rejects_empty_control_and_oversized_values() {
+        assert!(validate_session_title("   ").is_err());
+        assert!(validate_session_title("bad\nname").is_err());
+        assert!(validate_session_title(&"x".repeat(121)).is_err());
+        assert_eq!(validate_session_title("  useful title  ").expect("title"), "useful title");
     }
 
     /// Manual benchmark corpus used by the acceptance ledger. It deliberately has no wall-clock
