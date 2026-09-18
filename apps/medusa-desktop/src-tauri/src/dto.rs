@@ -32,6 +32,7 @@ pub enum DesktopAttachment {
     File { path: String },
     Image { name: String, data_url: String },
     Text { name: String, text: String },
+    Upload { name: String, data_url: String },
 }
 
 #[derive(Debug, Deserialize)]
