@@ -122,10 +122,9 @@ export function PermissionModeControl() {
         <span>{displayCopy.label}</span>
       </button>
       {open && (
-        <div className="permission-mode-menu" role="menu" aria-label="How should ChatGPT actions be approved?">
+        <div className="permission-mode-menu" role="menu" aria-label="How should Medusa actions be approved?">
           <div className="permission-mode-menu-header">
-            <div className="permission-mode-heading">How should ChatGPT actions be approved?</div>
-            <span className="permission-mode-learn-more">Learn more</span>
+            <div className="permission-mode-heading">How should Medusa actions be approved?</div>
           </div>
           {modes.map((mode) => {
             const copy = modeCopy(mode);
