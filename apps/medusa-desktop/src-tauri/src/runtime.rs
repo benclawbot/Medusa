@@ -1103,6 +1103,49 @@ mod tests {
     }
 
     #[test]
+    fn session_in_use_detects_attached_runtime_and_fails_closed_on_busy_entry() {
+        let directory = crate::tempdir().expect("tempdir");
+        let supervisor = DaemonSupervisor::observe_only(directory.path());
+        let entry = Arc::new(Mutex::new(RuntimeEntry {
+            repo: directory.path().to_path_buf(),
+            client_id: DESKTOP_CLIENT_ID.to_owned(),
+            session_id: Some("session-active".to_owned()),
+            replay_cursor: 0,
+            pending_ack_cursor: None,
+            web_artifact_baseline: BTreeMap::new(),
+            presentation: DesktopCanonicalPresentation::new(),
+            daemon: DesktopDaemon {
+                supervisor: supervisor.clone(),
+                last_state: Some(DaemonLifecycleState::Connected),
+            },
+        }));
+        let registry = RuntimeRegistry::default();
+        registry
+            .entries
+            .lock()
+            .expect("entries lock")
+            .insert("runtime-1".to_owned(), Arc::clone(&entry));
+
+        assert!(
+            registry
+                .session_in_use(directory.path(), "session-active")
+                .expect("active lookup")
+        );
+        assert!(
+            !registry
+                .session_in_use(directory.path(), "session-other")
+                .expect("other lookup")
+        );
+
+        let _busy = entry.lock().expect("entry lock");
+        assert!(
+            registry
+                .session_in_use(directory.path(), "session-other")
+                .expect("busy lookup")
+        );
+    }
+
+    #[test]
     fn shutdown_all_does_not_wait_for_an_active_runtime_entry() {
         let directory = crate::tempdir().expect("tempdir");
         let supervisor = DaemonSupervisor::observe_only(directory.path());
