@@ -479,7 +479,7 @@ fn interactive_bootstrap_stages_model_and_effort_but_other_frontends_remain_gate
         desktop_effort.result,
         FrontendControlResult::CommandAccepted { .. }
     ));
-    assert_eq!(control.agent_max_turns(), 256);
+    assert_eq!(control.agent_max_turns(), 500);
 
     // TUI first-run setup remains supported.
     let staged = control
