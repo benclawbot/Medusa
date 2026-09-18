@@ -378,6 +378,29 @@ fn attached_utf8_file_is_bounded_and_included() {
 }
 
 #[test]
+fn attached_binary_file_is_losslessly_included_as_base64_context() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("context.bin");
+    fs::write(&path, [0x00, 0xff, 0x01, 0x02]).expect("write fixture");
+    let draft = PromptDraft {
+        attachments: vec![PromptAttachment::File(FileAttachment {
+            path,
+            byte_len: 4,
+        })],
+        ..PromptDraft::default()
+    };
+
+    let blocks = message_blocks(&draft).expect("message blocks");
+    assert!(matches!(
+        &blocks[0],
+        MessageBlock::Text { text }
+            if text.contains("<attached_binary_file")
+                && text.contains("encoding=\"base64\"")
+                && text.contains("AP8BAg==")
+    ));
+}
+
+#[test]
 fn provider_usage_forwards_legacy_and_normalized_telemetry() {
     let (sender, receiver) = mpsc::channel();
     let mut state = UpdateState::new();
