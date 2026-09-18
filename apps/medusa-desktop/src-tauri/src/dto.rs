@@ -27,7 +27,7 @@ pub struct DesktopPromptDraft {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum DesktopAttachment {
     File { path: String },
     Image { name: String, data_url: String },
@@ -342,6 +342,28 @@ mod tests {
     use medusa_runtime::{
         RuntimeActivity, RuntimePlanStep, TeamSnapshot, TeamWorkerLifecycle, TeamWorkerSnapshot,
     };
+
+    #[test]
+    fn deserializes_camel_case_upload_attachment() {
+        let draft: DesktopPromptDraft = serde_json::from_value(serde_json::json!({
+            "text": "inspect this",
+            "revision": 3,
+            "attachments": [{
+                "kind": "upload",
+                "name": "context.pdf",
+                "dataUrl": "data:application/pdf;base64,JVBERi0xLjQ="
+            }]
+        }))
+        .expect("desktop draft");
+
+        assert_eq!(draft.revision, 3);
+        assert!(matches!(
+            draft.attachments.as_slice(),
+            [DesktopAttachment::Upload { name, data_url }]
+                if name == "context.pdf"
+                    && data_url == "data:application/pdf;base64,JVBERi0xLjQ="
+        ));
+    }
 
     #[test]
     fn maps_plan_and_activity_events_without_tui_types() {
