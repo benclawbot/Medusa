@@ -595,7 +595,6 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   busyRef.current = busy;
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const composerSelectorRef = useRef<HTMLDivElement>(null);
   const previewDialogRef = useRef<HTMLDivElement>(null);
   const closeComposerSelector = useCallback(() => setComposerSelectorOpen(false), []);
@@ -1323,7 +1322,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
 
   const addFiles = async () => {
     if (!repo) return;
-    const selected = await open({ multiple: true, directory: false, title: "Attach repository files" });
+    const selected = await open({ multiple: true, directory: false, title: "Attach files" });
     const paths = typeof selected === "string" ? [selected] : selected ?? [];
     if (!paths.length) return;
     markComposerEdited();
@@ -2107,8 +2106,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                 <div className="composer-line">
                   <div className="composer-tools">
                     {composerToolsSlot}
-                    <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void addImages(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-                    <button className="composer-icon-button" onClick={() => imageInputRef.current?.click()} disabled={!runtimeId} title="Add image" aria-label="Add image"><Plus size={21} /></button>
+                    <button className="composer-icon-button" onClick={() => void addFiles()} disabled={!runtimeId || !repo} title="Add files" aria-label="Add files"><Plus size={21} /></button>
                   </div>
                   <textarea
                     ref={composerRef}
