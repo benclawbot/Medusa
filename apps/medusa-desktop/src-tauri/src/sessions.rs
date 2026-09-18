@@ -9,6 +9,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tauri::State;
+
+use crate::runtime::RuntimeRegistry;
 
 const MAX_DESKTOP_SESSIONS: usize = 2_000;
 const MAX_DESKTOP_SESSION_MESSAGES: usize = 2_000;
@@ -196,6 +199,21 @@ fn fallback_journal_root(repo: &Path) -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("Medusa/journals").join(repository_key(repo)))
 }
 
+fn session_has_attached_frontends(repo: &Path, session_id: &str) -> Result<bool, String> {
+    let path = repo.join(".medusa/continuity").join(format!("{session_id}.json"));
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let value: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+    Ok(value
+        .get("attachments")
+        .and_then(Value::as_array)
+        .is_some_and(|attachments| !attachments.is_empty()))
+}
+
 fn remove_session_files(repo: &Path, session_id: &str) -> Result<(), String> {
     validate_session_id(session_id)?;
     for path in [
@@ -322,31 +340,51 @@ pub async fn runtime_archive_session(repo: String, session_id: String) -> Result
 }
 
 #[tauri::command]
-pub async fn runtime_delete_sessions(repo: String, session_ids: Vec<String>) -> Result<(), String> {
+pub async fn runtime_delete_sessions(
+    repo: String,
+    session_ids: Vec<String>,
+    registry: State<'_, RuntimeRegistry>,
+) -> Result<(), String> {
+    let repo = canonical_repo(&repo)?;
+    if session_ids.is_empty() {
+        return Ok(());
+    }
+    if session_ids.len() > MAX_PAGE_SIZE {
+        return Err(format!("cannot delete more than {MAX_PAGE_SIZE} sessions at once"));
+    }
+    let mut unique = BTreeSet::new();
+    for session_id in session_ids {
+        validate_session_id(&session_id)?;
+        if registry.session_in_use(&repo, &session_id)? {
+            return Err(format!("session {session_id} is currently active and cannot be deleted"));
+        }
+        unique.insert(session_id);
+    }
+
     run_blocking(move || {
-        let repo = canonical_repo(&repo)?;
-        if session_ids.is_empty() {
-            return Ok(());
-        }
-        if session_ids.len() > MAX_PAGE_SIZE {
-            return Err(format!("cannot delete more than {MAX_PAGE_SIZE} sessions at once"));
-        }
-        let mut unique = BTreeSet::new();
-        for session_id in session_ids {
-            validate_session_id(&session_id)?;
-            unique.insert(session_id);
-        }
         for session_id in &unique {
             let _ = find_session_path(&repo, session_id)?;
+            if session_has_attached_frontends(&repo, session_id)? {
+                return Err(format!(
+                    "session {session_id} is attached to a frontend and cannot be deleted"
+                ));
+            }
         }
+
+        // Publish the deletion tombstones before removing materialized state so
+        // an interrupted cleanup cannot make a deleted session reappear in Recent.
         let mut actions = load_session_actions(&repo)?;
-        for session_id in unique {
+        for session_id in &unique {
             let action = actions.sessions.entry(session_id.clone()).or_default();
             action.deleted = true;
             action.archived = false;
+        }
+        write_session_actions(&repo, &actions)?;
+
+        for session_id in unique {
             remove_session_files(&repo, &session_id)?;
         }
-        write_session_actions(&repo, &actions)
+        Ok(())
     })
     .await
 }
