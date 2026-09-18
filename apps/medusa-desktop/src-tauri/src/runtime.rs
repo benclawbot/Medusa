@@ -374,6 +374,24 @@ pub struct RuntimeRegistry {
 }
 
 impl RuntimeRegistry {
+    pub(crate) fn session_in_use(&self, repo: &Path, session_id: &str) -> Result<bool, String> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?;
+        for entry in entries.values() {
+            let Ok(entry) = entry.try_lock() else {
+                // A runtime request is currently using this entry. Fail closed rather
+                // than deleting session state underneath an in-flight operation.
+                return Ok(true);
+            };
+            if entry.repo == repo && entry.session_id.as_deref() == Some(session_id) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn insert(
         &self,
         repo: PathBuf,
