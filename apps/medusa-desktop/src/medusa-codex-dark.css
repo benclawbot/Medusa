@@ -373,11 +373,15 @@ summary:focus-visible {
   transform: none !important;
 }
 
-.recent-session-row > span {
+.recent-session-row > span:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
+}
+
+.recent-session-meta {
+  color: #999 !important;
 }
 
 .recent-session-row time {
@@ -831,4 +835,48 @@ summary:focus-visible {
     max-width: 86% !important;
     margin-right: 0 !important;
   }
+}
+
+
+.recent-session-more,
+.recent-sessions-more {
+  background: transparent !important;
+  color: #929292 !important;
+}
+
+.recent-session-more:hover,
+.recent-sessions-more:hover {
+  background: #292929 !important;
+  color: #ededed !important;
+}
+
+.recent-session-menu {
+  border-color: #3a3a3a !important;
+  background: #232323 !important;
+  color: #ededed !important;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .42) !important;
+}
+
+.recent-session-menu button {
+  border: 0 !important;
+  background: transparent !important;
+  color: #ededed !important;
+}
+
+.recent-session-menu button:hover:not(:disabled) {
+  background: #303030 !important;
+}
+
+.recent-session-menu button.danger {
+  color: #ef6a63 !important;
+}
+
+.recent-session-rename {
+  border-color: #414141 !important;
+  background: #292929 !important;
+  color: #ededed !important;
+}
+
+.recent-selection-count {
+  color: #8f8f8f !important;
 }
