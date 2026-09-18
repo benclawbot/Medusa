@@ -247,3 +247,183 @@
 @keyframes session-dock-spin {
   to { transform: rotate(360deg); }
 }
+
+
+/* Recent rail actions. Keep these selectors specific enough to override historical theme layers. */
+.recent-sessions {
+  position: relative;
+}
+
+.recent-sessions-heading {
+  position: relative;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.recent-heading-actions,
+.recent-session-actions {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.recent-heading-menu-trigger,
+.recent-session-menu-trigger {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.recent-session-row {
+  position: relative;
+  display: flex !important;
+  grid-template-columns: none !important;
+  gap: 4px !important;
+}
+
+.recent-session-open {
+  display: flex;
+  min-width: 0;
+  min-height: 41px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.recent-session-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-session-open time,
+.recent-session-select-row time {
+  flex: 0 0 auto;
+}
+
+.recent-session-pin {
+  flex: 0 0 auto;
+}
+
+.recent-session-menu-trigger {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.recent-session-row:hover .recent-session-menu-trigger,
+.recent-session-menu-trigger[aria-expanded="true"],
+.recent-session-menu-trigger:focus-visible {
+  visibility: visible;
+  opacity: 1;
+}
+
+.recent-session-menu {
+  position: absolute;
+  z-index: 1500;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  width: 172px;
+  padding: 5px;
+  border: 1px solid var(--line, #3a3a3a);
+  border-radius: 10px;
+  background: var(--surface, #252525);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 28%);
+}
+
+.recent-heading-menu {
+  top: calc(100% + 2px);
+}
+
+.recent-session-menu button {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.recent-session-menu button:hover,
+.recent-heading-menu-trigger:hover,
+.recent-session-menu-trigger:hover {
+  background: var(--surface-soft, #333);
+}
+
+.recent-session-menu button.danger {
+  color: #ef6b63;
+}
+
+.recent-menu-icon-placeholder {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.recent-session-select-row {
+  min-height: 41px;
+  align-items: center !important;
+  cursor: pointer;
+}
+
+.recent-session-select-row input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  margin: 0 3px 0 2px;
+}
+
+.recent-selection-toolbar {
+  display: flex;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.recent-selection-toolbar > button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line, #3a3a3a);
+  border-radius: 7px;
+  padding: 0 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.recent-selection-toolbar > button:hover:not(:disabled) {
+  background: var(--surface-soft, #333);
+}
+
+.recent-delete-selected {
+  color: #ef6b63 !important;
+}
+
+.recent-selection-toolbar > button:disabled {
+  opacity: 0.45;
+}
