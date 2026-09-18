@@ -29,7 +29,7 @@ The resume request is one-shot and is cleared during desktop startup. Invalid id
 
 The primary rail also exposes recent-session management without a sharing action. Hovering a recent session reveals a `...` menu with **Rename**, **Pin chat / Unpin chat**, **Archive**, and **Delete**. Rename, pin, archive, and deletion state are stored in repository-scoped desktop session metadata so they survive restarts without rewriting the canonical session objective. **Archive** removes the session from the Recent list. **Delete** removes the desktop session snapshot, journal, and continuity record and stores a deletion tombstone so stale materialized state does not make the session reappear in Recent.
 
-The `...` menu beside **Recent** enters bulk-selection mode with **Select all** or **Select none**. Individual sessions can then be checked or unchecked before **Delete selected** is applied. Bulk deletion preflights every selected session identifier before removing any session files.
+The `...` menu beside **Recent** enters bulk-selection mode with **Select all** or **Select none**. Individual sessions can then be checked or unchecked before **Delete selected** is applied. Bulk deletion preflights every selected session identifier before removing any session files. Deletion fails closed for a session that is currently attached to a desktop runtime or has active continuity attachments, so session files are never removed underneath an in-flight frontend.
 
 ## Continuous package validation
 
