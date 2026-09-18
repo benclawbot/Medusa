@@ -168,7 +168,15 @@ export interface TextAttachment {
   text: string;
 }
 
-export type DesktopAttachment = FileAttachment | ImageAttachment | TextAttachment;
+export interface UploadAttachment {
+  kind: "upload";
+  name: string;
+  dataUrl: string;
+  mediaType?: string;
+  sizeBytes?: number;
+}
+
+export type DesktopAttachment = FileAttachment | ImageAttachment | TextAttachment | UploadAttachment;
 
 export interface DesktopPromptDraft {
   text: string;

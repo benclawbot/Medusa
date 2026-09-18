@@ -175,6 +175,26 @@ it("starts a general chat without requiring a project", async () => {
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
 });
 
+it("uses an unrestricted file input for the plus attachment button", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  const input = await screen.findByLabelText("Attach files") as HTMLInputElement;
+  expect(input).not.toHaveAttribute("accept");
+  expect(input.multiple).toBe(true);
+
+  const click = vi.spyOn(input, "click");
+  fireEvent.click(screen.getByRole("button", { name: "Add files" }));
+  expect(click).toHaveBeenCalledTimes(1);
+
+  fireEvent.change(input, {
+    target: {
+      files: [new File(["%PDF-1.4"], "context.pdf", { type: "application/pdf" })],
+    },
+  });
+  expect(await screen.findByText("context.pdf")).toBeInTheDocument();
+});
+
 it("resumes a saved session in place without reloading the window", async () => {
   vi.mocked(startRuntime)
     .mockResolvedValueOnce({ runtimeId: "runtime-general", repo: "/repo" });

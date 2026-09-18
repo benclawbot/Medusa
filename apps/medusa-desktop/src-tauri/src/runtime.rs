@@ -303,6 +303,16 @@ impl RuntimeEntry {
                         bytes_base64: STANDARD.encode(text.as_bytes()),
                     }
                 }
+                DesktopAttachment::Upload { name, data_url } => {
+                    let (mime_type, bytes) = decode_file_data_url(&name, &data_url)?;
+                    total = checked_total(total, bytes.len())?;
+                    FrontendArtifactUpload {
+                        display_name: name,
+                        mime_type,
+                        kind: FrontendArtifactKind::File,
+                        bytes_base64: STANDARD.encode(bytes),
+                    }
+                }
             };
             let id = self
                 .client()
@@ -983,6 +993,27 @@ fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn decode_file_data_url(name: &str, data_url: &str) -> Result<(Option<String>, Vec<u8>), String> {
+    let (header, encoded) = data_url
+        .split_once(',')
+        .ok_or_else(|| format!("file attachment {name} is not a data URL"))?;
+    let media_type = header
+        .strip_prefix("data:")
+        .and_then(|value| value.strip_suffix(";base64"))
+        .ok_or_else(|| format!("file attachment {name} must be a base64 data URL"))?;
+    if media_type.contains(';') {
+        return Err(format!("file attachment {name} has unsupported data URL parameters"));
+    }
+    let mime_type = (!media_type.trim().is_empty()).then(|| media_type.to_ascii_lowercase());
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("cannot decode file attachment {name}: {error}"))?;
+    if bytes.is_empty() {
+        return Err(format!("file attachment {name} is empty"));
+    }
+    Ok((mime_type, bytes))
+}
+
 fn checked_total(total: usize, additional: usize) -> Result<usize, String> {
     let total = total.saturating_add(additional);
     if total > MAX_TOTAL_ATTACHMENT_BYTES {
@@ -1011,6 +1042,17 @@ fn validate_image_dimensions(name: &str, width: u32, height: u32) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_file_data_url_preserves_binary_bytes_and_mime_type() {
+        let (mime_type, bytes) = decode_file_data_url(
+            "context.pdf",
+            "data:application/pdf;base64,JVBERi0xLjQ=",
+        )
+        .expect("decode generic file");
+        assert_eq!(mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(bytes, b"%PDF-1.4");
+    }
 
     #[test]
     fn oversized_image_dimensions_are_rejected_before_upload() {
