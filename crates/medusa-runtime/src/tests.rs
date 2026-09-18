@@ -383,10 +383,7 @@ fn attached_binary_file_is_losslessly_included_as_base64_context() {
     let path = directory.path().join("context.bin");
     fs::write(&path, [0x00, 0xff, 0x01, 0x02]).expect("write fixture");
     let draft = PromptDraft {
-        attachments: vec![PromptAttachment::File(FileAttachment {
-            path,
-            byte_len: 4,
-        })],
+        attachments: vec![PromptAttachment::File(FileAttachment { path, byte_len: 4 })],
         ..PromptDraft::default()
     };
 
