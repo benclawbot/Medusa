@@ -27,7 +27,11 @@ pub struct DesktopPromptDraft {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum DesktopAttachment {
     File { path: String },
     Image { name: String, data_url: String },
