@@ -336,9 +336,11 @@ pub async fn runtime_delete_sessions(repo: String, session_ids: Vec<String>) -> 
             validate_session_id(&session_id)?;
             unique.insert(session_id);
         }
+        for session_id in &unique {
+            let _ = find_session_path(&repo, session_id)?;
+        }
         let mut actions = load_session_actions(&repo)?;
         for session_id in unique {
-            let _ = find_session_path(&repo, &session_id)?;
             let action = actions.sessions.entry(session_id.clone()).or_default();
             action.deleted = true;
             action.archived = false;
