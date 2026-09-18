@@ -136,7 +136,7 @@ const nextMessageId = () => ++messageCounter;
 let workEntryCounter = 0;
 const nextWorkEntryId = () => `work-${++workEntryCounter}`;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
-const MAX_FILE_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const MAX_FILE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
 const MAX_COMPOSER_HEIGHT = 160;
 const MAX_MESSAGE_HISTORY = 2000;
 const MAX_WORK_LOG_ENTRIES = 1000;
@@ -229,7 +229,7 @@ function readUploadedFile(file: File): Promise<DesktopAttachment> {
       return;
     }
     if (file.size > MAX_FILE_ATTACHMENT_BYTES) {
-      reject(new Error(`${file.name || "File"} is ${formatBytes(file.size)}; the maximum is 50 MB.`));
+      reject(new Error(`${file.name || "File"} is ${formatBytes(file.size)}; the maximum is 2 MB.`));
       return;
     }
     const reader = new FileReader();
