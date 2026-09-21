@@ -36,7 +36,7 @@ pub struct FirstRunSetupRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FirstRunSetupOutcome {
-    Configure(ProviderProfile),
+    Configure(ProviderProfile, Option<String>),
     UseExisting(String),
     Cancelled,
 }
@@ -139,6 +139,7 @@ struct SetupChoice {
 enum SetupTransition {
     None,
     StartBrowserOAuth(String),
+    PromptApiKey,
     Finish(FirstRunSetupOutcome),
 }
 
@@ -153,6 +154,7 @@ struct SetupState {
     discovered_models: BTreeMap<String, Vec<String>>,
     searching: bool,
     status: Option<String>,
+    api_key: Option<String>,
 }
 
 impl SetupState {
@@ -168,6 +170,7 @@ impl SetupState {
             discovered_models: BTreeMap::new(),
             searching: false,
             status: None,
+            api_key: None,
         }
     }
 
@@ -177,6 +180,14 @@ impl SetupState {
                 .iter()
                 .find(|entry| entry.id == self.profile.provider)
         })
+    }
+
+    fn set_api_key(&mut self, api_key: String) {
+        self.api_key = Some(api_key);
+        self.status = Some(
+            "API key captured for secure storage; it will not be written to provider.toml."
+                .to_owned(),
+        );
     }
 
     fn provider_index(&self) -> usize {
@@ -465,6 +476,9 @@ impl SetupState {
                 if let Some(method) = entry.auth_methods.get(selected) {
                     self.profile.auth = (*method).to_owned();
                     self.go_to(SetupStep::Model);
+                    if *method == "api-key" {
+                        return SetupTransition::PromptApiKey;
+                    }
                 }
                 SetupTransition::None
             }
@@ -514,7 +528,10 @@ impl SetupState {
                 }
                 let mut profile = self.profile.clone();
                 profile.configured = true;
-                SetupTransition::Finish(FirstRunSetupOutcome::Configure(profile))
+                SetupTransition::Finish(FirstRunSetupOutcome::Configure(
+                    profile,
+                    self.api_key.take(),
+                ))
             }
         }
     }
@@ -818,8 +835,48 @@ pub fn run_first_run_setup_with_host(
                     Err(message) => state.oauth_failed(message),
                 }
             }
+            SetupTransition::PromptApiKey => {
+                terminal.restore();
+                let api_key = read_api_key()?;
+                if api_key.trim().is_empty() {
+                    state.status = Some("API key cannot be empty.".to_owned());
+                } else {
+                    state.set_api_key(api_key);
+                }
+                terminal = SetupTerminal::enter()?;
+            }
         }
     }
+}
+
+fn read_api_key() -> io::Result<String> {
+    println!("\nEnter API key (input is hidden):");
+    io::stdout().flush()?;
+    enable_raw_mode()?;
+    let mut value = String::new();
+    loop {
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Enter => break,
+                KeyCode::Backspace => {
+                    value.pop();
+                }
+                KeyCode::Char(ch)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    value.push(ch)
+                }
+                KeyCode::Esc => {
+                    value.clear();
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    disable_raw_mode()?;
+    println!();
+    Ok(value)
 }
 
 struct SetupTerminal {

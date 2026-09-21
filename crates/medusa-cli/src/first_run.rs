@@ -62,8 +62,11 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
 
     match outcome {
         FirstRunSetupOutcome::Cancelled => Ok(FirstRunDisposition::Cancelled),
-        FirstRunSetupOutcome::Configure(profile) => {
-            let config = validate_candidate(&profile)?;
+        FirstRunSetupOutcome::Configure(profile, api_key) => {
+            if let Some(api_key) = api_key.as_deref() {
+                store_api_key(&profile.provider, api_key)?;
+            }
+            let config = validate_candidate(&profile, api_key.is_some())?;
             oauth_preflight::run_if_needed(&config)?;
             catalog.save_active_profile(
                 &profile,
@@ -81,7 +84,7 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
                     "provider profile `{name}` is not configured"
                 )));
             }
-            let config = validate_candidate(&profile)?;
+            let config = validate_candidate(&profile, false)?;
             oauth_preflight::run_if_needed(&config)?;
             catalog.use_profile_at_revision(
                 &name,
@@ -150,9 +153,9 @@ impl BrowserOAuthSession for OpenAiOAuthLogin {
     }
 }
 
-fn validate_candidate(profile: &ProviderProfile) -> MedusaResult<Config> {
+fn validate_candidate(profile: &ProviderProfile, stored_key: bool) -> MedusaResult<Config> {
     profile.validate()?;
-    check_api_key_present(profile, &|name| env::var(name).ok())?;
+    check_api_key_present(profile, &|name| env::var(name).ok(), stored_key)?;
     Config::load_layers_with_provider_profile(
         profile,
         None,
@@ -168,17 +171,25 @@ fn validate_candidate(profile: &ProviderProfile) -> MedusaResult<Config> {
 fn check_api_key_present(
     profile: &ProviderProfile,
     lookup: &dyn Fn(&str) -> Option<String>,
+    stored_key: bool,
 ) -> MedusaResult<()> {
     let Some(variable) = api_key_variable(profile) else {
         return Ok(());
     };
-    if lookup(variable).is_some_and(|value| !value.is_empty()) {
+    if stored_key || lookup(variable).is_some_and(|value| !value.is_empty()) {
         return Ok(());
     }
     Err(config_error(format!(
         "provider `{}` with auth `api-key` needs the {variable} environment variable set in this shell; export it and retry setup. Medusa reads the key from the environment and never stores it in provider.toml",
         profile.provider,
     )))
+}
+
+fn store_api_key(provider: &str, api_key: &str) -> MedusaResult<()> {
+    keyring::Entry::new("medusa", provider)
+        .map_err(|error| config_error(format!("cannot access secure credential storage: {error}")))?
+        .set_password(api_key)
+        .map_err(|error| config_error(format!("cannot save API key securely: {error}")))
 }
 
 /// Returns the environment variable a profile expects its API key in, if any.
@@ -214,7 +225,7 @@ mod tests {
             provider: "custom".to_owned(),
             ..ProviderProfile::default()
         };
-        validate_candidate(&profile).expect("candidate");
+        validate_candidate(&profile, false).expect("candidate");
     }
 
     #[test]
@@ -224,7 +235,7 @@ mod tests {
             provider: String::new(),
             ..ProviderProfile::default()
         };
-        assert!(validate_candidate(&profile).is_err());
+        assert!(validate_candidate(&profile, false).is_err());
     }
 
     #[test]
@@ -275,18 +286,19 @@ mod tests {
             ..ProviderProfile::default()
         };
         let absent = |_: &str| None;
-        let error = check_api_key_present(&profile, &absent).expect_err("missing key must fail");
+        let error =
+            check_api_key_present(&profile, &absent, false).expect_err("missing key must fail");
         assert!(
             error.to_string().contains("MINIMAX_API_KEY"),
             "unexpected error: {error}"
         );
         let empty = |_: &str| Some(String::new());
         assert!(
-            check_api_key_present(&profile, &empty).is_err(),
+            check_api_key_present(&profile, &empty, false).is_err(),
             "empty key must fail"
         );
         let present = |_: &str| Some("secret".to_owned());
-        check_api_key_present(&profile, &present).expect("present key passes");
+        check_api_key_present(&profile, &present, false).expect("present key passes");
     }
 
     #[test]

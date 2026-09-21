@@ -1499,6 +1499,7 @@ dependencies = [
  "clap",
  "crossterm",
  "hex",
+ "keyring",
  "medusa-agent",
  "medusa-capabilities",
  "medusa-clearops",
