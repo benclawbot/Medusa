@@ -16,6 +16,8 @@ use medusa_tui::setup::{
 
 use crate::oauth_preflight;
 
+const CREDENTIAL_SERVICE: &str = "com.benclawbot.medusa";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FirstRunDisposition {
     Continue,
@@ -33,7 +35,10 @@ pub(crate) fn configure_interactive() -> MedusaResult<FirstRunDisposition> {
 fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
     let catalog = ProviderProfileCatalog::user()?;
     let snapshot = catalog.snapshot()?;
-    if skip_configured && snapshot.profile.configured {
+    if skip_configured
+        && snapshot.profile.configured
+        && profile_credentials_ready(&snapshot.profile)
+    {
         return Ok(FirstRunDisposition::Continue);
     }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -186,10 +191,29 @@ fn check_api_key_present(
 }
 
 fn store_api_key(provider: &str, api_key: &str) -> MedusaResult<()> {
-    keyring::Entry::new("medusa", provider)
+    keyring::Entry::new(CREDENTIAL_SERVICE, &provider.trim().to_ascii_lowercase())
         .map_err(|error| config_error(format!("cannot access secure credential storage: {error}")))?
         .set_password(api_key)
         .map_err(|error| config_error(format!("cannot save API key securely: {error}")))
+}
+
+fn profile_credentials_ready(profile: &ProviderProfile) -> bool {
+    if profile.auth != "api-key" {
+        return true;
+    }
+    let Some(variable) = credential_environment(&profile.provider) else {
+        return true;
+    };
+    if env::var(variable).is_ok_and(|value| !value.is_empty()) {
+        return true;
+    }
+    keyring::Entry::new(
+        CREDENTIAL_SERVICE,
+        &profile.provider.trim().to_ascii_lowercase(),
+    )
+    .ok()
+    .and_then(|entry| entry.get_password().ok())
+    .is_some_and(|value| !value.is_empty())
 }
 
 /// Returns the environment variable a profile expects its API key in, if any.
