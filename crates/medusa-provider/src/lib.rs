@@ -3,6 +3,7 @@
 mod anthropic;
 mod configured;
 mod contracts;
+mod endpoint_security;
 mod health_store;
 mod hedge_acceptance;
 mod hedge_runtime;
