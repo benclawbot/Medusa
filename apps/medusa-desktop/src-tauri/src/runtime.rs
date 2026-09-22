@@ -1041,9 +1041,7 @@ fn decode_base64_attachment(
 }
 
 fn max_base64_input_len(decoded_limit: usize) -> usize {
-    decoded_limit
-        .saturating_add(2)
-        .saturating_div(3)
+    (decoded_limit.saturating_add(2) / 3)
         .saturating_mul(4)
         .saturating_add(4)
 }
