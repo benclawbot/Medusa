@@ -1092,8 +1092,8 @@ mod tests {
             vec!["b"]
         );
 
-        let archived = list_sessions_page_filtered_sync(&repo_text, None, 10, true)
-            .expect("archived page");
+        let archived =
+            list_sessions_page_filtered_sync(&repo_text, None, 10, true).expect("archived page");
         assert_eq!(
             archived
                 .sessions
