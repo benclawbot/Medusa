@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -311,6 +311,7 @@ pub fn filtered_paths(workspace: &ReviewWorkspace, filter: &ReviewFilter) -> Vec
 }
 
 fn revert_file(repo: &Path, path: &str) -> Result<(), ReviewWorkflowError> {
+    validate_review_relative_path(path)?;
     let tracked = hidden_command("git")
         .args(["ls-files", "--error-unmatch", "--", path])
         .current_dir(repo)
@@ -336,11 +337,27 @@ fn revert_file(repo: &Path, path: &str) -> Result<(), ReviewWorkflowError> {
 }
 
 fn remove_worktree_path(repo: &Path, path: &str) -> Result<(), ReviewWorkflowError> {
+    validate_review_relative_path(path)?;
     let target = repo.join(path);
     if target.is_dir() {
         fs::remove_dir_all(target).map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
     } else if target.exists() {
         fs::remove_file(target).map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn validate_review_relative_path(path: &str) -> Result<(), ReviewWorkflowError> {
+    let relative = Path::new(path);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(ReviewWorkflowError::Rejected(
+            "review path must be a normalized repository-relative path".to_owned(),
+        ));
     }
     Ok(())
 }

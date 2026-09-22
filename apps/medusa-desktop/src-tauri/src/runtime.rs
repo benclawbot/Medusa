@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
+    io::Read,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -227,8 +228,8 @@ impl RuntimeEntry {
                             canonical.display()
                         ));
                     }
-                    let bytes = fs::read(&canonical)
-                        .map_err(|error| format!("cannot read {}: {error}", canonical.display()))?;
+                    let remaining = remaining_attachment_bytes(total)?;
+                    let bytes = read_bounded_attachment_file(&canonical, remaining)?;
                     total = checked_total(total, bytes.len())?;
                     FrontendArtifactUpload {
                         display_name: canonical
@@ -266,15 +267,14 @@ impl RuntimeEntry {
                     ) {
                         return Err(format!("image attachment {name} has unsupported type {mime_type}"));
                     }
-                    let bytes = STANDARD
-                        .decode(encoded)
-                        .map_err(|error| format!("cannot decode image attachment {name}: {error}"))?;
-                    if bytes.len() > MAX_IMAGE_BYTES {
-                        return Err(format!(
-                            "image attachment {name} is {} bytes; limit is {MAX_IMAGE_BYTES}",
-                            bytes.len()
-                        ));
-                    }
+                    let remaining = remaining_attachment_bytes(total)?;
+                    let decode_limit = remaining.min(MAX_IMAGE_BYTES);
+                    let bytes = decode_base64_attachment(
+                        &name,
+                        encoded,
+                        decode_limit,
+                        "image attachment",
+                    )?;
                     let dimensions = ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
                         .with_guessed_format()
                         .map_err(|error| format!("cannot detect image attachment {name}: {error}"))?
@@ -304,7 +304,8 @@ impl RuntimeEntry {
                     }
                 }
                 DesktopAttachment::Upload { name, data_url } => {
-                    let (mime_type, bytes) = decode_file_data_url(&name, &data_url)?;
+                    let remaining = remaining_attachment_bytes(total)?;
+                    let (mime_type, bytes) = decode_file_data_url(&name, &data_url, remaining)?;
                     total = checked_total(total, bytes.len())?;
                     FrontendArtifactUpload {
                         display_name: name,
@@ -1011,7 +1012,11 @@ fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn decode_file_data_url(name: &str, data_url: &str) -> Result<(Option<String>, Vec<u8>), String> {
+fn decode_file_data_url(
+    name: &str,
+    data_url: &str,
+    decoded_limit: usize,
+) -> Result<(Option<String>, Vec<u8>), String> {
     let (header, encoded) = data_url
         .split_once(',')
         .ok_or_else(|| format!("file attachment {name} is not a data URL"))?;
@@ -1023,13 +1028,80 @@ fn decode_file_data_url(name: &str, data_url: &str) -> Result<(Option<String>, V
         return Err(format!("file attachment {name} has unsupported data URL parameters"));
     }
     let mime_type = (!media_type.trim().is_empty()).then(|| media_type.to_ascii_lowercase());
-    let bytes = STANDARD
-        .decode(encoded)
-        .map_err(|error| format!("cannot decode file attachment {name}: {error}"))?;
+    let bytes = decode_base64_attachment(name, encoded, decoded_limit, "file attachment")?;
     if bytes.is_empty() {
         return Err(format!("file attachment {name} is empty"));
     }
     Ok((mime_type, bytes))
+}
+
+fn decode_base64_attachment(
+    name: &str,
+    encoded: &str,
+    decoded_limit: usize,
+    kind: &str,
+) -> Result<Vec<u8>, String> {
+    if encoded.len() > max_base64_input_len(decoded_limit) {
+        return Err(format!(
+            "{kind} {name} exceeds the remaining attachment byte limit"
+        ));
+    }
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("cannot decode {kind} {name}: {error}"))?;
+    if bytes.len() > decoded_limit {
+        return Err(format!(
+            "{kind} {name} is {} bytes; remaining limit is {decoded_limit}",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn max_base64_input_len(decoded_limit: usize) -> usize {
+    (decoded_limit.saturating_add(2) / 3)
+        .saturating_mul(4)
+        .saturating_add(4)
+}
+
+fn remaining_attachment_bytes(total: usize) -> Result<usize, String> {
+    MAX_TOTAL_ATTACHMENT_BYTES.checked_sub(total).ok_or_else(|| {
+        format!(
+            "prompt attachments total {total} bytes; limit is {MAX_TOTAL_ATTACHMENT_BYTES}"
+        )
+    })
+}
+
+fn read_bounded_attachment_file(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+    if metadata.len() > u64::try_from(limit).unwrap_or(u64::MAX) {
+        return Err(format!(
+            "attachment {} is {} bytes; remaining limit is {limit}",
+            path.display(),
+            metadata.len()
+        ));
+    }
+
+    let file = fs::File::open(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let read_limit = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+    let mut reader = file.take(read_limit);
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len())
+            .unwrap_or(limit)
+            .min(limit),
+    );
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if bytes.len() > limit {
+        return Err(format!(
+            "attachment {} exceeded the remaining {limit}-byte limit while being read",
+            path.display()
+        ));
+    }
+    Ok(bytes)
 }
 
 fn checked_total(total: usize, additional: usize) -> Result<usize, String> {
@@ -1066,10 +1138,34 @@ mod tests {
         let (mime_type, bytes) = decode_file_data_url(
             "context.pdf",
             "data:application/pdf;base64,JVBERi0xLjQ=",
+            MAX_TOTAL_ATTACHMENT_BYTES,
         )
         .expect("decode generic file");
         assert_eq!(mime_type.as_deref(), Some("application/pdf"));
         assert_eq!(bytes, b"%PDF-1.4");
+    }
+
+    #[test]
+    fn oversized_base64_is_rejected_before_decode() {
+        let decoded_limit = 8;
+        let encoded = "A".repeat(max_base64_input_len(decoded_limit) + 1);
+        let error = decode_base64_attachment(
+            "oversized.bin",
+            &encoded,
+            decoded_limit,
+            "file attachment",
+        )
+        .expect_err("oversized base64 should fail before decode");
+        assert!(error.contains("byte limit"));
+    }
+
+    #[test]
+    fn bounded_file_read_rejects_metadata_over_limit() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("large.bin");
+        fs::write(&path, vec![0_u8; 16]).expect("write fixture");
+        let error = read_bounded_attachment_file(&path, 8).expect_err("oversized file");
+        assert!(error.contains("remaining limit"));
     }
 
     #[test]

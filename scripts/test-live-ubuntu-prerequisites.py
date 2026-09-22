@@ -45,6 +45,10 @@ def test_existing_bwrap_skips_apt() -> None:
         marker = bin_dir / "sudo-called"
         executable(bin_dir / "bwrap", "#!/usr/bin/env bash\nexit 0\n")
         executable(
+            bin_dir / "pkg-config",
+            "#!/usr/bin/env bash\n[[ \"${1:-}\" == \"--exists\" && \"${2:-}\" == \"dbus-1\" ]] && exit 0\nexit 1\n",
+        )
+        executable(
             bin_dir / "sudo",
             f"#!/usr/bin/env bash\ntouch {marker!s}\nexit 99\n",
         )

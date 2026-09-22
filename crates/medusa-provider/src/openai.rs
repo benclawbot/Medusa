@@ -1,8 +1,8 @@
-use std::{env, net::IpAddr, sync::atomic::AtomicBool};
+use std::{env, sync::atomic::AtomicBool};
 
 use medusa_config::{Config, model_capabilities};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::{Client as AsyncClient, Url, blocking::Client as BlockingClient};
+use reqwest::{Client as AsyncClient, blocking::Client as BlockingClient};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -10,19 +10,14 @@ use sha2::{Digest, Sha256};
 use crate::{
     ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
     OpenAiPromptTokenDetails, ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role,
-    Usage, async_response_error, blocking_response_error, openai_transport, provider_error,
-    provider_response_error, run_cancellable_request, shared_async_http_client,
-    shared_blocking_http_client, split_dynamic_system_context,
+    Usage, async_response_error, blocking_response_error,
+    endpoint_security::{
+        EndpointSource, canonical_https_origin, configured_endpoint_source,
+        validate_provider_endpoint,
+    },
+    openai_transport, provider_error, provider_response_error, run_cancellable_request,
+    shared_async_http_client, shared_blocking_http_client, split_dynamic_system_context,
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EndpointSource {
-    RepositoryConfig,
-    ProviderEnvironment,
-    OpenAiEnvironment,
-    MedusaEnvironment,
-    Default,
-}
 
 #[derive(Clone)]
 pub struct OpenAiProvider {
@@ -47,7 +42,7 @@ impl OpenAiProvider {
             .to_ascii_uppercase()
             .replace('-', "_");
         let (base_url, endpoint_source) = resolve_base_url(config, &provider);
-        validate_provider_endpoint(&provider, &base_url)?;
+        validate_provider_endpoint(&base_url)?;
 
         let provider_key_name = format!("{provider}_API_KEY");
         let provider_key_allowed =
@@ -364,19 +359,21 @@ impl ModelProvider for OpenAiProvider {
 
 fn resolve_base_url(config: &Config, provider: &str) -> (String, EndpointSource) {
     if let Some(base_url) = config.model.base_url.clone() {
-        return (base_url, EndpointSource::RepositoryConfig);
+        let provider_env = format!("{provider}_BASE_URL");
+        let source = configured_endpoint_source(&base_url, &[provider_env.as_str()]);
+        return (base_url, source);
     }
     if let Ok(base_url) = env::var(format!("{provider}_BASE_URL")) {
-        return (base_url, EndpointSource::ProviderEnvironment);
+        return (base_url, EndpointSource::Environment);
     }
     if provider == "OPENAI" {
         if let Ok(base_url) = env::var("OPENAI_BASE_URL") {
-            return (base_url, EndpointSource::OpenAiEnvironment);
+            return (base_url, EndpointSource::Environment);
         }
     }
     if provider == "MEDUSA" {
         if let Ok(base_url) = env::var("MEDUSA_BASE_URL") {
-            return (base_url, EndpointSource::MedusaEnvironment);
+            return (base_url, EndpointSource::Environment);
         }
     }
     let base_url = if provider == "MINIMAX" {
@@ -417,82 +414,6 @@ fn is_canonical_openai_endpoint(base_url: &str) -> bool {
 
 fn is_canonical_minimax_endpoint(base_url: &str) -> bool {
     canonical_https_origin(base_url, "api.minimax.io")
-}
-
-fn canonical_https_origin(base_url: &str, expected_host: &str) -> bool {
-    Url::parse(base_url).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.host_str() == Some(expected_host)
-            && url.port_or_known_default() == Some(443)
-    })
-}
-
-fn validate_provider_endpoint(provider: &str, base_url: &str) -> MedusaResult<()> {
-    let allow_insecure_loopback = env_flag("MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP");
-    validate_provider_endpoint_for_provider(provider, base_url, allow_insecure_loopback)
-}
-
-fn validate_provider_endpoint_for_provider(
-    _provider: &str,
-    base_url: &str,
-    allow_insecure_loopback: bool,
-) -> MedusaResult<()> {
-    let url = parse_provider_endpoint(base_url)?;
-    validate_parsed_provider_endpoint(url, allow_insecure_loopback)
-}
-
-#[cfg(test)]
-fn validate_provider_endpoint_with_policy(
-    base_url: &str,
-    allow_insecure_loopback: bool,
-) -> MedusaResult<()> {
-    let url = parse_provider_endpoint(base_url)?;
-    validate_parsed_provider_endpoint(url, allow_insecure_loopback)
-}
-
-fn parse_provider_endpoint(base_url: &str) -> MedusaResult<Url> {
-    let url = Url::parse(base_url).map_err(|error| {
-        MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Validation,
-            format!("invalid provider base_url: {error}"),
-        )
-    })?;
-    if url.username() != "" || url.password().is_some() {
-        return Err(MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Validation,
-            "provider base_url must not contain embedded credentials",
-        ));
-    }
-    Ok(url)
-}
-
-fn validate_parsed_provider_endpoint(url: Url, allow_insecure_loopback: bool) -> MedusaResult<()> {
-    if url.scheme() == "https" {
-        return Ok(());
-    }
-    if url.scheme() == "http" && is_loopback_url(&url) && allow_insecure_loopback {
-        return Ok(());
-    }
-    Err(MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        ErrorCategory::Validation,
-        "provider base_url must use HTTPS; loopback HTTP requires MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP=1",
-    ))
-}
-
-fn is_loopback_url(url: &Url) -> bool {
-    match url.host_str() {
-        Some("localhost") => true,
-        Some(host) => host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()),
-        None => false,
-    }
-}
-
-fn env_flag(name: &str) -> bool {
-    env::var(name)
-        .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -859,23 +780,35 @@ mod tests {
     fn user_level_provider_endpoint_can_authorize_provider_specific_key() {
         assert!(provider_credential_allowed(
             "CUSTOM",
-            EndpointSource::ProviderEnvironment,
+            EndpointSource::Environment,
             "https://provider.example/v1",
         ));
     }
 
     #[test]
     fn remote_http_is_rejected() {
-        let error = validate_provider_endpoint_with_policy("http://example.com/v1", true)
-            .expect_err("remote HTTP must fail");
+        let error = crate::endpoint_security::validate_provider_endpoint_with_policy(
+            "http://example.com/v1",
+            true,
+        )
+        .expect_err("remote HTTP must fail");
         assert!(error.to_string().contains("HTTPS"));
     }
 
     #[test]
     fn loopback_http_requires_explicit_opt_in() {
-        assert!(validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err());
-        validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", true)
-            .expect("explicit loopback development opt-in");
+        assert!(
+            crate::endpoint_security::validate_provider_endpoint_with_policy(
+                "http://127.0.0.1:8080/v1",
+                false
+            )
+            .is_err()
+        );
+        crate::endpoint_security::validate_provider_endpoint_with_policy(
+            "http://127.0.0.1:8080/v1",
+            true,
+        )
+        .expect("explicit loopback development opt-in");
     }
 
     #[test]
@@ -895,10 +828,9 @@ mod tests {
             "ChatGPT OAuth must rely on app-server authentication, not an API key"
         );
         assert!(
-            validate_provider_endpoint_for_provider(
-                "OPENAI_OAUTH",
+            crate::endpoint_security::validate_provider_endpoint_with_policy(
                 "http://127.0.0.1:10531/v1",
-                false,
+                false
             )
             .is_err()
         );
@@ -906,9 +838,11 @@ mod tests {
 
     #[test]
     fn embedded_endpoint_credentials_are_rejected() {
-        let error =
-            validate_provider_endpoint_with_policy("https://user:password@example.com/v1", false)
-                .expect_err("embedded credentials must fail");
+        let error = crate::endpoint_security::validate_provider_endpoint_with_policy(
+            "https://user:password@example.com/v1",
+            false,
+        )
+        .expect_err("embedded credentials must fail");
         assert!(error.to_string().contains("embedded credentials"));
     }
 }
