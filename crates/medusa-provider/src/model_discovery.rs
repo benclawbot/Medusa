@@ -75,7 +75,9 @@ pub fn discover_models(
     let ambient_key_allowed =
         !repository_endpoint || canonical_discovery_origin(catalog.id, base_url);
     let environment_key = ambient_key_allowed
-        .then(|| credential_environment(catalog.profile_provider).and_then(|name| env::var(name).ok()))
+        .then(|| {
+            credential_environment(catalog.profile_provider).and_then(|name| env::var(name).ok())
+        })
         .flatten();
     let api_key = session_api_key
         .filter(|value| !value.trim().is_empty())
@@ -201,8 +203,14 @@ mod tests {
 
     #[test]
     fn only_canonical_origins_may_inherit_ambient_credentials() {
-        assert!(canonical_discovery_origin("openai", "https://api.openai.com/v1"));
-        assert!(!canonical_discovery_origin("openai", "https://attacker.example/v1"));
+        assert!(canonical_discovery_origin(
+            "openai",
+            "https://api.openai.com/v1"
+        ));
+        assert!(!canonical_discovery_origin(
+            "openai",
+            "https://attacker.example/v1"
+        ));
     }
 
     #[test]
