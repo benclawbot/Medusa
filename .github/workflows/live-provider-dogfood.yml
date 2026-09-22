@@ -103,6 +103,13 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: bash scripts/install-live-ubuntu-prerequisites.sh
+      - name: Restore Linux system pkg-config search path
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          system_pkg_config_path="$(pkg-config --variable pc_path pkg-config)"
+          echo "PKG_CONFIG_PATH=${system_pkg_config_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" >> "$GITHUB_ENV"
+          PKG_CONFIG_PATH="${system_pkg_config_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" pkg-config --exists dbus-1
       - name: Require and mask the live credential
         run: python -c "import os,sys; key=os.environ.get('MINIMAX_API_KEY',''); print('::add-mask::'+key) if key else sys.exit('MINIMAX_API_KEY is required')"
       - name: Run bounded live product dogfood
