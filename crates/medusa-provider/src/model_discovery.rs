@@ -73,7 +73,7 @@ pub fn discover_models(
         );
         (
             base_url,
-            configured_endpoint_source(&base_url, &[env_name.as_str()]),
+            configured_endpoint_source(base_url, &[env_name.as_str()]),
         )
     } else if let Some(base_url) = catalog.base_url {
         (base_url, EndpointSource::Default)
