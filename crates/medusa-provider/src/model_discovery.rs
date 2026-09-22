@@ -8,7 +8,10 @@ use serde::Deserialize;
 
 use crate::{
     blocking_response_json,
-    endpoint_security::{EndpointSource, ambient_credential_allowed, validate_provider_endpoint},
+    endpoint_security::{
+        EndpointSource, ambient_credential_allowed, configured_endpoint_source,
+        validate_provider_endpoint,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,7 +67,11 @@ pub fn discover_models(
     let catalog = provider_catalog_entry(provider).ok_or(ModelDiscoveryError::Unsupported)?;
 
     let (base_url, endpoint_source) = if let Some(base_url) = config.model.base_url.as_deref() {
-        (base_url, EndpointSource::RepositoryConfig)
+        let env_name = format!("{}_BASE_URL", catalog.id.to_ascii_uppercase().replace('-', "_"));
+        (
+            base_url,
+            configured_endpoint_source(config, base_url, &[env_name.as_str()]),
+        )
     } else if let Some(base_url) = catalog.base_url {
         (base_url, EndpointSource::Default)
     } else if let Some(base_url) = default_base_url(catalog.id) {
