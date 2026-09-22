@@ -521,7 +521,7 @@
     {
       "path": "docs/multimodal-attachments.md",
       "disposition": "current",
-      "sha256": "3308fc05b044fcabe8b4c52eaf44d32b25480cf06db8f1ffdad809907451fafa"
+      "sha256": "450bcebc16f358067c2830f390429a92de4b5ac9c296098a4048865543c41410"
     },
     {
       "path": "docs/provider-request-lifecycle.md",
