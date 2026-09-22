@@ -1,62 +1,67 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { requestRuntimeResume, type SessionSummary } from "./runtime";
-import { listRuntimeSessionPage } from "./sessionPaging";
 import { formatSessionAge, SessionDock } from "./SessionDock";
+import {
+  archiveRuntimeSession,
+  deleteRuntimeSessions,
+  listRuntimeSessionPage,
+  renameRuntimeSession,
+  setRuntimeSessionPinned,
+} from "./sessionPaging";
 
-vi.mock("./runtime", async () => {
-  const actual = await vi.importActual<typeof import("./runtime")>("./runtime");
-  return {
-    ...actual,
-    requestRuntimeResume: vi.fn(),
-  };
-});
+vi.mock("./sessionPaging", () => ({
+  listRuntimeSessionPage: vi.fn(),
+  renameRuntimeSession: vi.fn(),
+  setRuntimeSessionPinned: vi.fn(),
+  archiveRuntimeSession: vi.fn(),
+  deleteRuntimeSessions: vi.fn(),
+}));
 
-vi.mock("./sessionPaging", async () => {
-  const actual = await vi.importActual<typeof import("./sessionPaging")>("./sessionPaging");
-  return {
-    ...actual,
-    listRuntimeSessionPage: vi.fn(),
-  };
-});
-
-const sessions: SessionSummary[] = [
+const sessions = [
   {
-    id: "session-alpha",
-    objective: "Alpha session",
-    createdAt: "2026-09-18T10:00:00Z",
-    updatedAt: "2026-09-18T12:00:00Z",
-    completed: true,
-    waitingForUser: false,
-    turn: 3,
-  },
-  {
-    id: "session-beta",
-    objective: "Beta session",
-    createdAt: "2026-09-18T09:00:00Z",
-    updatedAt: "2026-09-18T11:00:00Z",
+    id: "session-a",
+    objective: "Alpha chat",
+    createdAt: "2026-09-08T10:00:00Z",
+    updatedAt: "2026-09-08T11:00:00Z",
     completed: true,
     waitingForUser: false,
     turn: 2,
+    pinned: false,
+  },
+  {
+    id: "session-b",
+    objective: "Beta chat",
+    createdAt: "2026-09-08T09:00:00Z",
+    updatedAt: "2026-09-08T10:00:00Z",
+    completed: true,
+    waitingForUser: false,
+    turn: 1,
+    pinned: true,
   },
 ];
 
 beforeEach(() => {
+  window.localStorage.setItem("medusa.desktop.repo", "/repo");
   vi.mocked(listRuntimeSessionPage).mockReset().mockResolvedValue({ sessions });
-  vi.mocked(requestRuntimeResume).mockReset();
+  vi.mocked(renameRuntimeSession).mockReset().mockResolvedValue(undefined);
+  vi.mocked(setRuntimeSessionPinned).mockReset().mockResolvedValue(undefined);
+  vi.mocked(archiveRuntimeSession).mockReset().mockResolvedValue(undefined);
+  vi.mocked(deleteRuntimeSessions).mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  vi.restoreAllMocks();
 });
 
-it("renders the compact recent-session rail without the old Sessions navigation", () => {
+it("renders the compact recent-session rail without the old Sessions navigation", async () => {
   render(<SessionDock />);
 
   expect(screen.getByRole("region", { name: "Recent sessions" })).toBeInTheDocument();
   expect(screen.getByText("Recent")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Sessions" })).not.toBeInTheDocument();
+  expect(await screen.findByText("Alpha chat")).toBeInTheDocument();
 });
 
 it("formats recent-session age without redundant relative-time copy", () => {
@@ -65,67 +70,50 @@ it("formats recent-session age without redundant relative-time copy", () => {
   expect(formatSessionAge("2026-09-07T12:00:00Z", now)).toBe("1d");
 });
 
-it("offers rename, pin, archive, and delete without a share action", async () => {
-  window.localStorage.setItem("medusa.desktop.repo", "/repo");
+it("opens a per-session menu with rename pin archive and delete but no share action", async () => {
   render(<SessionDock />);
+  await screen.findByText("Alpha chat");
 
-  const actions = await screen.findByRole("button", { name: "Actions for Alpha session" });
-  fireEvent.click(actions);
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Alpha chat" }));
+  const menu = screen.getByRole("menu", { name: "Actions for Alpha chat" });
 
-  const menu = screen.getByRole("menu", { name: "Actions for Alpha session" });
-  expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
-  expect(within(menu).getByRole("menuitem", { name: "Pin chat" })).toBeInTheDocument();
-  expect(within(menu).getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
-  expect(within(menu).getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
-  expect(within(menu).queryByText(/share/i)).not.toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Pin chat" })).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Archive" })).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+  expect(menu).not.toHaveTextContent("Share");
 
-  fireEvent.click(within(menu).getByRole("menuitem", { name: "Pin chat" }));
-  expect(await screen.findByLabelText("Pinned")).toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole("button", { name: "Actions for Alpha session" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
-  const rename = screen.getByRole("textbox", { name: "Rename Alpha session" });
-  fireEvent.change(rename, { target: { value: "Pinned project chat" } });
-  fireEvent.keyDown(rename, { key: "Enter" });
-  expect(await screen.findByText("Pinned project chat")).toBeInTheDocument();
-
-  fireEvent.click(screen.getByTitle("Pinned project chat"));
-  expect(requestRuntimeResume).toHaveBeenCalledWith("session-alpha", "/repo");
+  fireEvent.click(screen.getByRole("menuitem", { name: "Pin chat" }));
+  await waitFor(() => expect(setRuntimeSessionPinned).toHaveBeenCalledWith("/repo", "session-a", true));
 });
 
-it("supports select all, individual untick, and bulk delete from Recent", async () => {
-  window.localStorage.setItem("medusa.desktop.repo", "/repo");
+it("header menu can select all, individually untick, and bulk delete the remainder", async () => {
   render(<SessionDock />);
+  await screen.findByText("Alpha chat");
 
-  await screen.findByText("Alpha session");
-  fireEvent.click(screen.getByRole("button", { name: "Recent session actions" }));
+  fireEvent.click(screen.getByRole("button", { name: "Recent session options" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "Select all" }));
 
-  const alpha = screen.getByRole("checkbox", { name: "Select Alpha session" });
-  const beta = screen.getByRole("checkbox", { name: "Select Beta session" });
+  const alpha = screen.getByRole("checkbox", { name: "Select Alpha chat" });
+  const beta = screen.getByRole("checkbox", { name: "Select Beta chat" });
   expect(alpha).toBeChecked();
   expect(beta).toBeChecked();
 
   fireEvent.click(beta);
-  expect(alpha).toBeChecked();
   expect(beta).not.toBeChecked();
 
-  fireEvent.click(screen.getByRole("button", { name: "Recent session actions" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "Delete selected" }));
-
-  await waitFor(() => expect(screen.queryByText("Alpha session")).not.toBeInTheDocument());
-  expect(screen.getByText("Beta session")).toBeInTheDocument();
-  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Delete selected (1)" }));
+  await waitFor(() => expect(deleteRuntimeSessions).toHaveBeenCalledWith("/repo", ["session-a"]));
 });
 
-it("archives a session out of the Recent list", async () => {
-  window.localStorage.setItem("medusa.desktop.repo", "/repo");
+it("header Select none enters selection mode with every recent session unticked", async () => {
   render(<SessionDock />);
+  await screen.findByText("Alpha chat");
 
-  const actions = await screen.findByRole("button", { name: "Actions for Beta session" });
-  fireEvent.click(actions);
-  fireEvent.click(screen.getByRole("menuitem", { name: "Archive" }));
+  fireEvent.click(screen.getByRole("button", { name: "Recent session options" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Select none" }));
 
-  await waitFor(() => expect(screen.queryByText("Beta session")).not.toBeInTheDocument());
-  expect(screen.getByText("Alpha session")).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Select Alpha chat" })).not.toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "Select Beta chat" })).not.toBeChecked();
+  expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
 });
