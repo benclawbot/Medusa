@@ -465,7 +465,7 @@ struct ProviderSettings {
 
 fn resolve_base_url(config: &Config, settings: &ProviderSettings) -> (String, EndpointSource) {
     if let Some(base_url) = config.model.base_url.clone() {
-        let source = configured_endpoint_source(config, &base_url, &[settings.base_url_env]);
+        let source = configured_endpoint_source(&base_url, &[settings.base_url_env]);
         return (base_url, source);
     }
     if let Ok(base_url) = env::var(settings.base_url_env) {
