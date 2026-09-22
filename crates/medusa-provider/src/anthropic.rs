@@ -20,7 +20,10 @@ use crate::{
     IncrementalVisibleText, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
     ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Usage, async_response_error,
     async_response_json, blocking_response_error, blocking_response_json,
-    endpoint_security::{EndpointSource, ambient_credential_allowed, validate_provider_endpoint},
+    endpoint_security::{
+        EndpointSource, ambient_credential_allowed, configured_endpoint_source,
+        validate_provider_endpoint,
+    },
     provider_error, run_cancellable_request, shared_async_http_client, shared_blocking_http_client,
     split_dynamic_system_context,
 };
@@ -462,7 +465,8 @@ struct ProviderSettings {
 
 fn resolve_base_url(config: &Config, settings: &ProviderSettings) -> (String, EndpointSource) {
     if let Some(base_url) = config.model.base_url.clone() {
-        return (base_url, EndpointSource::RepositoryConfig);
+        let source = configured_endpoint_source(config, &base_url, &[settings.base_url_env]);
+        return (base_url, source);
     }
     if let Ok(base_url) = env::var(settings.base_url_env) {
         return (base_url, EndpointSource::Environment);
