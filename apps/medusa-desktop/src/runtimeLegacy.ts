@@ -118,6 +118,7 @@ export interface SessionSummary {
   completed: boolean;
   waitingForUser: boolean;
   turn: number;
+  pinned?: boolean;
 }
 
 export interface SessionMessage {
