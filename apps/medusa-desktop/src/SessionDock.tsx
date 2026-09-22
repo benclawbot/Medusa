@@ -50,13 +50,17 @@ export function SessionDock() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [loadingMore, setLoadingMore] = useState(false);
   const [actionMenuId, setActionMenuId] = useState<string>();
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const requestGeneration = useRef(0);
 
-  const visibleSessions = sessions.slice(0, 8);
+  const visibleSessions = selectionMode || showAll ? sessions : sessions.slice(0, 8);
 
   useEffect(() => {
     const sync = () => {
@@ -64,6 +68,8 @@ export function SessionDock() {
       setRepo((current) => current === next ? current : next);
       setActionMenuId(undefined);
       setHeaderMenuOpen(false);
+      setShowArchived(false);
+      setShowAll(false);
       setSelectionMode(false);
       setSelected(new Set());
     };
@@ -82,14 +88,16 @@ export function SessionDock() {
       setSessions([]);
       setLoading(false);
       setError(undefined);
+      setNextCursor(undefined);
       return;
     }
     setLoading(true);
     setError(undefined);
     try {
-      const page = await listRuntimeSessionPage(repo);
+      const page = await listRuntimeSessionPage(repo, undefined, 24, showArchived);
       if (generation !== requestGeneration.current) return;
       setSessions(page.sessions);
+      setNextCursor(page.nextCursor);
       const ids = new Set(page.sessions.slice(0, 8).map((session) => session.id));
       setSelected((current) => new Set([...current].filter((id) => ids.has(id))));
     } catch (cause) {
@@ -97,7 +105,7 @@ export function SessionDock() {
     } finally {
       if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [repo]);
+  }, [repo, showArchived]);
 
   useEffect(() => {
     void refresh();
@@ -137,6 +145,7 @@ export function SessionDock() {
   const deleteSelected = async () => {
     const ids = [...selected];
     if (!ids.length) return;
+    if (!window.confirm(`Permanently delete ${ids.length === 1 ? "this completed session" : `${ids.length} completed sessions`}? This cannot be undone.`)) return;
     setError(undefined);
     try {
       await deleteRuntimeSessions(repo, ids);
@@ -148,11 +157,40 @@ export function SessionDock() {
     }
   };
 
+  const deleteSession = (sessionId: string) => {
+    if (!window.confirm("Permanently delete this completed session? This cannot be undone.")) return;
+    void runSessionAction(() => deleteRuntimeSessions(repo, [sessionId]));
+  };
+
+  const loadMore = async () => {
+    const cursor = nextCursor;
+    if (!repo || !cursor || loadingMore) return;
+    const generation = requestGeneration.current;
+    setLoadingMore(true);
+    try {
+      const page = await listRuntimeSessionPage(repo, cursor, 24, showArchived);
+      if (generation !== requestGeneration.current) return;
+      setSessions((current) => [
+        ...current,
+        ...page.sessions.filter((session) => !current.some((existing) => existing.id === session.id)),
+      ]);
+      setNextCursor(page.nextCursor);
+    } catch (cause) {
+      if (generation === requestGeneration.current) setError(toUserError(cause));
+    } finally {
+      if (generation === requestGeneration.current) setLoadingMore(false);
+    }
+  };
+
+  const selectedSessions = visibleSessions.filter((session) => selected.has(session.id));
+  const canDeleteSelected = selectedSessions.length === selected.size
+    && selectedSessions.every((session) => session.completed);
+
   return (
     <section className="recent-sessions" aria-label="Recent sessions">
       <div className="recent-sessions-heading">
-        <span>Recent</span>
-        {!!repo && visibleSessions.length > 0 && (
+        <span>{showArchived ? "Archived" : "Recent"}</span>
+        {!!repo && (
           <div className="recent-heading-actions">
             <button
               className="recent-heading-menu-trigger"
@@ -170,10 +208,23 @@ export function SessionDock() {
             {headerMenuOpen && (
               <div className="recent-session-menu recent-heading-menu" role="menu" aria-label="Recent selection options">
                 <button type="button" role="menuitem" onClick={() => startSelection(true)}>
-                  <Check size={14} /> Select all
+                  <Check size={14} /> Select all visible sessions
                 </button>
                 <button type="button" role="menuitem" onClick={() => startSelection(false)}>
                   <span className="recent-menu-icon-placeholder" /> Select none
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowArchived((current) => !current);
+                    setShowAll(false);
+                    setSelectionMode(false);
+                    setSelected(new Set());
+                    setHeaderMenuOpen(false);
+                  }}
+                >
+                  {showArchived ? "Show recent sessions" : "Show archived sessions"}
                 </button>
               </div>
             )}
@@ -185,8 +236,8 @@ export function SessionDock() {
         <div className="recent-sessions-state" role="status"><LoaderCircle className="spin" size={13} /> Loading…</div>
       )}
       {!!error && <div className="recent-sessions-state error" role="alert">Unable to update recent sessions</div>}
-      {!loading && !error && repo && sessions.length === 0 && (
-        <div className="recent-sessions-state">No recent sessions</div>
+      {!loading && !error && repo && sessions.length === 0 && !nextCursor && (
+        <div className="recent-sessions-state">No {showArchived ? "archived" : "recent"} sessions</div>
       )}
 
       {visibleSessions.map((session) => {
@@ -254,15 +305,17 @@ export function SessionDock() {
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => void runSessionAction(() => archiveRuntimeSession(repo, session.id))}
+                    onClick={() => void runSessionAction(() => archiveRuntimeSession(repo, session.id, !showArchived))}
                   >
-                    <Archive size={14} /> Archive
+                    <Archive size={14} /> {showArchived ? "Restore to Recent" : "Archive"}
                   </button>
                   <button
                     className="danger"
                     type="button"
                     role="menuitem"
-                    onClick={() => void runSessionAction(() => deleteRuntimeSessions(repo, [session.id]))}
+                    disabled={!session.completed}
+                    title={session.completed ? undefined : "Only completed sessions can be deleted"}
+                    onClick={() => deleteSession(session.id)}
                   >
                     <Trash2 size={14} /> Delete
                   </button>
@@ -278,7 +331,7 @@ export function SessionDock() {
           <button
             className="recent-delete-selected"
             type="button"
-            disabled={selected.size === 0}
+            disabled={selected.size === 0 || !canDeleteSelected}
             onClick={() => void deleteSelected()}
           >
             <Trash2 size={13} /> Delete selected{selected.size ? ` (${selected.size})` : ""}
@@ -293,6 +346,23 @@ export function SessionDock() {
             Cancel
           </button>
         </div>
+      )}
+
+      {!selectionMode && !showAll && sessions.length > 8 && (
+        <button className="recent-session-load-more" type="button" onClick={() => setShowAll(true)}>Show all loaded sessions</button>
+      )}
+      {!!nextCursor && (
+        <button
+          className="recent-session-load-more"
+          type="button"
+          disabled={loadingMore}
+          onClick={() => {
+            setShowAll(true);
+            void loadMore();
+          }}
+        >
+          {loadingMore ? "Loading older sessions…" : "Load older sessions"}
+        </button>
       )}
     </section>
   );

@@ -38,6 +38,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { appendBounded } from "./boundedHistory";
 import { RecoveryDock } from "./RecoveryDock";
 import { DesktopOnboarding } from "./DesktopOnboarding";
+import { configurationIsUsable } from "./onboarding";
 import { requestDesktopTool, type DesktopTool } from "./desktop-tools";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { SessionDock } from "./SessionDock";
@@ -815,7 +816,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     ) {
       setOauthAuthenticatedProvider(configuration.provider);
     }
-    return configuration;
+    return { catalog, configuration };
   }, []);
 
   const refreshWebArtifact = useCallback(async (id: string, failed = false, generation?: number) => {
@@ -1158,8 +1159,8 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     let disposed = false;
     const start = async () => {
       runtimeGeneration.current += 1;
-      const configuration = await refreshConfiguration();
-      if (!configuration.configured || !configuration.provider.trim() || !configuration.model.trim()) return undefined;
+      const { catalog, configuration } = await refreshConfiguration();
+      if (!configurationIsUsable(configuration, catalog)) return undefined;
       if (configuration.provider === "openai-oauth") {
         // OAuth discovery talks to the Codex app-server and can take its full
         // protocol timeout. Warm it in the background so launch stays usable.
@@ -1576,7 +1577,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         apiKey: next.apiKey,
         baseUrl: next.baseUrl,
       });
-      const configuration = await refreshConfiguration();
+      const { configuration } = await refreshConfiguration();
       setProvider(configuration.provider);
       setModel(configuration.model);
       setEffort(configuration.effort);
@@ -1808,7 +1809,12 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
     };
   }, [sidePanelResizing]);
 
-  if (!runtimeId && sharedConfiguration && !sharedConfiguration.configured) {
+  if (
+    !runtimeId
+    && sharedConfiguration
+    && (!sharedConfiguration.configured
+      || (providerCatalog.length > 0 && !configurationIsUsable(sharedConfiguration, providerCatalog)))
+  ) {
     return (
       <DesktopOnboarding
         configuration={sharedConfiguration}

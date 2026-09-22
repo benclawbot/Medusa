@@ -16,11 +16,13 @@ export async function listRuntimeSessionPage(
   repo: string,
   cursor?: string,
   limit = 24,
+  archived = false,
 ): Promise<SessionPage> {
   return invoke<SessionPage>("runtime_list_sessions_page", {
     repo,
     cursor: cursor ?? null,
     limit,
+    archived,
   });
 }
 
@@ -55,8 +57,12 @@ export async function setRuntimeSessionPinned(
   await invoke("runtime_set_session_pinned", { repo, sessionId, pinned });
 }
 
-export async function archiveRuntimeSession(repo: string, sessionId: string): Promise<void> {
-  await invoke("runtime_archive_session", { repo, sessionId });
+export async function archiveRuntimeSession(
+  repo: string,
+  sessionId: string,
+  archived = true,
+): Promise<void> {
+  await invoke("runtime_archive_session", { repo, sessionId, archived });
 }
 
 export async function deleteRuntimeSessions(repo: string, sessionIds: string[]): Promise<void> {
