@@ -6,7 +6,10 @@ use medusa_config::{
 use reqwest::{StatusCode, blocking::Client};
 use serde::Deserialize;
 
-use crate::blocking_response_json;
+use crate::{
+    blocking_response_json,
+    endpoint_security::{EndpointSource, ambient_credential_allowed, validate_provider_endpoint},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelDiscoveryError {
@@ -60,18 +63,29 @@ pub fn discover_models(
     let provider = config.model.provider.as_str();
     let catalog = provider_catalog_entry(provider).ok_or(ModelDiscoveryError::Unsupported)?;
 
-    let base_url = config
-        .model
-        .base_url
-        .as_deref()
-        .or(catalog.base_url)
-        .or_else(|| default_base_url(catalog.id))
-        .ok_or(ModelDiscoveryError::Unsupported)?
-        .trim_end_matches('/');
+    let (base_url, endpoint_source) = if let Some(base_url) = config.model.base_url.as_deref() {
+        (base_url, EndpointSource::RepositoryConfig)
+    } else if let Some(base_url) = catalog.base_url {
+        (base_url, EndpointSource::Default)
+    } else if let Some(base_url) = default_base_url(catalog.id) {
+        (base_url, EndpointSource::Default)
+    } else {
+        return Err(ModelDiscoveryError::Unsupported);
+    };
+    let base_url = base_url.trim_end_matches('/');
+    validate_provider_endpoint(base_url).map_err(|_| ModelDiscoveryError::InvalidResponse)?;
     let endpoint = format!("{base_url}/models");
 
-    let environment_key =
-        credential_environment(catalog.profile_provider).and_then(|name| env::var(name).ok());
+    let ambient_key_allowed = ambient_credential_allowed(
+        endpoint_source,
+        base_url,
+        canonical_host(catalog.id),
+    );
+    let environment_key = ambient_key_allowed
+        .then(|| {
+            credential_environment(catalog.profile_provider).and_then(|name| env::var(name).ok())
+        })
+        .flatten();
     let api_key = session_api_key
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
@@ -133,6 +147,15 @@ fn default_base_url(provider_id: &str) -> Option<&'static str> {
         "openai" => Some("https://api.openai.com/v1"),
         "anthropic" => Some("https://api.anthropic.com/v1"),
         "minimax" => Some("https://api.minimax.io/anthropic"),
+        _ => None,
+    }
+}
+
+fn canonical_host(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        "openai" => Some("api.openai.com"),
+        "anthropic" => Some("api.anthropic.com"),
+        "minimax" => Some("api.minimax.io"),
         _ => None,
     }
 }
