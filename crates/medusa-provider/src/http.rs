@@ -448,14 +448,21 @@ fn classify_status_with_body(
 
 pub(crate) fn provider_error(error: reqwest::Error) -> MedusaError {
     let message = if error.is_connect() {
-        let endpoint = error
-            .url()
-            .map_or_else(|| "the configured endpoint".to_owned(), ToString::to_string);
+        let endpoint = error.url().map_or_else(
+            || "the configured endpoint".to_owned(),
+            |url| {
+                let host = url.host_str().unwrap_or("configured endpoint");
+                match url.port() {
+                    Some(port) => format!("{}://{host}:{port}", url.scheme()),
+                    None => format!("{}://{host}", url.scheme()),
+                }
+            },
+        );
         format!(
-            "provider endpoint is unavailable at {endpoint}; start the local or gateway service, configure a reachable provider with `medusa config`, or configure model.fallback_providers: {error}"
+            "provider endpoint is unavailable at {endpoint}; start the local or gateway service, configure a reachable provider with `medusa config`, or configure model.fallback_providers"
         )
     } else {
-        format!("provider request failed: {error}")
+        "provider request failed".to_owned()
     };
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
@@ -485,6 +492,22 @@ mod tests {
     use reqwest::header::{HeaderMap, HeaderValue};
 
     use super::*;
+
+    #[test]
+    fn provider_errors_do_not_echo_sensitive_request_urls() {
+        let client = BlockingClient::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .expect("client");
+        let request = client
+            .get("http://127.0.0.1:9/path?token=super-secret")
+            .send()
+            .expect_err("closed local port");
+        let message = provider_error(request).to_string();
+        assert!(!message.contains("super-secret"));
+        assert!(!message.contains("/path"));
+        assert!(!message.contains("token="));
+    }
 
     #[test]
     fn cancellable_runtime_drops_pending_request_future() {
