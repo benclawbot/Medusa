@@ -76,11 +76,8 @@ pub fn discover_models(
     validate_provider_endpoint(base_url).map_err(|_| ModelDiscoveryError::InvalidResponse)?;
     let endpoint = format!("{base_url}/models");
 
-    let ambient_key_allowed = ambient_credential_allowed(
-        endpoint_source,
-        base_url,
-        canonical_host(catalog.id),
-    );
+    let ambient_key_allowed =
+        ambient_credential_allowed(endpoint_source, base_url, canonical_host(catalog.id));
     let environment_key = ambient_key_allowed
         .then(|| {
             credential_environment(catalog.profile_provider).and_then(|name| env::var(name).ok())
