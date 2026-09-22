@@ -787,16 +787,28 @@ mod tests {
 
     #[test]
     fn remote_http_is_rejected() {
-        let error = crate::endpoint_security::validate_provider_endpoint_with_policy("http://example.com/v1", true)
-            .expect_err("remote HTTP must fail");
+        let error = crate::endpoint_security::validate_provider_endpoint_with_policy(
+            "http://example.com/v1",
+            true,
+        )
+        .expect_err("remote HTTP must fail");
         assert!(error.to_string().contains("HTTPS"));
     }
 
     #[test]
     fn loopback_http_requires_explicit_opt_in() {
-        assert!(crate::endpoint_security::validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err());
-        crate::endpoint_security::validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", true)
-            .expect("explicit loopback development opt-in");
+        assert!(
+            crate::endpoint_security::validate_provider_endpoint_with_policy(
+                "http://127.0.0.1:8080/v1",
+                false
+            )
+            .is_err()
+        );
+        crate::endpoint_security::validate_provider_endpoint_with_policy(
+            "http://127.0.0.1:8080/v1",
+            true,
+        )
+        .expect("explicit loopback development opt-in");
     }
 
     #[test]
@@ -816,15 +828,21 @@ mod tests {
             "ChatGPT OAuth must rely on app-server authentication, not an API key"
         );
         assert!(
-            crate::endpoint_security::validate_provider_endpoint_with_policy("http://127.0.0.1:10531/v1", false).is_err()
+            crate::endpoint_security::validate_provider_endpoint_with_policy(
+                "http://127.0.0.1:10531/v1",
+                false
+            )
+            .is_err()
         );
     }
 
     #[test]
     fn embedded_endpoint_credentials_are_rejected() {
-        let error =
-            crate::endpoint_security::validate_provider_endpoint_with_policy("https://user:password@example.com/v1", false)
-                .expect_err("embedded credentials must fail");
+        let error = crate::endpoint_security::validate_provider_endpoint_with_policy(
+            "https://user:password@example.com/v1",
+            false,
+        )
+        .expect_err("embedded credentials must fail");
         assert!(error.to_string().contains("embedded credentials"));
     }
 }
