@@ -447,15 +447,17 @@ fn classify_status_with_body(
 }
 
 pub(crate) fn provider_error(error: reqwest::Error) -> MedusaError {
+    let endpoint = sanitized_provider_endpoint(error.url());
     let message = if error.is_connect() {
-        let endpoint = error
-            .url()
-            .map_or_else(|| "the configured endpoint".to_owned(), ToString::to_string);
         format!(
-            "provider endpoint is unavailable at {endpoint}; start the local or gateway service, configure a reachable provider with `medusa config`, or configure model.fallback_providers: {error}"
+            "provider endpoint is unavailable at {endpoint}; start the local or gateway service, configure a reachable provider with `medusa config`, or configure model.fallback_providers"
         )
+    } else if error.is_timeout() {
+        format!("provider request timed out at {endpoint}")
+    } else if let Some(status) = error.status() {
+        format!("provider request failed with HTTP {status} at {endpoint}")
     } else {
-        format!("provider request failed: {error}")
+        format!("provider request failed at {endpoint}")
     };
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
@@ -463,6 +465,18 @@ pub(crate) fn provider_error(error: reqwest::Error) -> MedusaError {
         message,
     )
     .with_retryable(true)
+}
+
+fn sanitized_provider_endpoint(url: Option<&reqwest::Url>) -> String {
+    let Some(url) = url else {
+        return "the configured endpoint".to_owned();
+    };
+    let mut sanitized = url.clone();
+    let _ = sanitized.set_username("");
+    let _ = sanitized.set_password(None);
+    sanitized.set_query(None);
+    sanitized.set_fragment(None);
+    sanitized.to_string()
 }
 
 pub(crate) fn provider_response_error(error: impl std::fmt::Display) -> MedusaError {
@@ -485,6 +499,19 @@ mod tests {
     use reqwest::header::{HeaderMap, HeaderValue};
 
     use super::*;
+
+    #[test]
+    fn provider_endpoint_errors_drop_credentials_query_and_fragment() {
+        let url = reqwest::Url::parse(
+            "https://user:password@example.test/v1/models?token=query-secret#fragment-secret",
+        )
+        .expect("test URL");
+        let endpoint = sanitized_provider_endpoint(Some(&url));
+        assert_eq!(endpoint, "https://example.test/v1/models");
+        for secret in ["user", "password", "query-secret", "fragment-secret"] {
+            assert!(!endpoint.contains(secret));
+        }
+    }
 
     #[test]
     fn cancellable_runtime_drops_pending_request_future() {
