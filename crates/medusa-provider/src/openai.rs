@@ -8,15 +8,15 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
+    ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse, OpenAiPromptTokenDetails,
+    ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role, Usage, async_response_error,
+    blocking_response_error,
     endpoint_security::{
         EndpointSource, canonical_https_origin, validate_provider_endpoint,
         validate_provider_endpoint_with_policy,
     },
-    OpenAiPromptTokenDetails, ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role,
-    Usage, async_response_error, blocking_response_error, openai_transport, provider_error,
-    provider_response_error, run_cancellable_request, shared_async_http_client,
-    shared_blocking_http_client, split_dynamic_system_context,
+    openai_transport, provider_error, provider_response_error, run_cancellable_request,
+    shared_async_http_client, shared_blocking_http_client, split_dynamic_system_context,
 };
 
 #[derive(Clone)]
@@ -814,8 +814,7 @@ mod tests {
             "ChatGPT OAuth must rely on app-server authentication, not an API key"
         );
         assert!(
-            validate_provider_endpoint_with_policy("http://127.0.0.1:10531/v1", false)
-            .is_err()
+            validate_provider_endpoint_with_policy("http://127.0.0.1:10531/v1", false).is_err()
         );
     }
 
