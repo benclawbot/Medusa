@@ -189,26 +189,6 @@ fn mutate_session_action(
     write_session_actions(repo, &actions)
 }
 
-fn remove_file_if_present(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("cannot delete {}: {error}", path.display())),
-    }
-}
-
-fn fallback_journal_root(repo: &Path) -> PathBuf {
-    fallback_session_root(repo)
-        .parent()
-        .and_then(Path::parent)
-        .map(|root| root.join("journals").join(repository_key(repo)))
-        .unwrap_or_else(|| {
-            std::env::temp_dir()
-                .join("Medusa/journals")
-                .join(repository_key(repo))
-        })
-}
-
 fn session_has_attached_frontends(repo: &Path, session_id: &str) -> Result<bool, String> {
     let path = repo
         .join(".medusa/continuity")
@@ -224,35 +204,6 @@ fn session_has_attached_frontends(repo: &Path, session_id: &str) -> Result<bool,
         .get("attachments")
         .and_then(Value::as_array)
         .is_some_and(|attachments| !attachments.is_empty()))
-}
-
-fn remove_session_files(repo: &Path, session_id: &str) -> Result<(), String> {
-    validate_session_id(session_id)?;
-    for path in [
-        repo.join(".medusa/sessions")
-            .join(format!("{session_id}.json")),
-        fallback_session_root(repo).join(format!("{session_id}.json")),
-        repo.join(".medusa/journals")
-            .join(format!("{session_id}.events")),
-        fallback_journal_root(repo).join(format!("{session_id}.events")),
-        repo.join(".medusa/continuity")
-            .join(format!("{session_id}.json")),
-    ] {
-        remove_file_if_present(&path)?;
-    }
-    if let Ok(mut indexes) = summary_indexes().lock() {
-        for index in indexes.values_mut() {
-            index.entries.retain(|path, _| {
-                path.file_stem().and_then(|value| value.to_str()) != Some(session_id)
-            });
-        }
-    }
-    if let Ok(mut indexes) = message_indexes().lock() {
-        indexes.retain(|path, _| {
-            path.file_stem().and_then(|value| value.to_str()) != Some(session_id)
-        });
-    }
-    Ok(())
 }
 
 fn summary_indexes() -> &'static Mutex<BTreeMap<PathBuf, RootIndex>> {
@@ -276,12 +227,14 @@ pub async fn runtime_list_sessions_page(
     repo: String,
     cursor: Option<String>,
     limit: Option<usize>,
+    archived: Option<bool>,
 ) -> Result<DesktopSessionPage, String> {
     run_blocking(move || {
-        list_sessions_page_sync(
+        list_sessions_page_filtered_sync(
             &repo,
             cursor.as_deref(),
             page_limit(limit, DEFAULT_SESSION_PAGE_SIZE),
+            archived.unwrap_or(false),
         )
     })
     .await
@@ -349,10 +302,14 @@ pub async fn runtime_set_session_pinned(
 }
 
 #[tauri::command]
-pub async fn runtime_archive_session(repo: String, session_id: String) -> Result<(), String> {
+pub async fn runtime_archive_session(
+    repo: String,
+    session_id: String,
+    archived: bool,
+) -> Result<(), String> {
     run_blocking(move || {
         let repo = canonical_repo(&repo)?;
-        mutate_session_action(&repo, &session_id, |action| action.archived = true)
+        mutate_session_action(&repo, &session_id, |action| action.archived = archived)
     })
     .await
 }
@@ -404,7 +361,8 @@ pub async fn runtime_delete_sessions(
         write_session_actions(&repo, &actions)?;
 
         for session_id in unique {
-            remove_session_files(&repo, &session_id)?;
+            medusa_runtime::checkpoint_store::dispose_completed_session(&repo, &session_id)
+                .map_err(|error| error.to_string())?;
         }
         Ok(())
     })
@@ -428,6 +386,15 @@ fn list_sessions_page_sync(
     cursor: Option<&str>,
     limit: usize,
 ) -> Result<DesktopSessionPage, String> {
+    list_sessions_page_filtered_sync(repo, cursor, limit, false)
+}
+
+fn list_sessions_page_filtered_sync(
+    repo: &str,
+    cursor: Option<&str>,
+    limit: usize,
+    archived: bool,
+) -> Result<DesktopSessionPage, String> {
     let repo = canonical_repo(repo)?;
     let mut sessions = BTreeMap::new();
     collect_sessions_indexed(&repo.join(".medusa/sessions"), &mut sessions)?;
@@ -437,7 +404,9 @@ fn list_sessions_page_sync(
         .into_values()
         .filter_map(|mut session| {
             let action = actions.sessions.get(&session.id);
-            if action.is_some_and(|action| action.archived || action.deleted) {
+            if action.is_some_and(|action| action.deleted)
+                || action.is_some_and(|action| action.archived) != archived
+            {
                 return None;
             }
             apply_session_action(&mut session, action);
@@ -1123,10 +1092,21 @@ mod tests {
             vec!["b"]
         );
 
+        let archived =
+            list_sessions_page_filtered_sync(&repo_text, None, 10, true).expect("archived page");
+        assert_eq!(
+            archived
+                .sessions
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+
         let mut actions = load_session_actions(&canonical).expect("actions");
         actions.sessions.entry("b".to_owned()).or_default().deleted = true;
         write_session_actions(&canonical, &actions).expect("persist delete");
-        remove_session_files(&canonical, "b").expect("remove files");
+        fs::remove_file(root.join("b.json")).expect("remove file");
         let page = list_sessions_page_sync(&repo_text, None, 10).expect("deleted page");
         assert!(page.sessions.is_empty());
         assert!(!root.join("b.json").exists());

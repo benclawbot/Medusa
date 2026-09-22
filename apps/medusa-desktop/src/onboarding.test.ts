@@ -73,6 +73,12 @@ describe("Desktop onboarding state authority", () => {
     expect(initialOnboardingStep(partial, [provider])).toBe("authentication");
   });
 
+  it("requires onboarding when a configured profile loses its API key", () => {
+    const missingCredential = config({ credentialConfigured: false });
+    expect(configurationIsUsable(missingCredential, [provider])).toBe(false);
+    expect(initialOnboardingStep(missingCredential, [provider])).toBe("authentication");
+  });
+
   it("resumes at model selection after authentication", () => {
     const partial = config({ configured: false, model: "" });
     expect(initialOnboardingStep(partial, [provider])).toBe("model");

@@ -134,6 +134,47 @@ it("does not treat an OAuth route as authenticated merely because it has no API 
   expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled();
 });
 
+it("requires credentials after switching away from a configured API-key provider", () => {
+  const configuredProvider: ProviderCatalogEntry = {
+    ...localProvider,
+    id: "configured",
+    connection: "configured",
+    profileProvider: "configured",
+    authMethods: ["api-key"],
+    defaultAuth: "api-key",
+    credentialConfigured: true,
+  };
+  const unconfiguredProvider: ProviderCatalogEntry = {
+    ...configuredProvider,
+    id: "unconfigured",
+    connection: "unconfigured",
+    profileProvider: "unconfigured",
+    credentialConfigured: false,
+  };
+  const configuredApiKey = {
+    ...configuration,
+    connection: "configured",
+    provider: "configured",
+    model: "local-model",
+    auth: "api-key",
+    credentialConfigured: true,
+  };
+  render(
+    <DesktopOnboarding
+      configuration={configuredApiKey}
+      providers={[configuredProvider, unconfiguredProvider]}
+      onApply={vi.fn()}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "unconfigured" } });
+  fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+  expect(screen.getByRole("heading", { name: "Authenticate" })).toBeInTheDocument();
+});
+
 it("defaults first-run permissions to Ask for approval and saves the reviewed choice", async () => {
   const onApply = vi.fn().mockResolvedValue(undefined);
   render(<DesktopOnboarding configuration={localConfiguration} providers={[localProvider]} onApply={onApply} />);

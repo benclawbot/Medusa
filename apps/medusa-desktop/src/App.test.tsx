@@ -111,7 +111,7 @@ vi.mock("./runtime", async () => {
       effort: "medium",
       auth: "api-key",
       configured: true,
-      credentialConfigured: false,
+      credentialConfigured: true,
     }),
     startRuntime: vi.fn(),
     resumeRuntime: vi.fn(),
@@ -142,7 +142,7 @@ beforeEach(() => {
     effort: "medium",
     auth: "api-key",
     configured: true,
-    credentialConfigured: false,
+    credentialConfigured: true,
   });
   vi.mocked(startRuntime).mockReset();
   vi.mocked(resumeRuntime).mockReset();
@@ -240,7 +240,7 @@ it("keeps polling the original runtime after a resume transition fails", async (
   expect(pollRuntime).not.toHaveBeenCalledWith("runtime-resumed");
 });
 
-it("starts the desktop before OAuth preflight completes", async () => {
+it("starts the desktop before OAuth preflight completes for an authenticated account", async () => {
   vi.mocked(loadSharedConfiguration).mockResolvedValue({
     revision: 0,
     activeProfile: "default",
@@ -250,7 +250,7 @@ it("starts the desktop before OAuth preflight completes", async () => {
     effort: "medium",
     auth: "none",
     configured: true,
-    credentialConfigured: false,
+    credentialConfigured: true,
   });
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-oauth", repo: "" });
   let finishPreflight: () => void = () => undefined;
@@ -268,6 +268,24 @@ it("starts the desktop before OAuth preflight completes", async () => {
   expect(screen.getByRole("textbox")).toBeEnabled();
 
   finishPreflight();
+});
+
+it("returns to setup instead of starting with a missing API key", async () => {
+  vi.mocked(loadSharedConfiguration).mockResolvedValue({
+    revision: 0,
+    activeProfile: "default",
+    connection: "direct",
+    provider: "minimax",
+    model: "MiniMax-M3",
+    effort: "medium",
+    auth: "api-key",
+    configured: true,
+    credentialConfigured: false,
+  });
+  render(<App />);
+
+  expect(await screen.findByRole("heading", { name: "Set up Medusa" })).toBeInTheDocument();
+  expect(startRuntime).not.toHaveBeenCalled();
 });
 
 it("keeps the composer usable while initial runtime configuration is pending", async () => {

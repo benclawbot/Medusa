@@ -47,6 +47,7 @@ beforeEach(() => {
   vi.mocked(setRuntimeSessionPinned).mockReset().mockResolvedValue(undefined);
   vi.mocked(archiveRuntimeSession).mockReset().mockResolvedValue(undefined);
   vi.mocked(deleteRuntimeSessions).mockReset().mockResolvedValue(undefined);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -92,7 +93,7 @@ it("header menu can select all, individually untick, and bulk delete the remaind
   await screen.findByText("Alpha chat");
 
   fireEvent.click(screen.getByRole("button", { name: "Recent session options" }));
-  fireEvent.click(screen.getByRole("menuitem", { name: "Select all" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Select all visible sessions" }));
 
   const alpha = screen.getByRole("checkbox", { name: "Select Alpha chat" });
   const beta = screen.getByRole("checkbox", { name: "Select Beta chat" });
@@ -116,4 +117,31 @@ it("header Select none enters selection mode with every recent session unticked"
   expect(screen.getByRole("checkbox", { name: "Select Alpha chat" })).not.toBeChecked();
   expect(screen.getByRole("checkbox", { name: "Select Beta chat" })).not.toBeChecked();
   expect(screen.getByRole("button", { name: "Delete selected" })).toBeDisabled();
+});
+
+it("can restore archived sessions", async () => {
+  render(<SessionDock />);
+  await screen.findByText("Alpha chat");
+
+  fireEvent.click(screen.getByRole("button", { name: "Recent session options" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Show archived sessions" }));
+  await waitFor(() => expect(listRuntimeSessionPage).toHaveBeenLastCalledWith("/repo", undefined, 24, true));
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for Alpha chat" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Restore to Recent" }));
+  await waitFor(() => expect(archiveRuntimeSession).toHaveBeenCalledWith("/repo", "session-a", false));
+});
+
+it("loads older sessions from the returned cursor", async () => {
+  vi.mocked(listRuntimeSessionPage)
+    .mockReset()
+    .mockResolvedValueOnce({ sessions: [sessions[0]], nextCursor: "older" })
+    .mockResolvedValueOnce({ sessions: [sessions[1]] });
+  render(<SessionDock />);
+
+  expect(await screen.findByText("Alpha chat")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Load older sessions" }));
+
+  expect(await screen.findByText("Beta chat")).toBeInTheDocument();
+  expect(listRuntimeSessionPage).toHaveBeenLastCalledWith("/repo", "older", 24, false);
 });

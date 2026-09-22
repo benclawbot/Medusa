@@ -374,6 +374,27 @@
   color: #ef6b63;
 }
 
+.recent-session-menu button:disabled,
+.recent-selection-toolbar > button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.recent-session-load-more {
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.recent-session-load-more:hover:not(:disabled) {
+  background: var(--surface-soft, #333);
+}
+
 .recent-menu-icon-placeholder {
   width: 14px;
   height: 14px;

@@ -66,7 +66,7 @@ export function DesktopOnboarding({ configuration, providers, error, onApply }: 
   const oauth = selectedProvider?.browserOauth ?? false;
   const credentialReady = oauth
     ? oauthConnected
-    : credentialless || configuration.credentialConfigured;
+    : credentialless || selectedProvider?.credentialConfigured === true;
 
   useEffect(() => {
     let cancelled = false;
