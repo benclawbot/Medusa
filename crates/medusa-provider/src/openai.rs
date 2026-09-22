@@ -13,7 +13,7 @@ use crate::{
     Usage, async_response_error, blocking_response_error,
     endpoint_security::{
         EndpointSource, canonical_https_origin, configured_endpoint_source,
-        validate_provider_endpoint, validate_provider_endpoint_with_policy,
+        validate_provider_endpoint,
     },
     openai_transport, provider_error, provider_response_error, run_cancellable_request,
     shared_async_http_client, shared_blocking_http_client, split_dynamic_system_context,
@@ -360,7 +360,7 @@ impl ModelProvider for OpenAiProvider {
 fn resolve_base_url(config: &Config, provider: &str) -> (String, EndpointSource) {
     if let Some(base_url) = config.model.base_url.clone() {
         let provider_env = format!("{provider}_BASE_URL");
-        let source = configured_endpoint_source(config, &base_url, &[provider_env.as_str()]);
+        let source = configured_endpoint_source(&base_url, &[provider_env.as_str()]);
         return (base_url, source);
     }
     if let Ok(base_url) = env::var(format!("{provider}_BASE_URL")) {
@@ -787,15 +787,15 @@ mod tests {
 
     #[test]
     fn remote_http_is_rejected() {
-        let error = validate_provider_endpoint_with_policy("http://example.com/v1", true)
+        let error = crate::endpoint_security::validate_provider_endpoint_with_policy("http://example.com/v1", true)
             .expect_err("remote HTTP must fail");
         assert!(error.to_string().contains("HTTPS"));
     }
 
     #[test]
     fn loopback_http_requires_explicit_opt_in() {
-        assert!(validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err());
-        validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", true)
+        assert!(crate::endpoint_security::validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", false).is_err());
+        crate::endpoint_security::validate_provider_endpoint_with_policy("http://127.0.0.1:8080/v1", true)
             .expect("explicit loopback development opt-in");
     }
 
@@ -816,14 +816,14 @@ mod tests {
             "ChatGPT OAuth must rely on app-server authentication, not an API key"
         );
         assert!(
-            validate_provider_endpoint_with_policy("http://127.0.0.1:10531/v1", false).is_err()
+            crate::endpoint_security::validate_provider_endpoint_with_policy("http://127.0.0.1:10531/v1", false).is_err()
         );
     }
 
     #[test]
     fn embedded_endpoint_credentials_are_rejected() {
         let error =
-            validate_provider_endpoint_with_policy("https://user:password@example.com/v1", false)
+            crate::endpoint_security::validate_provider_endpoint_with_policy("https://user:password@example.com/v1", false)
                 .expect_err("embedded credentials must fail");
         assert!(error.to_string().contains("embedded credentials"));
     }
