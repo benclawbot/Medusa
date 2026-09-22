@@ -1079,7 +1079,7 @@ mod tests {
 
     #[test]
     fn oversized_base64_is_rejected_before_decode() {
-        let encoded = "A".repeat(((MAX_TOTAL_ATTACHMENT_BYTES + 2) / 3) * 4 + 1);
+        let encoded = "A".repeat(MAX_TOTAL_ATTACHMENT_BYTES.div_ceil(3) * 4 + 1);
         let error = reject_oversized_base64(
             "huge.bin",
             &encoded,
