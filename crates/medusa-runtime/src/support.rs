@@ -655,16 +655,25 @@ pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, R
                         bytes: bytes.len(),
                     });
                 }
-                let text = String::from_utf8(bytes).map_err(|_| RuntimeError::BinaryFile {
-                    path: file.path.clone(),
-                })?;
-                blocks.push(MessageBlock::Text {
-                    text: format!(
-                        "<attached_file path=\"{}\">\n{}\n</attached_file>",
-                        file.path.display(),
-                        text
-                    ),
-                });
+                match String::from_utf8(bytes) {
+                    Ok(text) => blocks.push(MessageBlock::Text {
+                        text: format!(
+                            "<attached_file path=\"{}\">\n{}\n</attached_file>",
+                            file.path.display(),
+                            text
+                        ),
+                    }),
+                    Err(error) => {
+                        let bytes = error.into_bytes();
+                        blocks.push(MessageBlock::Text {
+                            text: format!(
+                                "<attached_binary_file path=\"{}\" encoding=\"base64\">\n{}\n</attached_binary_file>",
+                                file.path.display(),
+                                STANDARD.encode(bytes)
+                            ),
+                        });
+                    }
+                }
             }
         }
     }
@@ -684,6 +693,8 @@ fn encoded_image_info(bytes: &[u8], path: &Path) -> Result<Option<EncodedImageIn
         Some(parse_png_dimensions(bytes))
     } else if bytes.starts_with(&[0xff, 0xd8]) {
         Some(parse_jpeg_dimensions(bytes))
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(parse_gif_dimensions(bytes))
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         Some(parse_webp_dimensions(bytes))
     } else {
@@ -772,6 +783,17 @@ fn parse_jpeg_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
         cursor = cursor.saturating_add(length);
     }
     None
+}
+
+fn parse_gif_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+    if bytes.len() < 10 {
+        return None;
+    }
+    Some((
+        "image/gif",
+        u32::from(u16::from_le_bytes([bytes[6], bytes[7]])),
+        u32::from(u16::from_le_bytes([bytes[8], bytes[9]])),
+    ))
 }
 
 fn parse_webp_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
@@ -958,6 +980,12 @@ mod tests {
             0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
         ];
         assert_eq!(parse_jpeg_dimensions(&bytes), Some(("image/jpeg", 3, 2)));
+    }
+
+    #[test]
+    fn encoded_gif_dimensions_are_detected() {
+        let bytes = b"GIF89a\x03\x00\x02\x00";
+        assert_eq!(parse_gif_dimensions(bytes), Some(("image/gif", 3, 2)));
     }
 
     #[test]
