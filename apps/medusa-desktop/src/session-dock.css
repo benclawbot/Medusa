@@ -247,3 +247,160 @@
 @keyframes session-dock-spin {
   to { transform: rotate(360deg); }
 }
+
+
+/* Recent-session row actions and bulk selection. */
+.recent-sessions-heading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recent-sessions-heading-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recent-selection-count {
+  color: var(--muted, #77776f);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.recent-session-item {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.recent-session-item .recent-session-row {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.recent-session-checkbox {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  margin: 0 3px 0 0;
+  accent-color: currentColor;
+}
+
+.recent-session-more,
+.recent-sessions-more {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted, #77776f);
+}
+
+.recent-session-more {
+  opacity: 0;
+}
+
+.recent-session-item:hover .recent-session-more,
+.recent-session-item:focus-within .recent-session-more,
+.recent-session-item.menu-open .recent-session-more,
+.recent-sessions-heading .recent-sessions-more {
+  opacity: 1;
+}
+
+.recent-session-more:hover,
+.recent-sessions-more:hover {
+  background: var(--surface-soft, #f0f0ed);
+  color: var(--text, #242421);
+}
+
+.recent-session-meta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.recent-session-pinned {
+  flex: 0 0 auto;
+}
+
+.recent-session-menu {
+  position: absolute;
+  z-index: 1200;
+  top: calc(100% - 2px);
+  right: 0;
+  display: grid;
+  min-width: 170px;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line-strong, #d8d8d2);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .18);
+}
+
+.recent-session-bulk-menu {
+  top: calc(100% + 3px);
+}
+
+.recent-session-menu button {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.recent-session-menu button:hover:not(:disabled) {
+  background: var(--surface-soft, #f0f0ed);
+}
+
+.recent-session-menu button.danger {
+  color: var(--danger, #b42318);
+}
+
+.recent-session-menu button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.recent-session-rename {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 32px;
+  flex: 1 1 auto;
+  border: 1px solid var(--line-strong, #d8d8d2);
+  border-radius: 6px;
+  padding: 0 7px;
+  background: var(--surface, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+.recent-session-checkbox:focus-visible,
+.recent-session-more:focus-visible,
+.recent-sessions-more:focus-visible,
+.recent-session-menu button:focus-visible,
+.recent-session-rename:focus-visible {
+  outline: 2px solid var(--purple, #6941c6);
+  outline-offset: 1px;
+}
