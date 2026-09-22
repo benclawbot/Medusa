@@ -227,6 +227,12 @@ impl RuntimeEntry {
                             canonical.display()
                         ));
                     }
+                    let file_len = fs::metadata(&canonical)
+                        .map_err(|error| format!("cannot inspect {}: {error}", canonical.display()))?
+                        .len();
+                    let file_len = usize::try_from(file_len)
+                        .map_err(|_| format!("attachment {} is too large", canonical.display()))?;
+                    checked_total(total, file_len)?;
                     let bytes = fs::read(&canonical)
                         .map_err(|error| format!("cannot read {}: {error}", canonical.display()))?;
                     total = checked_total(total, bytes.len())?;
@@ -266,6 +272,7 @@ impl RuntimeEntry {
                     ) {
                         return Err(format!("image attachment {name} has unsupported type {mime_type}"));
                     }
+                    reject_oversized_base64(&name, encoded, MAX_IMAGE_BYTES)?;
                     let bytes = STANDARD
                         .decode(encoded)
                         .map_err(|error| format!("cannot decode image attachment {name}: {error}"))?;
@@ -1005,6 +1012,7 @@ fn decode_file_data_url(name: &str, data_url: &str) -> Result<(Option<String>, V
         return Err(format!("file attachment {name} has unsupported data URL parameters"));
     }
     let mime_type = (!media_type.trim().is_empty()).then(|| media_type.to_ascii_lowercase());
+    reject_oversized_base64(name, encoded, MAX_TOTAL_ATTACHMENT_BYTES)?;
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|error| format!("cannot decode file attachment {name}: {error}"))?;
@@ -1012,6 +1020,21 @@ fn decode_file_data_url(name: &str, data_url: &str) -> Result<(Option<String>, V
         return Err(format!("file attachment {name} is empty"));
     }
     Ok((mime_type, bytes))
+}
+
+fn reject_oversized_base64(name: &str, encoded: &str, decoded_limit: usize) -> Result<(), String> {
+    // Four Base64 characters encode at most three bytes. Check the encoded input before
+    // decoding so an untrusted renderer cannot force an oversized allocation first.
+    let encoded_limit = decoded_limit
+        .saturating_add(2)
+        .saturating_div(3)
+        .saturating_mul(4);
+    if encoded.len() > encoded_limit {
+        return Err(format!(
+            "attachment {name} exceeds the {decoded_limit} byte limit"
+        ));
+    }
+    Ok(())
 }
 
 fn checked_total(total: usize, additional: usize) -> Result<usize, String> {
@@ -1052,6 +1075,18 @@ mod tests {
         .expect("decode generic file");
         assert_eq!(mime_type.as_deref(), Some("application/pdf"));
         assert_eq!(bytes, b"%PDF-1.4");
+    }
+
+    #[test]
+    fn oversized_base64_is_rejected_before_decode() {
+        let encoded = "A".repeat(((MAX_TOTAL_ATTACHMENT_BYTES + 2) / 3) * 4 + 1);
+        let error = reject_oversized_base64(
+            "huge.bin",
+            &encoded,
+            MAX_TOTAL_ATTACHMENT_BYTES,
+        )
+        .expect_err("oversized encoded payload must fail");
+        assert!(error.contains("limit"));
     }
 
     #[test]
