@@ -46,6 +46,14 @@ fn generated_and_policy_sensitive_paths_are_classified() {
 }
 
 #[test]
+fn review_paths_reject_traversal_and_absolute_targets() {
+    assert!(validate_review_relative_path("src/lib.rs").is_ok());
+    assert!(validate_review_relative_path("../outside.txt").is_err());
+    assert!(validate_review_relative_path("./src/lib.rs").is_err());
+    assert!(validate_review_relative_path("/tmp/outside.txt").is_err());
+}
+
+#[test]
 fn baseline_preserves_preexisting_tracked_and_untracked_changes() {
     let repo = repository();
     fs::write(repo.path().join("tracked.txt"), "user change\n").expect("user change");
