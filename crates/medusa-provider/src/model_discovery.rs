@@ -67,7 +67,10 @@ pub fn discover_models(
     let catalog = provider_catalog_entry(provider).ok_or(ModelDiscoveryError::Unsupported)?;
 
     let (base_url, endpoint_source) = if let Some(base_url) = config.model.base_url.as_deref() {
-        let env_name = format!("{}_BASE_URL", catalog.id.to_ascii_uppercase().replace('-', "_"));
+        let env_name = format!(
+            "{}_BASE_URL",
+            catalog.id.to_ascii_uppercase().replace('-', "_")
+        );
         (
             base_url,
             configured_endpoint_source(config, base_url, &[env_name.as_str()]),
