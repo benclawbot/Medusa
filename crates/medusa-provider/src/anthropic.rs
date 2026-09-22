@@ -12,15 +12,19 @@ use std::{
 
 use medusa_config::{Config, model_capabilities};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::{Client as AsyncClient, Url, blocking::Client as BlockingClient};
+use reqwest::{Client as AsyncClient, blocking::Client as BlockingClient};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
     IncrementalVisibleText, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
     ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Usage, async_response_error,
-    async_response_json, blocking_response_error, blocking_response_json, provider_error,
-    run_cancellable_request, shared_async_http_client, shared_blocking_http_client,
+    async_response_json, blocking_response_error, blocking_response_json,
+    endpoint_security::{
+        EndpointSource, ambient_credential_allowed, configured_endpoint_source,
+        validate_provider_endpoint,
+    },
+    provider_error, run_cancellable_request, shared_async_http_client, shared_blocking_http_client,
     split_dynamic_system_context,
 };
 
@@ -56,17 +60,10 @@ impl MiniMaxProvider {
         session_api_key: Option<String>,
     ) -> MedusaResult<Self> {
         let settings = provider_settings(&config.model.provider)?;
-        let (base_url, repository_endpoint) = match config.model.base_url.clone() {
-            Some(base_url) => (base_url, true),
-            None => (
-                env::var(settings.base_url_env)
-                    .unwrap_or_else(|_| settings.default_base_url.to_owned()),
-                false,
-            ),
-        };
-        validate_provider_base_url(&base_url)?;
+        let (base_url, endpoint_source) = resolve_base_url(config, &settings);
+        validate_provider_endpoint(&base_url)?;
         let ambient_key_allowed =
-            !repository_endpoint || canonical_provider_origin(&base_url, settings.canonical_host);
+            ambient_credential_allowed(endpoint_source, &base_url, settings.canonical_host);
         let api_key = session_api_key
             .filter(|value| !value.trim().is_empty())
             .or_else(|| {
@@ -75,15 +72,16 @@ impl MiniMaxProvider {
                     .flatten()
             })
             .ok_or_else(|| {
-                let suffix = if repository_endpoint && !ambient_key_allowed {
-                    "; repository-configured endpoints cannot inherit ambient credentials; provide an explicit session credential"
-                } else {
-                    ""
-                };
+                let mut message = format!("missing provider credential in {}", settings.api_key_env);
+                if endpoint_source == EndpointSource::RepositoryConfig && !ambient_key_allowed {
+                    message.push_str(
+                        "; repository-configured endpoints cannot inherit ambient credentials unless the endpoint is the provider's canonical origin; use an explicit session credential or a user-level provider endpoint setting",
+                    );
+                }
                 MedusaError::new(
                     ErrorCode::DependencyUnavailable,
                     ErrorCategory::Environment,
-                    format!("missing provider credential in {}{suffix}", settings.api_key_env),
+                    message,
                 )
             })?;
         let mut capabilities = (settings.capabilities)();
@@ -461,41 +459,22 @@ struct ProviderSettings {
     api_key_env: &'static str,
     base_url_env: &'static str,
     default_base_url: &'static str,
-    canonical_host: &'static str,
+    canonical_host: Option<&'static str>,
     capabilities: fn() -> ProviderCapabilities,
 }
 
-fn validate_provider_base_url(base_url: &str) -> MedusaResult<()> {
-    let url = Url::parse(base_url).map_err(|_| {
-        MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Validation,
-            "provider base_url is invalid",
-        )
-    })?;
-    if url.username() != "" || url.password().is_some() {
-        return Err(MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Validation,
-            "provider base_url must not contain embedded credentials",
-        ));
+fn resolve_base_url(config: &Config, settings: &ProviderSettings) -> (String, EndpointSource) {
+    if let Some(base_url) = config.model.base_url.clone() {
+        let source = configured_endpoint_source(&base_url, &[settings.base_url_env]);
+        return (base_url, source);
     }
-    if url.scheme() != "https" {
-        return Err(MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Validation,
-            "provider base_url must use HTTPS",
-        ));
+    if let Ok(base_url) = env::var(settings.base_url_env) {
+        return (base_url, EndpointSource::Environment);
     }
-    Ok(())
-}
-
-fn canonical_provider_origin(base_url: &str, expected_host: &str) -> bool {
-    Url::parse(base_url).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.host_str() == Some(expected_host)
-            && url.port_or_known_default() == Some(443)
-    })
+    (
+        settings.default_base_url.to_owned(),
+        EndpointSource::Default,
+    )
 }
 
 fn provider_settings(provider: &str) -> MedusaResult<ProviderSettings> {
@@ -504,21 +483,21 @@ fn provider_settings(provider: &str) -> MedusaResult<ProviderSettings> {
             api_key_env: "MINIMAX_API_KEY",
             base_url_env: "MINIMAX_BASE_URL",
             default_base_url: "https://api.minimax.io/anthropic",
-            canonical_host: "api.minimax.io",
+            canonical_host: Some("api.minimax.io"),
             capabilities: minimax_capabilities_from_environment,
         }),
         "anthropic" => Ok(ProviderSettings {
             api_key_env: "ANTHROPIC_API_KEY",
             base_url_env: "ANTHROPIC_BASE_URL",
             default_base_url: "https://api.anthropic.com",
-            canonical_host: "api.anthropic.com",
+            canonical_host: Some("api.anthropic.com"),
             capabilities: anthropic_capabilities,
         }),
         "anthropic-compatible" => Ok(ProviderSettings {
             api_key_env: "MEDUSA_API_KEY",
             base_url_env: "MEDUSA_BASE_URL",
             default_base_url: "https://api.minimax.io/anthropic",
-            canonical_host: "api.minimax.io",
+            canonical_host: None,
             capabilities: ProviderCapabilities::default,
         }),
         other => Err(MedusaError::new(
@@ -1075,25 +1054,6 @@ mod tests {
             capabilities: anthropic_capabilities(),
             wire_history: Arc::default(),
         }
-    }
-
-    #[test]
-    fn provider_endpoint_policy_rejects_cleartext_and_embedded_credentials() {
-        assert!(validate_provider_base_url("http://api.anthropic.com").is_err());
-        assert!(validate_provider_base_url("https://user:secret@api.anthropic.com").is_err());
-        validate_provider_base_url("https://api.anthropic.com").expect("canonical HTTPS endpoint");
-    }
-
-    #[test]
-    fn repository_override_only_inherits_credentials_on_canonical_origin() {
-        assert!(canonical_provider_origin(
-            "https://api.anthropic.com/v1",
-            "api.anthropic.com"
-        ));
-        assert!(!canonical_provider_origin(
-            "https://attacker.example/v1",
-            "api.anthropic.com"
-        ));
     }
 
     #[test]
