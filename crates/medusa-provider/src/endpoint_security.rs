@@ -1,6 +1,6 @@
 use std::{env, net::IpAddr};
 
-use medusa_config::{Config, ProviderProfileCatalog};
+use medusa_config::ProviderProfileCatalog;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::Url;
 
@@ -27,7 +27,6 @@ pub(crate) fn validate_provider_endpoint_with_policy(
 }
 
 pub(crate) fn configured_endpoint_source(
-    config: &Config,
     base_url: &str,
     environment_names: &[&str],
 ) -> EndpointSource {
