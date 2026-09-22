@@ -18,10 +18,10 @@ use serde_json::{Value, json};
 
 use crate::{
     IncrementalVisibleText, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
-    endpoint_security::{EndpointSource, ambient_credential_allowed, validate_provider_endpoint},
     ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Usage, async_response_error,
-    async_response_json, blocking_response_error, blocking_response_json, provider_error,
-    run_cancellable_request, shared_async_http_client, shared_blocking_http_client,
+    async_response_json, blocking_response_error, blocking_response_json,
+    endpoint_security::{EndpointSource, ambient_credential_allowed, validate_provider_endpoint},
+    provider_error, run_cancellable_request, shared_async_http_client, shared_blocking_http_client,
     split_dynamic_system_context,
 };
 
@@ -467,7 +467,10 @@ fn resolve_base_url(config: &Config, settings: &ProviderSettings) -> (String, En
     if let Ok(base_url) = env::var(settings.base_url_env) {
         return (base_url, EndpointSource::Environment);
     }
-    (settings.default_base_url.to_owned(), EndpointSource::Default)
+    (
+        settings.default_base_url.to_owned(),
+        EndpointSource::Default,
+    )
 }
 
 fn provider_settings(provider: &str) -> MedusaResult<ProviderSettings> {
