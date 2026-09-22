@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse, OpenAiPromptTokenDetails,
-    ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role, Usage, async_response_error,
-    blocking_response_error,
+    ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
+    OpenAiPromptTokenDetails, ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role,
+    Usage, async_response_error, blocking_response_error,
     endpoint_security::{
         EndpointSource, canonical_https_origin, validate_provider_endpoint,
         validate_provider_endpoint_with_policy,
