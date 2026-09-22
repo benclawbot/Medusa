@@ -815,7 +815,9 @@ mod tests {
             provider.api_key.is_none(),
             "ChatGPT OAuth must rely on app-server authentication, not an API key"
         );
-        assert!(validate_provider_endpoint_with_policy("http://127.0.0.1:10531/v1", false).is_err());
+        assert!(
+            validate_provider_endpoint_with_policy("http://127.0.0.1:10531/v1", false).is_err()
+        );
     }
 
     #[test]
