@@ -1,5 +1,6 @@
 use std::{env, net::IpAddr};
 
+use medusa_config::{Config, ProviderProfileCatalog};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::Url;
 
@@ -23,6 +24,29 @@ pub(crate) fn validate_provider_endpoint_with_policy(
 ) -> MedusaResult<()> {
     let url = parse_provider_endpoint(base_url)?;
     validate_parsed_provider_endpoint(&url, allow_insecure_loopback)
+}
+
+pub(crate) fn configured_endpoint_source(
+    config: &Config,
+    base_url: &str,
+    environment_names: &[&str],
+) -> EndpointSource {
+    if environment_names
+        .iter()
+        .any(|name| env::var(name).is_ok_and(|value| value == base_url))
+    {
+        return EndpointSource::Environment;
+    }
+    if ProviderProfileCatalog::user()
+        .and_then(|catalog| catalog.active_store())
+        .and_then(|store| store.load())
+        .ok()
+        .and_then(|profile| profile.base_url)
+        .is_some_and(|value| value == base_url)
+    {
+        return EndpointSource::Environment;
+    }
+    EndpointSource::RepositoryConfig
 }
 
 pub(crate) fn ambient_credential_allowed(
