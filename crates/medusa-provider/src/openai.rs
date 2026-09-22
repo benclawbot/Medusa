@@ -12,8 +12,8 @@ use crate::{
     OpenAiPromptTokenDetails, ProviderCapabilities, ProviderStreamEvent, ResponseBlock, Role,
     Usage, async_response_error, blocking_response_error,
     endpoint_security::{
-        EndpointSource, canonical_https_origin, validate_provider_endpoint,
-        validate_provider_endpoint_with_policy,
+        EndpointSource, canonical_https_origin, configured_endpoint_source,
+        validate_provider_endpoint, validate_provider_endpoint_with_policy,
     },
     openai_transport, provider_error, provider_response_error, run_cancellable_request,
     shared_async_http_client, shared_blocking_http_client, split_dynamic_system_context,
@@ -359,7 +359,9 @@ impl ModelProvider for OpenAiProvider {
 
 fn resolve_base_url(config: &Config, provider: &str) -> (String, EndpointSource) {
     if let Some(base_url) = config.model.base_url.clone() {
-        return (base_url, EndpointSource::RepositoryConfig);
+        let provider_env = format!("{provider}_BASE_URL");
+        let source = configured_endpoint_source(config, &base_url, &[provider_env.as_str()]);
+        return (base_url, source);
     }
     if let Ok(base_url) = env::var(format!("{provider}_BASE_URL")) {
         return (base_url, EndpointSource::Environment);
