@@ -249,158 +249,179 @@
 }
 
 
-/* Recent-session row actions and bulk selection. */
-.recent-sessions-heading {
+/* Recent rail actions. Keep these selectors specific enough to override historical theme layers. */
+.recent-sessions {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
 }
 
-.recent-sessions-heading-actions {
+.recent-sessions-heading {
   position: relative;
-  display: flex;
+  display: flex !important;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
 }
 
-.recent-selection-count {
-  color: var(--muted, #77776f);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.recent-session-item {
+.recent-heading-actions,
+.recent-session-actions {
   position: relative;
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-}
-
-.recent-session-item .recent-session-row {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.recent-session-checkbox {
-  width: 15px;
-  height: 15px;
   flex: 0 0 auto;
-  margin: 0 3px 0 0;
-  accent-color: currentColor;
 }
 
-.recent-session-more,
-.recent-sessions-more {
+.recent-heading-menu-trigger,
+.recent-session-menu-trigger {
   display: grid;
   width: 28px;
   height: 28px;
-  flex: 0 0 28px;
   place-items: center;
   border: 0;
   border-radius: 6px;
   padding: 0;
   background: transparent;
-  color: var(--muted, #77776f);
+  color: inherit;
 }
 
-.recent-session-more {
+.recent-session-row {
+  position: relative;
+  display: flex !important;
+  grid-template-columns: none !important;
+  gap: 4px !important;
+}
+
+.recent-session-open {
+  display: flex;
+  min-width: 0;
+  min-height: 41px;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.recent-session-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-session-open time,
+.recent-session-select-row time {
+  flex: 0 0 auto;
+}
+
+.recent-session-pin {
+  flex: 0 0 auto;
+}
+
+.recent-session-menu-trigger {
   opacity: 0;
 }
 
-.recent-session-item:hover .recent-session-more,
-.recent-session-item:focus-within .recent-session-more,
-.recent-session-item.menu-open .recent-session-more,
-.recent-sessions-heading .recent-sessions-more {
+.recent-session-row:hover .recent-session-menu-trigger,
+.recent-session-menu-trigger[aria-expanded="true"],
+.recent-session-menu-trigger:focus-visible {
   opacity: 1;
-}
-
-.recent-session-more:hover,
-.recent-sessions-more:hover {
-  background: var(--surface-soft, #f0f0ed);
-  color: var(--text, #242421);
-}
-
-.recent-session-meta {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-}
-
-.recent-session-pinned {
-  flex: 0 0 auto;
 }
 
 .recent-session-menu {
   position: absolute;
-  z-index: 1200;
-  top: calc(100% - 2px);
+  z-index: 1500;
+  top: calc(100% + 4px);
   right: 0;
   display: grid;
-  min-width: 170px;
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--line-strong, #d8d8d2);
+  width: 172px;
+  padding: 5px;
+  border: 1px solid var(--line, #3a3a3a);
   border-radius: 10px;
-  background: var(--surface, #fff);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, .18);
+  background: var(--surface, #252525);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 28%);
 }
 
-.recent-session-bulk-menu {
-  top: calc(100% + 3px);
+.recent-heading-menu {
+  top: calc(100% + 2px);
 }
 
 .recent-session-menu button {
   display: flex;
   width: 100%;
-  min-height: 32px;
+  min-height: 34px;
   align-items: center;
   gap: 9px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   padding: 0 9px;
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   text-align: left;
 }
 
-.recent-session-menu button:hover:not(:disabled) {
-  background: var(--surface-soft, #f0f0ed);
+.recent-session-menu button:hover,
+.recent-heading-menu-trigger:hover,
+.recent-session-menu-trigger:hover {
+  background: var(--surface-soft, #333);
 }
 
 .recent-session-menu button.danger {
-  color: var(--danger, #b42318);
+  color: #ef6b63;
 }
 
-.recent-session-menu button:disabled {
-  opacity: .45;
-  cursor: not-allowed;
+.recent-menu-icon-placeholder {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
 }
 
-.recent-session-rename {
-  box-sizing: border-box;
-  min-width: 0;
-  min-height: 32px;
-  flex: 1 1 auto;
-  border: 1px solid var(--line-strong, #d8d8d2);
-  border-radius: 6px;
-  padding: 0 7px;
-  background: var(--surface, #fff);
+.recent-session-select-row {
+  min-height: 41px;
+  align-items: center !important;
+  cursor: pointer;
+}
+
+.recent-session-select-row input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  margin: 0 3px 0 2px;
+}
+
+.recent-selection-toolbar {
+  display: flex;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.recent-selection-toolbar > button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line, #3a3a3a);
+  border-radius: 7px;
+  padding: 0 8px;
+  background: transparent;
   color: inherit;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
 }
 
-.recent-session-checkbox:focus-visible,
-.recent-session-more:focus-visible,
-.recent-sessions-more:focus-visible,
-.recent-session-menu button:focus-visible,
-.recent-session-rename:focus-visible {
-  outline: 2px solid var(--purple, #6941c6);
-  outline-offset: 1px;
+.recent-selection-toolbar > button:hover:not(:disabled) {
+  background: var(--surface-soft, #333);
+}
+
+.recent-delete-selected {
+  color: #ef6b63 !important;
+}
+
+.recent-selection-toolbar > button:disabled {
+  opacity: 0.45;
 }
