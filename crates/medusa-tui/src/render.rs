@@ -784,9 +784,9 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "shift+tab confirmation · enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+e activity details"
+                "shift+tab confirmation · enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+o activity details"
             } else {
-                "shift+tab confirmation · enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+e activity details"
+                "shift+tab confirmation · enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+o activity details"
             },
             Color::DarkGrey,
         ),
