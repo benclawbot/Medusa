@@ -27,10 +27,9 @@ impl Effort {
     }
 }
 
-/// Display verbosity for tool-progress activity, mirroring the text frontend
-/// `/verbose <off|new|all|verbose>` levels: `off` hides tool, progress,
-/// and verification rows; `new` keeps only the latest such row; `all`
-/// shows every row; `verbose` additionally expands row details.
+/// Display verbosity for activity presentation. The user-facing names are
+/// `off`, `compact`, `detailed`, and `debug`; the legacy serialized
+/// values `new`, `all`, and `verbose` remain accepted for compatibility.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verbosity {
@@ -249,8 +248,8 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "verbose",
-        usage: "/verbose [off|new|all|verbose]",
-        description: "cycle or set tool-progress verbosity",
+        usage: "/verbose [off|compact|detailed|debug]",
+        description: "cycle or set activity detail level",
     },
     CommandSpec {
         name: "skills",
