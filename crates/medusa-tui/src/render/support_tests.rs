@@ -270,6 +270,46 @@ fn compact_mode_keeps_semantic_live_action_when_telemetry_arrives() {
 }
 
 #[test]
+fn compact_mode_retires_a_completed_action_in_the_current_turn() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "completed-live-action",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.transcript.push(TranscriptEntry::User(PromptDraft {
+        text: "run tests".to_owned(),
+        ..PromptDraft::default()
+    }));
+    app.begin_run();
+    app.verbosity = Verbosity::New;
+    app.transcript.extend([
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("tool-start".to_owned()),
+            kind: TranscriptActivityKind::Tool,
+            title: "Running cargo test".to_owned(),
+            details: Vec::new(),
+        }),
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("tool-finish".to_owned()),
+            kind: TranscriptActivityKind::Done,
+            title: "Finished cargo test".to_owned(),
+            details: Vec::new(),
+        }),
+    ]);
+
+    let visible = transcript_lines(&app, 80)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!visible.contains("Running cargo test"));
+    assert!(visible.contains("Finished cargo test"));
+}
+
+#[test]
 fn compact_mode_does_not_resurface_activity_from_a_previous_turn() {
     let directory = tempfile::tempdir().expect("tempdir");
     let mut app = AppState::new(
