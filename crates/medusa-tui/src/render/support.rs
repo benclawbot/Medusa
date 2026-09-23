@@ -66,8 +66,9 @@ fn activity_group_heading(group: ActivityGroup) -> StyledLine {
     }
 }
 
-/// Tool-progress rows affected by `/verbose`: tool, progress, and
-/// verification entries. Assistant, done, and error rows always render.
+/// Transient rows affected by `/verbose`: tool, progress, and verification
+/// entries. Durable outcomes remain visible, except diagnostic-only lifecycle
+/// activity which is reserved for `verbose` mode.
 fn verbose_filterable(kind: TranscriptActivityKind) -> bool {
     matches!(
         kind,
