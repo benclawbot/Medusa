@@ -95,7 +95,11 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     let mut previous_activity_group = None;
     let latest_filterable = app.transcript.iter().rposition(|entry| {
-        matches!(entry, TranscriptEntry::Activity(activity) if verbose_filterable(activity.kind))
+        matches!(
+            entry,
+            TranscriptEntry::Activity(activity)
+                if verbose_filterable(activity.kind) && !low_signal_activity(activity)
+        )
     });
     for (entry_index, entry) in app.transcript.iter().enumerate() {
         match entry {
