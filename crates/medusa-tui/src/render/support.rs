@@ -107,14 +107,27 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
         .then(|| {
             app.transcript[current_turn_start..]
                 .iter()
-                .rposition(|entry| {
-                    matches!(
-                        entry,
-                        TranscriptEntry::Activity(activity)
-                            if verbose_filterable(activity.kind) && !internal_telemetry(activity)
-                    )
+                .enumerate()
+                .rev()
+                .find_map(|(offset, entry)| {
+                    let TranscriptEntry::Activity(activity) = entry else {
+                        return None;
+                    };
+                    if internal_telemetry(activity) {
+                        return None;
+                    }
+                    if matches!(
+                        activity.kind,
+                        TranscriptActivityKind::Done
+                            | TranscriptActivityKind::Error
+                            | TranscriptActivityKind::Verification
+                    ) {
+                        return Some(None);
+                    }
+                    verbose_filterable(activity.kind)
+                        .then_some(Some(current_turn_start.saturating_add(offset)))
                 })
-                .map(|index| current_turn_start.saturating_add(index))
+                .flatten()
         })
         .flatten();
     for (entry_index, entry) in app.transcript.iter().enumerate() {
