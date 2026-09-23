@@ -803,9 +803,9 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "esc esc cancel · ctrl+c copy · ctrl+v paste · enter queue follow-up · ctrl+t plan · ctrl+o details"
+                "esc esc cancel · ctrl+c copy · ctrl+v paste · ctrl+q quit · enter queue follow-up · ctrl+t plan · ctrl+o details"
             } else {
-                "ctrl+c copy · ctrl+v paste · enter submit · tab commands · ctrl+t plan · ctrl+o details"
+                "ctrl+c copy · ctrl+v paste · ctrl+q quit · enter submit · tab commands · ctrl+t plan · ctrl+o details"
             },
             Color::DarkGrey,
         ),
