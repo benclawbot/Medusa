@@ -305,16 +305,12 @@ pub(super) fn execute_slash_command_with_submission(
             let _ = events.send(state.settings_event());
             let _ = events.send(RuntimeEvent::Notice {
                 title: "Verbosity".to_owned(),
-                details: vec![format!(
-                    "verbosity:{} — tool activity rows are {}.",
-                    next.label(),
-                    match next {
-                        Verbosity::Off => "hidden",
-                        Verbosity::New => "limited to the latest row",
-                        Verbosity::All => "all shown",
-                        Verbosity::Verbose => "all shown with details expanded",
-                    }
-                )],
+                details: vec![match next {
+                    Verbosity::Off => "Activity detail: off".to_owned(),
+                    Verbosity::New => "Activity detail: compact".to_owned(),
+                    Verbosity::All => "Activity detail: detailed".to_owned(),
+                    Verbosity::Verbose => "Activity detail: debug".to_owned(),
+                }],
             });
         }
         SlashCommand::Skills => {
