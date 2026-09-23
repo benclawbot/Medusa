@@ -147,6 +147,8 @@ medusa --fresh
 
 The TUI presents the shared runtime event stream as a conversation and activity timeline. It supports plans, questions, approvals, queued follow-ups, cancellation, session resume, settings, usage metrics, clipboard/file/image attachments, recovery views, team activity, and provider/model/effort selection. First-run provider setup and `/settings` use the shared provider/model catalog and revision-aware configuration authority rather than a terminal-only configuration store.
 
+The activity timeline is compact by default: it keeps durable actions, verification outcomes, errors, and the current live activity visible while suppressing internal lifecycle telemetry. Use `/verbose detailed` for all user-facing activity or `/verbose debug` for raw diagnostic activity; `Ctrl+O` expands the latest activity details. `Ctrl+C` copies the current terminal selection, `Ctrl+V` pastes, `Ctrl+Q` quits the TUI, and cancelling a running turn requires two `Esc` presses within one second.
+
 General-chat turns can avoid repository indexing/scanning when the task does not need workspace context. Repository-aware paths still activate the normal workspace intelligence, policy, verification, and durable evidence machinery.
 
 ### Desktop application

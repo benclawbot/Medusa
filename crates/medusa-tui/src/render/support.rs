@@ -1,6 +1,7 @@
 use super::*;
 use crate::commands::Verbosity;
 use crate::input::text_cells::{display_width, wrap_to_cells};
+use std::collections::HashSet;
 
 pub(super) fn render_loading_screen(frame: &mut [StyledLine], width: u16, height: u16) {
     let logo = MEDUSA_LOADING_LOGO
@@ -66,14 +67,13 @@ fn activity_group_heading(group: ActivityGroup) -> StyledLine {
     }
 }
 
-/// Tool-progress rows affected by `/verbose`: tool, progress, and
-/// verification entries. Assistant, done, and error rows always render.
+/// Transient rows affected by `/verbose`: tool and progress entries.
+/// Completed verification, edits, assistant results, and errors remain as
+/// durable outcomes in the normal transcript.
 fn verbose_filterable(kind: TranscriptActivityKind) -> bool {
     matches!(
         kind,
-        TranscriptActivityKind::Tool
-            | TranscriptActivityKind::Progress
-            | TranscriptActivityKind::Verification
+        TranscriptActivityKind::Tool | TranscriptActivityKind::Progress
     )
 }
 
@@ -86,9 +86,45 @@ fn mask_secret_text(value: &str) -> String {
 pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     let mut previous_activity_group = None;
-    let latest_filterable = app.transcript.iter().rposition(|entry| {
-        matches!(entry, TranscriptEntry::Activity(activity) if verbose_filterable(activity.kind))
-    });
+    let current_turn_start = app
+        .transcript
+        .iter()
+        .rposition(|entry| matches!(entry, TranscriptEntry::User(_)))
+        .map_or(0, |index| index.saturating_add(1));
+    let latest_filterable = if app.is_running() {
+        let mut completed_ids = HashSet::new();
+        app.transcript[current_turn_start..]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(offset, entry)| {
+                let TranscriptEntry::Activity(activity) = entry else {
+                    return None;
+                };
+                if crate::session::is_internal_activity_title(&activity.title) {
+                    return None;
+                }
+                if matches!(
+                    activity.kind,
+                    TranscriptActivityKind::Done
+                        | TranscriptActivityKind::Error
+                        | TranscriptActivityKind::Verification
+                ) {
+                    if let Some(id) = activity.id.as_deref() {
+                        completed_ids.insert(id);
+                    }
+                    return None;
+                }
+                (verbose_filterable(activity.kind)
+                    && activity
+                        .id
+                        .as_deref()
+                        .is_none_or(|id| !completed_ids.contains(id)))
+                .then_some(current_turn_start.saturating_add(offset))
+            })
+    } else {
+        None
+    };
     for (entry_index, entry) in app.transcript.iter().enumerate() {
         match entry {
             TranscriptEntry::User(draft) => {
@@ -131,13 +167,16 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 ));
             }
             TranscriptEntry::Activity(activity) => {
-                let hidden = match app.verbosity {
-                    Verbosity::Off => verbose_filterable(activity.kind),
-                    Verbosity::New => {
-                        verbose_filterable(activity.kind) && Some(entry_index) != latest_filterable
-                    }
-                    Verbosity::All | Verbosity::Verbose => false,
-                };
+                let hidden = (app.verbosity != Verbosity::Verbose
+                    && crate::session::is_internal_activity_title(&activity.title))
+                    || match app.verbosity {
+                        Verbosity::Off => verbose_filterable(activity.kind),
+                        Verbosity::New => {
+                            verbose_filterable(activity.kind)
+                                && Some(entry_index) != latest_filterable
+                        }
+                        Verbosity::All | Verbosity::Verbose => false,
+                    };
                 if hidden {
                     continue;
                 }
@@ -780,8 +819,7 @@ fn presented_activity_details(details: &[String], expanded: bool) -> Vec<String>
 
 pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> Vec<StyledLine> {
     let color = match activity.kind {
-        TranscriptActivityKind::Assistant => Color::Green,
-        TranscriptActivityKind::Done => Color::Green,
+        TranscriptActivityKind::Assistant | TranscriptActivityKind::Done => Color::Green,
         TranscriptActivityKind::Error => Color::Red,
         TranscriptActivityKind::Progress => Color::Yellow,
         TranscriptActivityKind::Tool => Color::Green,
@@ -797,35 +835,56 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> V
     } else {
         Color::Grey
     };
-    let (marker, lifecycle) = match activity.kind {
-        TranscriptActivityKind::Done => ("✓", "succeeded"),
-        TranscriptActivityKind::Error => ("✻", "failed"),
-        TranscriptActivityKind::Verification => ("◇", "verified"),
+    let marker = match activity.kind {
+        TranscriptActivityKind::Done | TranscriptActivityKind::Verification => "✓",
+        TranscriptActivityKind::Error => "✗",
         TranscriptActivityKind::Assistant
         | TranscriptActivityKind::Progress
-        | TranscriptActivityKind::Tool => ("●", "running"),
+        | TranscriptActivityKind::Tool => "›",
     };
     let mut lines = vec![StyledLine::with_marker(
         format!("{marker} "),
         color,
-        format!("[{lifecycle}] {}", mask_secret_text(&activity.title)),
+        mask_secret_text(&activity.title),
         foreground,
     )];
-    if !matches!(
-        activity.kind,
-        TranscriptActivityKind::Assistant | TranscriptActivityKind::Tool
-    ) {
-        lines.extend(
-            presented_activity_details(&activity.details, expanded)
-                .into_iter()
-                .map(|detail| {
-                    StyledLine::new(
-                        format!("  └ {}", mask_secret_text(&detail)),
-                        Color::DarkGrey,
-                    )
-                }),
-        );
-    }
+
+    let details = if expanded {
+        presented_activity_details(&activity.details, true)
+    } else {
+        match activity.kind {
+            TranscriptActivityKind::Error => activity
+                .details
+                .iter()
+                .filter(|detail| !detail.trim().is_empty())
+                .take(2)
+                .cloned()
+                .collect(),
+            TranscriptActivityKind::Verification => activity
+                .details
+                .iter()
+                .filter(|detail| !detail.trim().is_empty())
+                .take(3)
+                .cloned()
+                .collect(),
+            TranscriptActivityKind::Done => activity
+                .details
+                .iter()
+                .filter(|detail| detail.starts_with("Changed: "))
+                .take(3)
+                .cloned()
+                .collect(),
+            TranscriptActivityKind::Assistant
+            | TranscriptActivityKind::Progress
+            | TranscriptActivityKind::Tool => Vec::new(),
+        }
+    };
+    lines.extend(details.into_iter().map(|detail| {
+        StyledLine::new(
+            format!("  └ {}", mask_secret_text(&detail)),
+            Color::DarkGrey,
+        )
+    }));
     lines
 }
 

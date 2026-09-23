@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn delayed_observer_cannot_block_typing_interrupt_or_resize() {
+    fn delayed_observer_cannot_block_typing_ctrl_c_or_resize() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = app(directory.path());
         let entered = Arc::new(Barrier::new(2));
@@ -383,8 +383,8 @@ mod tests {
                     KeyCode::Char('c'),
                     KeyModifiers::CONTROL,
                 )))
-                .expect("interrupt"),
-                AppAction::Interrupt
+                .expect("copy selection"),
+                AppAction::None
             ));
             let _ = app.handle_event(Event::Resize(120, 40)).expect("resize");
             completed_tx.send(()).expect("completion signal");

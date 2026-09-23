@@ -222,7 +222,7 @@ fn local_verbosity_survives_initial_runtime_settings_until_acknowledged() {
     )
     .expect("create app");
 
-    assert_eq!(app.verbosity, Verbosity::All);
+    assert_eq!(app.verbosity, Verbosity::New);
     assert_eq!(
         app.set_local_verbosity(Some(Verbosity::Off)),
         Verbosity::Off

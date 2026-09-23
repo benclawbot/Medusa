@@ -222,6 +222,7 @@ fn verbosity_filters_tool_activity_rows() {
     assert!(!off.contains("tool call"));
     assert!(off.contains("boom"));
 
+    app.begin_run();
     app.verbosity = Verbosity::New;
     let new = titles(&app).join("\n");
     assert!(!new.contains("first tool call"));
@@ -230,4 +231,232 @@ fn verbosity_filters_tool_activity_rows() {
     app.verbosity = Verbosity::Verbose;
     let verbose = titles(&app).join("\n");
     assert!(verbose.contains("detail"));
+}
+
+#[test]
+fn compact_mode_keeps_semantic_live_action_when_telemetry_arrives() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "live-action-telemetry",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.begin_run();
+    app.verbosity = Verbosity::New;
+    app.transcript.extend([
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("tool".to_owned()),
+            kind: TranscriptActivityKind::Tool,
+            title: "Running cargo test".to_owned(),
+            details: Vec::new(),
+        }),
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("telemetry".to_owned()),
+            kind: TranscriptActivityKind::Progress,
+            title: "Tool output available".to_owned(),
+            details: Vec::new(),
+        }),
+    ]);
+
+    let visible = transcript_lines(&app, 80)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(visible.contains("Running cargo test"));
+    assert!(!visible.contains("Tool output available"));
+}
+
+#[test]
+fn compact_mode_retires_a_completed_action_in_the_current_turn() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "completed-live-action",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.transcript.push(TranscriptEntry::User(PromptDraft {
+        text: "run tests".to_owned(),
+        ..PromptDraft::default()
+    }));
+    app.begin_run();
+    app.verbosity = Verbosity::New;
+    app.transcript.extend([
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("tool-a".to_owned()),
+            kind: TranscriptActivityKind::Tool,
+            title: "Running first action".to_owned(),
+            details: Vec::new(),
+        }),
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("tool-b".to_owned()),
+            kind: TranscriptActivityKind::Tool,
+            title: "Running second action".to_owned(),
+            details: Vec::new(),
+        }),
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("tool-a".to_owned()),
+            kind: TranscriptActivityKind::Done,
+            title: "Finished first action".to_owned(),
+            details: Vec::new(),
+        }),
+    ]);
+
+    let visible = transcript_lines(&app, 80)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!visible.contains("Running first action"));
+    assert!(visible.contains("Running second action"));
+    assert!(visible.contains("Finished first action"));
+}
+
+#[test]
+fn compact_mode_does_not_resurface_activity_from_a_previous_turn() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "turn-scoped-live-action",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.transcript.extend([
+        TranscriptEntry::User(PromptDraft {
+            text: "first".to_owned(),
+            ..PromptDraft::default()
+        }),
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("old-tool".to_owned()),
+            kind: TranscriptActivityKind::Tool,
+            title: "Running stale tool".to_owned(),
+            details: Vec::new(),
+        }),
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("old-done".to_owned()),
+            kind: TranscriptActivityKind::Done,
+            title: "Finished stale tool".to_owned(),
+            details: Vec::new(),
+        }),
+        TranscriptEntry::User(PromptDraft {
+            text: "second".to_owned(),
+            ..PromptDraft::default()
+        }),
+    ]);
+    app.begin_run();
+    app.verbosity = Verbosity::New;
+
+    let visible = transcript_lines(&app, 80)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!visible.contains("Running stale tool"));
+    assert!(visible.contains("Finished stale tool"));
+}
+
+#[test]
+fn compact_and_detailed_modes_hide_internal_reasoning_telemetry() {
+    use crate::app::TranscriptActivityKind;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "reasoning-telemetry",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    for title in [
+        "reasoning",
+        "Requesting openai-oauth/gpt-5.6-luna",
+        "Waiting for provider response",
+        "Provider attempt classified",
+        "Model response received",
+    ] {
+        app.transcript
+            .push(TranscriptEntry::Activity(TranscriptActivity {
+                id: None,
+                kind: TranscriptActivityKind::Progress,
+                title: title.to_owned(),
+                details: vec!["provider lifecycle".to_owned()],
+            }));
+    }
+    app.transcript
+        .push(TranscriptEntry::Activity(TranscriptActivity {
+            id: None,
+            kind: TranscriptActivityKind::Tool,
+            title: "Codex command".to_owned(),
+            details: Vec::new(),
+        }));
+    app.begin_run();
+
+    for mode in [Verbosity::New, Verbosity::All] {
+        app.verbosity = mode;
+        let visible = transcript_lines(&app, 80)
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for title in [
+            "reasoning",
+            "Requesting openai-oauth/gpt-5.6-luna",
+            "Waiting for provider response",
+            "Provider attempt classified",
+            "Model response received",
+        ] {
+            assert!(!visible.contains(title));
+        }
+        assert!(visible.contains("Codex command"));
+    }
+
+    app.verbosity = Verbosity::Verbose;
+    let debug = transcript_lines(&app, 80)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for title in [
+        "reasoning",
+        "Requesting openai-oauth/gpt-5.6-luna",
+        "Waiting for provider response",
+        "Provider attempt classified",
+        "Model response received",
+    ] {
+        assert!(debug.contains(title));
+    }
+}
+
+#[test]
+fn collapsed_failures_keep_actionable_error_detail() {
+    use crate::app::TranscriptActivityKind;
+
+    let lines = activity_lines(
+        &TranscriptActivity {
+            id: None,
+            kind: TranscriptActivityKind::Error,
+            title: "cargo clippy failed".to_owned(),
+            details: vec![
+                "src/main.rs:42 unused variable".to_owned(),
+                "exit code 101".to_owned(),
+                "internal trace".to_owned(),
+            ],
+        },
+        false,
+    );
+    let visible = lines
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(visible.contains("cargo clippy failed"));
+    assert!(visible.contains("src/main.rs:42 unused variable"));
+    assert!(visible.contains("exit code 101"));
+    assert!(!visible.contains("internal trace"));
+    assert!(!visible.contains("[failed]"));
 }
