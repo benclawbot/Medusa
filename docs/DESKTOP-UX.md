@@ -1,12 +1,12 @@
 # Medusa Desktop UX
 
-Medusa Desktop follows an activity-first interaction model: the conversation is the primary surface, while execution detail remains visible without competing with the user's task.
+Medusa Desktop follows an action-oriented interaction model: the conversation is the primary surface, while execution is summarized as human-readable actions and outcomes instead of raw runtime lifecycle telemetry.
 
 ## Design principles
 
 1. **Conversation first** — prompts, responses, approvals, plan state, and tool activity stay in one chronological workspace.
-2. **Progressive disclosure** — summaries remain scannable; detailed tool output is expandable.
-3. **Visible execution** — active work, completion, failure, and plan progress have distinct states.
+2. **Progressive disclosure** — compact is the default; detailed activity is expandable and diagnostic lifecycle telemetry is opt-in.
+3. **Visible execution** — exactly one current action is emphasized while work runs; completed actions, failures, verification, and plan progress have distinct states.
 4. **Stable controls** — the composer, cancellation, attachments, slash commands, and approval actions remain predictable while work is running.
 5. **Low cognitive load** — the inspector summarizes session context and usage instead of duplicating execution details.
 6. **Responsive focus** — narrower windows remove secondary chrome before shrinking the primary conversation.
@@ -16,7 +16,7 @@ Medusa Desktop follows an activity-first interaction model: the conversation is 
 
 The desktop shell uses two isolated presentation layers:
 
-- `desktop-ux-overhaul.css` defines the premium visual hierarchy, message treatment, composer, plan tree, activity cards, inspector, and responsive focus mode.
+- `desktop-ux-overhaul.css` defines the visual hierarchy, including a neutral-grey user-request surface that stays distinct from assistant output.
 - `DesktopTimelineBridge.tsx` renders the live plan and runtime activity into the central transcript from the typed runtime timeline store.
 - `desktop-timeline.css` styles the unified execution timeline and expandable activity details.
 
@@ -29,17 +29,18 @@ The desktop shell uses two isolated presentation layers:
 - plan events replace the current typed plan snapshot
 - start events set the active state
 - questions, completion, cancellation, turn completion, and failures clear the active state
-- the central timeline keeps only the latest twelve activity cards visible while the inspector retains its existing summary behavior
-- while a turn is active, the conversation shows a compact live action trail; after a terminal event, that temporary trail is replaced by a `Worked for …` summary with expandable execution details
+- provider reasoning, session lifecycle transitions, and other diagnostic-only activity stay hidden unless diagnostic verbosity is selected
+- while a turn is active, the conversation emphasizes one current action plus up to four recent durable outcomes; after a terminal event, that temporary view is replaced by a `Worked for …` summary with expandable execution details
+- failed actions automatically expose their actionable details; successful actions stay collapsed until requested
 - generated web artifacts remain attached to the final summary with preview, download, and external-open actions
 - completed, cancelled, and failed turns show their elapsed wall-clock duration in the conversation summary
 
 ## Interaction contracts
 
-- `/verbose` is available from the slash-command palette and controls how much activity detail is shown during the current session
+- `/verbose` is available from the slash-command palette and controls execution density: `new` is compact/default, `all` is detailed, and `verbose` reveals diagnostic lifecycle activity and expands details
 - typing `/` opens a compact scrollable autocomplete list; arrow keys, Tab, Enter, and pointer selection choose a suggestion without repeating a command-type badge
 - generated page titles in the final summary are real `file:` links backed by the native default-browser handoff, with the URL remaining available for copying
-- in the TUI, `Esc` clears a non-empty composer draft; an empty composer uses `Esc` to cancel an active run, keeping prompt editing and run cancellation separate
+- in the TUI, `Ctrl+C` copies the current transcript selection, `Ctrl+V` pastes, and cancelling an active run requires two `Esc` presses within one second
 
 ## Validation
 
