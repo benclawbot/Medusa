@@ -449,11 +449,11 @@ function FinalTurnSummary({
       {!!summary.error && <p className="turn-summary-error">{summary.error}</p>}
 
       {!!activities.length && (
-        <details className="turn-summary-details">
+        <details className="turn-summary-details" open={summary.status === "failed" || undefined}>
           <summary>Show execution details ({activities.length})</summary>
           <div className="turn-summary-activity-list">
             {activities.map((entry) => (
-              <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id}>
+              <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={entry.status === "Error" || undefined}>
                 <summary>
                   <span aria-hidden="true"><Activity size={14} /></span>
                   <strong>{entry.text}</strong>
