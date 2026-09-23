@@ -25,6 +25,23 @@ function isApprovalPrompt(prompt: QuestionPrompt): boolean {
   return header.includes("permission") || header.includes("approval") || prompt.options.some((option) => optionKind(option.label) !== "other");
 }
 
+function approvalFacts(question: string): Array<{ label: string; value: string }> {
+  const labels = new Set(["Action", "Why", "Scope", "Risk", "Command", "Access"]);
+  return question
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separator = line.indexOf(":");
+      if (separator < 1) return undefined;
+      const label = line.slice(0, separator).trim();
+      const value = line.slice(separator + 1).trim();
+      if (!labels.has(label) || !value) return undefined;
+      return { label, value };
+    })
+    .filter((fact): fact is { label: string; value: string } => Boolean(fact));
+}
+
 export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalCardProps) {
   const [expanded, setExpanded] = useState(true);
   const approvalPrompts = useMemo(() => prompts.filter(isApprovalPrompt), [prompts]);
@@ -59,7 +76,7 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
         <span className="approval-icon"><ShieldAlert size={18} /></span>
         <div>
           <small>Operator decision required</small>
-          <strong>{approvalPrompts[0]?.question ?? otherPrompts[0]?.question}</strong>
+          <strong>{approvalPrompts.length ? "Review the requested action" : otherPrompts[0]?.question}</strong>
         </div>
         <button className="approval-expand" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-label={expanded ? "Collapse approval details" : "Expand approval details"}>
           <ChevronDown size={16} className={expanded ? "expanded" : ""} />
@@ -78,9 +95,15 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
             </details>
           )}
 
-          {approvalPrompts.map((prompt) => (
+          {approvalPrompts.map((prompt) => {
+            const facts = approvalFacts(prompt.question);
+            return (
             <div className="approval-prompt" key={`${prompt.header}-${prompt.question}`}>
-              <p>{prompt.question}</p>
+              {facts.length ? (
+                <dl className="approval-facts">
+                  {facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
+                </dl>
+              ) : <p>{prompt.question}</p>}
               <div className="approval-actions">
                 {prompt.options.map((option) => {
                   const kind = optionKind(option.label);
@@ -92,7 +115,8 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {otherPrompts.map((prompt) => (
             <div className="approval-prompt" key={`${prompt.header}-${prompt.question}`}>
