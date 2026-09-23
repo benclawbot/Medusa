@@ -380,7 +380,7 @@ mod tests {
                 false,
             );
             assert_eq!(lines.len(), 1);
-            assert_eq!(lines[0].text, "[running] High-level step");
+            assert_eq!(lines[0].text, "High-level step");
         }
     }
 
@@ -415,16 +415,48 @@ mod tests {
             }),
         ]);
 
+        app.verbosity = Verbosity::All;
         let lines = transcript_lines(&app, 100);
         let text = lines
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>();
         assert!(!text.contains(&"Execution activity"));
-        assert!(text.contains(&"[running] Inspect repository"));
-        assert!(text.contains(&"[succeeded] Patch applied"));
+        assert!(text.contains(&"Inspect repository"));
+        assert!(text.contains(&"Patch applied"));
         assert!(text.contains(&"Verification evidence"));
-        assert!(text.contains(&"[verified] Focused tests passed"));
+        assert!(text.contains(&"Focused tests passed"));
+        assert!(text.iter().all(|line| !line.contains("[running]")));
+        assert!(text.iter().all(|line| !line.contains("[succeeded]")));
+    }
+
+    #[test]
+    fn diagnostic_activity_is_hidden_until_verbose_mode() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "diagnostic-activity",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.transcript
+            .push(TranscriptEntry::Activity(TranscriptActivity {
+                id: None,
+                kind: TranscriptActivityKind::Done,
+                title: "reasoning".to_owned(),
+                details: vec!["provider lifecycle".to_owned()],
+            }));
+        assert!(transcript_lines(&app, 100).is_empty());
+
+        app.verbosity = Verbosity::Verbose;
+        let verbose = transcript_lines(&app, 100);
+        assert!(verbose.iter().any(|line| line.text == "reasoning"));
+        assert!(
+            verbose
+                .iter()
+                .any(|line| line.text.contains("provider lifecycle"))
+        );
     }
 
     #[test]
@@ -535,12 +567,12 @@ mod tests {
         app.dismiss_welcome_for_event(&Event::Paste(String::new()));
         app.begin_run();
         let working = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
-        assert!(working.iter().any(|line| line.text.contains("working...")));
+        assert!(working.iter().any(|line| line.text.contains("Working ·")));
 
         app.record_assistant_text("answer".to_owned());
         let answered = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
         assert!(answered.iter().any(|line| line.text.contains("answer")));
-        assert!(!answered.iter().any(|line| line.text.contains("working...")));
+        assert!(!answered.iter().any(|line| line.text.contains("Working ·")));
     }
 
     #[test]
@@ -557,7 +589,7 @@ mod tests {
         app.update_turn(3);
         app.record_usage(0, 300, 0, 0, 0);
         app.record_usage(700, 1_200, 200, 100, 2_000);
-        assert_eq!(running_status(&app), "working... · 0s");
+        assert_eq!(running_status(&app), "Working · 0s");
         assert_eq!(
             session_metrics_line(&app, 120),
             "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 1.2k tok/s"
