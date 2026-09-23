@@ -855,15 +855,31 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> V
 pub(super) fn plan_lines(plan: &app::TranscriptPlan) -> Vec<StyledLine> {
     use app::TranscriptPlanStepState::{Active, Completed, Failed, Pending};
 
-    plan.steps
+    if plan.steps.is_empty() {
+        return Vec::new();
+    }
+    let completed = plan
+        .steps
         .iter()
-        .map(|step| match step.state {
-            Active => StyledLine::with_marker("▪ ", Color::Yellow, &step.title, Color::White),
-            Completed => StyledLine::with_marker("✓ ", Color::Green, &step.title, Color::Grey),
-            Failed => StyledLine::with_marker("✻ ", Color::Red, &step.title, Color::White),
-            Pending => StyledLine::with_marker("□ ", Color::DarkGrey, &step.title, Color::DarkGrey),
-        })
-        .collect()
+        .filter(|step| step.state == Completed)
+        .count();
+    let current = plan
+        .steps
+        .iter()
+        .find(|step| step.state == Active)
+        .map(|step| step.title.as_str())
+        .unwrap_or("waiting");
+    let mut lines = vec![StyledLine::new(
+        format!("Plan {completed}/{} · Current {current}", plan.steps.len()),
+        Color::Blue,
+    )];
+    lines.extend(plan.steps.iter().map(|step| match step.state {
+        Active => StyledLine::with_marker("▪ ", Color::Yellow, &step.title, Color::White),
+        Completed => StyledLine::with_marker("✓ ", Color::Green, &step.title, Color::Grey),
+        Failed => StyledLine::with_marker("✗ ", Color::Red, &step.title, Color::White),
+        Pending => StyledLine::with_marker("□ ", Color::DarkGrey, &step.title, Color::DarkGrey),
+    }));
+    lines
 }
 
 pub(super) fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
