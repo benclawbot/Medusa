@@ -1117,3 +1117,36 @@ it("hides tool-progress rows when verbosity is off and keeps the latest for new"
   expect(screen.queryByText("first tool call")).not.toBeInTheDocument();
   expect(screen.queryByText("second tool call")).not.toBeInTheDocument();
 });
+
+
+it("hides low-signal reasoning lifecycle rows outside verbose diagnostics", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-focused-activity", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([
+      {
+        type: "settings",
+        model: "m",
+        effort: "medium",
+        verbosity: "new",
+        planMode: false,
+        credentialConfigured: true,
+      },
+      {
+        type: "activity",
+        activity: { id: "reasoning-1", kind: "done", title: "reasoning", details: ["internal"] },
+      },
+      {
+        type: "activity",
+        activity: { id: "edit-1", kind: "done", title: "Updated TUI input handling", details: ["3 files"] },
+      },
+    ])
+    .mockResolvedValue([]);
+
+  render(<App />);
+  await screen.findByRole("textbox");
+  await waitFor(() => expect(pollRuntime).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: /Work/ }));
+
+  expect(screen.queryByText("reasoning")).not.toBeInTheDocument();
+  expect(screen.getByText("Updated TUI input handling")).toBeInTheDocument();
+});
