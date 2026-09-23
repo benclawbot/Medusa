@@ -1091,6 +1091,21 @@ it("shows a rendered result in the shared side panel when a turn reports a faile
   expect(screen.queryByRole("complementary", { name: "Work" })).not.toBeInTheDocument();
 });
 
+it("hides diagnostic lifecycle activity at the default compact density", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-compact", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([
+      { type: "activity", activity: { id: "diag", kind: "done", title: "reasoning", details: ["provider lifecycle"] } },
+      { type: "activity", activity: { id: "edit", kind: "done", title: "Updated TUI input handling", details: ["3 files"] } },
+    ])
+    .mockResolvedValue([]);
+  render(<App />);
+  await screen.findByRole("textbox");
+  expect(await screen.findByText("Updated TUI input handling")).toBeInTheDocument();
+  expect(screen.queryByText("reasoning")).not.toBeInTheDocument();
+  expect(screen.queryByText("provider lifecycle")).not.toBeInTheDocument();
+});
+
 it("hides tool-progress rows when verbosity is off and keeps the latest for new", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-verbose", repo: "" });
   const activities = (titles: string[]) => titles.map((title, index) => ({
