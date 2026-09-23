@@ -1386,15 +1386,15 @@ fn map_frontend_event(
         FrontendEvent::ApprovalRequired(approval) => {
             events.push_back(RuntimeEvent::Question(RuntimeQuestion {
                 questions: vec![QuestionPrompt {
-                    header: "Approval".to_owned(),
+                    header: "Permission required".to_owned(),
                     question: format!(
-                        "{} in {}: {} (risk: {})",
-                        approval.action, approval.scope, approval.reason, approval.risk
+                        "What   {}\nWhy    {}\nScope  {}\nRisk   {}",
+                        approval.action, approval.reason, approval.scope, approval.risk
                     ),
                     options: vec![
                         QuestionOption {
-                            label: "Approve".to_owned(),
-                            description: "Allow this action once".to_owned(),
+                            label: "Run once".to_owned(),
+                            description: "Allow only this action".to_owned(),
                         },
                         QuestionOption {
                             label: "Deny".to_owned(),
