@@ -150,8 +150,10 @@ pub(super) fn session_metrics_line(app: &AppState, width: u16) -> String {
     let elapsed = format_elapsed(app.session_elapsed_seconds());
     let total = format_token_count(app.total_tokens);
     let cost = format_cost(app.estimated_cost_microusd);
-    if matches!(app.verbosity, crate::commands::Verbosity::Off | crate::commands::Verbosity::New)
-        || width < 80
+    if matches!(
+        app.verbosity,
+        crate::commands::Verbosity::Off | crate::commands::Verbosity::New
+    ) || width < 80
     {
         return format!("session {elapsed} · total {total} · cost {cost}");
     }
