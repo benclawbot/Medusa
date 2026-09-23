@@ -115,7 +115,7 @@ use session::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::ImageAttachment;
+    use crate::{clipboard::ImageAttachment, commands::Verbosity};
 
     #[test]
     fn default_socket_is_repository_scoped() {
