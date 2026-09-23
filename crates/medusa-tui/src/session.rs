@@ -431,6 +431,11 @@ fn session_control_action(
         return None;
     }
 
+    if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        *last_escape = None;
+        return Some(AppAction::Quit);
+    }
+
     if key.code == KeyCode::Esc && !modal_open {
         if !app.composer.draft.text.is_empty() || !app.composer.draft.attachments.is_empty() {
             *last_escape = None;
@@ -643,11 +648,15 @@ fn is_internal_activity_title(title: &str) -> bool {
         || normalized == "provider attempt classified"
         || normalized.starts_with("requesting ")
         || normalized.starts_with("waiting for ")
-        || normalized.starts_with("codex ")
 }
 
-fn is_user_visible_activity(activity: &RuntimeActivity) -> bool {
-    activity.kind != RuntimeActivityKind::Assistant && !is_internal_activity_title(&activity.title)
+fn is_user_visible_activity(activity: &RuntimeActivity, verbosity: Verbosity) -> bool {
+    if verbosity == Verbosity::Verbose {
+        return true;
+    }
+    activity.id.as_deref() != Some("runtime-capabilities")
+        && activity.kind != RuntimeActivityKind::Assistant
+        && !is_internal_activity_title(&activity.title)
 }
 
 fn user_visible_runtime_error(error: &str) -> String {
@@ -683,9 +692,7 @@ pub(super) fn drain_runtime_events(
                 app.record_assistant_text(text);
             }
             RuntimeEvent::Activity(activity) => {
-                if activity.id.as_deref() == Some("runtime-capabilities")
-                    || !is_user_visible_activity(&activity)
-                {
+                if !is_user_visible_activity(&activity, app.verbosity) {
                     continue;
                 }
                 app.record_activity(TranscriptActivity {
@@ -1017,6 +1024,28 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_q_is_a_reachable_quit_shortcut() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "ctrl-q-quit",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        let mut last_escape = None;
+        assert_eq!(
+            session_control_action(
+                &Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+                false,
+                &mut app,
+                &mut last_escape,
+            ),
+            Some(AppAction::Quit)
+        );
+    }
+
+    #[test]
     fn continuation_only_reconnects_without_prior_conversation() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
@@ -1097,25 +1126,64 @@ mod tests {
             (RuntimeActivityKind::Assistant, "Model response received"),
             (RuntimeActivityKind::Done, "Checkpoint created"),
         ] {
-            assert!(!is_user_visible_activity(&RuntimeActivity {
-                id: None,
-                kind,
-                title: title.to_owned(),
-                details: Vec::new(),
-            }));
+            assert!(!is_user_visible_activity(
+                &RuntimeActivity {
+                    id: None,
+                    kind,
+                    title: title.to_owned(),
+                    details: Vec::new(),
+                },
+                Verbosity::New,
+            ));
         }
-        assert!(is_user_visible_activity(&RuntimeActivity {
-            id: None,
-            kind: RuntimeActivityKind::Tool,
-            title: "Inspect repository".to_owned(),
-            details: Vec::new(),
-        }));
-        assert!(is_user_visible_activity(&RuntimeActivity {
-            id: None,
-            kind: RuntimeActivityKind::Error,
-            title: "cargo test failed".to_owned(),
-            details: vec!["exit code: 1".to_owned()],
-        }));
+        for title in ["Inspect repository", "Codex command", "Codex file change"] {
+            assert!(is_user_visible_activity(
+                &RuntimeActivity {
+                    id: None,
+                    kind: RuntimeActivityKind::Tool,
+                    title: title.to_owned(),
+                    details: Vec::new(),
+                },
+                Verbosity::New,
+            ));
+        }
+        assert!(is_user_visible_activity(
+            &RuntimeActivity {
+                id: None,
+                kind: RuntimeActivityKind::Error,
+                title: "cargo test failed".to_owned(),
+                details: vec!["exit code: 1".to_owned()],
+            },
+            Verbosity::New,
+        ));
+    }
+
+    #[test]
+    fn debug_verbosity_preserves_raw_runtime_diagnostics() {
+        for (kind, title) in [
+            (RuntimeActivityKind::Assistant, "Model response received"),
+            (RuntimeActivityKind::Progress, "Provider execution"),
+            (RuntimeActivityKind::Progress, "Requesting openai-oauth/gpt-5.6-luna"),
+        ] {
+            assert!(is_user_visible_activity(
+                &RuntimeActivity {
+                    id: None,
+                    kind,
+                    title: title.to_owned(),
+                    details: vec!["diagnostic".to_owned()],
+                },
+                Verbosity::Verbose,
+            ));
+        }
+        assert!(is_user_visible_activity(
+            &RuntimeActivity {
+                id: Some("runtime-capabilities".to_owned()),
+                kind: RuntimeActivityKind::Progress,
+                title: "Runtime capabilities".to_owned(),
+                details: Vec::new(),
+            },
+            Verbosity::Verbose,
+        ));
     }
 
     #[test]
