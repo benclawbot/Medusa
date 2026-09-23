@@ -1534,7 +1534,11 @@ fn map_presentation_activity(activity: PresentationActivity) -> RuntimeActivity 
             format!(
                 "Edited {} file{}",
                 activity.affected_paths.len(),
-                if activity.affected_paths.len() == 1 { "" } else { "s" }
+                if activity.affected_paths.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             )
         }
         (PresentationActivityKind::Edit, PresentationLifecycle::Active)
@@ -1543,7 +1547,11 @@ fn map_presentation_activity(activity: PresentationActivity) -> RuntimeActivity 
             format!(
                 "Editing {} file{}",
                 activity.affected_paths.len(),
-                if activity.affected_paths.len() == 1 { "" } else { "s" }
+                if activity.affected_paths.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             )
         }
         _ => activity.title,
