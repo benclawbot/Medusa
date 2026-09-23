@@ -287,15 +287,21 @@ fn compact_mode_retires_a_completed_action_in_the_current_turn() {
     app.verbosity = Verbosity::New;
     app.transcript.extend([
         TranscriptEntry::Activity(TranscriptActivity {
-            id: Some("tool-start".to_owned()),
+            id: Some("tool-a".to_owned()),
             kind: TranscriptActivityKind::Tool,
-            title: "Running cargo test".to_owned(),
+            title: "Running first action".to_owned(),
             details: Vec::new(),
         }),
         TranscriptEntry::Activity(TranscriptActivity {
-            id: Some("tool-finish".to_owned()),
+            id: Some("tool-b".to_owned()),
+            kind: TranscriptActivityKind::Tool,
+            title: "Running second action".to_owned(),
+            details: Vec::new(),
+        }),
+        TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("tool-a".to_owned()),
             kind: TranscriptActivityKind::Done,
-            title: "Finished cargo test".to_owned(),
+            title: "Finished first action".to_owned(),
             details: Vec::new(),
         }),
     ]);
@@ -305,8 +311,9 @@ fn compact_mode_retires_a_completed_action_in_the_current_turn() {
         .map(|line| line.text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(!visible.contains("Running cargo test"));
-    assert!(visible.contains("Finished cargo test"));
+    assert!(!visible.contains("Running first action"));
+    assert!(visible.contains("Running second action"));
+    assert!(visible.contains("Finished first action"));
 }
 
 #[test]
@@ -365,13 +372,29 @@ fn compact_and_detailed_modes_hide_internal_reasoning_telemetry() {
         Arc::new(UnsupportedClipboard),
     )
     .expect("app");
+    for title in [
+        "reasoning",
+        "Requesting openai-oauth/gpt-5.6-luna",
+        "Waiting for provider response",
+        "Provider attempt classified",
+        "Model response received",
+    ] {
+        app.transcript
+            .push(TranscriptEntry::Activity(TranscriptActivity {
+                id: None,
+                kind: TranscriptActivityKind::Progress,
+                title: title.to_owned(),
+                details: vec!["provider lifecycle".to_owned()],
+            }));
+    }
     app.transcript
         .push(TranscriptEntry::Activity(TranscriptActivity {
             id: None,
-            kind: TranscriptActivityKind::Done,
-            title: "reasoning".to_owned(),
-            details: vec!["provider lifecycle".to_owned()],
+            kind: TranscriptActivityKind::Tool,
+            title: "Codex command".to_owned(),
+            details: Vec::new(),
         }));
+    app.begin_run();
 
     for mode in [Verbosity::New, Verbosity::All] {
         app.verbosity = mode;
@@ -380,7 +403,16 @@ fn compact_and_detailed_modes_hide_internal_reasoning_telemetry() {
             .map(|line| line.text)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(!visible.contains("reasoning"));
+        for title in [
+            "reasoning",
+            "Requesting openai-oauth/gpt-5.6-luna",
+            "Waiting for provider response",
+            "Provider attempt classified",
+            "Model response received",
+        ] {
+            assert!(!visible.contains(title));
+        }
+        assert!(visible.contains("Codex command"));
     }
 
     app.verbosity = Verbosity::Verbose;
@@ -389,7 +421,15 @@ fn compact_and_detailed_modes_hide_internal_reasoning_telemetry() {
         .map(|line| line.text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(debug.contains("reasoning"));
+    for title in [
+        "reasoning",
+        "Requesting openai-oauth/gpt-5.6-luna",
+        "Waiting for provider response",
+        "Provider attempt classified",
+        "Model response received",
+    ] {
+        assert!(debug.contains(title));
+    }
 }
 
 #[test]

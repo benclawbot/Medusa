@@ -596,6 +596,9 @@ impl AppState {
         if text.trim().is_empty() {
             return;
         }
+        if self.assistant_stream_active {
+            self.status = "Responding".to_owned();
+        }
         if self.assistant_stream_active
             && let Some(TranscriptEntry::Assistant(existing)) = self.transcript.last_mut()
         {

@@ -641,12 +641,19 @@ fn is_internal_notice(title: &str) -> bool {
     ) || normalized.starts_with("configuration revision ")
 }
 
-fn is_internal_activity_title(title: &str) -> bool {
+pub(crate) fn is_internal_activity_title(title: &str) -> bool {
     let normalized = title.trim().to_ascii_lowercase();
-    normalized == "provider execution"
-        || normalized == "checkpoint created"
-        || normalized == "model response received"
-        || normalized == "provider attempt classified"
+    matches!(
+        normalized.as_str(),
+        "reasoning"
+            | "model request"
+            | "model response"
+            | "provider execution"
+            | "checkpoint created"
+            | "model response received"
+            | "provider attempt classified"
+            | "tool output available"
+    ) || normalized.starts_with("session state:")
         || normalized.starts_with("requesting ")
         || normalized.starts_with("waiting for ")
 }

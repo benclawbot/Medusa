@@ -101,24 +101,12 @@ pub(super) fn portable_render_snapshot(
     }
 }
 
-fn is_internal_status(title: &str) -> bool {
-    let title = title.trim().to_ascii_lowercase();
-    matches!(
-        title.as_str(),
-        "reasoning"
-            | "model request"
-            | "model response"
-            | "provider execution"
-            | "tool output available"
-    ) || title.starts_with("session state:")
-}
-
 fn active_status(app: &AppState) -> &str {
     for entry in app.transcript.iter().rev() {
         let TranscriptEntry::Activity(activity) = entry else {
             continue;
         };
-        if is_internal_status(&activity.title) {
+        if crate::session::is_internal_activity_title(&activity.title) {
             continue;
         }
         match activity.kind {

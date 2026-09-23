@@ -1,6 +1,7 @@
 use super::*;
 use crate::commands::Verbosity;
 use crate::input::text_cells::{display_width, wrap_to_cells};
+use std::collections::HashSet;
 
 pub(super) fn render_loading_screen(frame: &mut [StyledLine], width: u16, height: u16) {
     let logo = MEDUSA_LOADING_LOGO
@@ -76,18 +77,6 @@ fn verbose_filterable(kind: TranscriptActivityKind) -> bool {
     )
 }
 
-fn internal_telemetry(activity: &TranscriptActivity) -> bool {
-    let title = activity.title.trim().to_ascii_lowercase();
-    matches!(
-        title.as_str(),
-        "reasoning"
-            | "model request"
-            | "model response"
-            | "provider execution"
-            | "tool output available"
-    ) || title.starts_with("session state:")
-}
-
 /// Masks credential-like substrings in displayed transcript and modal text
 /// using the shared agent redactor. The composer keeps its own masking.
 fn mask_secret_text(value: &str) -> String {
@@ -102,34 +91,40 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
         .iter()
         .rposition(|entry| matches!(entry, TranscriptEntry::User(_)))
         .map_or(0, |index| index.saturating_add(1));
-    let latest_filterable = app
-        .is_running()
-        .then(|| {
-            app.transcript[current_turn_start..]
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(offset, entry)| {
-                    let TranscriptEntry::Activity(activity) = entry else {
-                        return None;
-                    };
-                    if internal_telemetry(activity) {
-                        return None;
+    let latest_filterable = if app.is_running() {
+        let mut completed_ids = HashSet::new();
+        app.transcript[current_turn_start..]
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(offset, entry)| {
+                let TranscriptEntry::Activity(activity) = entry else {
+                    return None;
+                };
+                if crate::session::is_internal_activity_title(&activity.title) {
+                    return None;
+                }
+                if matches!(
+                    activity.kind,
+                    TranscriptActivityKind::Done
+                        | TranscriptActivityKind::Error
+                        | TranscriptActivityKind::Verification
+                ) {
+                    if let Some(id) = activity.id.as_deref() {
+                        completed_ids.insert(id);
                     }
-                    if matches!(
-                        activity.kind,
-                        TranscriptActivityKind::Done
-                            | TranscriptActivityKind::Error
-                            | TranscriptActivityKind::Verification
-                    ) {
-                        return Some(None);
-                    }
-                    verbose_filterable(activity.kind)
-                        .then_some(Some(current_turn_start.saturating_add(offset)))
-                })
-                .flatten()
-        })
-        .flatten();
+                    return None;
+                }
+                (verbose_filterable(activity.kind)
+                    && activity
+                        .id
+                        .as_deref()
+                        .is_none_or(|id| !completed_ids.contains(id)))
+                .then_some(current_turn_start.saturating_add(offset))
+            })
+    } else {
+        None
+    };
     for (entry_index, entry) in app.transcript.iter().enumerate() {
         match entry {
             TranscriptEntry::User(draft) => {
@@ -172,7 +167,8 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 ));
             }
             TranscriptEntry::Activity(activity) => {
-                let hidden = (app.verbosity != Verbosity::Verbose && internal_telemetry(activity))
+                let hidden = (app.verbosity != Verbosity::Verbose
+                    && crate::session::is_internal_activity_title(&activity.title))
                     || match app.verbosity {
                         Verbosity::Off => verbose_filterable(activity.kind),
                         Verbosity::New => {
