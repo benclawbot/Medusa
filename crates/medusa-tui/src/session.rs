@@ -1,5 +1,6 @@
 use super::*;
 use crate::{
+    commands::Verbosity,
     daemon_status::DaemonMonitor,
     render::support::{app_error, runtime_error},
     runtime::RuntimeActivity,
