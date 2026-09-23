@@ -380,12 +380,12 @@ mod tests {
                 false,
             );
             assert_eq!(lines.len(), 1);
-            assert_eq!(lines[0].text, "[running] High-level step");
+            assert_eq!(lines[0].text, "High-level step");
         }
     }
 
     #[test]
-    fn structured_activity_groups_and_lifecycle_labels_render() {
+    fn structured_activity_groups_render_action_outcomes_without_lifecycle_noise() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
             directory.path().to_path_buf(),
@@ -421,14 +421,15 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>();
         assert!(!text.contains(&"Execution activity"));
-        assert!(text.contains(&"[running] Inspect repository"));
-        assert!(text.contains(&"[succeeded] Patch applied"));
+        assert!(!text.contains(&"Inspect repository"));
+        assert!(text.contains(&"Patch applied"));
         assert!(text.contains(&"Verification evidence"));
-        assert!(text.contains(&"[verified] Focused tests passed"));
+        assert!(text.contains(&"Focused tests passed"));
+        assert!(text.iter().all(|line| !line.starts_with('[')));
     }
 
     #[test]
-    fn ctrl_e_expands_only_the_latest_activity_with_details() {
+    fn ctrl_o_expands_only_the_latest_activity_with_details() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
             directory.path().to_path_buf(),
@@ -453,12 +454,12 @@ mod tests {
             }),
         ]);
 
-        let ctrl_e = Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('e'),
+        let ctrl_o = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('o'),
             KeyModifiers::CONTROL,
         ));
         assert!(matches!(
-            app.handle_event(ctrl_e.clone()).expect("expand"),
+            app.handle_event(ctrl_o.clone()).expect("expand"),
             AppAction::Redraw
         ));
         assert!(!app.activity_details_expanded(
@@ -484,7 +485,7 @@ mod tests {
                 details: vec!["legacy detail".to_owned()],
             }));
         assert!(matches!(
-            app.handle_event(ctrl_e).expect("expand legacy"),
+            app.handle_event(ctrl_o).expect("expand legacy"),
             AppAction::Redraw
         ));
         assert!(app.activity_details_expanded(
@@ -535,12 +536,12 @@ mod tests {
         app.dismiss_welcome_for_event(&Event::Paste(String::new()));
         app.begin_run();
         let working = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
-        assert!(working.iter().any(|line| line.text.contains("working...")));
+        assert!(working.iter().any(|line| line.text.contains("Working")));
 
         app.record_assistant_text("answer".to_owned());
         let answered = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
         assert!(answered.iter().any(|line| line.text.contains("answer")));
-        assert!(!answered.iter().any(|line| line.text.contains("working...")));
+        assert!(!answered.iter().any(|line| line.text.contains("Working")));
     }
 
     #[test]
@@ -554,14 +555,43 @@ mod tests {
         )
         .expect("app");
         app.begin_run();
+        app.verbosity = crate::commands::Verbosity::Verbose;
         app.update_turn(3);
         app.record_usage(0, 300, 0, 0, 0);
         app.record_usage(700, 1_200, 200, 100, 2_000);
-        assert_eq!(running_status(&app), "working... · 0s");
+        assert_eq!(running_status(&app), "Working · 0s");
         assert_eq!(
             session_metrics_line(&app, 120),
             "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 1.2k tok/s"
         );
+    }
+
+    #[test]
+    fn completed_action_is_not_reported_as_still_running() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "completed-action-status",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.begin_run();
+        app.record_activity(TranscriptActivity {
+            id: Some("tool-start".to_owned()),
+            kind: TranscriptActivityKind::Tool,
+            title: "Running cargo test".to_owned(),
+            details: Vec::new(),
+        });
+        assert!(running_status(&app).starts_with("Running cargo test · "));
+
+        app.record_activity(TranscriptActivity {
+            id: Some("tool-finish".to_owned()),
+            kind: TranscriptActivityKind::Done,
+            title: "Finished cargo test".to_owned(),
+            details: Vec::new(),
+        });
+        assert!(!running_status(&app).contains("Running cargo test"));
     }
 
     #[test]
@@ -574,6 +604,7 @@ mod tests {
             Arc::new(UnsupportedClipboard),
         )
         .expect("app");
+        app.verbosity = crate::commands::Verbosity::Verbose;
         app.record_turn_usage(
             1_000,
             500,

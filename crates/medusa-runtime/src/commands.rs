@@ -35,8 +35,8 @@ impl Effort {
 #[serde(rename_all = "snake_case")]
 pub enum Verbosity {
     Off,
-    New,
     #[default]
+    New,
     All,
     Verbose,
 }
@@ -56,9 +56,9 @@ impl Verbosity {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "off" => Some(Self::Off),
-            "new" => Some(Self::New),
-            "all" => Some(Self::All),
-            "verbose" => Some(Self::Verbose),
+            "new" | "compact" => Some(Self::New),
+            "all" | "detailed" => Some(Self::All),
+            "verbose" | "debug" => Some(Self::Verbose),
             _ => None,
         }
     }
@@ -458,7 +458,7 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             } else {
                 Some(
                     Verbosity::parse(remainder)
-                        .ok_or_else(|| "/verbose expects off, new, all, or verbose (bare /verbose cycles the level)".to_owned())?,
+                        .ok_or_else(|| "/verbose expects off, compact/new, detailed/all, or debug/verbose (bare /verbose cycles the level)".to_owned())?,
                 )
             };
             Ok(Some(SlashCommand::Verbose { mode }))
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn verbosity_cycles_like_hermes_and_parses() {
-        assert_eq!(Verbosity::default(), Verbosity::All);
+        assert_eq!(Verbosity::default(), Verbosity::New);
         assert_eq!(Verbosity::Off.cycled(), Verbosity::New);
         assert_eq!(Verbosity::New.cycled(), Verbosity::All);
         assert_eq!(Verbosity::All.cycled(), Verbosity::Verbose);
@@ -927,6 +927,18 @@ mod tests {
             parse_slash_command("/verbose"),
             Ok(Some(SlashCommand::Verbose { mode: None }))
         );
+        for (input, expected) in [
+            ("/verbose compact", Verbosity::New),
+            ("/verbose detailed", Verbosity::All),
+            ("/verbose debug", Verbosity::Verbose),
+        ] {
+            assert_eq!(
+                parse_slash_command(input),
+                Ok(Some(SlashCommand::Verbose {
+                    mode: Some(expected)
+                }))
+            );
+        }
         assert!(parse_slash_command("/verbose loud").is_err());
         let error = parse_slash_command("/verbose loud").expect_err("reject bad verbosity");
         assert!(error.contains("bare /verbose cycles"));

@@ -87,7 +87,9 @@ impl ComposerState {
                 self.insert_text("\n")
             }
             (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
-                Ok(ComposerAction::Interrupt)
+                // Ctrl+C is reserved for copying terminal selections. Cancellation
+                // is handled by the session-level double-Esc gesture.
+                Ok(ComposerAction::None)
             }
             (KeyCode::Char('r'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
                 Ok(if self.history_search_previous() {

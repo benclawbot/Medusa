@@ -101,30 +101,47 @@ pub(super) fn portable_render_snapshot(
     }
 }
 
+fn is_internal_status(title: &str) -> bool {
+    let title = title.trim().to_ascii_lowercase();
+    matches!(
+        title.as_str(),
+        "reasoning"
+            | "model request"
+            | "model response"
+            | "provider execution"
+            | "tool output available"
+    ) || title.starts_with("session state:")
+}
+
 fn active_status(app: &AppState) -> &str {
-    app.transcript
-        .iter()
-        .rev()
-        .find_map(|entry| match entry {
-            TranscriptEntry::Activity(activity)
-                if matches!(
-                    activity.kind,
-                    TranscriptActivityKind::Assistant
-                        | TranscriptActivityKind::Progress
-                        | TranscriptActivityKind::Tool
-                        | TranscriptActivityKind::Verification
-                ) =>
-            {
-                Some(activity.title.as_str())
-            }
-            _ => None,
-        })
-        .unwrap_or(&app.status)
+    for entry in app.transcript.iter().rev() {
+        let TranscriptEntry::Activity(activity) = entry else {
+            continue;
+        };
+        if is_internal_status(&activity.title) {
+            continue;
+        }
+        match activity.kind {
+            TranscriptActivityKind::Assistant
+            | TranscriptActivityKind::Progress
+            | TranscriptActivityKind::Tool => return activity.title.as_str(),
+            TranscriptActivityKind::Done
+            | TranscriptActivityKind::Error
+            | TranscriptActivityKind::Verification => break,
+        }
+    }
+    &app.status
 }
 
 pub(super) fn running_status(app: &AppState) -> String {
+    let activity = active_status(app);
+    let activity = if activity.eq_ignore_ascii_case("working") {
+        "Working"
+    } else {
+        activity
+    };
     format!(
-        "working... · {}",
+        "{activity} · {}",
         format_elapsed(app.elapsed_seconds().unwrap_or_default())
     )
 }
@@ -133,13 +150,15 @@ pub(super) fn session_metrics_line(app: &AppState, width: u16) -> String {
     let elapsed = format_elapsed(app.session_elapsed_seconds());
     let total = format_token_count(app.total_tokens);
     let cost = format_cost(app.estimated_cost_microusd);
-    if width < 80 {
+    if matches!(app.verbosity, crate::commands::Verbosity::Off | crate::commands::Verbosity::New)
+        || width < 80
+    {
         return format!("session {elapsed} · total {total} · cost {cost}");
     }
     let rate = app
         .output_tokens_per_second()
         .map_or_else(|| "—".to_owned(), format_token_rate);
-    if width < 120 {
+    if app.verbosity == crate::commands::Verbosity::All || width < 120 {
         return format!(
             "session {elapsed} · total {total} · output {} · cost {cost} · {rate} tok/s",
             format_token_count(app.output_tokens),
@@ -784,9 +803,9 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "shift+tab confirmation · enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+e activity details"
+                "esc esc cancel · ctrl+c copy · ctrl+v paste · enter queue follow-up · ctrl+t plan · ctrl+o details"
             } else {
-                "shift+tab confirmation · enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+e activity details"
+                "ctrl+c copy · ctrl+v paste · enter submit · tab commands · ctrl+t plan · ctrl+o details"
             },
             Color::DarkGrey,
         ),

@@ -1017,7 +1017,7 @@ fn verbose_command_sets_cycles_and_notifies() {
         directory.path().to_path_buf(),
         medusa_config::Config::default(),
     );
-    assert_eq!(state.verbosity, Verbosity::All);
+    assert_eq!(state.verbosity, Verbosity::New);
     let (events_tx, events_rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
 

@@ -296,7 +296,9 @@ impl AppState {
                 self.task_list_visible = !self.task_list_visible;
                 return Ok(AppAction::Redraw);
             }
-            if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if matches!(key.code, KeyCode::Char('e') | KeyCode::Char('o'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+            {
                 self.toggle_latest_activity_details();
                 return Ok(AppAction::Redraw);
             }

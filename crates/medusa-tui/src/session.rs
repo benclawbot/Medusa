@@ -6,7 +6,7 @@ use crate::{
 };
 use std::time::Instant;
 
-const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
+const DOUBLE_ESCAPE_WINDOW: Duration = Duration::from_secs(1);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 fn input_poll_timeout(
@@ -143,7 +143,7 @@ pub(super) fn run_loop(
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
     let mut next_animation = Instant::now();
     let mut needs_draw = true;
-    let mut last_ctrl_c = None;
+    let mut last_escape = None;
 
     loop {
         needs_draw |= drain_runtime_events(app, runtime)?;
@@ -177,8 +177,11 @@ pub(super) fn run_loop(
             needs_draw = true;
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
+            if handle_copy_shortcut(app, identity, &terminal_event)? {
+                continue;
+            }
             if let Some(action) =
-                session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
+                session_control_action(&terminal_event, modal_open, app, &mut last_escape)
             {
                 if handle_action(app, runtime, action, options.fresh)? {
                     return Ok(ExitReason::UserQuit);
@@ -215,7 +218,7 @@ pub(super) fn run_loop(
     runtime: &mut RuntimeController,
 ) -> io::Result<ExitReason> {
     let mut last_frame: Option<Vec<StyledLine>> = None;
-    let mut last_ctrl_c = None;
+    let mut last_escape = None;
     // The runtime event worker owns daemon startup/recovery. Keep first paint non-blocking.
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let _ = daemon.poll(app);
@@ -260,8 +263,11 @@ pub(super) fn run_loop(
             needs_frame = true;
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
+            if handle_copy_shortcut(app, identity, &terminal_event)? {
+                continue;
+            }
             if let Some(action) =
-                session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
+                session_control_action(&terminal_event, modal_open, app, &mut last_escape)
             {
                 if handle_action(app, runtime, action, options.fresh)? {
                     return Ok(ExitReason::UserQuit);
@@ -382,11 +388,41 @@ fn handle_mouse_selection(
     }
 }
 
+fn handle_copy_shortcut(
+    app: &mut AppState,
+    identity: &UiIdentity,
+    event: &Event,
+) -> io::Result<bool> {
+    let Event::Key(key) = event else {
+        return Ok(false);
+    };
+    if key.kind != KeyEventKind::Press
+        || key.code != KeyCode::Char('c')
+        || !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        return Ok(false);
+    }
+
+    let Some(selection) = app.selection.filter(|selection| !selection.is_empty()) else {
+        app.status = "select text, then press Ctrl+C to copy".to_owned();
+        return Ok(true);
+    };
+    let (width, height) = size()?;
+    let frame = render_frame(identity, app, width, height);
+    let text = selected_text(&frame, width, selection);
+    if text.is_empty() {
+        app.status = "selected text is empty".to_owned();
+    } else if let Err(error) = app.copy_text(&text) {
+        app.status = format!("copy failed: {error}");
+    }
+    Ok(true)
+}
+
 fn session_control_action(
     terminal_event: &Event,
     modal_open: bool,
-    app: &AppState,
-    last_ctrl_c: &mut Option<Instant>,
+    app: &mut AppState,
+    last_escape: &mut Option<Instant>,
 ) -> Option<AppAction> {
     let Event::Key(key) = terminal_event else {
         return None;
@@ -394,28 +430,28 @@ fn session_control_action(
     if key.kind != KeyEventKind::Press {
         return None;
     }
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        let now = Instant::now();
-        if last_ctrl_c
-            .take()
-            .is_some_and(|previous| now.saturating_duration_since(previous) <= DOUBLE_CTRL_C_WINDOW)
-        {
-            return Some(AppAction::Quit);
-        }
-        *last_ctrl_c = Some(now);
-        return Some(AppAction::Interrupt);
-    }
 
-    *last_ctrl_c = None;
     if key.code == KeyCode::Esc && !modal_open {
         if !app.composer.draft.text.is_empty() || !app.composer.draft.attachments.is_empty() {
+            *last_escape = None;
             return Some(AppAction::ClearPrompt);
         }
         if app.is_running() {
-            return Some(AppAction::Interrupt);
+            let now = Instant::now();
+            if last_escape.take().is_some_and(|previous| {
+                now.saturating_duration_since(previous) <= DOUBLE_ESCAPE_WINDOW
+            }) {
+                return Some(AppAction::Interrupt);
+            }
+            *last_escape = Some(now);
+            app.status = "press Esc again to cancel".to_owned();
+            return Some(AppAction::Redraw);
         }
+        *last_escape = None;
         return Some(AppAction::ClearPrompt);
     }
+
+    *last_escape = None;
     None
 }
 
@@ -611,10 +647,7 @@ fn is_internal_activity_title(title: &str) -> bool {
 }
 
 fn is_user_visible_activity(activity: &RuntimeActivity) -> bool {
-    !matches!(
-        activity.kind,
-        RuntimeActivityKind::Assistant | RuntimeActivityKind::Tool
-    ) && !is_internal_activity_title(&activity.title)
+    activity.kind != RuntimeActivityKind::Assistant && !is_internal_activity_title(&activity.title)
 }
 
 fn user_visible_runtime_error(error: &str) -> String {
@@ -917,18 +950,18 @@ mod tests {
         .expect("app");
         let mut app = app;
         app.begin_run();
-        let mut last_ctrl_c = None;
+        let mut last_escape = None;
         let action = session_control_action(
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             false,
-            &app,
-            &mut last_ctrl_c,
+            &mut app,
+            &mut last_escape,
         );
         assert_eq!(action, Some(AppAction::ClearPrompt));
     }
 
     #[test]
-    fn escape_interrupts_only_when_the_running_turn_has_no_draft() {
+    fn running_turn_requires_double_escape_to_interrupt() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
             directory.path().to_path_buf(),
@@ -938,15 +971,48 @@ mod tests {
         )
         .expect("app");
         app.begin_run();
-        let mut last_ctrl_c = None;
+        let mut last_escape = None;
         assert_eq!(
             session_control_action(
                 &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
                 false,
-                &app,
-                &mut last_ctrl_c,
+                &mut app,
+                &mut last_escape,
+            ),
+            Some(AppAction::Redraw)
+        );
+        assert_eq!(app.status, "press Esc again to cancel");
+        assert_eq!(
+            session_control_action(
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+                false,
+                &mut app,
+                &mut last_escape,
             ),
             Some(AppAction::Interrupt)
+        );
+    }
+
+    #[test]
+    fn ctrl_c_is_not_a_cancellation_or_quit_shortcut() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "ctrl-c-copy",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.begin_run();
+        let mut last_escape = None;
+        assert_eq!(
+            session_control_action(
+                &Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+                false,
+                &mut app,
+                &mut last_escape,
+            ),
+            None
         );
     }
 
@@ -1026,10 +1092,9 @@ mod tests {
     }
 
     #[test]
-    fn model_and_primary_tool_activities_are_hidden_but_failures_remain_visible() {
+    fn model_and_internal_activities_are_hidden_but_user_actions_remain_visible() {
         for (kind, title) in [
             (RuntimeActivityKind::Assistant, "Model response received"),
-            (RuntimeActivityKind::Tool, "Shell(cargo test)"),
             (RuntimeActivityKind::Done, "Checkpoint created"),
         ] {
             assert!(!is_user_visible_activity(&RuntimeActivity {
@@ -1041,8 +1106,14 @@ mod tests {
         }
         assert!(is_user_visible_activity(&RuntimeActivity {
             id: None,
+            kind: RuntimeActivityKind::Tool,
+            title: "Inspect repository".to_owned(),
+            details: Vec::new(),
+        }));
+        assert!(is_user_visible_activity(&RuntimeActivity {
+            id: None,
             kind: RuntimeActivityKind::Error,
-            title: "Shell(cargo test) failed".to_owned(),
+            title: "cargo test failed".to_owned(),
             details: vec!["exit code: 1".to_owned()],
         }));
     }

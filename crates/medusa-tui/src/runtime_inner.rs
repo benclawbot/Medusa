@@ -249,7 +249,9 @@ impl DaemonRuntimeState {
         let initial_settings = RuntimeEvent::Settings {
             model: format!("{} / {}", config.model.provider, config.model.name),
             effort: format!("effort:{}", effort_label_for_turns(config.agent.max_turns)),
-            verbosity: medusa_runtime::commands::Verbosity::All.label().to_owned(),
+            verbosity: medusa_runtime::commands::Verbosity::default()
+                .label()
+                .to_owned(),
             plan_mode: config.agent.mode == Mode::ReadOnly,
             credential_configured,
             context_window_tokens: config.model.context_window_tokens,
@@ -1388,8 +1390,8 @@ fn map_frontend_event(
                 questions: vec![QuestionPrompt {
                     header: "Approval".to_owned(),
                     question: format!(
-                        "{} in {}: {} (risk: {})",
-                        approval.action, approval.scope, approval.reason, approval.risk
+                        "Action: {}\nWhy: {}\nScope: {}\nRisk: {}",
+                        approval.action, approval.reason, approval.scope, approval.risk
                     ),
                     options: vec![
                         QuestionOption {
@@ -1512,15 +1514,44 @@ fn canonical_start_event(run_active: &mut bool) -> Option<RuntimeEvent> {
 fn map_presentation_activity(activity: PresentationActivity) -> RuntimeActivity {
     let mut details = activity.details;
     if !activity.affected_paths.is_empty() {
-        details.push(format!("Paths: {}", activity.affected_paths.join(", ")));
+        details.extend(
+            activity
+                .affected_paths
+                .iter()
+                .map(|path| format!("Changed: {path}")),
+        );
     }
     if let Some(evidence) = activity.evidence_ref {
         details.push(format!("Evidence: {evidence}"));
     }
+    let title = match (activity.kind, activity.lifecycle) {
+        (PresentationActivityKind::RepositoryRead, PresentationLifecycle::Succeeded) => {
+            "Inspected repository".to_owned()
+        }
+        (PresentationActivityKind::Edit, PresentationLifecycle::Succeeded)
+            if !activity.affected_paths.is_empty() =>
+        {
+            format!(
+                "Edited {} file{}",
+                activity.affected_paths.len(),
+                if activity.affected_paths.len() == 1 { "" } else { "s" }
+            )
+        }
+        (PresentationActivityKind::Edit, PresentationLifecycle::Active)
+            if !activity.affected_paths.is_empty() =>
+        {
+            format!(
+                "Editing {} file{}",
+                activity.affected_paths.len(),
+                if activity.affected_paths.len() == 1 { "" } else { "s" }
+            )
+        }
+        _ => activity.title,
+    };
     RuntimeActivity {
         id: Some(activity.activity_id),
         kind: runtime_activity_kind(activity.kind, activity.lifecycle),
-        title: activity.title,
+        title,
         details,
     }
 }
@@ -1549,7 +1580,7 @@ fn runtime_activity_kind(
             | PresentationActivityKind::Edit
             | PresentationActivityKind::Command => RuntimeActivityKind::Tool,
             PresentationActivityKind::Verification | PresentationActivityKind::Test => {
-                RuntimeActivityKind::Verification
+                RuntimeActivityKind::Progress
             }
             PresentationActivityKind::Done => RuntimeActivityKind::Done,
             PresentationActivityKind::Error => RuntimeActivityKind::Error,
