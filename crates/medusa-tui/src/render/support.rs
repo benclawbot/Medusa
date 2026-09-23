@@ -77,6 +77,22 @@ fn verbose_filterable(kind: TranscriptActivityKind) -> bool {
     )
 }
 
+/// Provider/runtime lifecycle telemetry is useful for diagnosis, but it is not
+/// a user action or outcome. Keep it out of normal transcript density levels.
+fn diagnostic_only(activity: &TranscriptActivity) -> bool {
+    let title = activity.title.trim().to_ascii_lowercase();
+    matches!(
+        title.as_str(),
+        "reasoning"
+            | "analysis"
+            | "thinking"
+            | "provider execution"
+            | "tool output available"
+            | "runtime capabilities"
+    ) || title.starts_with("session state:")
+        || title.starts_with("session action ")
+}
+
 /// Masks credential-like substrings in displayed transcript and modal text
 /// using the shared agent redactor. The composer keeps its own masking.
 fn mask_secret_text(value: &str) -> String {
@@ -87,7 +103,11 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     let mut previous_activity_group = None;
     let latest_filterable = app.transcript.iter().rposition(|entry| {
-        matches!(entry, TranscriptEntry::Activity(activity) if verbose_filterable(activity.kind))
+        matches!(
+            entry,
+            TranscriptEntry::Activity(activity)
+                if verbose_filterable(activity.kind) && !diagnostic_only(activity)
+        )
     });
     for (entry_index, entry) in app.transcript.iter().enumerate() {
         match entry {
@@ -131,12 +151,17 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 ));
             }
             TranscriptEntry::Activity(activity) => {
-                let hidden = match app.verbosity {
-                    Verbosity::Off => verbose_filterable(activity.kind),
-                    Verbosity::New => {
-                        verbose_filterable(activity.kind) && Some(entry_index) != latest_filterable
+                let hidden = if diagnostic_only(activity) {
+                    app.verbosity != Verbosity::Verbose
+                } else {
+                    match app.verbosity {
+                        Verbosity::Off => verbose_filterable(activity.kind),
+                        Verbosity::New => {
+                            verbose_filterable(activity.kind)
+                                && Some(entry_index) != latest_filterable
+                        }
+                        Verbosity::All | Verbosity::Verbose => false,
                     }
-                    Verbosity::All | Verbosity::Verbose => false,
                 };
                 if hidden {
                     continue;
@@ -153,6 +178,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 lines.extend(activity_lines(
                     activity,
                     app.verbosity == Verbosity::Verbose
+                        || activity.kind == TranscriptActivityKind::Error
                         || app.activity_details_expanded(entry_index, activity),
                 ));
             }
@@ -797,26 +823,23 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> V
     } else {
         Color::Grey
     };
-    let (marker, lifecycle) = match activity.kind {
-        TranscriptActivityKind::Done => ("✓", "succeeded"),
-        TranscriptActivityKind::Error => ("✻", "failed"),
-        TranscriptActivityKind::Verification => ("◇", "verified"),
+    let marker = match activity.kind {
+        TranscriptActivityKind::Done => "✓",
+        TranscriptActivityKind::Error => "✗",
+        TranscriptActivityKind::Verification => "◇",
         TranscriptActivityKind::Assistant
         | TranscriptActivityKind::Progress
-        | TranscriptActivityKind::Tool => ("●", "running"),
+        | TranscriptActivityKind::Tool => "›",
     };
     let mut lines = vec![StyledLine::with_marker(
         format!("{marker} "),
         color,
-        format!("[{lifecycle}] {}", mask_secret_text(&activity.title)),
+        mask_secret_text(&activity.title),
         foreground,
     )];
-    if !matches!(
-        activity.kind,
-        TranscriptActivityKind::Assistant | TranscriptActivityKind::Tool
-    ) {
+    if expanded {
         lines.extend(
-            presented_activity_details(&activity.details, expanded)
+            presented_activity_details(&activity.details, true)
                 .into_iter()
                 .map(|detail| {
                     StyledLine::new(
