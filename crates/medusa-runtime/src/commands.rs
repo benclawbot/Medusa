@@ -906,7 +906,7 @@ mod tests {
 
     #[test]
     fn verbosity_cycles_like_hermes_and_parses() {
-        assert_eq!(Verbosity::default(), Verbosity::All);
+        assert_eq!(Verbosity::default(), Verbosity::New);
         assert_eq!(Verbosity::Off.cycled(), Verbosity::New);
         assert_eq!(Verbosity::New.cycled(), Verbosity::All);
         assert_eq!(Verbosity::All.cycled(), Verbosity::Verbose);
