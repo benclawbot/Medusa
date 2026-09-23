@@ -231,3 +231,49 @@ fn verbosity_filters_tool_activity_rows() {
     let verbose = titles(&app).join("\n");
     assert!(verbose.contains("detail"));
 }
+
+
+#[test]
+fn compact_transcript_hides_reasoning_lifecycle_noise() {
+    use crate::app::TranscriptActivityKind;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "reasoning-noise",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.verbosity = Verbosity::New;
+    app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
+        id: Some("reasoning-1".to_owned()),
+        kind: TranscriptActivityKind::Done,
+        title: "reasoning".to_owned(),
+        details: vec!["internal lifecycle detail".to_owned()],
+    }));
+    app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
+        id: Some("edit-1".to_owned()),
+        kind: TranscriptActivityKind::Done,
+        title: "Updated TUI input handling".to_owned(),
+        details: vec!["3 files · +79 −11".to_owned()],
+    }));
+
+    let rendered = transcript_lines(&app, 100)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.contains("reasoning"));
+    assert!(rendered.contains("Updated TUI input handling"));
+    assert!(rendered.contains("3 files · +79 −11"));
+
+    app.verbosity = Verbosity::Verbose;
+    let verbose = transcript_lines(&app, 100)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(verbose.contains("reasoning"));
+}
