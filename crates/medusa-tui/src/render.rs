@@ -124,7 +124,8 @@ fn active_status(app: &AppState) -> &str {
 
 pub(super) fn running_status(app: &AppState) -> String {
     format!(
-        "working... · {}",
+        "{} · {}",
+        active_status(app),
         format_elapsed(app.elapsed_seconds().unwrap_or_default())
     )
 }
@@ -784,9 +785,9 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "shift+tab confirmation · enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+e activity details"
+                "enter queue follow-up · esc esc cancel · ctrl+c copy · ctrl+v paste · ctrl+e details"
             } else {
-                "shift+tab confirmation · enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+e activity details"
+                "enter submit · ctrl+c copy · ctrl+v paste · tab commands · ctrl+e details"
             },
             Color::DarkGrey,
         ),
@@ -796,11 +797,21 @@ pub(super) fn render_frame(
         &mut frame,
         bottom_row,
         StyledLine::new(
-            format!(
-                "{} · confirmation [{}]",
-                session_metrics_line(app, width),
-                identity.permission
-            ),
+            if app.verbosity == crate::commands::Verbosity::Verbose {
+                format!(
+                    "{} · confirmation [{}]",
+                    session_metrics_line(app, width),
+                    identity.permission
+                )
+            } else {
+                format!(
+                    "session {} · turn {} · display {} · confirmation [{}]",
+                    format_elapsed(app.session_elapsed_seconds()),
+                    app.active_turn,
+                    app.verbosity.label(),
+                    identity.permission
+                )
+            },
             Color::DarkGrey,
         ),
     );

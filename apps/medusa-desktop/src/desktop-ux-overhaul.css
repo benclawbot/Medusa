@@ -173,9 +173,9 @@ body {
 }
 
 .message.user .message-body {
-  border: 1px solid #e7e2ff;
-  border-radius: 16px 16px 5px 16px;
-  background: var(--medusa-accent-soft);
+  border: 1px solid #e5e7eb;
+  border-radius: 14px 14px 5px 14px;
+  background: #f3f4f6;
   padding: 12px 15px;
 }
 

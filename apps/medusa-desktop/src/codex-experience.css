@@ -1036,3 +1036,30 @@ kbd,
     padding-left: 1px;
   }
 }
+
+
+/* Action-oriented live execution: one current action, then compact durable outcomes. */
+.live-current-action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--medusa-border);
+  color: var(--medusa-ink);
+}
+
+.live-current-action strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--medusa-text-sm);
+}
+
+.live-outcome-list {
+  display: grid;
+  gap: 3px;
+  border-top: 1px solid var(--medusa-border);
+  padding-top: 5px;
+}

@@ -27,16 +27,16 @@ impl Effort {
     }
 }
 
-/// Display verbosity for tool-progress activity, mirroring the text frontend
-/// `/verbose <off|new|all|verbose>` levels: `off` hides tool, progress,
-/// and verification rows; `new` keeps only the latest such row; `all`
-/// shows every row; `verbose` additionally expands row details.
+/// Display density for execution activity. `new` is the compact default:
+/// keep the current action plus durable outcomes. `all` shows the meaningful
+/// work log, while `verbose` also exposes diagnostic activity and expands
+/// details. `off` hides transient tool/progress rows entirely.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verbosity {
     Off,
-    New,
     #[default]
+    New,
     All,
     Verbose,
 }
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn verbosity_cycles_like_hermes_and_parses() {
-        assert_eq!(Verbosity::default(), Verbosity::All);
+        assert_eq!(Verbosity::default(), Verbosity::New);
         assert_eq!(Verbosity::Off.cycled(), Verbosity::New);
         assert_eq!(Verbosity::New.cycled(), Verbosity::All);
         assert_eq!(Verbosity::All.cycled(), Verbosity::Verbose);

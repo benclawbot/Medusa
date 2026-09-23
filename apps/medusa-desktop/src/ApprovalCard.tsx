@@ -14,7 +14,7 @@ const normalized = (value: string) => value.trim().toLowerCase();
 function optionKind(label: string): "approve" | "approveClass" | "reject" | "edit" | "other" {
   const value = normalized(label);
   if (value.includes("approve class") || value.includes("always allow")) return "approveClass";
-  if (value.includes("approve") || value.includes("allow once")) return "approve";
+  if (value.includes("approve") || value.includes("allow once") || value.includes("run once")) return "approve";
   if (value.includes("reject") || value.includes("deny")) return "reject";
   if (value.includes("feedback") || value.includes("modify") || value.includes("edit plan")) return "edit";
   return "other";
@@ -25,11 +25,47 @@ function isApprovalPrompt(prompt: QuestionPrompt): boolean {
   return header.includes("permission") || header.includes("approval") || prompt.options.some((option) => optionKind(option.label) !== "other");
 }
 
+
+interface ApprovalContext {
+  what: string;
+  why: string;
+  scope: string;
+  risk: string;
+}
+
+function parseApprovalContext(question: string): ApprovalContext | undefined {
+  const fields = new Map<string, string>();
+  for (const line of question.split("\n")) {
+    const match = /^(What|Why|Scope|Risk)\s+(.+)$/i.exec(line.trim());
+    if (match) fields.set(match[1].toLowerCase(), match[2].trim());
+  }
+  const what = fields.get("what");
+  const why = fields.get("why");
+  const scope = fields.get("scope");
+  const risk = fields.get("risk");
+  return what && why && scope && risk ? { what, why, scope, risk } : undefined;
+}
+
+function ApprovalContextView({ question }: { question: string }) {
+  const context = parseApprovalContext(question);
+  if (!context) return <p>{question}</p>;
+  return (
+    <dl className="approval-context">
+      <div><dt>What</dt><dd>{context.what}</dd></div>
+      <div><dt>Why</dt><dd>{context.why}</dd></div>
+      <div><dt>Scope</dt><dd>{context.scope}</dd></div>
+      <div><dt>Risk</dt><dd>{context.risk}</dd></div>
+    </dl>
+  );
+}
+
 export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalCardProps) {
   const [expanded, setExpanded] = useState(true);
   const approvalPrompts = useMemo(() => prompts.filter(isApprovalPrompt), [prompts]);
   const otherPrompts = useMemo(() => prompts.filter((prompt) => !isApprovalPrompt(prompt)), [prompts]);
   const completed = plan.filter((step) => step.status === "completed").length;
+  const primaryApproval = approvalPrompts[0];
+  const primaryContext = primaryApproval ? parseApprovalContext(primaryApproval.question) : undefined;
 
   useEffect(() => {
     if (!expanded || !approvalPrompts.length) return;
@@ -59,7 +95,7 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
         <span className="approval-icon"><ShieldAlert size={18} /></span>
         <div>
           <small>Operator decision required</small>
-          <strong>{approvalPrompts[0]?.question ?? otherPrompts[0]?.question}</strong>
+          <strong>{primaryContext?.what ?? primaryApproval?.question ?? otherPrompts[0]?.question}</strong>
         </div>
         <button className="approval-expand" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-label={expanded ? "Collapse approval details" : "Expand approval details"}>
           <ChevronDown size={16} className={expanded ? "expanded" : ""} />
@@ -80,7 +116,7 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
 
           {approvalPrompts.map((prompt) => (
             <div className="approval-prompt" key={`${prompt.header}-${prompt.question}`}>
-              <p>{prompt.question}</p>
+              <ApprovalContextView question={prompt.question} />
               <div className="approval-actions">
                 {prompt.options.map((option) => {
                   const kind = optionKind(option.label);

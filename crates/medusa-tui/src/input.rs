@@ -87,7 +87,7 @@ impl ComposerState {
                 self.insert_text("\n")
             }
             (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
-                Ok(ComposerAction::Interrupt)
+                Ok(ComposerAction::None)
             }
             (KeyCode::Char('r'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
                 Ok(if self.history_search_previous() {

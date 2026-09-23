@@ -118,7 +118,7 @@ interface UsageState {
 type Verbosity = "off" | "new" | "all" | "verbose";
 
 function parseVerbosity(value: unknown): Verbosity {
-  return value === "off" || value === "new" || value === "verbose" ? value : "all";
+  return value === "off" || value === "all" || value === "verbose" ? value : "new";
 }
 
 interface SettingsState {
@@ -323,6 +323,33 @@ function activityStatusClass(entry: WorkLogEntry): string {
   return entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : "";
 }
 
+function isDiagnosticActivityTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return [
+    "reasoning",
+    "analysis",
+    "thinking",
+    "provider execution",
+    "tool output available",
+    "runtime capabilities",
+  ].includes(normalized)
+    || normalized.startsWith("session state:")
+    || normalized.startsWith("session action ");
+}
+
+function runtimeActivityStatus(activity: RuntimeActivity): "Done" | "Error" | "Working" | "Recorded" {
+  if (activity.kind === "error") return "Error";
+  if (activity.kind === "done") return "Done";
+  if (activity.kind === "verification") {
+    const result = `${activity.title} ${(activity.details ?? []).join(" ")}`.toLowerCase();
+    if (/\b(fail(?:ed|ure)?|error)\b/.test(result)) return "Error";
+    if (/\b(pass(?:ed)?|verified|succeeded|complete(?:d)?)\b/.test(result)) return "Done";
+    return "Working";
+  }
+  if (activity.kind === "tool" || activity.kind === "progress") return "Working";
+  return "Recorded";
+}
+
 function liveTurnPhaseLabel(phase: LiveTurnPhase | undefined): string {
   switch (phase) {
     case "submitting":
@@ -353,30 +380,40 @@ function LiveActivityTrail({
   activeEntry?: WorkLogEntry;
   phase?: LiveTurnPhase;
 }) {
+  const recentOutcomes = entries
+    .filter((entry) => entry.id !== activeEntry?.id && entry.status !== "Working")
+    .slice(-4);
   return (
     <section className="activity-summary live-activity-trail" aria-label="Actions in progress">
       <div className="activity-summary-heading">
         <span><Activity size={15} aria-hidden="true" /> Working for {formatWorkedDuration(elapsedSeconds)}</span>
-        <small>{activeEntry?.text ?? liveTurnPhaseLabel(phase)}</small>
+        <small>Current action</small>
       </div>
-      {entries.map((entry) => (
-        <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={entry.status === "Working" || verboseDetails || undefined}>
-          <summary>
-            <span aria-hidden="true"><Activity size={14} /></span>
-            <strong>{entry.text}</strong>
-            <small>{entry.status ?? "Working"}</small>
-          </summary>
-          {!!entry.details?.length && (
-            <div className="activity-details">
-              {entry.details.map((detail, index) => <p key={`${entry.id}-${index}`}>{detail}</p>)}
-            </div>
-          )}
-        </details>
-      ))}
+      <div className="live-current-action" role="status">
+        <span className="todo-status-spinner" aria-hidden="true" />
+        <strong>{activeEntry?.text ?? liveTurnPhaseLabel(phase)}</strong>
+      </div>
+      {!!recentOutcomes.length && (
+        <div className="live-outcome-list" aria-label="Recent completed actions">
+          {recentOutcomes.map((entry) => (
+            <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={entry.status === "Error" || verboseDetails || undefined}>
+              <summary>
+                <span aria-hidden="true">{entry.status === "Error" ? <OctagonX size={14} /> : <CheckCircle2 size={14} />}</span>
+                <strong>{entry.text}</strong>
+                <small>{entry.status ?? "Recorded"}</small>
+              </summary>
+              {!!entry.details?.length && (
+                <div className="activity-details">
+                  {entry.details.map((detail, index) => <p key={`${entry.id}-${index}`}>{detail}</p>)}
+                </div>
+              )}
+            </details>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
-
 function FinalTurnSummary({
   summary,
   activities,
@@ -412,11 +449,11 @@ function FinalTurnSummary({
       {!!summary.error && <p className="turn-summary-error">{summary.error}</p>}
 
       {!!activities.length && (
-        <details className="turn-summary-details">
+        <details className="turn-summary-details" open={summary.status === "failed" || undefined}>
           <summary>Show execution details ({activities.length})</summary>
           <div className="turn-summary-activity-list">
             {activities.map((entry) => (
-              <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id}>
+              <details className={`activity-row ${activityStatusClass(entry)}`} key={entry.id} open={entry.status === "Error" || undefined}>
                 <summary>
                   <span aria-hidden="true"><Activity size={14} /></span>
                   <strong>{entry.text}</strong>
@@ -564,7 +601,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   const [settings, setSettings] = useState<SettingsState>({
     model: "not connected",
     effort: "effort:auto",
-    verbosity: "all",
+    verbosity: "new",
     planMode: false,
     credentialConfigured: false,
   });
@@ -876,13 +913,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
         const timestamp = Date.now();
         const activityId = activity.id;
         const newEntryId = nextWorkEntryId();
-        const status = activity.kind === "done"
-          ? "Done"
-          : activity.kind === "error"
-            ? "Error"
-            : activity.kind === "tool" || activity.kind === "progress" || activity.kind === "verification"
-              ? "Working"
-              : "Recorded";
+        const status = runtimeActivityStatus(activity);
         setWorkLog((current) => {
           const index = activityId
             ? current.findIndex((item) => item.kind === "activity" && item.activityId === activityId)
@@ -1749,34 +1780,46 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   let activeWorkEntry: WorkLogEntry | undefined;
   for (let index = workLog.length - 1; index >= 0; index -= 1) {
     const entry = workLog[index];
-    if (entry?.kind === "activity" && entry.status === "Working") {
+    if (
+      entry?.kind === "activity"
+      && entry.status === "Working"
+      && (settings.verbosity === "verbose" || !isDiagnosticActivityTitle(entry.text))
+    ) {
       activeWorkEntry = entry;
       break;
     }
   }
-  // /verbose display filter: tool-progress rows carry status "Working".
-  // "off" hides them, "new" keeps only the latest, "verbose" expands details.
+  // Density is progressive disclosure rather than raw runtime logging.
+  // "new" keeps one live action plus durable outcomes, "all" keeps every
+  // meaningful action, and "verbose" additionally reveals lifecycle telemetry.
   const visibleWorkLog = (() => {
-    if (settings.verbosity === "all" || settings.verbosity === "verbose") return workLog;
+    const diagnosticVisible = settings.verbosity === "verbose";
+    const meaningful = workLog.filter((entry) =>
+      entry.kind !== "activity" || diagnosticVisible || !isDiagnosticActivityTitle(entry.text),
+    );
+    if (settings.verbosity === "all" || settings.verbosity === "verbose") return meaningful;
     let latestWorking = -1;
     if (settings.verbosity === "new") {
-      for (let index = workLog.length - 1; index >= 0; index -= 1) {
-        const entry = workLog[index];
+      for (let index = meaningful.length - 1; index >= 0; index -= 1) {
+        const entry = meaningful[index];
         if (entry?.kind === "activity" && entry.status === "Working") {
           latestWorking = index;
           break;
         }
       }
     }
-    return workLog.filter((entry, index) =>
+    return meaningful.filter((entry, index) =>
       entry.kind !== "activity" || entry.status !== "Working" || index === latestWorking,
     );
   })();
   const verboseDetails = settings.verbosity === "verbose";
   const liveActivityEntries = visibleWorkLog
     .filter((entry) => entry.kind === "activity")
-    .slice(-8);
-  const completedActivityEntries = workLog.filter((entry) => entry.kind === "activity");
+    .slice(-5);
+  const completedActivityEntries = workLog.filter((entry) =>
+    entry.kind === "activity"
+      && (settings.verbosity === "verbose" || !isDiagnosticActivityTitle(entry.text)),
+  );
   const hasPartialResult = partialResult && Boolean(webArtifact);
 
   const beginSidePanelResize = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -1980,7 +2023,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
                     <p className="work-log-empty">Actions and your inputs will appear here while Medusa works.</p>
                   ) : visibleWorkLog.map((entry) => (
                     entry.kind === "activity" ? (
-                      <details className={`work-log-row activity ${entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : ""}`} key={entry.id} open={verboseDetails || undefined}>
+                      <details className={`work-log-row activity ${entry.status === "Done" ? "done" : entry.status === "Error" ? "error" : ""}`} key={entry.id} open={entry.status === "Error" || verboseDetails || undefined}>
                         <summary>
                           <span className="work-log-icon">{entry.status === "Error" ? <OctagonX size={14} /> : entry.status === "Done" ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span>
                           <span className="work-log-text" title={entry.text}>{entry.text}</span>

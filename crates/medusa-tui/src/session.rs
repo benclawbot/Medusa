@@ -6,7 +6,7 @@ use crate::{
 };
 use std::time::Instant;
 
-const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
+const DOUBLE_ESCAPE_WINDOW: Duration = Duration::from_secs(1);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 fn input_poll_timeout(
@@ -143,7 +143,7 @@ pub(super) fn run_loop(
     let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
     let mut next_animation = Instant::now();
     let mut needs_draw = true;
-    let mut last_ctrl_c = None;
+    let mut last_escape = None;
 
     loop {
         needs_draw |= drain_runtime_events(app, runtime)?;
@@ -177,8 +177,11 @@ pub(super) fn run_loop(
             needs_draw = true;
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
+            if handle_copy_shortcut(app, identity, &terminal_event)? {
+                continue;
+            }
             if let Some(action) =
-                session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
+                session_control_action(&terminal_event, modal_open, app, &mut last_escape)
             {
                 if handle_action(app, runtime, action, options.fresh)? {
                     return Ok(ExitReason::UserQuit);
@@ -215,7 +218,7 @@ pub(super) fn run_loop(
     runtime: &mut RuntimeController,
 ) -> io::Result<ExitReason> {
     let mut last_frame: Option<Vec<StyledLine>> = None;
-    let mut last_ctrl_c = None;
+    let mut last_escape = None;
     // The runtime event worker owns daemon startup/recovery. Keep first paint non-blocking.
     let mut daemon = DaemonMonitor::new(options.socket_path());
     let _ = daemon.poll(app);
@@ -260,8 +263,12 @@ pub(super) fn run_loop(
             needs_frame = true;
             app.dismiss_welcome_for_event(&terminal_event);
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
+            if handle_copy_shortcut(app, identity, &terminal_event)? {
+                last_frame = None;
+                continue;
+            }
             if let Some(action) =
-                session_control_action(&terminal_event, modal_open, app, &mut last_ctrl_c)
+                session_control_action(&terminal_event, modal_open, app, &mut last_escape)
             {
                 if handle_action(app, runtime, action, options.fresh)? {
                     return Ok(ExitReason::UserQuit);
@@ -382,11 +389,44 @@ fn handle_mouse_selection(
     }
 }
 
+fn handle_copy_shortcut(
+    app: &mut AppState,
+    identity: &UiIdentity,
+    terminal_event: &Event,
+) -> io::Result<bool> {
+    let Event::Key(key) = terminal_event else {
+        return Ok(false);
+    };
+    if key.kind != KeyEventKind::Press
+        || key.code != KeyCode::Char('c')
+        || !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        return Ok(false);
+    }
+    let Some(selection) = app.selection else {
+        app.status = "select transcript text to copy".to_owned();
+        return Ok(true);
+    };
+    if selection.is_empty() {
+        app.status = "select transcript text to copy".to_owned();
+        return Ok(true);
+    }
+    let (width, height) = size()?;
+    let frame = render_frame(identity, app, width, height);
+    let text = selected_text(&frame, width, selection);
+    if text.is_empty() {
+        app.status = "select transcript text to copy".to_owned();
+    } else if let Err(error) = app.copy_text(&text) {
+        app.status = format!("copy failed: {error}");
+    }
+    Ok(true)
+}
+
 fn session_control_action(
     terminal_event: &Event,
     modal_open: bool,
-    app: &AppState,
-    last_ctrl_c: &mut Option<Instant>,
+    app: &mut AppState,
+    last_escape: &mut Option<Instant>,
 ) -> Option<AppAction> {
     let Event::Key(key) = terminal_event else {
         return None;
@@ -394,29 +434,28 @@ fn session_control_action(
     if key.kind != KeyEventKind::Press {
         return None;
     }
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        let now = Instant::now();
-        if last_ctrl_c
-            .take()
-            .is_some_and(|previous| now.saturating_duration_since(previous) <= DOUBLE_CTRL_C_WINDOW)
-        {
-            return Some(AppAction::Quit);
-        }
-        *last_ctrl_c = Some(now);
-        return Some(AppAction::Interrupt);
+    if key.code != KeyCode::Esc {
+        *last_escape = None;
+        return None;
     }
-
-    *last_ctrl_c = None;
-    if key.code == KeyCode::Esc && !modal_open {
-        if !app.composer.draft.text.is_empty() || !app.composer.draft.attachments.is_empty() {
-            return Some(AppAction::ClearPrompt);
-        }
-        if app.is_running() {
+    if modal_open {
+        *last_escape = None;
+        return None;
+    }
+    if app.is_running() {
+        let now = Instant::now();
+        if last_escape
+            .take()
+            .is_some_and(|previous| now.saturating_duration_since(previous) <= DOUBLE_ESCAPE_WINDOW)
+        {
             return Some(AppAction::Interrupt);
         }
-        return Some(AppAction::ClearPrompt);
+        *last_escape = Some(now);
+        app.status = "press Esc again to cancel the active run".to_owned();
+        return Some(AppAction::Redraw);
     }
-    None
+    *last_escape = None;
+    Some(AppAction::ClearPrompt)
 }
 
 pub(super) fn handle_app_action(
@@ -906,47 +945,57 @@ mod tests {
     }
 
     #[test]
-    fn escape_clears_a_draft_before_it_can_interrupt_a_running_turn() {
+    fn running_turn_requires_double_escape_to_cancel() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let app = AppState::new(
+        let mut app = AppState::new(
             directory.path().to_path_buf(),
             "escape-running",
             "/verbose",
             Arc::new(UnsupportedClipboard),
         )
         .expect("app");
-        let mut app = app;
         app.begin_run();
-        let mut last_ctrl_c = None;
-        let action = session_control_action(
-            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-            false,
-            &app,
-            &mut last_ctrl_c,
-        );
-        assert_eq!(action, Some(AppAction::ClearPrompt));
-    }
-
-    #[test]
-    fn escape_interrupts_only_when_the_running_turn_has_no_draft() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let mut app = AppState::new(
-            directory.path().to_path_buf(),
-            "escape-interrupt",
-            "",
-            Arc::new(UnsupportedClipboard),
-        )
-        .expect("app");
-        app.begin_run();
-        let mut last_ctrl_c = None;
+        let mut last_escape = None;
         assert_eq!(
             session_control_action(
                 &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
                 false,
-                &app,
-                &mut last_ctrl_c,
+                &mut app,
+                &mut last_escape,
+            ),
+            Some(AppAction::Redraw)
+        );
+        assert!(app.status.contains("Esc again"));
+        assert_eq!(
+            session_control_action(
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+                false,
+                &mut app,
+                &mut last_escape,
             ),
             Some(AppAction::Interrupt)
+        );
+    }
+
+    #[test]
+    fn escape_clears_the_composer_when_idle() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "escape-idle",
+            "draft",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        let mut last_escape = None;
+        assert_eq!(
+            session_control_action(
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+                false,
+                &mut app,
+                &mut last_escape,
+            ),
+            Some(AppAction::ClearPrompt)
         );
     }
 

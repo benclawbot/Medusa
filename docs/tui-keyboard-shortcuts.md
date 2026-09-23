@@ -7,6 +7,7 @@ This reference covers the interactive `medusa tui` interface.
 | Shortcut | Action |
 | --- | --- |
 | `Enter` | Submit the current prompt. While a run is active, queue a follow-up for the next turn. |
+| `Ctrl+C` | Copy the current transcript selection. Mouse selection is also copied when released. |
 | `Ctrl+V` | Paste text, an image, or file attachments from the clipboard. |
 | `Tab` | Complete or move through slash-command suggestions. |
 | `Up` / `Down` | Move through command suggestions when the slash-command menu is open. |
@@ -26,8 +27,8 @@ This reference covers the interactive `medusa tui` interface.
 
 | Shortcut | Action |
 | --- | --- |
-| `Ctrl+C` | Interrupt the active run. Press twice within one second to quit the TUI. |
-| `Esc` | Interrupt an active run when no modal is open. Otherwise close or leave the current interaction. |
+| `Esc`, `Esc` | Cancel the active run. The second press must follow within one second. A single press never cancels work. |
+| `Esc` | When no run is active, clear the composer or leave the current interaction. |
 | `Ctrl+D` | Exit when the composer is empty. |
 
 ## Modal controls

@@ -151,7 +151,7 @@
     {
       "path": "docs/DESKTOP-UX.md",
       "disposition": "current",
-      "sha256": "12ab5c56b87e3e58b06438603c05f76e6449fdc888a0b899b02aada7f41e4f40"
+      "sha256": "f394fd44f788ca4169afb68a3daeb735d41a7db0dda78ba0f7d02f9ee79dd60f"
     },
     {
       "path": "docs/DOCUMENTATION-GOVERNANCE.md",
@@ -636,7 +636,7 @@
     {
       "path": "docs/tui-keyboard-shortcuts.md",
       "disposition": "current",
-      "sha256": "6775938ee9c420a59bf9b13bba4b358e40ddd0a01f2f01c1e730a5d5f5e48c60"
+      "sha256": "637e4caf022454129072d8a7dda32ac03a197ebd74dbe02fdfb76750b18dcdbe"
     },
     {
       "path": "docs/tui-troubleshooting.md",
