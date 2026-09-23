@@ -97,16 +97,24 @@ fn mask_secret_text(value: &str) -> String {
 pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     let mut previous_activity_group = None;
+    let current_turn_start = app
+        .transcript
+        .iter()
+        .rposition(|entry| matches!(entry, TranscriptEntry::User(_)))
+        .map_or(0, |index| index.saturating_add(1));
     let latest_filterable = app
         .is_running()
         .then(|| {
-            app.transcript.iter().rposition(|entry| {
-                matches!(
-                    entry,
-                    TranscriptEntry::Activity(activity)
-                        if verbose_filterable(activity.kind) && !internal_telemetry(activity)
-                )
-            })
+            app.transcript[current_turn_start..]
+                .iter()
+                .rposition(|entry| {
+                    matches!(
+                        entry,
+                        TranscriptEntry::Activity(activity)
+                            if verbose_filterable(activity.kind) && !internal_telemetry(activity)
+                    )
+                })
+                .map(|index| current_turn_start.saturating_add(index))
         })
         .flatten();
     for (entry_index, entry) in app.transcript.iter().enumerate() {
