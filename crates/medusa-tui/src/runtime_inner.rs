@@ -249,7 +249,7 @@ impl DaemonRuntimeState {
         let initial_settings = RuntimeEvent::Settings {
             model: format!("{} / {}", config.model.provider, config.model.name),
             effort: format!("effort:{}", effort_label_for_turns(config.agent.max_turns)),
-            verbosity: medusa_runtime::commands::Verbosity::All.label().to_owned(),
+            verbosity: medusa_runtime::commands::Verbosity::New.label().to_owned(),
             plan_mode: config.agent.mode == Mode::ReadOnly,
             credential_configured,
             context_window_tokens: config.model.context_window_tokens,
@@ -1388,13 +1388,13 @@ fn map_frontend_event(
                 questions: vec![QuestionPrompt {
                     header: "Approval".to_owned(),
                     question: format!(
-                        "{} in {}: {} (risk: {})",
-                        approval.action, approval.scope, approval.reason, approval.risk
+                        "Action: {}\nWhy: {}\nScope: {}\nRisk: {}",
+                        approval.action, approval.reason, approval.scope, approval.risk
                     ),
                     options: vec![
                         QuestionOption {
-                            label: "Approve".to_owned(),
-                            description: "Allow this action once".to_owned(),
+                            label: "Approve once".to_owned(),
+                            description: "Allow only this requested action".to_owned(),
                         },
                         QuestionOption {
                             label: "Deny".to_owned(),
