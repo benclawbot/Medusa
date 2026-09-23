@@ -1780,7 +1780,11 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   let activeWorkEntry: WorkLogEntry | undefined;
   for (let index = workLog.length - 1; index >= 0; index -= 1) {
     const entry = workLog[index];
-    if (entry?.kind === "activity" && entry.status === "Working") {
+    if (
+      entry?.kind === "activity"
+      && entry.status === "Working"
+      && (settings.verbosity === "verbose" || !isDiagnosticActivityTitle(entry.text))
+    ) {
       activeWorkEntry = entry;
       break;
     }
