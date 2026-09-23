@@ -107,8 +107,6 @@ fn conversation_urls_are_emitted_as_terminal_hyperlinks() {
 
 #[test]
 fn non_url_control_sequences_are_neutralized_but_real_urls_keep_hyperlinks() {
-    // OSC-52 clipboard write, window-title set, and bracketed-paste markers
-    // must not reach the terminal raw.
     let rendered = terminal_hyperlinks(concat!(
         "before ",
         "\x1b]52;c;aGVsbG8=\x07",
@@ -127,11 +125,8 @@ fn non_url_control_sequences_are_neutralized_but_real_urls_keep_hyperlinks() {
         "stray ESC survived sanitization: {without_hyperlink_wrappers:?}"
     );
     assert!(!without_hyperlink_wrappers.contains('\x07'));
-    // The printable remnants ("]52;c;", "]0;") may survive as inert text, but
-    // without the surrounding ESC they cannot function as control sequences.
     assert!(!without_hyperlink_wrappers.contains("\x1b]52;c;"));
     assert!(!without_hyperlink_wrappers.contains("\x1b]0;"));
-    // C1 controls are stripped as well.
     let c1 = terminal_hyperlinks("a\u{9b}5~b");
     assert_eq!(c1, "a5~b");
 }
@@ -230,4 +225,51 @@ fn verbosity_filters_tool_activity_rows() {
     app.verbosity = Verbosity::Verbose;
     let verbose = titles(&app).join("\n");
     assert!(verbose.contains("detail"));
+}
+
+#[test]
+fn compact_transcript_hides_reasoning_lifecycle_noise() {
+    use crate::app::TranscriptActivityKind;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "reasoning-noise",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.verbosity = Verbosity::New;
+    app.transcript
+        .push(TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("reasoning-1".to_owned()),
+            kind: TranscriptActivityKind::Done,
+            title: "reasoning".to_owned(),
+            details: vec!["internal lifecycle detail".to_owned()],
+        }));
+    app.transcript
+        .push(TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("edit-1".to_owned()),
+            kind: TranscriptActivityKind::Done,
+            title: "Updated TUI input handling".to_owned(),
+            details: vec!["3 files · +79 −11".to_owned()],
+        }));
+
+    let rendered = transcript_lines(&app, 100)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!rendered.contains("reasoning"));
+    assert!(rendered.contains("Updated TUI input handling"));
+    assert!(rendered.contains("3 files · +79 −11"));
+
+    app.verbosity = Verbosity::Verbose;
+    let verbose = transcript_lines(&app, 100)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(verbose.contains("reasoning"));
 }
