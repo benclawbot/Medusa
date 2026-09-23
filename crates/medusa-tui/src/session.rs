@@ -1164,7 +1164,10 @@ mod tests {
         for (kind, title) in [
             (RuntimeActivityKind::Assistant, "Model response received"),
             (RuntimeActivityKind::Progress, "Provider execution"),
-            (RuntimeActivityKind::Progress, "Requesting openai-oauth/gpt-5.6-luna"),
+            (
+                RuntimeActivityKind::Progress,
+                "Requesting openai-oauth/gpt-5.6-luna",
+            ),
         ] {
             assert!(is_user_visible_activity(
                 &RuntimeActivity {
