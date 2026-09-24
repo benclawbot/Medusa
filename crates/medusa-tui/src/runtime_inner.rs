@@ -77,11 +77,22 @@ pub(crate) fn ensure_openai_oauth_connected() -> Result<Vec<String>, String> {
 }
 
 fn credentials_ready(config: &Config) -> Result<bool, RuntimeError> {
+    credential_state(config).map(|(ready, _)| ready)
+}
+
+fn credential_state(config: &Config) -> Result<(bool, Option<String>), RuntimeError> {
     // `auth=none` is an explicit route contract, not a missing credential.
-    Ok(config.model.auth == "none"
-        || credential_environment(&config.model.provider)
-            .is_some_and(|name| env::var(name).is_ok())
-        || saved_credential(&config.model.provider)?.is_some())
+    if config.model.auth == "none" {
+        return Ok((true, None));
+    }
+    if credential_environment(&config.model.provider)
+        .is_some_and(|name| env::var(name).is_ok_and(|value| !value.trim().is_empty()))
+    {
+        return Ok((true, None));
+    }
+    let saved = saved_credential(&config.model.provider)?
+        .filter(|credential| !credential.trim().is_empty());
+    Ok((saved.is_some(), saved))
 }
 
 #[derive(Debug)]
@@ -153,6 +164,8 @@ struct DaemonRuntimeState {
     supervisor: DaemonSupervisor,
     last_lifecycle: Option<DaemonLifecycleState>,
     provider: String,
+    credential_to_forward: Option<(String, String)>,
+    credential_forwarded: bool,
     context_window_tokens: u64,
     auto_compact_percent: u8,
     last_poll_error: Option<String>,
@@ -242,10 +255,18 @@ impl DaemonRuntimeState {
                     Some(format!("runtime configuration failed: {error}")),
                 ),
             };
-        let (credential_configured, credential_error) = match credentials_ready(&config) {
-            Ok(configured) => (configured, None),
-            Err(error) => (false, Some(error.to_string())),
-        };
+        let (credential_configured, startup_credential, credential_error) =
+            match credential_state(&config) {
+                Ok((configured, saved)) => (
+                    configured,
+                    saved.map(|credential| (config.model.provider.clone(), credential)),
+                    None,
+                ),
+                Err(error) => (false, None, Some(error.to_string())),
+            };
+        let provider = config.model.provider.clone();
+        let context_window_tokens = config.model.context_window_tokens;
+        let auto_compact_percent = config.model.auto_compact_percent;
         let initial_settings = RuntimeEvent::Settings {
             model: format!("{} / {}", config.model.provider, config.model.name),
             effort: format!("effort:{}", effort_label_for_turns(config.agent.max_turns)),
@@ -254,8 +275,8 @@ impl DaemonRuntimeState {
                 .to_owned(),
             plan_mode: config.agent.mode == Mode::ReadOnly,
             credential_configured,
-            context_window_tokens: config.model.context_window_tokens,
-            auto_compact_percent: config.model.auto_compact_percent,
+            context_window_tokens,
+            auto_compact_percent,
         };
         let pending_startup_error = [launch_error, config_error, credential_error]
             .into_iter()
@@ -271,9 +292,11 @@ impl DaemonRuntimeState {
             presentation: CanonicalPresentation::new(),
             supervisor,
             last_lifecycle: None,
-            provider: config.model.provider,
-            context_window_tokens: config.model.context_window_tokens,
-            auto_compact_percent: config.model.auto_compact_percent,
+            provider,
+            credential_to_forward: startup_credential,
+            credential_forwarded: false,
+            context_window_tokens,
+            auto_compact_percent,
             last_poll_error: None,
             pending_startup_error: (!pending_startup_error.is_empty())
                 .then_some(pending_startup_error),
@@ -286,6 +309,18 @@ impl DaemonRuntimeState {
     fn ensure_daemon(&mut self) -> Result<DaemonLifecycle, RuntimeError> {
         let lifecycle = self.supervisor.ensure_running().map_err(runtime_error)?;
         self.last_lifecycle = Some(lifecycle.state);
+        if (!self.credential_forwarded || lifecycle.state == DaemonLifecycleState::Recovered)
+            && let Some((provider, credential)) = self.credential_to_forward.as_ref()
+            && provider == &self.provider
+        {
+            self.client()
+                .frontend_credential(FrontendCredentialUpdate {
+                    provider: provider.clone(),
+                    credential: credential.clone(),
+                })
+                .map_err(runtime_error)?;
+            self.credential_forwarded = true;
+        }
         Ok(lifecycle)
     }
 
@@ -391,13 +426,19 @@ impl DaemonRuntimeState {
             return Ok(());
         };
         save_credential(provider, &credential)?;
+        self.credential_to_forward = Some((provider.to_owned(), credential.clone()));
+        self.credential_forwarded = false;
         self.ensure_daemon()?;
-        self.client()
-            .frontend_credential(FrontendCredentialUpdate {
-                provider: provider.to_owned(),
-                credential,
-            })
-            .map_err(runtime_error)
+        if !self.credential_forwarded {
+            self.client()
+                .frontend_credential(FrontendCredentialUpdate {
+                    provider: provider.to_owned(),
+                    credential,
+                })
+                .map_err(runtime_error)?;
+            self.credential_forwarded = true;
+        }
+        Ok(())
     }
 
     fn stage_draft(&mut self, draft: PromptDraft) -> Result<(String, Vec<String>), RuntimeError> {

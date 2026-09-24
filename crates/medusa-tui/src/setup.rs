@@ -6,7 +6,10 @@ use std::{
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
     execute, queue,
     style::{Attribute, Print, SetAttribute},
     terminal::{
@@ -183,7 +186,7 @@ impl SetupState {
     }
 
     fn set_api_key(&mut self, api_key: String) {
-        self.api_key = Some(api_key);
+        self.api_key = Some(api_key.trim().to_owned());
         self.status = Some(
             "API key captured for secure storage; it will not be written to provider.toml."
                 .to_owned(),
@@ -384,7 +387,7 @@ impl SetupState {
                     .to_owned()
             }
             SetupStep::Authentication => {
-                "Credentials stay with the provider, environment, or Codex app-server; Medusa does not display them."
+                "API keys are hidden while entered and saved in secure credential storage; environment variables remain supported."
                     .to_owned()
             }
             SetupStep::Model if self.searching => {
@@ -456,7 +459,10 @@ impl SetupState {
                     return SetupTransition::None;
                 }
                 apply_provider_defaults(entry, &mut self.profile);
-                if entry.browser_oauth || entry.auth_methods.len() > 1 {
+                if entry.browser_oauth
+                    || entry.auth_methods.len() > 1
+                    || entry.auth_methods.contains(&"api-key")
+                {
                     self.go_to(SetupStep::Authentication);
                 } else {
                     self.go_to(SetupStep::Model);
@@ -679,6 +685,9 @@ impl SetupState {
         }
         lines.push(String::new());
         lines.push("No credential value is written to provider.toml.".to_owned());
+        if self.api_key.is_some() {
+            lines.push("The API key will be saved in secure credential storage.".to_owned());
+        }
         lines
     }
 }
@@ -853,30 +862,56 @@ fn read_api_key() -> io::Result<String> {
     println!("\nEnter API key (input is hidden):");
     io::stdout().flush()?;
     enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    if let Err(error) = execute!(stdout, EnableBracketedPaste) {
+        let _ = disable_raw_mode();
+        return Err(error);
+    }
     let mut value = String::new();
-    loop {
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Enter => break,
-                KeyCode::Backspace => {
-                    value.pop();
-                }
-                KeyCode::Char(ch)
-                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-                {
-                    value.push(ch)
-                }
-                KeyCode::Esc => {
-                    value.clear();
-                    break;
-                }
+    let result = (|| -> io::Result<String> {
+        loop {
+            match event::read()? {
+                Event::Paste(pasted) => value.push_str(&pasted),
+                Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
+                    KeyCode::Enter => break,
+                    KeyCode::Backspace => {
+                        value.pop();
+                    }
+                    KeyCode::Char(ch)
+                        if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                    {
+                        value.push(ch)
+                    }
+                    KeyCode::Esc => {
+                        value.clear();
+                        break;
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        value.clear();
+                        break;
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
-    }
-    disable_raw_mode()?;
+        Ok(value)
+    })();
+    let paste_restore = execute!(stdout, DisableBracketedPaste);
+    let raw_mode_restore = disable_raw_mode();
     println!();
-    Ok(value)
+    match result {
+        Err(error) => {
+            let _ = paste_restore;
+            let _ = raw_mode_restore;
+            Err(error)
+        }
+        Ok(value) => {
+            paste_restore?;
+            raw_mode_restore?;
+            Ok(value)
+        }
+    }
 }
 
 struct SetupTerminal {
@@ -974,7 +1009,7 @@ impl Drop for SetupTerminal {
 fn auth_label(method: &str) -> &'static str {
     match method {
         "oauth" => "Provider OAuth",
-        "api-key" => "API key from environment",
+        "api-key" => "API key",
         "existing" => "Existing provider credentials",
         "none" => "No authentication",
         _ => "Authentication",
@@ -984,7 +1019,7 @@ fn auth_label(method: &str) -> &'static str {
 fn auth_description(method: &str) -> &'static str {
     match method {
         "oauth" => "Use the provider's OAuth authority",
-        "api-key" => "Read the provider's registered environment variable; never store the value",
+        "api-key" => "Enter the provider's API key; the host saves it in secure credential storage",
         "existing" => "Use credentials already owned by the selected provider",
         "none" => "The route does not require a Medusa-managed credential",
         _ => "Keep the route's typed authentication mode",
@@ -1095,6 +1130,40 @@ mod tests {
         enter(&mut state);
         assert_eq!(state.profile.connection, "omniroute");
         assert_eq!(state.profile.provider, "auto/coding");
+    }
+
+    #[test]
+    fn single_method_api_key_route_prompts_and_returns_the_hidden_key() {
+        let mut state = SetupState::new(FirstRunSetupRequest {
+            initial_profile: ProviderProfile::default(),
+            existing_profiles: Vec::new(),
+        });
+        state.mode = Some(SetupMode::Quick);
+        state.step = SetupStep::Provider;
+        let minimax = provider_catalog()
+            .iter()
+            .position(|entry| entry.id == "minimax")
+            .expect("MiniMax provider");
+        state
+            .selection
+            .set_selected(minimax, provider_catalog().len());
+
+        assert_eq!(enter(&mut state), SetupTransition::None);
+        assert_eq!(state.step, SetupStep::Authentication);
+        assert_eq!(state.choices().len(), 1);
+        assert_eq!(enter(&mut state), SetupTransition::PromptApiKey);
+        assert_eq!(state.step, SetupStep::Model);
+
+        state.set_api_key("  setup-secret\n".to_owned());
+        assert!(!state.review_lines().join("\n").contains("setup-secret"));
+        assert_eq!(enter(&mut state), SetupTransition::None);
+        let SetupTransition::Finish(FirstRunSetupOutcome::Configure(profile, Some(api_key))) =
+            enter(&mut state)
+        else {
+            panic!("setup should return the entered API key with the profile");
+        };
+        assert_eq!(profile.provider, "minimax");
+        assert_eq!(api_key, "setup-secret");
     }
 
     #[test]

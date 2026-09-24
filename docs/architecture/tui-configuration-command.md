@@ -30,7 +30,7 @@ Profile selection and key mutations follow this order:
 
 A failed candidate never replaces the previous profile or live route.
 
-Configuration changes preserve process-only state such as the current effort setting, planning mode, session state, and process-scoped API key. The TUI never prints or persists that key.
+Configuration changes preserve process-only state such as the current effort setting, planning mode, and session state. API keys are never displayed or written to `provider.toml`; keys entered in setup or the model picker are stored in the operating system's secure credential store and sent to the daemon over its local credential channel when needed.
 
 ## Redaction and provider behavior
 

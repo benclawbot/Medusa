@@ -19,7 +19,7 @@ The packages are built by GitHub-hosted runners for the runner architecture used
 ## Runtime requirements
 
 - Git is required for repository operations.
-- Provider-backed execution requires `MINIMAX_API_KEY` in the user's environment.
+- Provider-backed execution requires a provider API key, supplied through the operating system's secure credential store or the provider's environment variable (for MiniMax, `MINIMAX_API_KEY`).
 - Desktop development and Desktop Commander require Node.js 22; UI-change verification is a static HTTP check and does not require a browser sidecar.
 - Linux desktop packages require the WebKitGTK runtime expected by the generated Tauri package.
 

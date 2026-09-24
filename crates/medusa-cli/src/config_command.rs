@@ -176,7 +176,7 @@ fn print_profile_summary(profile: &ProviderProfile) {
     if let Some(variable) = credential_environment(&profile.provider)
         && profile.auth == "api-key"
     {
-        println!("  Credential: {variable} (environment only)");
+        println!("  Credential: secure credential store or {variable}");
     }
     println!();
 }
@@ -586,7 +586,7 @@ fn print_auth_guidance(profile: &ProviderProfile) {
             "OAuth support is provider-specific and will open the provider login flow when the adapter supports it."
         ),
         "api-key" => println!(
-            "API keys are not written to provider.toml. Existing provider environment variables remain supported."
+            "API keys are not written to provider.toml. First-run setup saves entered keys in the operating system's secure credential store; provider environment variables remain supported."
         ),
         "existing" => println!(
             "Medusa will use credentials already available to the selected gateway or provider."

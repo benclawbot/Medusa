@@ -42,12 +42,14 @@ The command emits a versioned JSON report covering:
 
 The deterministic diagnostic never prints credential values and does not contact a provider. Live availability and completion checks remain optional credentialed canaries and must record provider, model, configuration, and run metadata separately.
 
+The first-run TUI can collect API keys and save them in the operating system's secure credential store. The standalone provider diagnostic checks environment variables only; it does not inspect that store.
+
 ## Fail-closed behavior
 
 The diagnostic exits unsuccessfully when:
 
 - the provider is outside the supported first-run set;
-- an API-key route has no matching environment credential;
+- an API-key route has no matching environment credential (the standalone diagnostic does not inspect the TUI credential store);
 - a custom route omits `base_url`;
 - the protocol or authentication mode is unsupported;
 - the model is empty;

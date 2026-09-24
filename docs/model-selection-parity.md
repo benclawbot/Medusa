@@ -4,4 +4,4 @@ Medusa's interactive model switcher now exposes the same provider routes accepte
 
 Changing providers updates both the provider identifier and the wire protocol. Anthropic-family routes use the Anthropic Messages protocol; the remaining routes use the OpenAI-compatible chat protocol.
 
-Credentials remain process-local or environment-backed. ChatGPT OAuth, OmniRoute, and local gateways do not require Medusa to read an OAuth credential file.
+API keys entered during first-run setup or model configuration are saved in the operating system's secure credential store and forwarded to the daemon only for the active Medusa process. Provider environment variables remain supported. ChatGPT OAuth, OmniRoute, and local gateways do not require Medusa to read an OAuth credential file.

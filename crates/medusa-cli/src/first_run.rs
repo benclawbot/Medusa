@@ -160,7 +160,11 @@ impl BrowserOAuthSession for OpenAiOAuthLogin {
 
 fn validate_candidate(profile: &ProviderProfile, stored_key: bool) -> MedusaResult<Config> {
     profile.validate()?;
-    check_api_key_present(profile, &|name| env::var(name).ok(), stored_key)?;
+    check_api_key_present(
+        profile,
+        &|name| env::var(name).ok(),
+        stored_key || profile_credentials_ready(profile),
+    )?;
     Config::load_layers_with_provider_profile(
         profile,
         None,
@@ -181,11 +185,11 @@ fn check_api_key_present(
     let Some(variable) = api_key_variable(profile) else {
         return Ok(());
     };
-    if stored_key || lookup(variable).is_some_and(|value| !value.is_empty()) {
+    if stored_key || lookup(variable).is_some_and(|value| !value.trim().is_empty()) {
         return Ok(());
     }
     Err(config_error(format!(
-        "provider `{}` with auth `api-key` needs the {variable} environment variable set in this shell; export it and retry setup. Medusa reads the key from the environment and never stores it in provider.toml",
+        "provider `{}` with auth `api-key` requires an API key. Enter one in interactive setup or set {variable}; Medusa stores entered keys in the operating system's secure credential store, never in provider.toml",
         profile.provider,
     )))
 }
@@ -204,7 +208,7 @@ fn profile_credentials_ready(profile: &ProviderProfile) -> bool {
     let Some(variable) = credential_environment(&profile.provider) else {
         return true;
     };
-    if env::var(variable).is_ok_and(|value| !value.is_empty()) {
+    if env::var(variable).is_ok_and(|value| !value.trim().is_empty()) {
         return true;
     }
     keyring::Entry::new(
@@ -213,13 +217,11 @@ fn profile_credentials_ready(profile: &ProviderProfile) -> bool {
     )
     .ok()
     .and_then(|entry| entry.get_password().ok())
-    .is_some_and(|value| !value.is_empty())
+    .is_some_and(|value| !value.trim().is_empty())
 }
 
-/// Returns the environment variable a profile expects its API key in, if any.
-///
-/// Profiles with `auth == "api-key"` read the key from the registered provider
-/// variable at request time; nothing in the setup flow stores the value.
+/// Returns the environment variable accepted as a provider API-key fallback.
+/// Interactive setup stores entered keys in the operating system's credential store.
 fn api_key_variable(profile: &ProviderProfile) -> Option<&'static str> {
     if profile.auth == "api-key" {
         credential_environment(&profile.provider)

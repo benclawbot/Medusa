@@ -227,18 +227,18 @@ The non-secret provider profile is stored in the user configuration directory:
 - Linux and macOS: `${XDG_CONFIG_HOME:-~/.config}/medusa/provider.toml`
 - Windows: `%APPDATA%\medusa\provider.toml`
 
-API keys are read from the environment and are not written to `provider.toml`.
+First-run setup accepts API keys directly and saves them in the operating system's secure credential store for later TUI sessions. Provider environment variables remain supported. API keys are never written to `provider.toml`.
 
 The canonical selectable-route, support-tier, credential, live-dogfood, protocol, and Realtime status matrix is [`docs/provider-support.json`](docs/provider-support.json). Current selectable routes are:
 
 | Route | Support | Protocol | Credential source |
 |---|---|---|---|
-| MiniMax direct | production-supported | Anthropic Messages-compatible | `MINIMAX_API_KEY` |
-| Anthropic | production-supported | Anthropic Messages | `ANTHROPIC_API_KEY` |
-| Anthropic-compatible | custom endpoint | Anthropic-compatible | `MEDUSA_API_KEY`, optionally `MEDUSA_BASE_URL` |
-| OpenAI API | production-supported | OpenAI-compatible | `OPENAI_API_KEY` |
+| MiniMax direct | production-supported | Anthropic Messages-compatible | Secure credential store or `MINIMAX_API_KEY` |
+| Anthropic | production-supported | Anthropic Messages | Secure credential store or `ANTHROPIC_API_KEY` |
+| Anthropic-compatible | custom endpoint | Anthropic-compatible | Secure credential store or `MEDUSA_API_KEY`, optionally `MEDUSA_BASE_URL` |
+| OpenAI API | production-supported | OpenAI-compatible | Secure credential store or `OPENAI_API_KEY` |
 | ChatGPT OAuth | production-supported | Codex app-server JSONL | Codex ChatGPT account state |
-| OpenAI-compatible | custom endpoint | OpenAI-compatible | `MEDUSA_API_KEY` plus configured endpoint |
+| OpenAI-compatible | custom endpoint | OpenAI-compatible | Secure credential store or `MEDUSA_API_KEY` plus configured endpoint |
 | OmniRoute | managed route | OpenAI-compatible | managed external route |
 | Local runtime | local route | OpenAI-compatible | user-operated local runtime |
 
