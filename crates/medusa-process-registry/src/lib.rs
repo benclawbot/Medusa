@@ -645,13 +645,7 @@ mod tests {
         first.save_atomic(&path).expect("first save");
 
         let mut second = ProcessRegistry::default();
-        second
-            .register(
-                ProcessId::parse("worker").expect("id"),
-                ProcessSpec::new("worker", vec!["--test".to_owned()]).expect("spec"),
-                datetime!(2026-01-01 0:00 UTC),
-            )
-            .expect("register");
+        second.register(record("worker")).expect("register");
         second.save_atomic(&path).expect("replacement save");
 
         assert_eq!(ProcessRegistry::load(&path).expect("load"), second);
