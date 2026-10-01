@@ -1,12 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::UNIX_EPOCH,
 };
 
+use medusa_process_containment::ExclusiveFileLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -116,12 +117,50 @@ fn session_actions_path(repo: &Path) -> PathBuf {
     repo.join(".medusa/desktop/session-actions.json")
 }
 
+fn session_actions_lock_path(repo: &Path) -> PathBuf {
+    repo.join(".medusa/desktop/session-actions.lock")
+}
+
+#[cfg(windows)]
+fn session_actions_backup_path(path: &Path) -> PathBuf {
+    path.with_extension("json.bak")
+}
+
+fn acquire_session_actions_lock(repo: &Path) -> Result<ExclusiveFileLock, String> {
+    let path = session_actions_lock_path(repo);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "session actions lock path has no parent".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    ExclusiveFileLock::try_acquire(&path)
+        .map_err(|error| format!("cannot lock {}: {error}", path.display()))
+}
+
 fn load_session_actions(repo: &Path) -> Result<DesktopSessionActions, String> {
     let path = session_actions_path(repo);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(DesktopSessionActions::default());
+            #[cfg(windows)]
+            {
+                let backup = session_actions_backup_path(&path);
+                match fs::read(&backup) {
+                    Ok(bytes) => bytes,
+                    Err(backup_error)
+                        if backup_error.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        return Ok(DesktopSessionActions::default());
+                    }
+                    Err(backup_error) => {
+                        return Err(format!("cannot read {}: {backup_error}", backup.display()));
+                    }
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                return Ok(DesktopSessionActions::default());
+            }
         }
         Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
     };
@@ -136,18 +175,63 @@ fn write_session_actions(repo: &Path, actions: &DesktopSessionActions) -> Result
         .ok_or_else(|| "session actions path has no parent".to_owned())?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let temporary = path.with_extension(format!("json.tmp.{}", ulid::Ulid::new()));
     let bytes = serde_json::to_vec_pretty(actions)
         .map_err(|error| format!("cannot serialize desktop session actions: {error}"))?;
-    fs::write(&temporary, bytes)
-        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
+    let mut file = File::create(&temporary)
+        .map_err(|error| format!("cannot create {}: {error}", temporary.display()))?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("cannot durably write {}: {error}", temporary.display()))?;
+    drop(file);
+
     #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|error| format!("cannot replace {}: {error}", path.display()))?;
+    {
+        let backup = session_actions_backup_path(&path);
+        if backup.exists() {
+            if path.exists() {
+                fs::remove_file(&backup)
+                    .map_err(|error| format!("cannot clear {}: {error}", backup.display()))?;
+            } else {
+                fs::rename(&backup, &path).map_err(|error| {
+                    format!(
+                        "cannot recover {} from {}: {error}",
+                        path.display(),
+                        backup.display()
+                    )
+                })?;
+            }
+        }
+        if path.exists() {
+            fs::rename(&path, &backup).map_err(|error| {
+                format!(
+                    "cannot stage replacement of {} as {}: {error}",
+                    path.display(),
+                    backup.display()
+                )
+            })?;
+        }
+        if let Err(error) = fs::rename(&temporary, &path) {
+            if backup.exists() && !path.exists() {
+                let _ = fs::rename(&backup, &path);
+            }
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("cannot publish {}: {error}", path.display()));
+        }
+        let _ = fs::remove_file(&backup);
+        return Ok(());
     }
-    fs::rename(&temporary, &path)
-        .map_err(|error| format!("cannot publish {}: {error}", path.display()))
+
+    #[cfg(not(windows))]
+    {
+        fs::rename(&temporary, &path)
+            .map_err(|error| format!("cannot publish {}: {error}", path.display()))?;
+        #[cfg(unix)]
+        if let Ok(directory) = File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    }
 }
 
 fn apply_session_action(
@@ -183,6 +267,7 @@ fn mutate_session_action(
     mutation: impl FnOnce(&mut DesktopSessionAction),
 ) -> Result<(), String> {
     validate_session_id(session_id)?;
+    let _lock = acquire_session_actions_lock(repo)?;
     let _ = find_session_path(repo, session_id)?;
     let mut actions = load_session_actions(repo)?;
     mutation(actions.sessions.entry(session_id.to_owned()).or_default());
@@ -341,6 +426,7 @@ pub async fn runtime_delete_sessions(
     }
 
     run_blocking(move || {
+        let _lock = acquire_session_actions_lock(&repo)?;
         for session_id in &unique {
             let _ = find_session_path(&repo, session_id)?;
             if session_has_attached_frontends(&repo, session_id)? {
@@ -1120,6 +1206,44 @@ mod tests {
         assert_eq!(
             validate_session_title("  useful title  ").expect("title"),
             "useful title"
+        );
+    }
+
+    #[test]
+    fn session_action_lock_rejects_overlapping_mutations() {
+        let repo = crate::tempdir().expect("repo");
+        let first = acquire_session_actions_lock(repo.path()).expect("first lock");
+        let error = acquire_session_actions_lock(repo.path()).expect_err("second lock must fail");
+        assert!(
+            error.contains("cannot lock"),
+            "unexpected lock error: {error}"
+        );
+        drop(first);
+        acquire_session_actions_lock(repo.path()).expect("lock released after drop");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn session_actions_recover_from_interrupted_windows_replace() {
+        let repo = crate::tempdir().expect("repo");
+        let path = session_actions_path(repo.path());
+        fs::create_dir_all(path.parent().expect("parent")).expect("desktop state");
+        let mut actions = DesktopSessionActions::default();
+        actions
+            .sessions
+            .entry("session-a".to_owned())
+            .or_default()
+            .deleted = true;
+        write_session_actions(repo.path(), &actions).expect("initial actions");
+
+        let backup = session_actions_backup_path(&path);
+        fs::rename(&path, &backup).expect("simulate crash after backup rename");
+        let recovered = load_session_actions(repo.path()).expect("load backup");
+        assert!(
+            recovered
+                .sessions
+                .get("session-a")
+                .is_some_and(|action| action.deleted)
         );
     }
 
