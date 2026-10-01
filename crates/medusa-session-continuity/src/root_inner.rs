@@ -1106,16 +1106,10 @@ impl ContinuityStore {
                 // cannot overwrite a session that appeared after the initial existence check.
                 fs::hard_link(&temp, &self.path)
             }
-            PersistMode::Replace => {
-                let replacement = tempfile::NamedTempFile::from_parts(
-                    fs::File::open(&temp)?,
-                    tempfile::TempPath::from_path(temp.clone()),
-                );
-                replacement
-                    .persist(&self.path)
-                    .map(|_| ())
-                    .map_err(|error| error.error)
-            }
+            PersistMode::Replace => tempfile::TempPath::try_from_path(temp.clone())?
+                .persist(&self.path)
+                .map(|_| ())
+                .map_err(|error| error.error),
         };
         if let Err(error) = install_result {
             let _ = fs::remove_file(&temp);
