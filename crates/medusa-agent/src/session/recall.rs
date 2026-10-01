@@ -1,4 +1,4 @@
-use std::{fs, io::Write};
+use std::fs;
 
 use medusa_core::{MedusaResult, hidden_command};
 use serde::Serialize;
