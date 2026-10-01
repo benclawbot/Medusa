@@ -462,12 +462,23 @@ mod tests {
     }
 
     #[test]
-    fn fresh_empty_startup_lock_is_not_reclaimed() {
+    fn startup_lock_uses_kernel_ownership_and_releases_on_drop() {
         let directory = tempfile::tempdir().expect("tempdir");
         let paths = DaemonPaths::for_repo(directory.path());
         fs::create_dir_all(&paths.directory).expect("daemon directory");
-        fs::write(&paths.startup, []).expect("empty startup lock");
-        assert!(!startup_lock_is_stale(&paths.startup));
+        let first = match StartupLock::try_acquire(&paths.startup).expect("first lock") {
+            StartupLockAttempt::Acquired(lock) => lock,
+            StartupLockAttempt::Busy => panic!("first startup lock unexpectedly busy"),
+        };
+        assert!(matches!(
+            StartupLock::try_acquire(&paths.startup).expect("second attempt"),
+            StartupLockAttempt::Busy
+        ));
+        drop(first);
+        assert!(matches!(
+            StartupLock::try_acquire(&paths.startup).expect("released attempt"),
+            StartupLockAttempt::Acquired(_)
+        ));
     }
 
     #[test]
