@@ -5,11 +5,11 @@
 //! immediately before submission. No frontend-supplied path is ever trusted.
 
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
+
+use medusa_core::storage;
 
 use medusa_runtime::{
     attachment::{
@@ -306,86 +306,19 @@ fn validate_mime_type(value: Option<&str>) -> Result<Option<String>, FrontendArt
     Ok(Some(trimmed))
 }
 
-static WRITE_ONCE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Write-once publish through a unique temporary file plus an atomic rename.
+/// Publishes bounded artifact bytes through the shared durable atomic-write authority.
 ///
-/// A crash during the old direct `create_new` write left a truncated file behind;
-/// the next ingest then returned `AlreadyExists`-as-`Ok` while reads failed with
-/// `CorruptArtifact`. If the destination already holds exactly `bytes` the write
-/// is a no-op duplicate; otherwise the complete buffer is fsynced to a temporary
-/// file in the same directory and atomically renamed over the destination, and
-/// the directory entry is fsynced so the publish survives a crash.
+/// Identical content is a no-op. A corrupt/truncated predecessor is replaced only after the
+/// complete new bytes have reached the temporary file, so crash recovery never requires deleting
+/// the last durable copy first.
 fn write_once(path: &Path, bytes: &[u8]) -> Result<(), FrontendArtifactStoreError> {
-    if let Ok(existing) = fs::read(path) {
-        if existing == bytes {
-            return Ok(());
-        }
-    } else if path.exists() {
-        // Unreadable destination: fall through to atomic replacement below so a
-        // permission or I/O failure surfaces instead of masquerading as success.
+    if let Ok(existing) = fs::read(path)
+        && existing == bytes
+    {
+        return Ok(());
     }
-    let parent = path.parent().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "artifact destination has no parent directory",
-        )
-    })?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact");
-    // A stale temporary from a crashed process (plus pid reuse) can collide
-    // with a fresh name; retry allocation with a new counter instead of
-    // failing the ingest.
-    let mut allocated = None;
-    for _ in 0..8 {
-        let counter = WRITE_ONCE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(file) => {
-                allocated = Some((candidate, file));
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error.into()),
-        }
-    }
-    let Some((temporary, mut file)) = allocated else {
-        // A full collision window surfaces as an error so the caller retries
-        // instead of assuming publication. The pre-existing destination, if
-        // any, is left untouched.
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "could not allocate a unique temporary artifact path",
-        )
-        .into());
-    };
-    let publish = (|| -> std::io::Result<()> {
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        #[cfg(windows)]
-        if path.exists() {
-            // `rename` does not replace on Windows; the pre-existing file is
-            // either an identical duplicate (already checked above) or a
-            // truncated/corrupt predecessor that healing must replace.
-            fs::remove_file(path)?;
-        }
-        fs::rename(&temporary, path)?;
-        if let Ok(directory) = fs::File::open(parent) {
-            let _ = directory.sync_all();
-        }
-        Ok(())
-    })();
-    if publish.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    Ok(publish?)
+    storage::atomic_write(path, bytes)?;
+    Ok(())
 }
 
 #[derive(Debug, Error)]
