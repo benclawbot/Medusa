@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -217,12 +217,10 @@ pub fn persist(repo: &Path, journal: &MutationJournal) -> MedusaResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = temporary_path(&path);
     let bytes = serde_json::to_vec_pretty(journal).map_err(|error| {
         provenance_error(format!("could not serialize mutation provenance: {error}"))
     })?;
-    fs::write(&temporary, bytes)?;
-    fs::rename(&temporary, &path)?;
+    storage::atomic_write(&path, &bytes)?;
     Ok(())
 }
 
