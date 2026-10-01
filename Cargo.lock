@@ -1812,6 +1812,7 @@ version = "2.0.0"
 dependencies = [
  "medusa-config",
  "medusa-core",
+ "medusa-process-containment",
  "medusa-prompt-cache",
  "reqwest",
  "serde",
