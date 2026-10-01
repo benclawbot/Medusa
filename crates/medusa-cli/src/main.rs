@@ -38,6 +38,7 @@ use medusa_hardening::{
 use headless_approval::{ApprovalMatch, HeadlessApprovalPolicy};
 use medusa_protocol::frontend::{FrontendEvent, FrontendKind};
 use medusa_runtime::{
+    commands::{ModelCommand, SlashCommand},
     frontend::CanonicalFrontendEventStream, prompt::PromptDraft, RuntimeController, RuntimeEvent,
 };
 use medusa_tui::{TuiOptions, run as run_tui};
@@ -385,7 +386,8 @@ fn run() -> MedusaResult<()> {
                 non_interactive,
                 approve_allowlist.as_deref(),
             )?;
-            let runtime = RuntimeController::start_with_config(repo.clone(), config);
+            let runtime = RuntimeController::start_with_config(repo.clone(), config.clone());
+            forward_saved_api_key(&runtime, &config)?;
             runtime
                 .submit(PromptDraft {
                     text: objective,
@@ -397,8 +399,13 @@ fn run() -> MedusaResult<()> {
         CommandKind::Resume { session } => {
             ensure_first_run()?;
             ensure_selected_runtime()?;
-            let runtime = RuntimeController::start_resumed_with_config(repo.clone(), &session, config)
-                .map_err(runtime_error)?;
+            let runtime = RuntimeController::start_resumed_with_config(
+                repo.clone(),
+                &session,
+                config.clone(),
+            )
+            .map_err(runtime_error)?;
+            forward_saved_api_key(&runtime, &config)?;
             runtime
                 .submit(PromptDraft {
                     text: "Continue the current task from its durable session state.".to_owned(),
@@ -411,6 +418,23 @@ fn run() -> MedusaResult<()> {
         CommandKind::Uninstall => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
+}
+
+fn forward_saved_api_key(runtime: &RuntimeController, config: &Config) -> MedusaResult<()> {
+    if config.model.auth != "api-key" {
+        return Ok(());
+    }
+    if medusa_config::credential_environment(&config.model.provider)
+        .is_some_and(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
+    {
+        return Ok(());
+    }
+    if let Some(api_key) = super::first_run::stored_api_key(&config.model.provider)? {
+        runtime
+            .run_command(SlashCommand::Model(ModelCommand::SetApiKey(api_key)))
+            .map_err(runtime_error)?;
+    }
+    Ok(())
 }
 
 fn runtime_error(error: medusa_runtime::RuntimeError) -> MedusaError {
