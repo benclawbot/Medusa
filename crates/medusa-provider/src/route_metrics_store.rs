@@ -300,14 +300,17 @@ fn sync_parent(path: &Path) {
 }
 
 #[cfg(test)]
-fn assert_live_route_lock_is_exclusive(path: &Path) {
-    let first = FileLock::acquire(path).expect("first route lock");
+#[test]
+fn live_route_state_lock_cannot_be_stolen() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join(LOCK_FILE_NAME);
+    let first = FileLock::acquire(&path).expect("first route lock");
     assert!(
-        ExclusiveFileLock::try_acquire(path).is_err(),
+        ExclusiveFileLock::try_acquire(&path).is_err(),
         "live route state lock must not be stealable"
     );
     drop(first);
-    ExclusiveFileLock::try_acquire(path).expect("route lock released");
+    ExclusiveFileLock::try_acquire(&path).expect("route lock released");
 }
 
 fn route_key(profile: &ProviderRouteProfile) -> String {
