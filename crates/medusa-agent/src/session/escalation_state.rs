@@ -221,11 +221,8 @@ pub fn persist_escalation_journal(
     if let Some(parent) = path.parent() {
         secure_state::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("json.tmp");
-    let mut file = secure_state::create_file(&temporary)?;
-    file.write_all(&serde_json::to_vec_pretty(journal)?)?;
-    file.sync_all()?;
-    fs::rename(&temporary, &path)?;
+    let bytes = serde_json::to_vec_pretty(journal)?;
+    medusa_core::storage::atomic_write(&path, &bytes)?;
     secure_state::repair(&path, false)?;
     Ok(())
 }
