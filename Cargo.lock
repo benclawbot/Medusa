@@ -1968,6 +1968,7 @@ dependencies = [
  "keyring",
  "medusa-agent",
  "medusa-config",
+ "medusa-core",
  "medusa-daemon",
  "medusa-protocol",
  "medusa-recovery-coordinator",
