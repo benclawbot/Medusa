@@ -86,19 +86,10 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
     let inbox = session.repo.join(".medusa/session-recall-inbox");
     secure_state::create_dir_all(&inbox)?;
     let path = inbox.join(format!("{}.json", session.id));
-    let temporary = path.with_extension("json.tmp");
-    let result = (|| {
-        let mut file = secure_state::create_new_file(&temporary)?;
-        file.write_all(&serde_json::to_vec_pretty(&record)?)?;
-        file.sync_all()?;
-        fs::rename(&temporary, &path)?;
-        secure_state::repair(&path, false)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    let bytes = serde_json::to_vec_pretty(&record)?;
+    medusa_core::storage::atomic_write(&path, &bytes)?;
+    secure_state::repair(&path, false)?;
+    Ok(())
 }
 
 fn repository_fingerprint(repo: &std::path::Path) -> String {
