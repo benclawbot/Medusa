@@ -873,17 +873,7 @@ fn persist_state(path: &Path, state: &AgentScopeState) -> MedusaResult<()> {
         .ok_or_else(|| scope_error("agent scope state path has no parent"))?;
     fs::create_dir_all(parent)?;
     let bytes = serde_json::to_vec_pretty(state).map_err(json_error)?;
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-    }
-    fs::rename(&temporary, path)?;
+    storage::atomic_write(path, &bytes)?;
     Ok(())
 }
 
