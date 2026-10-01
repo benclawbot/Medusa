@@ -35,14 +35,16 @@ pub(crate) fn configure_interactive() -> MedusaResult<FirstRunDisposition> {
 fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
     let catalog = ProviderProfileCatalog::user()?;
     let snapshot = catalog.snapshot()?;
-    if skip_configured
-        && snapshot.profile.configured
-        && profile_credentials_ready(&snapshot.profile)
-    {
+    let credentials_ready = profile_credentials_ready(&snapshot.profile);
+    if skip_configured && snapshot.profile.configured && credentials_ready {
         return Ok(FirstRunDisposition::Continue);
     }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return non_terminal_disposition(skip_configured, snapshot.profile.configured);
+        return non_terminal_disposition(
+            skip_configured,
+            snapshot.profile.configured,
+            credentials_ready,
+        );
     }
 
     let existing_profiles = catalog
@@ -104,9 +106,15 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
 fn non_terminal_disposition(
     skip_configured: bool,
     configured: bool,
+    credentials_ready: bool,
 ) -> MedusaResult<FirstRunDisposition> {
     if skip_configured && configured {
-        return Ok(FirstRunDisposition::Continue);
+        if credentials_ready {
+            return Ok(FirstRunDisposition::Continue);
+        }
+        return Err(config_error(
+            "the configured API-key provider has no usable credential in this non-interactive session; set its provider API-key environment variable or run `medusa config init` in an interactive terminal",
+        ));
     }
     if skip_configured {
         return Err(config_error(
@@ -265,17 +273,25 @@ mod tests {
     }
 
     #[test]
-    fn headless_first_run_fails_clearly_without_a_provider() {
+    fn headless_first_run_requires_configured_provider_credentials() {
         assert_eq!(
-            non_terminal_disposition(true, true).expect("configured continues"),
+            non_terminal_disposition(true, true, true).expect("configured and ready continues"),
             FirstRunDisposition::Continue
         );
-        let error = non_terminal_disposition(true, false).expect_err("unconfigured must fail");
+        let error =
+            non_terminal_disposition(true, true, false).expect_err("missing credential must fail");
+        assert!(
+            error.to_string().contains("no usable credential"),
+            "unexpected error: {error}"
+        );
+        let error =
+            non_terminal_disposition(true, false, false).expect_err("unconfigured must fail");
         assert!(
             error.to_string().contains("medusa config init"),
             "unexpected error: {error}"
         );
-        let error = non_terminal_disposition(false, true).expect_err("init needs a terminal");
+        let error =
+            non_terminal_disposition(false, true, false).expect_err("init needs a terminal");
         assert!(
             error.to_string().contains("interactive terminal"),
             "unexpected error: {error}"
