@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 
 pub const PROVIDER_PROFILE_KEYS: [&str; 8] = [
@@ -271,16 +271,8 @@ impl ProviderProfileStore {
             .map_err(|error| store_error(format!("create {}: {error}", parent.display())))?;
         let text =
             toml::to_string_pretty(profile).map_err(|error| store_error(error.to_string()))?;
-        let temporary = self.path.with_extension("toml.tmp");
-        let mut file = fs::File::create(&temporary)
-            .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-        file.write_all(text.as_bytes())
-            .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-        file.sync_all()
-            .map_err(|error| store_error(format!("sync {}: {error}", temporary.display())))?;
-        fs::rename(&temporary, &self.path)
-            .map_err(|error| store_error(format!("replace {}: {error}", self.path.display())))?;
-        sync_parent(&self.path);
+        storage::atomic_write(&self.path, text.as_bytes())
+            .map_err(|error| store_error(format!("write {}: {error}", self.path.display())))?;
         if let Some(marker) = profile.migration_marker.as_deref() {
             append_migration_audit(&self.path, marker);
         }
