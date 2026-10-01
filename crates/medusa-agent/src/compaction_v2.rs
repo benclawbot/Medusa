@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use medusa_protocol::EventPayload;
 use medusa_provider::{Message, MessageBlock, ModelRequest, ModelResponse, ResponseBlock, Role};
 use serde::{Deserialize, Serialize};
@@ -622,14 +622,16 @@ fn persist_manifest(
         manifest.generation, manifest.manifest_hash
     ));
     let bytes = serde_json::to_vec_pretty(manifest).map_err(json_error)?;
-    let temp = root.join(format!(".v2-{:08}.tmp", manifest.generation));
-    let mut file = fs::File::create(&temp)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    fs::rename(&temp, &path)?;
-    if let Ok(dir) = fs::File::open(&root) {
-        let _ = dir.sync_all();
+    if path.is_file() {
+        let existing = fs::read(&path)?;
+        if existing == bytes {
+            return Ok(path);
+        }
+        return Err(compaction_error(
+            "compaction manifest path already exists with different content",
+        ));
     }
+    storage::atomic_write(&path, &bytes)?;
     Ok(path)
 }
 
