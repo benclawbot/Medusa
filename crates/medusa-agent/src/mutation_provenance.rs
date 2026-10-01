@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
@@ -11,7 +10,6 @@ use sha2::{Digest, Sha256};
 pub const MUTATION_PROVENANCE_SCHEMA_VERSION: u32 = 1;
 const PROVENANCE_PATH: &str = ".medusa/mutation-provenance.json";
 const MAX_RETAINED_BYTES: usize = 256 * 1024;
-static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MutationContext {
@@ -286,10 +284,6 @@ fn fingerprint(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn temporary_path(path: &Path) -> PathBuf {
-    let nonce = TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed);
-    path.with_extension(format!("json.medusa-tmp-{}-{nonce}", std::process::id()))
-}
 
 fn provenance_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
