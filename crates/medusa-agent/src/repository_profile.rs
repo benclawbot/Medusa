@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 
 const PROFILE_SCHEMA_VERSION: u16 = 1;
