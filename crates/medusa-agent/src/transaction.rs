@@ -7,6 +7,7 @@ use std::{
 
 use medusa_core::{
     ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command, repository_mutation,
+    storage,
 };
 #[cfg(test)]
 use medusa_protocol::EventPayload;
@@ -421,8 +422,21 @@ fn apply_atomic_inner(
                 ),
             ));
         }
-        if let Err(error) = fs::rename(temporary, target) {
-            note_rollback(tracker, "commit rename failed");
+        let staged_bytes = match fs::read(temporary) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                note_rollback(tracker, "staged write could not be read for commit");
+                let rollback = rollback(&backups[..index]);
+                cleanup_staged(&staged[index..]);
+                return Err(MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Execution,
+                    format!("transaction commit failed: {error}; rollback={rollback}"),
+                ));
+            }
+        };
+        if let Err(error) = storage::atomic_write(target, &staged_bytes) {
+            note_rollback(tracker, "commit publication failed");
             let rollback = rollback(&backups[..index]);
             cleanup_staged(&staged[index..]);
             return Err(MedusaError::new(
@@ -431,6 +445,21 @@ fn apply_atomic_inner(
                 format!("transaction commit failed: {error}; rollback={rollback}"),
             ));
         }
+        if let Some(permissions) = backups[index].permissions.clone()
+            && let Err(error) = fs::set_permissions(target, permissions)
+        {
+            note_rollback(tracker, "commit permission restoration failed");
+            let rollback = rollback(&backups[..=index]);
+            cleanup_staged(&staged[index..]);
+            return Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Execution,
+                format!(
+                    "transaction commit permissions failed: {error}; rollback={rollback}"
+                ),
+            ));
+        }
+        let _ = fs::remove_file(temporary);
     }
 
     note_progress(tracker, format!("committed {} files", staged.len()));
@@ -1220,6 +1249,27 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(!outside.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn replaces_existing_file_in_transaction() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("existing.txt"), "before").expect("fixture");
+
+        let outcome = apply_atomic(
+            directory.path(),
+            &[FileMutation {
+                path: "existing.txt".into(),
+                content: "after".into(),
+            }],
+        )
+        .expect("replace existing file");
+
+        assert!(!outcome.rolled_back);
+        assert_eq!(
+            fs::read_to_string(directory.path().join("existing.txt")).expect("read"),
+            "after"
+        );
     }
 
     #[cfg(unix)]
