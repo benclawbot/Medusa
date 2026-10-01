@@ -50,7 +50,6 @@ pub struct NonFatalDiagnostic {
 }
 
 const MAX_DIAGNOSTICS: usize = 128;
-static SNAPSHOT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
