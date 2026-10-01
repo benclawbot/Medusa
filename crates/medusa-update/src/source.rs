@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use reqwest::{
     StatusCode,
     blocking::{Client, Response},
@@ -749,10 +749,7 @@ fn read_cached_revision(target_dir: &Path) -> Option<String> {
 /// Records `revision` as the most-recent successful build target.
 fn write_cached_revision(target_dir: &Path, revision: &str) -> MedusaResult<()> {
     fs::create_dir_all(target_dir)?;
-    let path = target_dir.join(LAST_REVISION_FILE);
-    let tmp = target_dir.join(format!("{LAST_REVISION_FILE}.tmp"));
-    fs::write(&tmp, revision.as_bytes())?;
-    fs::rename(&tmp, &path)?;
+    storage::atomic_write(&target_dir.join(LAST_REVISION_FILE), revision.as_bytes())?;
     Ok(())
 }
 
@@ -763,10 +760,7 @@ fn write_cached_host_triple(target_dir: &Path) -> MedusaResult<()> {
         return Ok(());
     };
     fs::create_dir_all(target_dir)?;
-    let path = target_dir.join(HOST_TRIPLE_FILE);
-    let tmp = target_dir.join(format!("{HOST_TRIPLE_FILE}.tmp"));
-    fs::write(&tmp, triple.as_bytes())?;
-    fs::rename(&tmp, &path)?;
+    storage::atomic_write(&target_dir.join(HOST_TRIPLE_FILE), triple.as_bytes())?;
     Ok(())
 }
 
@@ -834,10 +828,7 @@ fn binary_sha256(path: &Path) -> MedusaResult<String> {
 
 fn write_cached_binary_sha256(target_dir: &Path) -> MedusaResult<()> {
     let digest = binary_sha256(&cached_release_binary(target_dir))?;
-    let path = target_dir.join(BINARY_SHA256_FILE);
-    let tmp = target_dir.join(format!("{BINARY_SHA256_FILE}.tmp"));
-    fs::write(&tmp, digest.as_bytes())?;
-    fs::rename(&tmp, &path)?;
+    storage::atomic_write(&target_dir.join(BINARY_SHA256_FILE), digest.as_bytes())?;
     Ok(())
 }
 
