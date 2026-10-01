@@ -1106,7 +1106,16 @@ impl ContinuityStore {
                 // cannot overwrite a session that appeared after the initial existence check.
                 fs::hard_link(&temp, &self.path)
             }
-            PersistMode::Replace => rename_with_retry(&temp, &self.path),
+            PersistMode::Replace => {
+                let replacement = tempfile::NamedTempFile::from_parts(
+                    fs::File::open(&temp)?,
+                    tempfile::TempPath::from_path(temp.clone()),
+                );
+                replacement
+                    .persist(&self.path)
+                    .map(|_| ())
+                    .map_err(|error| error.error)
+            }
         };
         if let Err(error) = install_result {
             let _ = fs::remove_file(&temp);
@@ -1175,28 +1184,6 @@ enum PersistMode {
 #[derive(Debug)]
 struct ContinuityLock {
     _lock: ExclusiveFileLock,
-}
-
-fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
-    for attempt in 0..RENAME_RETRY_ATTEMPTS {
-        match fs::rename(from, to) {
-            Ok(()) => return Ok(()),
-            Err(error)
-                if attempt + 1 < RENAME_RETRY_ATTEMPTS
-                    && matches!(
-                        error.kind(),
-                        io::ErrorKind::AlreadyExists
-                            | io::ErrorKind::Interrupted
-                            | io::ErrorKind::PermissionDenied
-                            | io::ErrorKind::WouldBlock
-                    ) =>
-            {
-                thread::sleep(RENAME_RETRY_DELAY);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    unreachable!("rename retry loop always returns before exhaustion")
 }
 
 fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, ContinuityError> {
