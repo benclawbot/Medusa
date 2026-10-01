@@ -21,11 +21,12 @@ use std::process::Stdio;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::process_start_marker;
 use medusa_protocol::frontend::FrontendCommand;
 #[cfg(test)]
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use medusa_tool_policy::validate_shell_command;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ulid::Ulid;
 
@@ -1344,6 +1345,14 @@ fn is_transient_listener_error(error: &std::io::Error) -> bool {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct OwnershipRecord {
+    pid: u32,
+    platform: String,
+    start_marker: String,
+    boot_id: Option<String>,
+}
+
 struct Ownership {
     path: PathBuf,
     _file: File,
@@ -1374,7 +1383,17 @@ impl Ownership {
                     format!("daemon ownership unavailable: {error}"),
                 )
             })?;
-        writeln!(file, "{}", std::process::id())?;
+        let pid = std::process::id();
+        let marker = process_start_marker(pid)?
+            .ok_or_else(|| std::io::Error::other("current daemon process identity disappeared"))?;
+        let record = OwnershipRecord {
+            pid,
+            platform: marker.platform.to_owned(),
+            start_marker: marker.value,
+            boot_id: marker.boot_id,
+        };
+        serde_json::to_writer(&mut file, &record).map_err(std::io::Error::other)?;
+        writeln!(file)?;
         file.flush()?;
         Ok(Self {
             path: paths.owner.clone(),
@@ -1393,6 +1412,20 @@ fn owner_process_alive(owner: &Path) -> bool {
     let Ok(raw) = fs::read_to_string(owner) else {
         return false;
     };
+    if let Ok(record) = serde_json::from_str::<OwnershipRecord>(&raw) {
+        return match process_start_marker(record.pid) {
+            Ok(Some(observed)) => {
+                observed.platform == record.platform
+                    && observed.value == record.start_marker
+                    && observed.boot_id == record.boot_id
+            }
+            Ok(None) => false,
+            // A readable ownership record whose process identity cannot be inspected must
+            // fail closed. Treating it as stale could allow two daemons to own the same repo.
+            Err(_) => true,
+        };
+    }
+    // Backward compatibility for owner files created before creation identities were persisted.
     let Ok(pid) = raw.trim().parse::<u32>() else {
         return false;
     };
@@ -1413,6 +1446,67 @@ fn process_is_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn process_is_alive(pid: u32) -> bool {
     medusa_process_containment::process_is_alive(pid)
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    fn write_owner(path: &Path, record: &OwnershipRecord) {
+        fs::write(path, serde_json::to_vec(record).expect("serialize owner"))
+            .expect("write owner");
+    }
+
+    #[test]
+    fn recorded_creation_identity_accepts_current_owner() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let owner = directory.path().join("owner");
+        let pid = std::process::id();
+        let marker = process_start_marker(pid)
+            .expect("inspect current process")
+            .expect("current process marker");
+        write_owner(
+            &owner,
+            &OwnershipRecord {
+                pid,
+                platform: marker.platform.to_owned(),
+                start_marker: marker.value,
+                boot_id: marker.boot_id,
+            },
+        );
+
+        assert!(owner_process_alive(&owner));
+    }
+
+    #[test]
+    fn recycled_pid_identity_is_treated_as_stale() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let owner = directory.path().join("owner");
+        let pid = std::process::id();
+        let marker = process_start_marker(pid)
+            .expect("inspect current process")
+            .expect("current process marker");
+        write_owner(
+            &owner,
+            &OwnershipRecord {
+                pid,
+                platform: marker.platform.to_owned(),
+                start_marker: format!("{}-stale", marker.value),
+                boot_id: marker.boot_id,
+            },
+        );
+
+        assert!(!owner_process_alive(&owner));
+    }
+
+    #[test]
+    fn legacy_pid_only_owner_files_remain_supported() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let owner = directory.path().join("owner");
+        fs::write(&owner, std::process::id().to_string()).expect("write legacy owner");
+
+        assert!(owner_process_alive(&owner));
+    }
 }
 
 #[cfg(test)]
