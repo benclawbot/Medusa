@@ -1,16 +1,13 @@
 use std::{
     collections::BTreeMap,
     fs,
-    fs::OpenOptions,
-    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    thread,
-    time::{Duration, SystemTime},
 };
 
 use medusa_config::ProviderProfileCatalog;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_process_containment::ExclusiveFileLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -19,9 +16,6 @@ use crate::{ProviderHealth, ProviderRouteProfile};
 const STORE_SCHEMA_VERSION: u16 = 1;
 const STORE_FILE_NAME: &str = "provider-runtime.json";
 const LOCK_FILE_NAME: &str = ".provider-runtime.lock";
-const LOCK_RETRY_ATTEMPTS: usize = 200;
-const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
-const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ProviderHealthStore {
@@ -244,48 +238,19 @@ impl ProviderHealthStore {
 }
 
 struct FileLock {
-    path: PathBuf,
+    _inner: ExclusiveFileLock,
 }
 
 impl FileLock {
     fn acquire(path: &Path) -> MedusaResult<Self> {
-        for _ in 0..LOCK_RETRY_ATTEMPTS {
-            match OpenOptions::new().write(true).create_new(true).open(path) {
-                Ok(mut file) => {
-                    writeln!(file, "pid={}", std::process::id()).map_err(store_io_error)?;
-                    file.sync_all().map_err(store_io_error)?;
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                    });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if lock_is_stale(path) {
-                        match fs::remove_file(path) {
-                            Ok(()) => continue,
-                            Err(remove_error)
-                                if remove_error.kind() == std::io::ErrorKind::NotFound =>
-                            {
-                                continue;
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                    thread::sleep(LOCK_RETRY_DELAY);
-                }
-                Err(error) => return Err(store_io_error(error)),
-            }
-        }
-        Err(store_error(format!(
-            "provider runtime state is busy; could not acquire {}",
-            path.display()
-        )))
-    }
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-        sync_parent(&self.path);
+        ExclusiveFileLock::try_acquire(path)
+            .map(|inner| Self { _inner: inner })
+            .map_err(|error| {
+                store_error(format!(
+                    "provider runtime state is busy; could not acquire {}: {error}",
+                    path.display()
+                ))
+            })
     }
 }
 
@@ -320,12 +285,22 @@ fn sync_parent(path: &Path) {
     let _ = path;
 }
 
-fn lock_is_stale(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_some_and(|age| age >= STALE_LOCK_AGE)
+#[cfg(test)]
+mod kernel_lock_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_state_lock_cannot_be_stolen_while_owner_is_alive() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("provider-runtime.lock");
+        let first = FileLock::acquire(&path).expect("first lock");
+        assert!(
+            FileLock::acquire(&path).is_err(),
+            "a second owner must not steal a live kernel lock"
+        );
+        drop(first);
+        FileLock::acquire(&path).expect("released lock");
+    }
 }
 
 fn route_key(profile: &ProviderRouteProfile) -> String {
