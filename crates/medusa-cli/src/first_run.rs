@@ -35,14 +35,16 @@ pub(crate) fn configure_interactive() -> MedusaResult<FirstRunDisposition> {
 fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
     let catalog = ProviderProfileCatalog::user()?;
     let snapshot = catalog.snapshot()?;
-    if skip_configured
-        && snapshot.profile.configured
-        && profile_credentials_ready(&snapshot.profile)
-    {
+    let credentials_ready = profile_credentials_ready(&snapshot.profile);
+    if skip_configured && snapshot.profile.configured && credentials_ready {
         return Ok(FirstRunDisposition::Continue);
     }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return non_terminal_disposition(skip_configured, snapshot.profile.configured);
+        return non_terminal_disposition(
+            skip_configured,
+            snapshot.profile.configured,
+            credentials_ready,
+        );
     }
 
     let existing_profiles = catalog
@@ -122,9 +124,15 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
 fn non_terminal_disposition(
     skip_configured: bool,
     configured: bool,
+    credentials_ready: bool,
 ) -> MedusaResult<FirstRunDisposition> {
     if skip_configured && configured {
-        return Ok(FirstRunDisposition::Continue);
+        if credentials_ready {
+            return Ok(FirstRunDisposition::Continue);
+        }
+        return Err(config_error(
+            "the configured API-key provider has no usable credential in this non-interactive session; set its provider API-key environment variable or run `medusa config init` in an interactive terminal",
+        ));
     }
     if skip_configured {
         return Err(config_error(
@@ -217,16 +225,6 @@ fn credential_entry(provider: &str) -> MedusaResult<keyring::Entry> {
         .map_err(|error| config_error(format!("cannot access secure credential storage: {error}")))
 }
 
-fn stored_api_key(provider: &str) -> MedusaResult<Option<String>> {
-    match credential_entry(provider)?.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(config_error(format!(
-            "cannot read API key from secure credential storage: {error}"
-        ))),
-    }
-}
-
 fn store_api_key(provider: &str, api_key: &str) -> MedusaResult<()> {
     credential_entry(provider)?
         .set_password(api_key)
@@ -248,6 +246,17 @@ fn restore_api_key(provider: &str, previous: Option<&str>) -> MedusaResult<()> {
     }
 }
 
+pub(crate) fn stored_api_key(provider: &str) -> MedusaResult<Option<String>> {
+    let entry = credential_entry(provider)?;
+    match entry.get_password() {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(config_error(format!(
+            "cannot read API key from secure credential storage: {error}"
+        ))),
+    }
+}
+
 fn profile_credentials_ready(profile: &ProviderProfile) -> bool {
     if profile.auth != "api-key" {
         return true;
@@ -258,13 +267,7 @@ fn profile_credentials_ready(profile: &ProviderProfile) -> bool {
     if env::var(variable).is_ok_and(|value| !value.trim().is_empty()) {
         return true;
     }
-    keyring::Entry::new(
-        CREDENTIAL_SERVICE,
-        &profile.provider.trim().to_ascii_lowercase(),
-    )
-    .ok()
-    .and_then(|entry| entry.get_password().ok())
-    .is_some_and(|value| !value.trim().is_empty())
+    stored_api_key(&profile.provider).ok().flatten().is_some()
 }
 
 /// Returns the environment variable accepted as a provider API-key fallback.
@@ -312,17 +315,25 @@ mod tests {
     }
 
     #[test]
-    fn headless_first_run_fails_clearly_without_a_provider() {
+    fn headless_first_run_requires_configured_provider_credentials() {
         assert_eq!(
-            non_terminal_disposition(true, true).expect("configured continues"),
+            non_terminal_disposition(true, true, true).expect("configured and ready continues"),
             FirstRunDisposition::Continue
         );
-        let error = non_terminal_disposition(true, false).expect_err("unconfigured must fail");
+        let error =
+            non_terminal_disposition(true, true, false).expect_err("missing credential must fail");
+        assert!(
+            error.to_string().contains("no usable credential"),
+            "unexpected error: {error}"
+        );
+        let error =
+            non_terminal_disposition(true, false, false).expect_err("unconfigured must fail");
         assert!(
             error.to_string().contains("medusa config init"),
             "unexpected error: {error}"
         );
-        let error = non_terminal_disposition(false, true).expect_err("init needs a terminal");
+        let error =
+            non_terminal_disposition(false, true, false).expect_err("init needs a terminal");
         assert!(
             error.to_string().contains("interactive terminal"),
             "unexpected error: {error}"
