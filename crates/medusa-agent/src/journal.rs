@@ -1056,6 +1056,33 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_existing_journal() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut current = session(directory.path());
+        append_payload_committed(
+            &mut current,
+            Actor::Coordinator,
+            EventPayload::GoalUpdated {
+                objective: "first".to_owned(),
+            },
+        )
+        .expect("first append");
+        let path = journal_path(directory.path(), &current.id).expect("journal path");
+
+        current.objective = "rewritten".to_owned();
+        rewrite_journal(&path, &current).expect("rewrite journal");
+
+        let reloaded = read_journal(&path, &current.id, true, true).expect("reload");
+        assert_eq!(
+            reloaded
+                .committed_snapshot
+                .expect("committed snapshot")
+                .objective,
+            "rewritten"
+        );
+    }
+
+    #[test]
     fn snapshot_compaction_keeps_events_and_latest_snapshot() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut current = session(directory.path());
