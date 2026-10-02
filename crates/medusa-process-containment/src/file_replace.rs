@@ -1,4 +1,7 @@
-use std::{fs, io, path::Path};
+use std::{io, path::Path};
+
+#[cfg(any(not(windows), test))]
+use std::fs;
 
 /// Moves a prepared file into `destination`, replacing an existing file when supported.
 ///
