@@ -168,6 +168,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
             }
             TranscriptEntry::Activity(activity) => {
                 let hidden = (app.verbosity != Verbosity::Verbose
+                    && activity.kind != TranscriptActivityKind::Error
                     && crate::session::is_internal_activity_title(&activity.title))
                     || match app.verbosity {
                         Verbosity::Off => verbose_filterable(activity.kind),

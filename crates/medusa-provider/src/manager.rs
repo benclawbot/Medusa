@@ -801,7 +801,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
         mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
         mut before_attempt: Option<ProviderAttemptHook<'_>>,
     ) -> MedusaResult<ModelResponse> {
-        let key = serde_json::to_string(request).map_err(|error| {
+        let key = serde_json::to_string(&(phase, request)).map_err(|error| {
             MedusaError::new(
                 ErrorCode::InvalidConfiguration,
                 ErrorCategory::Validation,
@@ -1283,6 +1283,43 @@ mod tests {
             streaming: false,
             retry: RouteRetryPolicy::default(),
         }
+    }
+
+    #[test]
+    fn response_cache_is_scoped_to_execution_phase() {
+        let (planning, planning_calls) = provider(Ok(ModelResponse {
+            response_id: Some("planning".into()),
+            ..success()
+        }));
+        let (formatting, formatting_calls) = provider(Ok(ModelResponse {
+            response_id: Some("formatting".into()),
+            ..success()
+        }));
+        let mut manager = ProviderManager::new_with_profiles(
+            vec![planning, formatting],
+            vec![profile("planning-route"), profile("formatting-route")],
+        );
+        manager = manager.with_role_routes(&BTreeMap::from([
+            ("planning".to_owned(), "planning-route".to_owned()),
+            ("formatting".to_owned(), "formatting-route".to_owned()),
+        ]));
+
+        let first = manager
+            .complete_with_cancel_and_sink(&request(), ProviderExecutionPhase::Planning, None, None)
+            .expect("planning response");
+        let second = manager
+            .complete_with_cancel_and_sink(
+                &request(),
+                ProviderExecutionPhase::Formatting,
+                None,
+                None,
+            )
+            .expect("formatting response");
+
+        assert_eq!(first.response_id.as_deref(), Some("planning"));
+        assert_eq!(second.response_id.as_deref(), Some("formatting"));
+        assert_eq!(planning_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(formatting_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
