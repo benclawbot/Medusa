@@ -460,10 +460,23 @@ impl ProcessRegistry {
         self.validate()?;
         let parent = path.parent().ok_or(RegistryError::MissingParentDirectory)?;
         fs::create_dir_all(parent)?;
-        let temporary = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(self)?;
-        fs::write(&temporary, bytes)?;
-        fs::rename(&temporary, path)?;
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("process-registry.json");
+        let mut temporary = tempfile::Builder::new()
+            .prefix(&format!(".{name}."))
+            .suffix(".tmp")
+            .tempfile_in(parent)?;
+        use std::io::Write as _;
+        temporary.write_all(&bytes)?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(path).map_err(|error| error.error)?;
+        #[cfg(unix)]
+        if let Ok(directory) = fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
         Ok(())
     }
 }
@@ -620,6 +633,20 @@ mod tests {
             .mark_running_with_marker(pid, Some(marker(start)), datetime!(2026-07-24 12:01 UTC))
             .expect("running");
         process
+    }
+
+    #[test]
+    fn registry_atomic_save_replaces_existing_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("registry.json");
+        let first = ProcessRegistry::default();
+        first.save_atomic(&path).expect("first save");
+
+        let mut second = ProcessRegistry::default();
+        second.register(record("worker")).expect("register");
+        second.save_atomic(&path).expect("replacement save");
+
+        assert_eq!(ProcessRegistry::load(&path).expect("load"), second);
     }
 
     #[test]

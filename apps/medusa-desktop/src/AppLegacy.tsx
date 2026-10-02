@@ -102,6 +102,7 @@ interface WorkLogEntry {
   status?: string;
   details?: string[];
   activityId?: string;
+  diagnosticOnly?: boolean;
 }
 
 type LiveTurnPhase = "submitting" | "starting" | "waiting" | "responding" | "queued";
@@ -118,7 +119,17 @@ interface UsageState {
 type Verbosity = "off" | "new" | "all" | "verbose";
 
 function parseVerbosity(value: unknown): Verbosity {
-  return value === "off" || value === "new" || value === "verbose" ? value : "all";
+  return value === "off" || value === "all" || value === "verbose" ? value : "new";
+}
+
+function isLowSignalActivity(activity: RuntimeActivity): boolean {
+  if (activity.kind === "error") return false;
+  const normalized = activity.title.trim().toLowerCase();
+  return normalized === "reasoning"
+    || normalized === "thinking"
+    || normalized === "working"
+    || normalized === "processing"
+    || normalized === "model reasoning";
 }
 
 interface SettingsState {
@@ -895,6 +906,7 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
             details: activity.details,
             status,
             timestamp,
+            diagnosticOnly: isLowSignalActivity(activity),
           };
           if (index < 0) return appendBounded(current, entry, MAX_WORK_LOG_ENTRIES);
           const next = [...current];
@@ -1749,34 +1761,41 @@ export function App({ settingsSlot, composerSlot, composerToolsSlot }: AppProps 
   let activeWorkEntry: WorkLogEntry | undefined;
   for (let index = workLog.length - 1; index >= 0; index -= 1) {
     const entry = workLog[index];
-    if (entry?.kind === "activity" && entry.status === "Working") {
+    if (
+      entry?.kind === "activity"
+      && entry.status === "Working"
+      && (!entry.diagnosticOnly || settings.verbosity === "verbose")
+    ) {
       activeWorkEntry = entry;
       break;
     }
   }
-  // /verbose display filter: tool-progress rows carry status "Working".
-  // "off" hides them, "new" keeps only the latest, "verbose" expands details.
+  // /verbose display filter: routine lifecycle rows are diagnostics, while errors
+  // remain user-visible regardless of title. "new" keeps only the latest transient action.
   const visibleWorkLog = (() => {
-    if (settings.verbosity === "all" || settings.verbosity === "verbose") return workLog;
+    const diagnosticFiltered = settings.verbosity === "verbose"
+      ? workLog
+      : workLog.filter((entry) => !entry.diagnosticOnly);
+    if (settings.verbosity === "all" || settings.verbosity === "verbose") return diagnosticFiltered;
     let latestWorking = -1;
     if (settings.verbosity === "new") {
-      for (let index = workLog.length - 1; index >= 0; index -= 1) {
-        const entry = workLog[index];
+      for (let index = diagnosticFiltered.length - 1; index >= 0; index -= 1) {
+        const entry = diagnosticFiltered[index];
         if (entry?.kind === "activity" && entry.status === "Working") {
           latestWorking = index;
           break;
         }
       }
     }
-    return workLog.filter((entry, index) =>
+    return diagnosticFiltered.filter((entry, index) =>
       entry.kind !== "activity" || entry.status !== "Working" || index === latestWorking,
     );
   })();
   const verboseDetails = settings.verbosity === "verbose";
-  const liveActivityEntries = visibleWorkLog
-    .filter((entry) => entry.kind === "activity")
-    .slice(-8);
-  const completedActivityEntries = workLog.filter((entry) => entry.kind === "activity");
+  const liveActivityEntries = activeWorkEntry ? [activeWorkEntry] : [];
+  const completedActivityEntries = workLog.filter(
+    (entry) => entry.kind === "activity" && !entry.diagnosticOnly,
+  );
   const hasPartialResult = partialResult && Boolean(webArtifact);
 
   const beginSidePanelResize = (event: React.PointerEvent<HTMLButtonElement>) => {

@@ -9,6 +9,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_co
 use medusa_protocol::{EventEnvelope, EventPayload};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use ulid::Ulid;
 
 use crate::{
     compaction_v2::{SemanticHistory, SemanticProvenance, SemanticSummaryStatus},
@@ -490,6 +491,10 @@ fn repository_identity(repo: &Path) -> BranchRepositoryIdentity {
     }
 }
 
+fn branch_summary_temp_path(root: &Path, record_hash: &str) -> PathBuf {
+    root.join(format!(".{record_hash}.{}.tmp", Ulid::new()))
+}
+
 fn persist_record(session: &AgentSession, record: &BranchSummaryRecord) -> MedusaResult<PathBuf> {
     let root = session.repo.join(".medusa/artifacts/branch-summary-v1");
     fs::create_dir_all(&root)?;
@@ -498,11 +503,7 @@ fn persist_record(session: &AgentSession, record: &BranchSummaryRecord) -> Medus
         return Ok(path);
     }
     let bytes = serde_json::to_vec_pretty(record).map_err(json_error)?;
-    let temp = root.join(format!(
-        ".{}.{}.tmp",
-        record.record_hash,
-        std::process::id()
-    ));
+    let temp = branch_summary_temp_path(&root, &record.record_hash);
     {
         let mut file = fs::OpenOptions::new()
             .create_new(true)
@@ -638,6 +639,14 @@ mod tests {
 
     fn digest(label: &str) -> String {
         hex::encode(Sha256::digest(label.as_bytes()))
+    }
+
+    #[test]
+    fn concurrent_branch_summary_writers_get_unique_temporary_paths() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let first = branch_summary_temp_path(directory.path(), "record");
+        let second = branch_summary_temp_path(directory.path(), "record");
+        assert_ne!(first, second);
     }
 
     #[test]
