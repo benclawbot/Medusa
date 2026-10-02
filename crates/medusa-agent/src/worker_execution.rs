@@ -844,7 +844,7 @@ mod tests {
         let original = fs::read(&path).expect("initial state");
 
         controller
-            .push_progress(ProgressKind::Progress, "second write", None)
+            .push_progress(ProgressKind::PlanUpdated, "second write", None)
             .expect("progress");
         controller.persist().expect("rewrite worker state");
 

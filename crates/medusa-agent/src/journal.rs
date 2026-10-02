@@ -1079,7 +1079,13 @@ mod tests {
         rewrite_journal(&path, &current).expect("rewrite journal");
 
         let reloaded = read_journal(&path, &current.id, true, true).expect("reload");
-        assert_eq!(reloaded.objective, "rewritten");
+        assert_eq!(
+            reloaded
+                .committed_snapshot
+                .expect("committed snapshot")
+                .objective,
+            "rewritten"
+        );
     }
 
     #[test]
