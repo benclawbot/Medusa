@@ -453,9 +453,8 @@ mod tests {
             list(repository.path(), session.id.as_str())
                 .expect("records")
                 .last()
-                .expect("last")
-                .checkpoint,
-            checkpoint
+                .expect("last"),
+            &checkpoint
         );
     }
 

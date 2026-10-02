@@ -11,6 +11,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use medusa_process_containment::replace_file;
 use medusa_runtime::{
     attachment::{
         MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_PROMPT,
