@@ -6,6 +6,7 @@ use std::{
     path::Path,
 };
 
+use medusa_process_containment::replace_file;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use ulid::Ulid;
@@ -69,25 +70,6 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     result
-}
-
-#[cfg(not(windows))]
-fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(temporary, destination)
-}
-
-#[cfg(windows)]
-fn replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
-    match fs::rename(temporary, destination) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            // `std::fs::rename` does not replace an existing file on Windows. Keep the
-            // same publication API while avoiding the old fixed-name temporary files.
-            fs::remove_file(destination)?;
-            fs::rename(temporary, destination)
-        }
-        Err(error) => Err(error),
-    }
 }
 
 #[cfg(unix)]
