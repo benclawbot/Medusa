@@ -70,17 +70,35 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
     match outcome {
         FirstRunSetupOutcome::Cancelled => Ok(FirstRunDisposition::Cancelled),
         FirstRunSetupOutcome::Configure(profile, api_key) => {
+            // Validate every non-mutating authority before changing either the keyring or
+            // provider catalog. This keeps failed validation/preflight attempts side-effect free.
             let config = validate_candidate(&profile, api_key.is_some())?;
             oauth_preflight::run_if_needed(&config)?;
-            catalog.save_active_profile(
+
+            let previous_credential = if api_key.is_some() {
+                stored_api_key(&profile.provider)?
+            } else {
+                None
+            };
+            if let Some(api_key) = api_key.as_deref() {
+                store_api_key(&profile.provider, api_key)?;
+            }
+            if let Err(error) = catalog.save_active_profile(
                 &profile,
                 snapshot.revision,
                 ConfigurationChangeOrigin::Tui,
                 PROVIDER_PROFILE_KEYS.iter().map(|key| (*key).to_owned()),
                 ConfigurationApplyTiming::NextSession,
-            )?;
-            if let Some(api_key) = api_key.as_deref() {
-                store_api_key(&profile.provider, api_key)?;
+            ) {
+                if api_key.is_some()
+                    && let Err(rollback_error) =
+                        restore_api_key(&profile.provider, previous_credential.as_deref())
+                {
+                    return Err(config_error(format!(
+                        "provider configuration was not saved ({error}); secure credential rollback also failed: {rollback_error}"
+                    )));
+                }
+                return Err(error);
             }
             Ok(FirstRunDisposition::Continue)
         }
@@ -202,18 +220,34 @@ fn check_api_key_present(
     )))
 }
 
-fn store_api_key(provider: &str, api_key: &str) -> MedusaResult<()> {
+fn credential_entry(provider: &str) -> MedusaResult<keyring::Entry> {
     keyring::Entry::new(CREDENTIAL_SERVICE, &provider.trim().to_ascii_lowercase())
-        .map_err(|error| config_error(format!("cannot access secure credential storage: {error}")))?
+        .map_err(|error| config_error(format!("cannot access secure credential storage: {error}")))
+}
+
+fn store_api_key(provider: &str, api_key: &str) -> MedusaResult<()> {
+    credential_entry(provider)?
         .set_password(api_key)
         .map_err(|error| config_error(format!("cannot save API key securely: {error}")))
 }
 
+fn restore_api_key(provider: &str, previous: Option<&str>) -> MedusaResult<()> {
+    let entry = credential_entry(provider)?;
+    match previous {
+        Some(value) => entry
+            .set_password(value)
+            .map_err(|error| config_error(format!("cannot restore previous API key: {error}"))),
+        None => match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(config_error(format!(
+                "cannot remove newly stored API key during rollback: {error}"
+            ))),
+        },
+    }
+}
+
 pub(crate) fn stored_api_key(provider: &str) -> MedusaResult<Option<String>> {
-    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, &provider.trim().to_ascii_lowercase())
-        .map_err(|error| {
-            config_error(format!("cannot access secure credential storage: {error}"))
-        })?;
+    let entry = credential_entry(provider)?;
     match entry.get_password() {
         Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
