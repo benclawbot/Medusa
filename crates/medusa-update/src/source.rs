@@ -804,9 +804,7 @@ fn cached_release_binary(target_dir: &Path) -> PathBuf {
 fn read_cached_binary_sha256(target_dir: &Path) -> Option<String> {
     let raw = fs::read_to_string(target_dir.join(BINARY_SHA256_FILE)).ok()?;
     let digest = raw.trim();
-    if digest.len() != SHA256_HEX_LENGTH
-        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if digest.len() != SHA256_HEX_LENGTH || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     Some(digest.to_ascii_lowercase())
@@ -836,8 +834,7 @@ fn cached_binary_sha256_matches(target_dir: &Path) -> bool {
     let Some(expected) = read_cached_binary_sha256(target_dir) else {
         return false;
     };
-    binary_sha256(&cached_release_binary(target_dir))
-        .is_ok_and(|actual| actual == expected)
+    binary_sha256(&cached_release_binary(target_dir)).is_ok_and(|actual| actual == expected)
 }
 
 /// Whether `sccache` (or `cachepot`) is on PATH. When present, cargo will pick it up
