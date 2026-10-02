@@ -1,8 +1,8 @@
 use std::{fs, io::Write, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
-use medusa_process_containment::replace_file;
 use medusa_escalation::{EscalationMode, EscalationReason};
+use medusa_process_containment::replace_file;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 

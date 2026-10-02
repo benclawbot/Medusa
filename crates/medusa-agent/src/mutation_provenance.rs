@@ -389,5 +389,4 @@ mod tests {
         assert!(item.scope.retained_preimage.is_none());
         assert!(item.scope.retained_postimage.is_some());
     }
-
 }

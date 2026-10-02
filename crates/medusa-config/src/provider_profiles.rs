@@ -7,12 +7,12 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    durable_file,
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore,
     configuration_state::{
         ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
         ConfigurationStateGuard, ConfigurationStateStore,
     },
+    durable_file,
     staged_profile::{
         begin_pending_transaction, finish_pending_transaction, reconcile_pending_transaction,
         record_known_good,

@@ -760,17 +760,23 @@ mod tests {
         controller
             .analysis_set_value("session-a", "count", AnalysisValue::Integer(1))
             .expect("set");
-        controller.analysis_snapshot("session-a").expect("first snapshot");
+        controller
+            .analysis_snapshot("session-a")
+            .expect("first snapshot");
         controller
             .analysis_set_value("session-a", "count", AnalysisValue::Integer(2))
             .expect("update");
-        controller.analysis_snapshot("session-a").expect("replace snapshot");
+        controller
+            .analysis_snapshot("session-a")
+            .expect("replace snapshot");
         controller
             .analysis_set_value("session-a", "count", AnalysisValue::Integer(99))
             .expect("mutate after snapshot");
         controller.analysis_restore("session-a").expect("restore");
         assert_eq!(
-            controller.analysis_value("session-a", "count").expect("value"),
+            controller
+                .analysis_value("session-a", "count")
+                .expect("value"),
             Some(AnalysisValue::Integer(2))
         );
     }

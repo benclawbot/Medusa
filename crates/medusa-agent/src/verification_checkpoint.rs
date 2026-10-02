@@ -328,10 +328,10 @@ mod tests {
     fn concurrent_saves_leave_one_valid_checkpoint() {
         let directory = tempfile::tempdir().expect("directory");
         let root = directory.path().to_path_buf();
-        let left = VerificationCheckpoint::new("state-a", dag(), vec!["left"])
-            .expect("left checkpoint");
-        let right = VerificationCheckpoint::new("state-a", dag(), vec!["right"])
-            .expect("right checkpoint");
+        let left =
+            VerificationCheckpoint::new("state-a", dag(), vec!["left"]).expect("left checkpoint");
+        let right =
+            VerificationCheckpoint::new("state-a", dag(), vec!["right"]).expect("right checkpoint");
 
         let left_root = root.clone();
         let left_thread = std::thread::spawn(move || {

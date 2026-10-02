@@ -7,10 +7,10 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    durable_file,
     ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog, ProviderProfileSnapshot,
     ProviderProfileStore, ProviderProfileValue, configuration_state::ConfigurationStateStore,
+    durable_file,
 };
 
 const HISTORY_SCHEMA_VERSION: u32 = 1;

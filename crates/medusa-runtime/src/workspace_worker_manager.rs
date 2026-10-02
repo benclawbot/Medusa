@@ -16,8 +16,8 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_process_containment::replace_file;
 use medusa_evidence::{ChangeKind, ChangedComponent, normalize_components};
+use medusa_process_containment::replace_file;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

@@ -12,7 +12,10 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// replacing `destination` through the platform replacement primitive.
 pub fn atomic_write(destination: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = destination.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "destination path has no parent")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "destination path has no parent",
+        )
     })?;
     fs::create_dir_all(parent)?;
     let name = destination
@@ -56,8 +59,7 @@ pub fn atomic_write(destination: &Path, bytes: &[u8]) -> io::Result<()> {
         )
     })?;
     let result = (|| {
-        let mut file =
-            file.ok_or_else(|| io::Error::other("temporary file was not opened"))?;
+        let mut file = file.ok_or_else(|| io::Error::other("temporary file was not opened"))?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -153,9 +155,7 @@ mod tests {
         atomic_write(&destination, b"second").expect("second");
         assert_eq!(fs::read(&destination).expect("destination"), b"second");
         assert_eq!(
-            fs::read_dir(directory.path())
-                .expect("directory")
-                .count(),
+            fs::read_dir(directory.path()).expect("directory").count(),
             1
         );
     }
