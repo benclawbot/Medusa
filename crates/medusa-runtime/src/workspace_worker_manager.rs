@@ -16,6 +16,7 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::replace_file;
 use medusa_evidence::{ChangeKind, ChangedComponent, normalize_components};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -866,11 +867,7 @@ fn copy_file_atomic(source: &Path, destination: &Path) -> MedusaResult<()> {
     let temporary = destination.with_extension("medusa-tmp");
     remove_path(&temporary)?;
     fs::copy(source, &temporary)?;
-    #[cfg(windows)]
-    if destination.exists() {
-        fs::remove_file(destination)?;
-    }
-    fs::rename(temporary, destination)?;
+    replace_file(&temporary, destination)?;
     Ok(())
 }
 
@@ -1006,11 +1003,7 @@ fn write_json(path: &Path, value: &impl Serialize) -> MedusaResult<()> {
         &temporary,
         serde_json::to_vec_pretty(value).map_err(|error| invalid(error.to_string()))?,
     )?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    fs::rename(temporary, path)?;
+    replace_file(&temporary, path)?;
     Ok(())
 }
 
