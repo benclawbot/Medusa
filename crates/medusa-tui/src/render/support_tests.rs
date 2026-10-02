@@ -433,6 +433,35 @@ fn compact_and_detailed_modes_hide_internal_reasoning_telemetry() {
 }
 
 #[test]
+fn compact_mode_keeps_internal_title_failures_visible() {
+    use crate::app::TranscriptActivityKind;
+
+    let directory = tempfile::tempdir().expect("tempdir");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "internal-failure",
+        "",
+        Arc::new(UnsupportedClipboard),
+    )
+    .expect("app");
+    app.verbosity = Verbosity::New;
+    app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
+        id: None,
+        kind: TranscriptActivityKind::Error,
+        title: "reasoning".to_owned(),
+        details: vec!["provider failed".to_owned()],
+    }));
+
+    let visible = transcript_lines(&app, 80)
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(visible.contains("reasoning"));
+    assert!(visible.contains("provider failed"));
+}
+
+#[test]
 fn collapsed_failures_keep_actionable_error_detail() {
     use crate::app::TranscriptActivityKind;
 
