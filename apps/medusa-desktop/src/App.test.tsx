@@ -1113,7 +1113,7 @@ it("hides tool-progress rows when verbosity is off and keeps the latest for new"
   render(<App />);
   await screen.findByRole("textbox");
   await waitFor(() => expect(pollRuntime).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole("button", { name: /Work/ }));
+  expect(await screen.findByRole("complementary", { name: "Work" })).toBeInTheDocument();
   expect(screen.queryByText("first tool call")).not.toBeInTheDocument();
   expect(screen.queryByText("second tool call")).not.toBeInTheDocument();
 });
@@ -1148,10 +1148,9 @@ it("hides routine reasoning activity but preserves reasoning failures", async ()
   render(<App />);
   await screen.findByRole("textbox");
   await waitFor(() => expect(pollRuntime).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole("button", { name: /Work/ }));
+  expect(await screen.findByRole("complementary", { name: "Work" })).toBeInTheDocument();
 
+  expect(await screen.findByText("reasoning")).toBeInTheDocument();
+  expect(await screen.findByText("Updated TUI input handling")).toBeInTheDocument();
   expect(screen.queryByText("thinking")).not.toBeInTheDocument();
-  expect(screen.getByText("reasoning")).toBeInTheDocument();
-  expect(screen.getByText("Updated TUI input handling")).toBeInTheDocument();
 });
-

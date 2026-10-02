@@ -445,12 +445,13 @@ fn compact_mode_keeps_internal_title_failures_visible() {
     )
     .expect("app");
     app.verbosity = Verbosity::New;
-    app.transcript.push(TranscriptEntry::Activity(TranscriptActivity {
-        id: None,
-        kind: TranscriptActivityKind::Error,
-        title: "reasoning".to_owned(),
-        details: vec!["provider failed".to_owned()],
-    }));
+    app.transcript
+        .push(TranscriptEntry::Activity(TranscriptActivity {
+            id: None,
+            kind: TranscriptActivityKind::Error,
+            title: "reasoning".to_owned(),
+            details: vec!["provider failed".to_owned()],
+        }));
 
     let visible = transcript_lines(&app, 80)
         .into_iter()
