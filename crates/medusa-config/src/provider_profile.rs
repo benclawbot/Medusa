@@ -365,9 +365,11 @@ mod tests {
     #[test]
     fn save_replaces_an_existing_provider_profile() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let store = ProviderProfileStore::new(directory.path().join("provider.toml"));
-        let mut profile = ProviderProfile::default();
-        profile.configured = true;
+        let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
+        let mut profile = ProviderProfile {
+            configured: true,
+            ..ProviderProfile::default()
+        };
         store.save(&profile).expect("first save");
         profile.model = "MiniMax-M3-fast".to_owned();
         store.save(&profile).expect("replace save");
