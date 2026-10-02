@@ -2467,8 +2467,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror 2.0.20",
  "tempfile",
+ "thiserror 2.0.20",
  "ulid",
 ]
 
@@ -2680,10 +2680,10 @@ dependencies = [
 name = "medusa-process-registry"
 version = "2.0.0"
 dependencies = [
+ "medusa-core",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "tempfile",
  "time",
 ]
 
@@ -2723,6 +2723,7 @@ version = "2.0.0"
 dependencies = [
  "medusa-config",
  "medusa-core",
+ "medusa-process-containment",
  "medusa-prompt-cache",
  "reqwest 0.12.28",
  "serde",
@@ -2807,8 +2808,8 @@ dependencies = [
  "medusa-process-containment",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
  "tempfile",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
