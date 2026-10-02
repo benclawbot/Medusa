@@ -1,17 +1,12 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{fs, path::Path};
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const MUTATION_PROVENANCE_SCHEMA_VERSION: u32 = 1;
 const PROVENANCE_PATH: &str = ".medusa/mutation-provenance.json";
 const MAX_RETAINED_BYTES: usize = 256 * 1024;
-static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MutationContext {
@@ -217,12 +212,10 @@ pub fn persist(repo: &Path, journal: &MutationJournal) -> MedusaResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = temporary_path(&path);
     let bytes = serde_json::to_vec_pretty(journal).map_err(|error| {
         provenance_error(format!("could not serialize mutation provenance: {error}"))
     })?;
-    fs::write(&temporary, bytes)?;
-    fs::rename(&temporary, &path)?;
+    storage::atomic_write(&path, &bytes)?;
     Ok(())
 }
 
@@ -286,11 +279,6 @@ fn ranges_overlap(left: &MutationScope, right: &MutationScope) -> bool {
 
 fn fingerprint(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let nonce = TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed);
-    path.with_extension(format!("json.medusa-tmp-{}-{nonce}", std::process::id()))
 }
 
 fn provenance_error(message: impl Into<String>) -> MedusaError {
@@ -385,10 +373,14 @@ mod tests {
     }
 
     #[test]
-    fn persistence_survives_restart_and_rejects_corruption() {
+    fn persistence_survives_repeated_writes_and_rejects_corruption() {
         let directory = tempfile::tempdir().unwrap();
         let mut journal = MutationJournal::default();
         journal.append(record(1, 0, b"old", b"new")).unwrap();
+        persist(directory.path(), &journal).unwrap();
+        assert_eq!(load(directory.path()).unwrap(), journal);
+
+        journal.append(record(2, 1, b"new", b"updated")).unwrap();
         persist(directory.path(), &journal).unwrap();
         assert_eq!(load(directory.path()).unwrap(), journal);
 
@@ -402,11 +394,5 @@ mod tests {
         let item = record(1, 0, &bytes, b"small");
         assert!(item.scope.retained_preimage.is_none());
         assert!(item.scope.retained_postimage.is_some());
-    }
-
-    #[test]
-    fn provenance_staging_paths_are_unique() {
-        let path = Path::new("mutation-provenance.json");
-        assert_ne!(temporary_path(path), temporary_path(path));
     }
 }

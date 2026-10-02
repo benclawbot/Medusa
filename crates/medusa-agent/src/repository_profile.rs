@@ -5,7 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 
 const PROFILE_SCHEMA_VERSION: u16 = 1;
@@ -212,12 +212,8 @@ fn persist(repo: &Path, profile: &RepositoryProfile) -> MedusaResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(profile)?)?;
-    if path.exists() {
-        fs::remove_file(&path)?;
-    }
-    fs::rename(temporary, path)?;
+    let bytes = serde_json::to_vec_pretty(profile)?;
+    storage::atomic_write(&path, &bytes)?;
     Ok(())
 }
 
