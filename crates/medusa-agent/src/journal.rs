@@ -7,7 +7,7 @@ use std::{
     time::SystemTime,
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId, storage};
 use medusa_protocol::{
     Actor, EventEnvelope, EventPayload, SessionAction, SessionActionKind, SessionActionLifecycle,
 };
@@ -510,24 +510,18 @@ fn rewrite_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
 
 fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     create_parent(path)?;
-    let temporary = path.with_extension("events.tmp");
-    let mut file = File::create(&temporary)?;
-    file.write_all(JOURNAL_MAGIC)?;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(JOURNAL_MAGIC);
     for event in &session.events {
         write_record(
-            &mut file,
+            &mut bytes,
             &JournalRecord::Event {
                 event: Box::new(event.clone()),
             },
         )?;
     }
-    write_record(&mut file, &snapshot_record(session))?;
-    file.sync_all()?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
-    fs::rename(temporary, path)?;
+    write_record(&mut bytes, &snapshot_record(session))?;
+    storage::atomic_write(path, &bytes)?;
     invalidate_journal_cache(path);
     Ok(())
 }
@@ -712,7 +706,7 @@ fn invalidate_journal_cache(path: &Path) {
     }
 }
 
-fn write_record(file: &mut File, record: &JournalRecord) -> MedusaResult<()> {
+fn write_record(file: &mut impl Write, record: &JournalRecord) -> MedusaResult<()> {
     let payload = serde_json::to_vec(record)?;
     if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
         return Err(persistence_error(

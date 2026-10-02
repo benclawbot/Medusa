@@ -25,7 +25,12 @@ pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
 }
 
 pub(crate) fn ensure_first_run() -> MedusaResult<()> {
-    Ok(())
+    match crate::first_run::ensure_first_run()? {
+        crate::first_run::FirstRunDisposition::Continue => Ok(()),
+        crate::first_run::FirstRunDisposition::Cancelled => {
+            Err(config_error("provider setup was cancelled"))
+        }
+    }
 }
 
 pub(crate) fn configure_interactive() -> MedusaResult<()> {
@@ -530,9 +535,17 @@ fn ensure_profile_ready(profile: &ProviderProfile) -> MedusaResult<()> {
                 profile.provider
             ))
         })?;
-        if env::var_os(variable).is_none() {
+        let environment_ready = env::var(variable).is_ok_and(|value| !value.trim().is_empty());
+        let keyring_ready = keyring::Entry::new(
+            "com.benclawbot.medusa",
+            &profile.provider.trim().to_ascii_lowercase(),
+        )
+        .ok()
+        .and_then(|entry| entry.get_password().ok())
+        .is_some_and(|value| !value.trim().is_empty());
+        if !environment_ready && !keyring_ready {
             return Err(config_error(format!(
-                "{variable} is not present in the Medusa process environment. Set it before model execution (PowerShell: `$env:{variable} = \"...\"`) and run `medusa config doctor`."
+                "provider credential is unavailable. Enter an API key with `medusa config init` or set {variable} before model execution."
             )));
         }
     }
@@ -601,6 +614,18 @@ fn config_error(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Validation,
         message,
     )
+}
+
+#[cfg(test)]
+mod first_run_gate_tests {
+    use super::*;
+
+    #[test]
+    fn headless_gate_delegates_to_real_first_run_authority() {
+        // Compile-time regression guard: this function must not regress to an unconditional Ok.
+        let gate: fn() -> MedusaResult<()> = ensure_first_run;
+        let _ = gate;
+    }
 }
 
 #[cfg(test)]

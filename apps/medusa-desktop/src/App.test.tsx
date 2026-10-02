@@ -1113,7 +1113,44 @@ it("hides tool-progress rows when verbosity is off and keeps the latest for new"
   render(<App />);
   await screen.findByRole("textbox");
   await waitFor(() => expect(pollRuntime).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole("button", { name: /Work/ }));
+  expect(await screen.findByRole("complementary", { name: "Work" })).toBeInTheDocument();
   expect(screen.queryByText("first tool call")).not.toBeInTheDocument();
   expect(screen.queryByText("second tool call")).not.toBeInTheDocument();
+});
+
+it("hides routine reasoning activity but preserves reasoning failures", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-focused-activity", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([
+      {
+        type: "settings",
+        model: "m",
+        effort: "medium",
+        verbosity: "new",
+        planMode: false,
+        credentialConfigured: true,
+      },
+      {
+        type: "activity",
+        activity: { id: "thinking-1", kind: "progress", title: "thinking", details: ["internal"] },
+      },
+      {
+        type: "activity",
+        activity: { id: "reasoning-error", kind: "error", title: "reasoning", details: ["provider failed"] },
+      },
+      {
+        type: "activity",
+        activity: { id: "edit-1", kind: "done", title: "Updated TUI input handling", details: ["3 files"] },
+      },
+    ])
+    .mockResolvedValue([]);
+
+  render(<App />);
+  await screen.findByRole("textbox");
+  await waitFor(() => expect(pollRuntime).toHaveBeenCalled());
+  expect(await screen.findByRole("complementary", { name: "Work" })).toBeInTheDocument();
+
+  expect(await screen.findByText("reasoning")).toBeInTheDocument();
+  expect(await screen.findByText("Updated TUI input handling")).toBeInTheDocument();
+  expect(screen.queryByText("thinking")).not.toBeInTheDocument();
 });

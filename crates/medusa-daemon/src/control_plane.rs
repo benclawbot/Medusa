@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use medusa_core::storage;
 use medusa_process_containment::{NativeProcessStartMarker, process_start_marker};
 use medusa_process_registry::{
     IdentityVerification, ProcessId, ProcessIdentity, ProcessRecord, ProcessRegistry, ProcessSpec,
@@ -351,9 +352,8 @@ impl SupervisionControlPlane {
             .parent()
             .ok_or(ControlPlaneError::MissingParentDirectory)?;
         fs::create_dir_all(parent)?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(&self.state)?)?;
-        fs::rename(temporary, &self.path)?;
+        let bytes = serde_json::to_vec_pretty(&self.state)?;
+        storage::atomic_write(&self.path, &bytes)?;
         Ok(())
     }
 }
@@ -565,6 +565,35 @@ mod tests {
             working_directory: None,
             restartable,
         }
+    }
+
+    #[test]
+    fn repeated_control_plane_persistence_replaces_existing_state() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("supervision.json");
+        let now = datetime!(2026-07-26 07:00 UTC);
+        let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
+
+        plane
+            .register_runtime("exec-1", process_id(), spec(true), current_pid(), None, now)
+            .expect("first persist");
+        plane
+            .heartbeat(
+                &process_id(),
+                Some("checkpoint-a".to_owned()),
+                now + Duration::minutes(1),
+            )
+            .expect("replacement persist");
+
+        let reloaded =
+            SupervisionControlPlane::load(&path, "install-a").expect("reload control plane");
+        assert!(
+            reloaded
+                .state
+                .bindings
+                .get(&process_id())
+                .is_some_and(|binding| binding.checkpoint_ref.as_deref() == Some("checkpoint-a"))
+        );
     }
 
     #[test]

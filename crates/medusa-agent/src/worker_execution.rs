@@ -686,17 +686,8 @@ impl WorkerExecutionController {
             .parent()
             .ok_or_else(|| "worker execution state path has no parent".to_owned())?;
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(&self.state).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
-        #[cfg(windows)]
-        if self.path.exists() {
-            fs::remove_file(&self.path).map_err(|error| error.to_string())?;
-        }
-        fs::rename(temporary, &self.path).map_err(|error| error.to_string())
+        let bytes = serde_json::to_vec_pretty(&self.state).map_err(|error| error.to_string())?;
+        medusa_core::storage::atomic_write(&self.path, &bytes).map_err(|error| error.to_string())
     }
 }
 

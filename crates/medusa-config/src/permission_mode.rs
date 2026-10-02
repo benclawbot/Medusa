@@ -1,10 +1,9 @@
 use std::{
     env, fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 
 use crate::Mode;
@@ -219,17 +218,8 @@ impl PermissionStore {
             mode,
         })
         .map_err(|error| store_error(format!("serialize permission mode: {error}")))?;
-        let temporary = self.path.with_extension("toml.tmp");
-        let mut file = fs::File::create(&temporary)
-            .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-        file.write_all(text.as_bytes())
-            .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-        file.sync_all()
-            .map_err(|error| store_error(format!("sync {}: {error}", temporary.display())))?;
-        fs::rename(&temporary, &self.path)
-            .map_err(|error| store_error(format!("replace {}: {error}", self.path.display())))?;
-        sync_parent(&self.path);
-        Ok(())
+        storage::atomic_write(&self.path, text.as_bytes())
+            .map_err(|error| store_error(format!("replace {}: {error}", self.path.display())))
     }
 }
 
@@ -261,17 +251,6 @@ fn store_error(message: impl Into<String>) -> MedusaError {
     )
 }
 
-fn sync_parent(path: &Path) {
-    #[cfg(unix)]
-    if let Some(parent) = path.parent()
-        && let Ok(directory) = fs::File::open(parent)
-    {
-        let _ = directory.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +261,21 @@ mod tests {
         let store = PermissionStore::at(directory.path().join(FILE_NAME));
         assert_eq!(store.load().expect("load"), PermissionMode::AskForApproval);
         assert_eq!(store.load().expect("load").execution_mode(), Mode::Review);
+    }
+
+    #[test]
+    fn selection_can_be_replaced_repeatedly() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join(FILE_NAME);
+        let store = PermissionStore::at(&path);
+
+        store.save(PermissionMode::ReadOnly).expect("first save");
+        store
+            .save(PermissionMode::ApproveForMe)
+            .expect("replacement save");
+        store.save(PermissionMode::FullAccess).expect("third save");
+
+        assert_eq!(store.load().expect("load"), PermissionMode::FullAccess);
     }
 
     #[test]
