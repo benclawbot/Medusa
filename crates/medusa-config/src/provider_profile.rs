@@ -363,6 +363,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn save_replaces_an_existing_provider_profile() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
+        let mut profile = ProviderProfile {
+            configured: true,
+            ..ProviderProfile::default()
+        };
+        store.save(&profile).expect("first save");
+        profile.model = "MiniMax-M3-fast".to_owned();
+        store.save(&profile).expect("replace save");
+        assert_eq!(store.load().expect("load").model, "MiniMax-M3-fast");
+    }
+
+    #[test]
     fn defaults_preserve_existing_first_run_contract() {
         let profile = ProviderProfile::default();
         profile.validate().expect("defaults");
