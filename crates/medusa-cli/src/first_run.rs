@@ -72,9 +72,6 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
         FirstRunSetupOutcome::Configure(profile, api_key) => {
             let config = validate_candidate(&profile, api_key.is_some())?;
             oauth_preflight::run_if_needed(&config)?;
-            if let Some(api_key) = api_key.as_deref() {
-                store_api_key(&profile.provider, api_key)?;
-            }
             catalog.save_active_profile(
                 &profile,
                 snapshot.revision,
@@ -82,6 +79,9 @@ fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
                 PROVIDER_PROFILE_KEYS.iter().map(|key| (*key).to_owned()),
                 ConfigurationApplyTiming::NextSession,
             )?;
+            if let Some(api_key) = api_key.as_deref() {
+                store_api_key(&profile.provider, api_key)?;
+            }
             Ok(FirstRunDisposition::Continue)
         }
         FirstRunSetupOutcome::UseExisting(name) => {
