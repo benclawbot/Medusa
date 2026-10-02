@@ -288,17 +288,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
     storage::atomic_write(path, bytes).map_err(store_io_error)
 }
 
-fn sync_parent(path: &Path) {
-    #[cfg(unix)]
-    if let Some(parent) = path.parent()
-        && let Ok(directory) = fs::File::open(parent)
-    {
-        let _ = directory.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-}
-
 #[cfg(test)]
 #[test]
 fn live_route_state_lock_cannot_be_stolen() {
