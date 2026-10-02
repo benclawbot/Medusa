@@ -7,7 +7,7 @@ on:
       - 'crates/medusa-testkit/**'
       - 'crates/medusa-agent/src/journal.rs'
       - 'crates/**/recovery*.rs'
-      - 'crates/medusa-transaction-coordinator/**'
+      - 'crates/medusa-runtime/src/mutation_transaction*.rs'
       - 'crates/medusa-execution-checkpoint/**'
       - 'crates/medusa-worker-leases/**'
       - 'crates/medusa-process-registry/**'
@@ -22,7 +22,7 @@ on:
       - 'crates/medusa-testkit/**'
       - 'crates/medusa-agent/src/journal.rs'
       - 'crates/**/recovery*.rs'
-      - 'crates/medusa-transaction-coordinator/**'
+      - 'crates/medusa-runtime/src/mutation_transaction*.rs'
       - 'crates/medusa-execution-checkpoint/**'
       - 'crates/medusa-worker-leases/**'
       - 'crates/medusa-process-registry/**'
@@ -63,10 +63,12 @@ jobs:
         run: cargo test -p medusa-testkit --locked -- --nocapture
       - name: Run protocol property and malformed-input certification
         run: cargo test -p medusa-protocol --test resilience --locked -- --nocapture
+      - name: Run parent-review transaction state-machine and recovery suites
+        run: >-
+          cargo test -p medusa-runtime mutation_transaction:: --locked -- --nocapture
       - name: Run authority state-machine and recovery suites
         run: >-
           cargo test
-          -p medusa-transaction-coordinator
           -p medusa-execution-checkpoint
           -p medusa-worker-leases
           -p medusa-process-registry
@@ -110,10 +112,12 @@ jobs:
           command: "metadata --locked --format-version 1"
       - name: Run deep protocol and deterministic fault campaign
         run: cargo test -p medusa-testkit -p medusa-protocol --locked -- --nocapture
+      - name: Run deep parent-review transaction state-machine and recovery suites
+        run: >-
+          cargo test -p medusa-runtime mutation_transaction:: --locked -- --nocapture
       - name: Run deep authority state-machine and recovery suites
         run: >-
           cargo test
-          -p medusa-transaction-coordinator
           -p medusa-execution-checkpoint
           -p medusa-worker-leases
           -p medusa-process-registry
