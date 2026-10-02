@@ -692,6 +692,10 @@ impl WorkerExecutionController {
             serde_json::to_vec_pretty(&self.state).map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())?;
+        #[cfg(windows)]
+        if self.path.exists() {
+            fs::remove_file(&self.path).map_err(|error| error.to_string())?;
+        }
         fs::rename(temporary, &self.path).map_err(|error| error.to_string())
     }
 }
