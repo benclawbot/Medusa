@@ -454,9 +454,7 @@ fn apply_atomic_inner(
             return Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Execution,
-                format!(
-                    "transaction commit permissions failed: {error}; rollback={rollback}"
-                ),
+                format!("transaction commit permissions failed: {error}; rollback={rollback}"),
             ));
         }
         let _ = fs::remove_file(temporary);
