@@ -11,6 +11,7 @@ use std::{
 };
 
 use medusa_multi_agent_scheduler::{DynamicSchedule, Task, TaskState, Worker as ScheduledWorker};
+use medusa_process_containment::replace_file;
 use medusa_progress::{ProgressEvent, ProgressKind};
 use medusa_protocol::EventPayload;
 use medusa_worker_leases::WorkerLease;
@@ -692,7 +693,7 @@ impl WorkerExecutionController {
             serde_json::to_vec_pretty(&self.state).map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())?;
-        fs::rename(temporary, &self.path).map_err(|error| error.to_string())
+        replace_file(&temporary, &self.path).map_err(|error| error.to_string())
     }
 }
 
