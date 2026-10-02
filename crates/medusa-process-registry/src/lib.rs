@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use medusa_process_containment::replace_file;
+use medusa_core::storage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -464,7 +464,8 @@ impl ProcessRegistry {
         let temporary = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(self)?;
         fs::write(&temporary, bytes)?;
-        replace_file(&temporary, path)?;
+        storage::atomic_write(path, &fs::read(&temporary)?)?;
+        fs::remove_file(&temporary)?;
         Ok(())
     }
 }
