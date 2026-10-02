@@ -82,7 +82,8 @@ pub fn normalize_components(
         if component.kind != ChangeKind::Deleted {
             let absolute = repo.join(&component.path);
             if absolute.is_file() {
-                component.content_hash = Some(hash_bytes(&fs::read(absolute)?));
+                let bytes = fs::read(&absolute).map_err(|error| crate::io_at(&absolute, error))?;
+                component.content_hash = Some(hash_bytes(&bytes));
             }
         }
         normalized.push(component);
