@@ -7,8 +7,8 @@ use std::{
     time::Duration,
 };
 
-use serde::{Deserialize, Serialize};
 use medusa_core::storage;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::clipboard::{
