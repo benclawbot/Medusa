@@ -580,8 +580,8 @@ mod tests {
         plane
             .heartbeat(
                 &process_id(),
-                now + Duration::minutes(1),
                 Some("checkpoint-a".to_owned()),
+                now + Duration::minutes(1),
             )
             .expect("replacement persist");
 
@@ -589,8 +589,9 @@ mod tests {
             SupervisionControlPlane::load(&path, "install-a").expect("reload control plane");
         assert!(
             reloaded
-                .bindings()
-                .get("exec-1")
+                .state
+                .bindings
+                .get(&process_id())
                 .is_some_and(|binding| binding.checkpoint_ref.as_deref() == Some("checkpoint-a"))
         );
     }
