@@ -291,6 +291,35 @@ def test_credential_gated_jobs_never_run_on_pull_request() -> None:
     assert "MINIMAX_API_KEY" in workflow
 
 
+def test_parser_consumers_install_their_dependency_before_running() -> None:
+    consumers = (
+        "scripts/test-ci-workflow-contract.py",
+        "scripts/test-live-ubuntu-prerequisites.py",
+    )
+    install = "python -m pip install PyYAML==6.0.2"
+
+    def installed_before_use(steps: list[dict]) -> bool:
+        uses = [
+            index for index, step in enumerate(steps)
+            if any(script in step.get("run", "") for script in consumers)
+        ]
+        return not uses or any(
+            install in step.get("run", "")
+            for step in steps[:min(uses)]
+        )
+
+    consumer = {"run": "python scripts/test-live-ubuntu-prerequisites.py"}
+    installer = {"run": install}
+    assert installed_before_use([installer, consumer])
+    assert not installed_before_use([consumer])
+    assert not installed_before_use([consumer, installer])
+
+    for name, job in load_workflow_document("ci.yml")["jobs"].items():
+        assert installed_before_use(job.get("steps", [])), (
+            f"job {name} must install its pinned YAML parser before running parser-dependent tests"
+        )
+
+
 def test_tui_model_is_explicitly_parameterized() -> None:
     wrapper = (ROOT / "scripts" / "run-live-tui-minimax-e2e.py").read_text(encoding="utf-8")
     assert '"--model", model' in wrapper
@@ -325,6 +354,7 @@ def main() -> int:
         test_cargo_machete_install_selects_the_pinned_package,
         test_rolling_alias_rotation_deletes_only_the_mutable_alias,
         test_credential_gated_jobs_never_run_on_pull_request,
+        test_parser_consumers_install_their_dependency_before_running,
         test_tui_model_is_explicitly_parameterized,
         test_openai_oauth_never_uses_latest,
     ]
