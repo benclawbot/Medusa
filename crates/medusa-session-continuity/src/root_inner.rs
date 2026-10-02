@@ -17,8 +17,6 @@ const MAX_TRAJECTORY_ITEMS: usize = 256;
 const MAX_TRAJECTORY_TEXT_BYTES: usize = 32 * 1024;
 const LOCK_RETRY_ATTEMPTS: usize = 10_000;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(1);
-const RENAME_RETRY_ATTEMPTS: usize = 8;
-const RENAME_RETRY_DELAY: Duration = Duration::from_millis(2);
 static TEMPORARY_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1106,7 +1104,10 @@ impl ContinuityStore {
                 // cannot overwrite a session that appeared after the initial existence check.
                 fs::hard_link(&temp, &self.path)
             }
-            PersistMode::Replace => rename_with_retry(&temp, &self.path),
+            PersistMode::Replace => tempfile::TempPath::try_from_path(temp.clone())?
+                .persist(&self.path)
+                .map(|_| ())
+                .map_err(|error| error.error),
         };
         if let Err(error) = install_result {
             let _ = fs::remove_file(&temp);
@@ -1175,28 +1176,6 @@ enum PersistMode {
 #[derive(Debug)]
 struct ContinuityLock {
     _lock: ExclusiveFileLock,
-}
-
-fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
-    for attempt in 0..RENAME_RETRY_ATTEMPTS {
-        match fs::rename(from, to) {
-            Ok(()) => return Ok(()),
-            Err(error)
-                if attempt + 1 < RENAME_RETRY_ATTEMPTS
-                    && matches!(
-                        error.kind(),
-                        io::ErrorKind::AlreadyExists
-                            | io::ErrorKind::Interrupted
-                            | io::ErrorKind::PermissionDenied
-                            | io::ErrorKind::WouldBlock
-                    ) =>
-            {
-                thread::sleep(RENAME_RETRY_DELAY);
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    unreachable!("rename retry loop always returns before exhaustion")
 }
 
 fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, ContinuityError> {
