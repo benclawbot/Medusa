@@ -147,9 +147,7 @@ fn load_session_actions(repo: &Path) -> Result<DesktopSessionActions, String> {
                 let backup = session_actions_backup_path(&path);
                 match fs::read(&backup) {
                     Ok(bytes) => bytes,
-                    Err(backup_error)
-                        if backup_error.kind() == std::io::ErrorKind::NotFound =>
-                    {
+                    Err(backup_error) if backup_error.kind() == std::io::ErrorKind::NotFound => {
                         return Ok(DesktopSessionActions::default());
                     }
                     Err(backup_error) => {
