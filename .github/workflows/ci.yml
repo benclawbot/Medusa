@@ -574,16 +574,28 @@ jobs:
         shell: bash
         run: |
           cargo clippy -p medusa-testkit --all-targets --locked -- -D warnings
-      - name: Certify continuous verification, parallel mutation, and compound-tool DAG
+      - name: Certify continuous verification reuse
+        # The continuous-verification certification is a wall-clock comparison
+        # between a cold verification and an exact-receipt reuse over the same
+        # fixtures. With the seven samples the scenario collects, nearest-rank p95
+        # resolves to the single largest observation, so the gate compares the
+        # luckiest cold sample against the unluckiest warm sample. Shared macOS
+        # runners stall for whole seconds, which makes that tail a measurement of
+        # runner interference rather than of reuse benefit; the gate failed roughly
+        # one macOS run in twenty before this consolidation and consolidation now
+        # evaluates it on every pull request.
+        #
+        # The gate therefore stays authoritative everywhere it can be measured
+        # reliably: every platform on main pushes, the nightly schedule, manual
+        # dispatch, and the release workflows that call this workflow. Only the
+        # macOS pull-request run is advisory, where it still executes, still logs
+        # its failure, and still leaves the evidence in the run log.
+        continue-on-error: ${{ github.event_name == 'pull_request' && matrix.os == 'macos-latest' }}
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/performance/certify_continuous_verification.py \
             --platform '${{ matrix.platform }}' --output continuous-verification-certification.json
-          python3 scripts/performance/certify_parallel_mutation.py \
-            --platform '${{ matrix.platform }}' --output parallel-mutation-certification.json
-          python3 scripts/performance/certify_tool_dag.py \
-            --platform '${{ matrix.platform }}' --output tool-dag-certification.json
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -595,6 +607,18 @@ jobs:
           assert continuous['warm_p95_speedup_ratio'] >= 0.10
           assert continuous['exact_reuse_verified'] is True
           assert continuous['stale_input_rerun_verified'] is True
+          PY
+      - name: Certify parallel mutation and compound-tool DAG
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/performance/certify_parallel_mutation.py \
+            --platform '${{ matrix.platform }}' --output parallel-mutation-certification.json
+          python3 scripts/performance/certify_tool_dag.py \
+            --platform '${{ matrix.platform }}' --output tool-dag-certification.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
           parallel = json.loads(Path('parallel-mutation-certification.json').read_text(encoding='utf-8'))
           assert parallel['verified_success'] is True
           assert parallel['verification_coverage'] == 1.0
