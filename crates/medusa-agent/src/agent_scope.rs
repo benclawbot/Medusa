@@ -1009,10 +1009,16 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("scope.state.json");
         let first = AgentScopeState {
+            schema_version: AGENT_SCOPE_SCHEMA_VERSION,
             scope_id: "scope-a".to_owned(),
             scope_fingerprint: "fingerprint-a".to_owned(),
             generation: 1,
-            ..AgentScopeState::default()
+            lifecycle: AgentScopeLifecycle::Prepared,
+            updated_at_unix_ms: 1,
+            stop_cause: None,
+            failed_start_cause: None,
+            revoked_tools: Vec::new(),
+            owned_resources: Vec::new(),
         };
         persist_state(&path, &first).expect("first state");
         let mut second = first;
