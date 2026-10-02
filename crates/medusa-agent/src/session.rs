@@ -8,6 +8,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_process_containment::replace_file;
 use medusa_protocol::EventEnvelope;
 use medusa_provider::Message;
 use medusa_world_model::WorldModelRef;
@@ -258,7 +259,7 @@ fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {
         let mut file = secure_state::create_new_file(&temporary)?;
         file.write_all(&serde_json::to_vec_pretty(session)?)?;
         file.sync_all()?;
-        fs::rename(&temporary, path)?;
+        replace_file(&temporary, path)?;
         secure_state::repair(path, false)?;
         sync_parent(path);
         Ok(())
@@ -374,11 +375,11 @@ fn record_nonfatal(
         let _ = secure_state::create_dir_all(parent);
     }
     if let Ok(bytes) = serde_json::to_vec_pretty(&diagnostics) {
-        let temporary = path.with_extension("json.tmp");
+        let temporary = unique_snapshot_temporary(&path);
         if let Ok(mut file) = secure_state::create_new_file(&temporary) {
             if file.write_all(&bytes).is_ok()
                 && file.sync_all().is_ok()
-                && fs::rename(&temporary, &path).is_ok()
+                && replace_file(&temporary, &path).is_ok()
             {
                 let _ = secure_state::repair(&path, false);
             } else {
@@ -488,6 +489,47 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
             .count();
         assert_eq!(temporary_files, 0);
+    }
+
+    #[test]
+    fn compatibility_snapshot_replaces_existing_snapshot() {
+        let repository = tempfile::tempdir().expect("repository");
+        bootstrap(repository.path()).expect("bootstrap");
+        let mut session = concurrent_test_session(repository.path());
+
+        persist_compatibility_snapshot(&session).expect("first snapshot");
+        session.turn = 2;
+        session.objective = "updated snapshot".to_owned();
+        persist_compatibility_snapshot(&session).expect("replace snapshot");
+
+        let path = session_path(repository.path(), &session.id);
+        let loaded: AgentSession =
+            serde_json::from_slice(&fs::read(path).expect("snapshot bytes")).expect("snapshot");
+        assert_eq!(loaded.turn, 2);
+        assert_eq!(loaded.objective, "updated snapshot");
+    }
+
+    #[test]
+    fn stale_nonfatal_temporary_file_does_not_block_future_diagnostics() {
+        let repository = tempfile::tempdir().expect("repository");
+        let path = diagnostic_path(repository.path());
+        fs::create_dir_all(path.parent().expect("parent")).expect("diagnostic dir");
+        fs::write(path.with_extension("json.tmp"), b"stale").expect("stale temp");
+
+        record_nonfatal(
+            repository.path(),
+            None,
+            "test",
+            "stale-temp",
+            "expected diagnostic",
+        );
+
+        let diagnostics = load_nonfatal_diagnostics(repository.path());
+        assert!(
+            diagnostics
+                .iter()
+                .any(|item| item.operation == "stale-temp")
+        );
     }
 
     #[test]
