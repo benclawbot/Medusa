@@ -3,6 +3,9 @@ name: Performance Scenario Corpus
 on:
   pull_request:
     paths:
+      - 'crates/**/context*.rs'
+      - 'crates/**/cache*.rs'
+      - 'crates/**/compaction*.rs'
       - 'benchmarks/performance/**'
       - 'scripts/performance/**'
       - 'crates/medusa-provider/src/hedge_acceptance.rs'

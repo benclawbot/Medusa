@@ -4,6 +4,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
     paths:
+      - 'crates/**/context*.rs'
+      - 'crates/**/cache*.rs'
+      - 'crates/**/compaction*.rs'
       - 'benchmarks/**'
       - 'scripts/reliability-benchmark.py'
       - 'scripts/test-reliability-benchmark.py'
@@ -14,6 +17,7 @@ on:
       - 'scripts/compare-coding-harness-benchmarks.py'
       - 'scripts/test-compare-coding-harness-benchmarks.py'
       - 'docs/BENCHMARKS.md'
+      - '.github/workflows/reliability-benchmarks.yml'
   workflow_dispatch:
 
 permissions:
