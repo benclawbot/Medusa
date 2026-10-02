@@ -3,6 +3,8 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    thread,
+    time::Duration,
 };
 
 use medusa_config::ProviderProfileCatalog;
@@ -16,6 +18,8 @@ use crate::{ProviderHealth, ProviderRouteProfile};
 const STORE_SCHEMA_VERSION: u16 = 1;
 const STORE_FILE_NAME: &str = "provider-runtime.json";
 const LOCK_FILE_NAME: &str = ".provider-runtime.lock";
+const LOCK_RETRY_ATTEMPTS: usize = 200;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Clone)]
 pub struct ProviderHealthStore {
@@ -243,14 +247,25 @@ struct FileLock {
 
 impl FileLock {
     fn acquire(path: &Path) -> MedusaResult<Self> {
-        ExclusiveFileLock::try_acquire(path)
-            .map(|inner| Self { _inner: inner })
-            .map_err(|error| {
-                store_error(format!(
-                    "provider runtime state is busy; could not acquire {}: {error}",
-                    path.display()
-                ))
-            })
+        Self::acquire_with_retry(path, LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY)
+    }
+
+    fn acquire_with_retry(path: &Path, attempts: usize, delay: Duration) -> MedusaResult<Self> {
+        for attempt in 0..attempts {
+            match ExclusiveFileLock::try_acquire(path) {
+                Ok(inner) => return Ok(Self { _inner: inner }),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if attempt + 1 < attempts {
+                        thread::sleep(delay);
+                    }
+                }
+                Err(error) => return Err(store_io_error(error)),
+            }
+        }
+        Err(store_error(format!(
+            "provider runtime state is busy; could not acquire {}",
+            path.display()
+        )))
     }
 }
 
@@ -284,11 +299,11 @@ mod kernel_lock_tests {
         let path = directory.path().join("provider-runtime.lock");
         let first = FileLock::acquire(&path).expect("first lock");
         assert!(
-            FileLock::acquire(&path).is_err(),
+            FileLock::acquire_with_retry(&path, 2, Duration::ZERO).is_err(),
             "a second owner must not steal a live kernel lock"
         );
         drop(first);
-        FileLock::acquire(&path).expect("released lock");
+        FileLock::acquire_with_retry(&path, 2, Duration::ZERO).expect("released lock");
     }
 }
 
