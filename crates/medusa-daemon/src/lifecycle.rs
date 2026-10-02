@@ -362,10 +362,14 @@ impl StartupLock {
     fn try_acquire(path: &Path) -> MedusaResult<StartupLockAttempt> {
         match ExclusiveFileLock::try_acquire(path) {
             Ok(inner) => Ok(StartupLockAttempt::Acquired(Self { _inner: inner })),
-            Err(error) if matches!(
-                error.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::PermissionDenied
-            ) => Ok(StartupLockAttempt::Busy),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                Ok(StartupLockAttempt::Busy)
+            }
             Err(error) => Err(lifecycle_error(format!(
                 "cannot acquire daemon startup lock {}: {error}",
                 path.display()
