@@ -1477,7 +1477,7 @@ mod connection_concurrency_tests {
             })
         };
 
-        let blocked_requests = (0..(MAX_BLOCKING_FRONTEND_CONNECTIONS + 2))
+        let blocked_requests = (0..MAX_BLOCKING_FRONTEND_CONNECTIONS)
             .map(|index| {
                 let envelope = FrontendCommandEnvelope {
                     protocol_version: FRONTEND_PROTOCOL_VERSION,
@@ -1504,6 +1504,26 @@ mod connection_concurrency_tests {
             thread::sleep(Duration::from_millis(10));
         }
 
+        let overflow = DaemonClient::new(&paths.socket)
+            .request(Request::Frontend {
+                envelope: FrontendCommandEnvelope {
+                    protocol_version: FRONTEND_PROTOCOL_VERSION,
+                    command_id: "overflow-frontend".to_owned(),
+                    idempotency_key: "overflow-frontend".to_owned(),
+                    frontend: FrontendKind::Tui,
+                    client_id: "overflow-frontend-client".to_owned(),
+                    session_id: None,
+                    turn_id: None,
+                    timestamp: OffsetDateTime::now_utc(),
+                    command: FrontendCommand::ListSessions,
+                },
+            })
+            .expect("overflow frontend response");
+        assert!(matches!(
+            overflow,
+            Response::Error { code, .. } if code == "daemon_busy"
+        ));
+
         let started = Instant::now();
         let response = DaemonClient::new(&paths.socket)
             .request(Request::Ping)
@@ -1515,16 +1535,9 @@ mod connection_concurrency_tests {
         );
 
         drop(frontend_guard);
-        let mut rejected = 0;
         for request in blocked_requests {
-            if request.join().expect("join blocked request").is_err() {
-                rejected += 1;
-            }
+            request.join().expect("join blocked request").expect("frontend response");
         }
-        assert!(
-            rejected >= 1,
-            "frontend saturation must fail fast instead of consuming health capacity"
-        );
         assert!(matches!(
             DaemonClient::new(&paths.socket)
                 .request(Request::Shutdown)

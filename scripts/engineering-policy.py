@@ -365,7 +365,53 @@ def github_workflow_runs(repository: str, head: str, token: str) -> list[dict[st
     return runs
 
 
-def enforce(policy: dict[str, Any], report: dict[str, Any], root: pathlib.Path, satisfied: set[str], repository: str | None, head: str | None, token: str | None, timeout_seconds: int) -> None:
+def github_workflow_jobs(repository: str, run_id: str, token: str) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    page = 1
+    total_count: int | None = None
+    while total_count is None or len(jobs) < total_count:
+        query = urllib.parse.urlencode({"per_page": 100, "page": page})
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/jobs?{query}",
+            headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.load(response)
+        except Exception as exc:
+            raise ValueError(f"cannot query GitHub jobs for workflow run {run_id}: {exc}") from exc
+        page_jobs = payload.get("jobs")
+        count = payload.get("total_count")
+        if not isinstance(page_jobs, list) or not isinstance(count, int) or count < 0:
+            raise ValueError("GitHub workflow jobs response missing valid total_count or jobs")
+        if total_count is not None and count != total_count:
+            raise ValueError("GitHub workflow jobs total_count changed during pagination")
+        total_count = count
+        jobs.extend(page_jobs)
+        if len(jobs) > total_count or (not page_jobs and len(jobs) < total_count):
+            raise ValueError("GitHub workflow jobs pagination returned an inconsistent result")
+        page += 1
+    return jobs
+
+
+def current_run_jobs_succeeded(jobs: list[dict[str, Any]], current_job_name: str) -> bool | None:
+    current_jobs = [job for job in jobs if job.get("name") == current_job_name]
+    if len(current_jobs) != 1:
+        raise ValueError(f"current workflow run must contain exactly one {current_job_name!r} job")
+    other_jobs = [job for job in jobs if job.get("name") != current_job_name]
+    if not other_jobs or any(job.get("status") != "completed" for job in other_jobs):
+        return None
+    failures = [
+        f"{job.get('name', '<unnamed>')}={job.get('conclusion', 'unknown')}"
+        for job in other_jobs
+        if job.get("conclusion") not in {"success", "skipped"}
+    ]
+    if failures:
+        raise ValueError("current workflow run has unsuccessful jobs: " + ", ".join(failures))
+    return True
+
+
+def enforce(policy: dict[str, Any], report: dict[str, Any], root: pathlib.Path, satisfied: set[str], repository: str | None, head: str | None, token: str | None, timeout_seconds: int, current_run_id: str | None = None, current_job_name: str | None = None) -> None:
     registry = policy["check_registry"]
     workflows: dict[str, list[str]] = {}
     for check_id in report.get("required_checks", []):
@@ -389,8 +435,13 @@ def enforce(policy: dict[str, Any], report: dict[str, Any], root: pathlib.Path, 
     deadline = time.monotonic() + max(0, timeout_seconds)
     pending = set(workflows)
     while pending:
-        runs = github_workflow_runs(repository, head, token)
+        if "CI" in pending and current_run_id and current_job_name:
+            if current_run_jobs_succeeded(github_workflow_jobs(repository, current_run_id, token), current_job_name):
+                pending.remove("CI")
+        runs = github_workflow_runs(repository, head, token) if pending - ({"CI"} if current_run_id and current_job_name else set()) else []
         for workflow_name in list(pending):
+            if workflow_name == "CI" and current_run_id and current_job_name:
+                continue
             candidates = [run for run in runs if run.get("name") == workflow_name]
             if not candidates:
                 continue
@@ -506,6 +557,8 @@ def main() -> int:
     enforce_parser.add_argument("--head", default=os.environ.get("GITHUB_SHA"))
     enforce_parser.add_argument("--token-env", default="GITHUB_TOKEN")
     enforce_parser.add_argument("--timeout-seconds", type=int, default=600)
+    enforce_parser.add_argument("--current-run-id", default=os.environ.get("GITHUB_RUN_ID"))
+    enforce_parser.add_argument("--current-job-name")
     sub.add_parser("self-test")
     args = parser.parse_args()
     try:
@@ -520,7 +573,7 @@ def main() -> int:
         if args.command == "enforce":
             report = json.loads(args.report.read_text(encoding="utf-8"))
             token = os.environ.get(args.token_env)
-            enforce(policy, report, root or pathlib.Path(".").resolve(), set(args.satisfied), args.repository, args.head, token, args.timeout_seconds)
+            enforce(policy, report, root or pathlib.Path(".").resolve(), set(args.satisfied), args.repository, args.head, token, args.timeout_seconds, args.current_run_id, args.current_job_name)
             print("engineering policy required checks satisfied")
             return 0
         paths = list(args.paths)

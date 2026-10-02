@@ -230,13 +230,35 @@ def test_rolling_alias_rotation_deletes_only_the_mutable_alias() -> None:
 def test_credential_gated_jobs_never_run_on_pull_request() -> None:
     """Repository secrets must never be reachable from an untrusted pull request.
 
-    The live provider/TUI gates need MINIMAX_API_KEY, which GitHub withholds from
-    fork pull requests but still exposes to same-repo pull requests. Rather than
-    discriminate on the head repository at runtime, every secret-bearing job in
-    ci.yml is gated on workflow_dispatch, which only users with write access can
-    trigger. This asserts that property holds for every job that reads a secret,
-    and that ci.yml still validates main pushes and pull requests itself.
+    GitHub withholds secrets from fork pull requests but still exposes them to
+    same-repository pull requests. Secret-bearing jobs may run on manual dispatch
+    or the explicitly trusted weekly schedule, but never on pull requests. The
+    mutation check protects against adding a PR alternative beside dispatch.
     """
+
+    def trusted_credential_condition(condition: str) -> bool:
+        normalized = re.sub(r"\s+", " ", condition).strip()
+        terms = {term.strip().strip("() ") for term in normalized.split("||")}
+        allowed = {
+            "github.event_name == 'workflow_dispatch'",
+            "github.event_name == 'schedule' && github.event.schedule == '17 3 * * 1'",
+        }
+        return "github.event_name == 'workflow_dispatch'" in terms and terms <= allowed
+
+    assert trusted_credential_condition(
+        "(github.event_name == 'schedule' && github.event.schedule == '17 3 * * 1') || "
+        "github.event_name == 'workflow_dispatch'"
+    )
+    assert not trusted_credential_condition(
+        "github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'"
+    ), "credential conditions must reject a pull_request alternative"
+    assert not trusted_credential_condition(
+        "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'"
+    ), "credential conditions must reject schedules outside the trusted weekly run"
+    assert not trusted_credential_condition(
+        "github.event_name == 'workflow_dispatch' || github.event_name == 'push'"
+    ), "credential conditions must reject unapproved event alternatives"
+
     workflow = read_workflow("ci.yml")
     document = load_workflow_document("ci.yml")
     triggers = document[True] if True in document else document["on"]
@@ -258,9 +280,9 @@ def test_credential_gated_jobs_never_run_on_pull_request() -> None:
             continue
         secret_jobs.append(name)
         condition = job.get("if", "")
-        assert "github.event_name == 'workflow_dispatch'" in condition, (
+        assert trusted_credential_condition(condition), (
             f"job {name} reads repository secrets {sorted(set(credentials))} "
-            "but is not gated on workflow_dispatch"
+            "but is not limited to manual dispatch and the trusted weekly schedule"
         )
     assert secret_jobs, "expected at least one credential-gated live gate to remain"
     assert "live" in secret_jobs
