@@ -421,7 +421,7 @@ fn apply_atomic_inner(
                 ),
             ));
         }
-        if let Err(error) = fs::rename(temporary, target) {
+        if let Err(error) = commit_staged_file(temporary, target) {
             note_rollback(tracker, "commit rename failed");
             let rollback = rollback(&backups[..index]);
             cleanup_staged(&staged[index..]);
@@ -843,6 +843,16 @@ fn unique_staging_path(target: &Path, index: usize) -> PathBuf {
     ))
 }
 
+fn commit_staged_file(temporary: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        if target.exists() {
+            fs::remove_file(target)?;
+        }
+    }
+    fs::rename(temporary, target)
+}
+
 fn matches_backup(target: &Path, backup: &Backup) -> MedusaResult<bool> {
     match &backup.content {
         Some(expected) => Ok(target.exists() && fs::read(target)? == *expected),
@@ -1010,6 +1020,29 @@ mod tests {
             fs::read_to_string(directory.path().join("nested/b.txt")).unwrap(),
             "b"
         );
+    }
+
+    #[test]
+    fn overwrites_existing_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        hidden_command("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        let path = directory.path().join("existing.txt");
+        fs::write(&path, "before").expect("seed existing file");
+
+        apply_atomic(
+            directory.path(),
+            &[FileMutation {
+                path: "existing.txt".into(),
+                content: "after".into(),
+            }],
+        )
+        .expect("overwrite transaction");
+
+        assert_eq!(fs::read_to_string(path).expect("read result"), "after");
     }
 
     #[test]
