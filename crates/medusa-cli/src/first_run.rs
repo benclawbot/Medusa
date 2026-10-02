@@ -210,11 +210,10 @@ fn store_api_key(provider: &str, api_key: &str) -> MedusaResult<()> {
 }
 
 pub(crate) fn stored_api_key(provider: &str) -> MedusaResult<Option<String>> {
-    let entry = keyring::Entry::new(
-        CREDENTIAL_SERVICE,
-        &provider.trim().to_ascii_lowercase(),
-    )
-    .map_err(|error| config_error(format!("cannot access secure credential storage: {error}")))?;
+    let entry = keyring::Entry::new(CREDENTIAL_SERVICE, &provider.trim().to_ascii_lowercase())
+        .map_err(|error| {
+            config_error(format!("cannot access secure credential storage: {error}"))
+        })?;
     match entry.get_password() {
         Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
         Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
@@ -234,10 +233,7 @@ fn profile_credentials_ready(profile: &ProviderProfile) -> bool {
     if env::var(variable).is_ok_and(|value| !value.trim().is_empty()) {
         return true;
     }
-    stored_api_key(&profile.provider)
-        .ok()
-        .flatten()
-        .is_some()
+    stored_api_key(&profile.provider).ok().flatten().is_some()
 }
 
 /// Returns the environment variable accepted as a provider API-key fallback.
