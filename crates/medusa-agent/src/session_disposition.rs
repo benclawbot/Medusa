@@ -306,29 +306,9 @@ fn remove_dir_if_present(path: &Path) -> MedusaResult<()> {
 }
 
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> MedusaResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
-    let result = (|| -> MedusaResult<()> {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)?;
-        file.write_all(&serde_json::to_vec_pretty(value)?)?;
-        file.sync_all()?;
-        #[cfg(windows)]
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    let bytes = serde_json::to_vec_pretty(value)?;
+    medusa_core::storage::atomic_write(path, &bytes)?;
+    Ok(())
 }
 
 fn validation_error(message: impl Into<String>) -> MedusaError {
