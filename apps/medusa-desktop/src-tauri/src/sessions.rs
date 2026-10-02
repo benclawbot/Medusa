@@ -4,7 +4,8 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
-    time::UNIX_EPOCH,
+    thread,
+    time::{Duration, UNIX_EPOCH},
 };
 
 use medusa_process_containment::ExclusiveFileLock;
@@ -22,6 +23,8 @@ const MAX_PAGE_SIZE: usize = 200;
 const MAX_CACHED_SESSION_FILES: usize = 512;
 const MAX_CACHED_SESSION_ROOTS: usize = 64;
 const SESSION_CURSOR_SEPARATOR: char = '\u{1f}';
+const SESSION_ACTION_LOCK_RETRY_ATTEMPTS: usize = 200;
+const SESSION_ACTION_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -127,14 +130,39 @@ fn session_actions_backup_path(path: &Path) -> PathBuf {
 }
 
 fn acquire_session_actions_lock(repo: &Path) -> Result<ExclusiveFileLock, String> {
+    acquire_session_actions_lock_with_retry(
+        repo,
+        SESSION_ACTION_LOCK_RETRY_ATTEMPTS,
+        SESSION_ACTION_LOCK_RETRY_DELAY,
+    )
+}
+
+fn acquire_session_actions_lock_with_retry(
+    repo: &Path,
+    attempts: usize,
+    delay: Duration,
+) -> Result<ExclusiveFileLock, String> {
     let path = session_actions_lock_path(repo);
     let parent = path
         .parent()
         .ok_or_else(|| "session actions lock path has no parent".to_owned())?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-    ExclusiveFileLock::try_acquire(&path)
-        .map_err(|error| format!("cannot lock {}: {error}", path.display()))
+    for attempt in 0..attempts {
+        match ExclusiveFileLock::try_acquire(&path) {
+            Ok(lock) => return Ok(lock),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if attempt + 1 < attempts {
+                    thread::sleep(delay);
+                }
+            }
+            Err(error) => return Err(format!("cannot lock {}: {error}", path.display())),
+        }
+    }
+    Err(format!(
+        "cannot lock {}: desktop session actions are busy",
+        path.display()
+    ))
 }
 
 fn load_session_actions(repo: &Path) -> Result<DesktopSessionActions, String> {
@@ -1211,7 +1239,8 @@ mod tests {
     fn session_action_lock_rejects_overlapping_mutations() {
         let repo = crate::tempdir().expect("repo");
         let first = acquire_session_actions_lock(repo.path()).expect("first lock");
-        let error = acquire_session_actions_lock(repo.path()).expect_err("second lock must fail");
+        let error = acquire_session_actions_lock_with_retry(repo.path(), 2, Duration::ZERO)
+            .expect_err("second lock must fail");
         assert!(
             error.contains("cannot lock"),
             "unexpected lock error: {error}"
