@@ -1,6 +1,5 @@
 use std::{
     env, fmt, fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
