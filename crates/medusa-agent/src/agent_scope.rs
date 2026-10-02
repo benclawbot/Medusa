@@ -18,6 +18,7 @@ use std::{
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::Mode;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId, hidden_command};
+use medusa_process_containment::replace_file;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -873,17 +874,19 @@ fn persist_state(path: &Path, state: &AgentScopeState) -> MedusaResult<()> {
         .ok_or_else(|| scope_error("agent scope state path has no parent"))?;
     fs::create_dir_all(parent)?;
     let bytes = serde_json::to_vec_pretty(state).map_err(json_error)?;
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    let temporary = path.with_extension(format!("tmp-{}", ulid::Ulid::new()));
     {
         let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .write(true)
             .open(&temporary)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
     }
-    fs::rename(&temporary, path)?;
+    if let Err(error) = replace_file(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -999,6 +1002,25 @@ mod tests {
             "delegation_contract_id": null,
             "delegation_contract_fingerprint": null,
         })
+    }
+
+    #[test]
+    fn mutable_scope_state_replaces_existing_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("scope.state.json");
+        let first = AgentScopeState {
+            scope_id: "scope-a".to_owned(),
+            scope_fingerprint: "fingerprint-a".to_owned(),
+            generation: 1,
+            ..AgentScopeState::default()
+        };
+        persist_state(&path, &first).expect("first state");
+        let mut second = first;
+        second.generation = 2;
+        persist_state(&path, &second).expect("replace state");
+        let reloaded: AgentScopeState =
+            serde_json::from_slice(&fs::read(&path).expect("state bytes")).expect("state");
+        assert_eq!(reloaded.generation, 2);
     }
 
     #[test]
