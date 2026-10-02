@@ -472,9 +472,7 @@ impl ProcessRegistry {
         use std::io::Write as _;
         temporary.write_all(&bytes)?;
         temporary.as_file().sync_all()?;
-        temporary
-            .persist(path)
-            .map_err(|error| error.error)?;
+        temporary.persist(path).map_err(|error| error.error)?;
         #[cfg(unix)]
         if let Ok(directory) = fs::File::open(parent) {
             let _ = directory.sync_all();

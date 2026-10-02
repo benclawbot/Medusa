@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "5013a15d31be27ccc4fd27d4f0c73c2b048bd700e748425971792c42cec9cbfa"
+      "sha256": "8f27880e089fc9e28715959676d6d5b55637c9f1f8ca0866954aebfbe821c5c4"
     },
     {
       "path": "SECURITY.md",
@@ -116,7 +116,7 @@
     {
       "path": "docs/COMPATIBILITY.md",
       "disposition": "current",
-      "sha256": "9a220d6d0e738fd02590eff36e502f6a9ffe1e928113ef2121a9d80a892e33b6"
+      "sha256": "c51044d9783169d89fc1a477564c9c583d2febface0f60893fdebc63ecbd4189"
     },
     {
       "path": "docs/CONFIGURATION.md",
@@ -231,7 +231,7 @@
     {
       "path": "docs/PROVIDER-DELIVERY.md",
       "disposition": "current",
-      "sha256": "21986d0360f1dc759d13290e6e2d38678c585341fdf0051f12e6670f26e27b12"
+      "sha256": "02dea5e356b9848b7cfdc5570a3af45b20dc966f126dfbc4c76a1143dbb3b4d8"
     },
     {
       "path": "docs/PROVIDER-SUPPORT.md",
@@ -451,7 +451,7 @@
     {
       "path": "docs/architecture/tui-configuration-command.md",
       "disposition": "current",
-      "sha256": "be39202e64c1892a19076f0df340dba2af750648394874208ed8d5461e545843"
+      "sha256": "1a5a8aeb83fbad4bfbf243e1f311461ad022663b71bf27830df321c83b2e04c7"
     },
     {
       "path": "docs/architecture/typescript-code-intelligence.md",
@@ -516,7 +516,7 @@
     {
       "path": "docs/model-selection-parity.md",
       "disposition": "current",
-      "sha256": "83fdccf368ab2f42e066a4f91bb67f0afbb1c7ab31c027d4c0af93bc0817264a"
+      "sha256": "72b321f29d9e57f5d485596b4a2cc6f62306fe0a4452136bcc00b1da2f84cfeb"
     },
     {
       "path": "docs/multimodal-attachments.md",
