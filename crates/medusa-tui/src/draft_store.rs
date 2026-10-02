@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use medusa_core::storage;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -384,16 +385,7 @@ fn validate_attachment_name(name: &str) -> io::Result<()> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "target has no parent directory",
-        )
-    })?;
-    fs::create_dir_all(parent)?;
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    fs::write(&temporary, bytes)?;
-    fs::rename(temporary, path)
+    storage::atomic_write(path, bytes)
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
@@ -414,6 +406,15 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn draft_atomic_write_replaces_existing_file() {
+        let repository = tempdir().expect("temporary repository");
+        let path = repository.path().join(".medusa/drafts/session/draft.json");
+        atomic_write(&path, b"first").expect("first write");
+        atomic_write(&path, b"second").expect("replacement write");
+        assert_eq!(fs::read(path).expect("read replacement"), b"second");
+    }
 
     #[test]
     fn draft_round_trip_preserves_text_and_image() {

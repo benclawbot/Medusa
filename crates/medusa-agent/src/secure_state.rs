@@ -27,10 +27,6 @@ pub(crate) fn create_new_file(path: &Path) -> io::Result<fs::File> {
     }
 }
 
-pub(crate) fn create_file(path: &Path) -> io::Result<fs::File> {
-    open_secure_file(path, false)
-}
-
 fn open_secure_file(path: &Path, create_new: bool) -> io::Result<fs::File> {
     if let Some(parent) = path.parent() {
         create_dir_all(parent)?;
