@@ -111,7 +111,7 @@ export function ApprovalCard({ prompts, plan, onRespond, onEditPlan }: ApprovalC
                     return <button key={option.label} className="approval-action edit" onClick={onEditPlan}><PencilLine size={15} /><span>{option.label}</span><small>{option.description}</small></button>;
                   }
                   const Icon = kind === "reject" ? X : kind === "approveClass" ? ShieldCheck : Check;
-                  return <button key={option.label} className={`approval-action ${kind}`} onClick={() => onRespond(option.label)}><Icon size={15} /><span>{option.label}</span><small>{option.description}</small></button>;
+                  return <button key={option.label} className={`approval-action ${kind}`} onClick={() => onRespond(option.label)} autoFocus={kind === "approve"} aria-keyshortcuts={kind === "approve" ? "Y" : kind === "reject" ? "N" : undefined}><Icon size={15} /><span>{option.label}</span><small>{option.description}</small></button>;
                 })}
               </div>
             </div>
