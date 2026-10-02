@@ -369,14 +369,10 @@ fn write_once(path: &Path, bytes: &[u8]) -> Result<(), FrontendArtifactStoreErro
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        #[cfg(windows)]
-        if path.exists() {
-            // `rename` does not replace on Windows; the pre-existing file is
-            // either an identical duplicate (already checked above) or a
-            // truncated/corrupt predecessor that healing must replace.
-            fs::remove_file(path)?;
-        }
-        fs::rename(&temporary, path)?;
+        // The pre-existing file is either an identical duplicate (already checked above) or a
+        // truncated/corrupt predecessor that healing must replace without a delete-before-publish
+        // crash window.
+        replace_file(&temporary, path)?;
         if let Ok(directory) = fs::File::open(parent) {
             let _ = directory.sync_all();
         }
