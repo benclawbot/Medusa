@@ -14,6 +14,11 @@ def read_workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
+def test_primary_ci_validates_main_pushes() -> None:
+    ci = read_workflow("ci.yml")
+    assert "  push:\n    branches:\n      - main\n" in ci
+
+
 def test_publishers_require_authoritative_workspace_validation() -> None:
     ci = read_workflow("ci.yml")
     assert "workflow_call:" in ci
@@ -243,6 +248,7 @@ def test_openai_oauth_never_uses_latest() -> None:
 
 def main() -> int:
     tests = [
+        test_primary_ci_validates_main_pushes,
         test_publishers_require_authoritative_workspace_validation,
         test_rolling_main_requires_independent_signatures,
         test_windows_distribution_requires_authenticode,
