@@ -34,9 +34,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .tempfile_in(parent)?;
     temporary.write_all(bytes)?;
     temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .map_err(|error| error.error)?;
+    temporary.persist(path).map_err(|error| error.error)?;
     sync_parent(parent);
     Ok(())
 }
