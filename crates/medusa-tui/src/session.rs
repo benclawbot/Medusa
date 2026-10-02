@@ -659,7 +659,7 @@ pub(crate) fn is_internal_activity_title(title: &str) -> bool {
 }
 
 fn is_user_visible_activity(activity: &RuntimeActivity, verbosity: Verbosity) -> bool {
-    if verbosity == Verbosity::Verbose {
+    if verbosity == Verbosity::Verbose || activity.kind == RuntimeActivityKind::Error {
         return true;
     }
     activity.id.as_deref() != Some("runtime-capabilities")
@@ -1161,6 +1161,19 @@ mod tests {
                 kind: RuntimeActivityKind::Error,
                 title: "cargo test failed".to_owned(),
                 details: vec!["exit code: 1".to_owned()],
+            },
+            Verbosity::New,
+        ));
+    }
+
+    #[test]
+    fn internal_activity_titles_do_not_hide_failures() {
+        assert!(is_user_visible_activity(
+            &RuntimeActivity {
+                id: None,
+                kind: RuntimeActivityKind::Error,
+                title: "reasoning".to_owned(),
+                details: vec!["provider failed".to_owned()],
             },
             Verbosity::New,
         ));

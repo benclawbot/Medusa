@@ -22,6 +22,7 @@ medusa-agent = { path = "../medusa-agent" }
 image = { version = "=0.25.5", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 medusa-config = { path = "../medusa-config" }
+medusa-core.workspace = true
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }

@@ -1814,6 +1814,7 @@ version = "2.0.0"
 dependencies = [
  "medusa-config",
  "medusa-core",
+ "medusa-process-containment",
  "medusa-prompt-cache",
  "reqwest",
  "serde",
@@ -1970,6 +1971,7 @@ dependencies = [
  "keyring",
  "medusa-agent",
  "medusa-config",
+ "medusa-core",
  "medusa-daemon",
  "medusa-protocol",
  "medusa-recovery-coordinator",

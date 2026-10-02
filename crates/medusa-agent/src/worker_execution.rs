@@ -686,13 +686,8 @@ impl WorkerExecutionController {
             .parent()
             .ok_or_else(|| "worker execution state path has no parent".to_owned())?;
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(
-            &temporary,
-            serde_json::to_vec_pretty(&self.state).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
-        fs::rename(temporary, &self.path).map_err(|error| error.to_string())
+        let bytes = serde_json::to_vec_pretty(&self.state).map_err(|error| error.to_string())?;
+        medusa_core::storage::atomic_write(&self.path, &bytes).map_err(|error| error.to_string())
     }
 }
 
@@ -830,6 +825,23 @@ mod tests {
             content: "pub fn fixed() {}\n".into(),
             priority: 1,
         }
+    }
+
+    #[test]
+    fn persists_over_existing_worker_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("workers.json");
+        let mut controller = controller(&path);
+        let original = fs::read(&path).expect("initial state");
+
+        controller
+            .push_progress(ProgressKind::PlanUpdated, "second write", None)
+            .expect("progress");
+        controller.persist().expect("rewrite worker state");
+
+        let rewritten = fs::read(&path).expect("rewritten state");
+        assert_ne!(rewritten, original);
+        WorkerExecutionController::load(path).expect("reload rewritten state");
     }
 
     #[test]

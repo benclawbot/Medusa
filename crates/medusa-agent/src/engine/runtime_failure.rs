@@ -7,7 +7,7 @@ use medusa_continuation::{
     ContinuationAction, ContinuationContext, ContinuationController, ContinuationPolicy,
     PlanSnapshot, TodoSnapshot, TodoState,
 };
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use medusa_failure::{
     FailureDecision, FailureDomain, FailureHistory, FailureRecord, FailureSignal, RetryPolicy,
 };
@@ -233,9 +233,7 @@ fn persist_replan_count(session: &AgentSession, count: u32) -> MedusaResult<()> 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("txt.tmp");
-    fs::write(&temporary, count.to_string())?;
-    fs::rename(temporary, path)?;
+    storage::atomic_write(&path, count.to_string().as_bytes())?;
     Ok(())
 }
 
@@ -244,9 +242,8 @@ fn persist_history(session: &AgentSession, history: &FailureHistory) -> MedusaRe
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(history)?)?;
-    fs::rename(temporary, path)?;
+    let bytes = serde_json::to_vec_pretty(history)?;
+    storage::atomic_write(&path, &bytes)?;
     Ok(())
 }
 

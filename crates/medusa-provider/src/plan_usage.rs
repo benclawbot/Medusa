@@ -5,7 +5,7 @@ use std::{
 };
 
 use medusa_config::ProviderProfileCatalog;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -96,12 +96,7 @@ fn persist(usage: &ProviderPlanUsage) -> MedusaResult<()> {
         .map_err(|_| plan_store_error("provider plan usage lock was poisoned"))?;
     let path = usage_path()?;
     let bytes = serde_json::to_vec_pretty(usage).map_err(plan_store_error)?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, bytes).map_err(plan_store_error)?;
-    if path.exists() {
-        fs::remove_file(&path).map_err(plan_store_error)?;
-    }
-    fs::rename(&temporary, &path).map_err(plan_store_error)
+    storage::atomic_write(&path, &bytes).map_err(plan_store_error)
 }
 
 fn usage_path() -> MedusaResult<PathBuf> {

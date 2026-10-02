@@ -622,6 +622,20 @@ mod tests {
     }
 
     #[test]
+    fn registry_atomic_save_replaces_existing_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("registry.json");
+        let first = ProcessRegistry::default();
+        first.save_atomic(&path).expect("first save");
+
+        let mut second = ProcessRegistry::default();
+        second.register(record("worker")).expect("register");
+        second.save_atomic(&path).expect("replacement save");
+
+        assert_eq!(ProcessRegistry::load(&path).expect("load"), second);
+    }
+
+    #[test]
     fn process_lifecycle_is_strict() {
         let mut process = running("tests", 42, "100");
         assert_eq!(process.state, ProcessState::Running);
