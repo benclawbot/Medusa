@@ -17,8 +17,6 @@ const MAX_TRAJECTORY_ITEMS: usize = 256;
 const MAX_TRAJECTORY_TEXT_BYTES: usize = 32 * 1024;
 const LOCK_RETRY_ATTEMPTS: usize = 10_000;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(1);
-const RENAME_RETRY_ATTEMPTS: usize = 8;
-const RENAME_RETRY_DELAY: Duration = Duration::from_millis(2);
 static TEMPORARY_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
