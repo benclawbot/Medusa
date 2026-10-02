@@ -1308,7 +1308,12 @@ mod tests {
             .complete_with_cancel_and_sink(&request(), ProviderExecutionPhase::Planning, None, None)
             .expect("planning response");
         let second = manager
-            .complete_with_cancel_and_sink(&request(), ProviderExecutionPhase::Formatting, None, None)
+            .complete_with_cancel_and_sink(
+                &request(),
+                ProviderExecutionPhase::Formatting,
+                None,
+                None,
+            )
             .expect("formatting response");
 
         assert_eq!(first.response_id.as_deref(), Some("planning"));
