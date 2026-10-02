@@ -2,10 +2,12 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use medusa_core::MedusaResult;
+use medusa_process_containment::{ExclusiveFileLock, atomic_write as durable_atomic_write};
 use serde::{Deserialize, Serialize};
 
 const PROFILE_SCHEMA_VERSION: u16 = 1;
@@ -13,6 +15,8 @@ const MAX_PROFILE_AGE_MS: u128 = 90 * 24 * 60 * 60 * 1_000;
 const MIN_CONFIDENCE: f64 = 0.55;
 const MAX_SCORE_ADJUSTMENT: i64 = 40;
 const MAX_OBSERVATIONS_PER_TOOL: u64 = 10_000;
+const PROFILE_LOCK_RETRY_ATTEMPTS: usize = 200;
+const PROFILE_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +119,7 @@ pub(crate) fn record(
     output_mode: LearnedOutputMode,
     recovery_read: bool,
 ) -> MedusaResult<()> {
+    let _guard = acquire_profile_lock(repo)?;
     let mut profile = load(repo)?.unwrap_or_default();
     if !profile.enabled || profile.schema_version != PROFILE_SCHEMA_VERSION {
         return Ok(());
@@ -209,16 +214,31 @@ fn load(repo: &Path) -> MedusaResult<Option<RepositoryProfile>> {
 
 fn persist(repo: &Path, profile: &RepositoryProfile) -> MedusaResult<()> {
     let path = profile_path(repo);
+    durable_atomic_write(&path, &serde_json::to_vec_pretty(profile)?)?;
+    Ok(())
+}
+
+fn acquire_profile_lock(repo: &Path) -> MedusaResult<ExclusiveFileLock> {
+    let path = repo.join(".medusa/orchestration-profile.lock");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(profile)?)?;
-    if path.exists() {
-        fs::remove_file(&path)?;
+    for attempt in 0..PROFILE_LOCK_RETRY_ATTEMPTS {
+        match ExclusiveFileLock::try_acquire(&path) {
+            Ok(lock) => return Ok(lock),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if attempt + 1 < PROFILE_LOCK_RETRY_ATTEMPTS {
+                    thread::sleep(PROFILE_LOCK_RETRY_DELAY);
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
-    fs::rename(temporary, path)?;
-    Ok(())
+    Err(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        "repository orchestration profile is busy",
+    )
+    .into())
 }
 
 fn profile_path(repo: &Path) -> PathBuf {
@@ -278,6 +298,38 @@ mod tests {
         assert_eq!(learned.status, "applied");
         assert!(learned.score_adjustment > 0);
         assert!(learned.score_adjustment <= MAX_SCORE_ADJUSTMENT);
+    }
+
+    #[test]
+    fn concurrent_observations_are_not_lost() {
+        let repo = tempfile::tempdir().expect("repository");
+        let root = repo.path().to_path_buf();
+        let workers = (0..8)
+            .map(|_| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..10 {
+                        record(
+                            &root,
+                            "shell_run",
+                            true,
+                            10,
+                            20,
+                            LearnedOutputMode::Compact,
+                            false,
+                        )
+                        .expect("record");
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().expect("join");
+        }
+        let profile = load(repo.path()).expect("load").expect("profile");
+        let observation = profile.tools.get("shell_run").expect("observation");
+        assert_eq!(observation.successes, 80);
+        assert_eq!(profile.generation, 80);
     }
 
     #[test]
