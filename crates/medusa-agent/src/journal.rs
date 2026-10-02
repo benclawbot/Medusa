@@ -8,6 +8,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_process_containment::replace_file;
 use medusa_protocol::{
     Actor, EventEnvelope, EventPayload, SessionAction, SessionActionKind, SessionActionLifecycle,
 };
@@ -523,7 +524,7 @@ fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     }
     write_record(&mut file, &snapshot_record(session))?;
     file.sync_all()?;
-    fs::rename(temporary, path)?;
+    replace_file(&temporary, path)?;
     invalidate_journal_cache(path);
     Ok(())
 }
