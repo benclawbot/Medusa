@@ -461,11 +461,8 @@ impl ProcessRegistry {
         self.validate()?;
         let parent = path.parent().ok_or(RegistryError::MissingParentDirectory)?;
         fs::create_dir_all(parent)?;
-        let temporary = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(self)?;
-        fs::write(&temporary, bytes)?;
-        storage::atomic_write(path, &fs::read(&temporary)?)?;
-        fs::remove_file(&temporary)?;
+        storage::atomic_write(path, &bytes)?;
         Ok(())
     }
 }
