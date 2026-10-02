@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use medusa_process_containment::replace_file;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -463,7 +464,7 @@ impl ProcessRegistry {
         let temporary = path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(self)?;
         fs::write(&temporary, bytes)?;
-        fs::rename(&temporary, path)?;
+        replace_file(&temporary, path)?;
         Ok(())
     }
 }
@@ -776,6 +777,20 @@ mod tests {
             Some(IdentityVerification::IdentityUnavailable)
         );
         assert!(!process.destructive_action_allowed());
+    }
+
+    #[test]
+    fn save_atomic_replaces_existing_registry() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("processes.json");
+        let mut registry = ProcessRegistry::default();
+        registry.save_atomic(&path).expect("first save");
+        registry
+            .register(running("server", 99, "100"))
+            .expect("register");
+        registry.save_atomic(&path).expect("replace save");
+        let loaded = ProcessRegistry::load(&path).expect("load");
+        assert!(loaded.get(&ProcessId::parse("server").expect("id")).is_some());
     }
 
     #[test]
