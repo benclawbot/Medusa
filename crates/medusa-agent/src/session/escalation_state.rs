@@ -1,6 +1,7 @@
 use std::{fs, io::Write, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_process_containment::replace_file;
 use medusa_escalation::{EscalationMode, EscalationReason};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -225,7 +226,7 @@ pub fn persist_escalation_journal(
     let mut file = secure_state::create_file(&temporary)?;
     file.write_all(&serde_json::to_vec_pretty(journal)?)?;
     file.sync_all()?;
-    fs::rename(&temporary, &path)?;
+    replace_file(&temporary, &path)?;
     secure_state::repair(&path, false)?;
     Ok(())
 }
