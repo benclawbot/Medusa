@@ -7,9 +7,11 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_process_containment::process_start_marker;
 use serde::{Deserialize, Serialize};
+
+use super::durable_file;
 
 const CONFIGURATION_STATE_SCHEMA_VERSION: u32 = 1;
 const LOCK_RETRY_ATTEMPTS: usize = 200;
@@ -366,7 +368,7 @@ fn lock_is_stale(path: &Path) -> bool {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    storage::atomic_write(path, bytes)
+    durable_file::atomic_write(path, bytes)
         .map_err(|error| store_error(format!("write {}: {error}", path.display())))
 }
 
