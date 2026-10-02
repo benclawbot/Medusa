@@ -788,7 +788,11 @@ mod tests {
             .expect("register");
         registry.save_atomic(&path).expect("replace save");
         let loaded = ProcessRegistry::load(&path).expect("load");
-        assert!(loaded.get(&ProcessId::parse("server").expect("id")).is_some());
+        assert!(
+            loaded
+                .get(&ProcessId::parse("server").expect("id"))
+                .is_some()
+        );
     }
 
     #[test]
