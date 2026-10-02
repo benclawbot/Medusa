@@ -23,6 +23,7 @@ medusa-config = { path = "../../../crates/medusa-config" }
 medusa-core = { path = "../../../crates/medusa-core" }
 medusa-daemon = { path = "../../../crates/medusa-daemon" }
 medusa-memory = { path = "../../../crates/medusa-memory" }
+medusa-process-containment = { path = "../../../crates/medusa-process-containment" }
 medusa-protocol = { path = "../../../crates/medusa-protocol" }
 medusa-provider = { path = "../../../crates/medusa-provider" }
 medusa-review-model = { path = "../../../crates/medusa-review-model" }
