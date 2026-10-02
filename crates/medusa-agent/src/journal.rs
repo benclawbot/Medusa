@@ -706,7 +706,7 @@ fn invalidate_journal_cache(path: &Path) {
     }
 }
 
-fn write_record(file: &mut File, record: &JournalRecord) -> MedusaResult<()> {
+fn write_record(file: &mut impl Write, record: &JournalRecord) -> MedusaResult<()> {
     let payload = serde_json::to_vec(record)?;
     if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
         return Err(persistence_error(
