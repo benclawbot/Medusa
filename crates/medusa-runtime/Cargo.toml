@@ -24,6 +24,7 @@ medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-protocol = { path = "../medusa-protocol" }
+medusa-process-containment.workspace = true
 medusa-provider = { package = "medusa-external-provider", path = "../medusa-external-provider" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-review-model = { path = "../medusa-review-model" }
