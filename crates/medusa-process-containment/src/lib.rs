@@ -47,7 +47,7 @@ pub use base_container::{
 };
 pub use confined_file::{ConfinedDir, ConfinedReadError};
 pub use file_lock::ExclusiveFileLock;
-pub use file_replace::replace_file;
+pub use file_replace::{atomic_write, replace_file};
 #[cfg(windows)]
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
 pub use process_identity::{
