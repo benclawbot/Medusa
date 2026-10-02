@@ -408,6 +408,15 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn draft_atomic_write_replaces_existing_file() {
+        let repository = tempdir().expect("temporary repository");
+        let path = repository.path().join(".medusa/drafts/session/draft.json");
+        atomic_write(&path, b"first").expect("first write");
+        atomic_write(&path, b"second").expect("replacement write");
+        assert_eq!(fs::read(path).expect("read replacement"), b"second");
+    }
+
+    #[test]
     fn repeated_draft_save_replaces_existing_state() {
         let repository = tempdir().expect("temporary repository");
         let store = DraftStore::for_repo(repository.path());

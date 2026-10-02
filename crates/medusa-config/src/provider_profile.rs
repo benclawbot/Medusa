@@ -1,10 +1,9 @@
 use std::{
     env, fmt, fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
 
 pub const PROVIDER_PROFILE_KEYS: [&str; 8] = [
@@ -271,16 +270,8 @@ impl ProviderProfileStore {
             .map_err(|error| store_error(format!("create {}: {error}", parent.display())))?;
         let text =
             toml::to_string_pretty(profile).map_err(|error| store_error(error.to_string()))?;
-        let temporary = self.path.with_extension("toml.tmp");
-        let mut file = fs::File::create(&temporary)
-            .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-        file.write_all(text.as_bytes())
-            .map_err(|error| store_error(format!("write {}: {error}", temporary.display())))?;
-        file.sync_all()
-            .map_err(|error| store_error(format!("sync {}: {error}", temporary.display())))?;
-        fs::rename(&temporary, &self.path)
+        storage::atomic_write(&self.path, text.as_bytes())
             .map_err(|error| store_error(format!("replace {}: {error}", self.path.display())))?;
-        sync_parent(&self.path);
         if let Some(marker) = profile.migration_marker.as_deref() {
             append_migration_audit(&self.path, marker);
         }
@@ -370,6 +361,20 @@ fn sync_parent(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_replaces_an_existing_provider_profile() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
+        let mut profile = ProviderProfile {
+            configured: true,
+            ..ProviderProfile::default()
+        };
+        store.save(&profile).expect("first save");
+        profile.model = "MiniMax-M3-fast".to_owned();
+        store.save(&profile).expect("replace save");
+        assert_eq!(store.load().expect("load").model, "MiniMax-M3-fast");
+    }
 
     #[test]
     fn defaults_preserve_existing_first_run_contract() {
