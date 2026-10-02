@@ -8,6 +8,7 @@ use std::{
 use medusa_core::{
     ErrorCategory, ErrorCode, MedusaError, MedusaResult, hidden_command, repository_mutation,
 };
+use medusa_process_containment::replace_file;
 #[cfg(test)]
 use medusa_protocol::EventPayload;
 use serde::{Deserialize, Serialize};
@@ -421,7 +422,7 @@ fn apply_atomic_inner(
                 ),
             ));
         }
-        if let Err(error) = fs::rename(temporary, target) {
+        if let Err(error) = replace_file(temporary, target) {
             note_rollback(tracker, "commit rename failed");
             let rollback = rollback(&backups[..index]);
             cleanup_staged(&staged[index..]);
