@@ -8,8 +8,8 @@ use std::{
 };
 
 use medusa_config::ProviderProfileCatalog;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
-use medusa_process_containment::ExclusiveFileLock;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::{ExclusiveFileLock, atomic_write as durable_atomic_write};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -286,7 +286,7 @@ fn load_state(path: &Path) -> MedusaResult<ProviderRuntimeState> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    storage::atomic_write(path, bytes).map_err(store_io_error)
+    durable_atomic_write(path, bytes).map_err(store_io_error)
 }
 
 #[cfg(test)]
