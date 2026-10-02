@@ -17,7 +17,7 @@ use std::{
 
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::Mode;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId, hidden_command};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId, hidden_command, storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
