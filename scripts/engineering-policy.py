@@ -20,7 +20,8 @@ REQUIRED_RULE_FIELDS = {"id", "description", "include", "required_checks", "prot
 AUTHORITY_PATHS = {
     ".github/engineering-policy.json",
     "scripts/engineering-policy.py",
-    ".github/workflows/architecture-policy.yml",
+    # The policy engine now runs as the `policy` job of the single CI workflow.
+    ".github/workflows/ci.yml",
 }
 TERMINAL_BAD_CONCLUSIONS = {"failure", "cancelled", "timed_out", "action_required", "stale", "skipped"}
 

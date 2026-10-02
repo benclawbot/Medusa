@@ -91,7 +91,7 @@
     {
       "path": "docs/CAPABILITY-EVIDENCE.md",
       "disposition": "current",
-      "sha256": "e427ce2c78849885b488ded1aa18f5a4bda624cddf74bd93f67166a5bd24ab1b"
+      "sha256": "f330fa62085f2e911e35846cdf0d828f2f736fc32bcbc2794438ae0fa5ddce24"
     },
     {
       "path": "docs/CHATGPT-OAUTH.md",
@@ -251,7 +251,7 @@
     {
       "path": "docs/REFACTOR-BASELINE.md",
       "disposition": "current",
-      "sha256": "fbe40104c65d6258f5011410952e41dc9e81e9aa8b4fdc5b1b4a05233b04fcb9"
+      "sha256": "b65034898ae8bb921fa919ec9d1e2990385a323691a7ee29355bb06ca4589d88"
     },
     {
       "path": "docs/RELEASE-SIGNING.md",
@@ -461,7 +461,7 @@
     {
       "path": "docs/data-lifecycle-certification.md",
       "disposition": "current",
-      "sha256": "280701461be28080bec4483b7f395188740779f3df5c2e56082199152bd04eaf"
+      "sha256": "94aae990a31b12f1800b9213ab5dfc973f48789406837c24dc4cef51fa4a3d5e"
     },
     {
       "path": "docs/durable-journal-policy.md",
@@ -541,7 +541,7 @@
     {
       "path": "docs/resilience-certification.md",
       "disposition": "current",
-      "sha256": "91fcd62dcaa39396b42126acd2acf932f82f92f21140122292b4db93f550777b"
+      "sha256": "4c693bd3f71937a8285ce727f5f63a1998e208baf7455a0a6b9577e2d6d7dada"
     },
     {
       "path": "docs/rust-ast-structured-edits.md",

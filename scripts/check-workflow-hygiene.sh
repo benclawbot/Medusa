@@ -49,6 +49,14 @@ if (( ${#workflows[@]} == 0 )); then
   exit 2
 fi
 
+# GitHub rejects a workflow whose YAML contains a duplicate mapping key, and the
+# failure surfaces only as "this run likely failed because of a workflow file
+# issue" with no jobs. PyYAML silently keeps the last value, so audit every
+# workflow explicitly for duplicate keys before anything else runs.
+printf '%s\n' "${workflows[@]}" | while IFS= read -r -d '' file; do
+  python3 scripts/check-workflow-yaml.py "$file" || exit 2
+done
+
 printf '%-72s %-16s\n' WORKFLOW CONTENTS_PERMISSION
 for file in "${workflows[@]}"; do
   repository_path=".github/workflows/${file##*/}"

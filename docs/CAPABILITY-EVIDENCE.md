@@ -35,7 +35,7 @@ The manifest records current production paths, behavioral test paths, canonical 
 
 The `multi-agent-research` production claim now covers two mutation backends under one transaction authority:
 
-- **Git:** `parallel_mutation` builds a typed conflict-aware `MutationDag` only for exact, sufficiently confident, non-high-risk scopes within the bounded three-mutator budget. Specialized resources cover manifests, lockfiles, migrations, snapshots, and generated outputs. `parallel_mutation_batch` independently accepts child evidence, establishes `IntegrationBarrier`, deterministically stages accepted children, validates aggregate scope, verifies the aggregate, and prepares the final immutable transaction. `.github/workflows/parallel-mutation-certification.yml` exercises DAG behavior, runtime wiring, deterministic integration, rollback/cleanup, fallback/scope invalidation, and performance evidence across Linux, macOS, and Windows.
+- **Git:** `parallel_mutation` builds a typed conflict-aware `MutationDag` only for exact, sufficiently confident, non-high-risk scopes within the bounded three-mutator budget. Specialized resources cover manifests, lockfiles, migrations, snapshots, and generated outputs. `parallel_mutation_batch` independently accepts child evidence, establishes `IntegrationBarrier`, deterministically stages accepted children, validates aggregate scope, verifies the aggregate, and prepares the final immutable transaction. The `Deterministic benchmarks and certification corpus` job of `.github/workflows/ci.yml` exercises DAG behavior, runtime wiring, deterministic integration, rollback/cleanup, fallback/scope invalidation, and performance evidence across Linux, macOS, and Windows.
 - **Directory / ephemeral:** `workspace_worker_manager` fingerprints the bounded directory, creates one isolated copy, derives typed changed components, persists content-addressed baseline/candidate snapshots, materializes the immutable candidate for independent verification, rejects primary drift, applies only authorized paths, rolls back failed application, and proves resulting tree identity. Directory mutation fails closed on symlinks. `workspace.rs` exposes Git/directory detection and an explicitly owned ephemeral-workspace lifecycle.
 
 Read-only planner/risk-review teammate coordination is independent of Git. Git is therefore an external dependency only for Git-backed worktree and parallel-mutation semantics, not for general documentation, analysis, supplied-source research, or non-Git artifact mutation.
@@ -60,15 +60,22 @@ Plugin structure must not be presented as active capability merely because crate
 
 ## Canonical gates
 
-- **CI** validates formatting, Clippy, panic-free production targets, workspace tests, documentation, dependency policy, release-evidence fixtures, SBOM generation, and workflow parsing.
-- **Daemon** validates daemon lifecycle behavior on Linux, macOS, and Windows.
-- **Desktop** validates the React/Tauri frontend, shared runtime adapter, daemon integration, and unsigned cross-platform bundles.
-- **Refactor Guardrails** enforces workflow permissions, current architecture metadata, and legacy maturity contracts.
-- **Architecture v2 Baseline** validates the living index, workspace/component inventory, production paths, duplicate authorities, forbidden dependencies, PR governance, CODEOWNERS, real CLI entrypoints, and removable expected-failure fixtures on Linux, macOS, and Windows.
-- **Release Gates** validates coverage, adversarial regressions, fuzzing, chaos recovery, security, packages, documentation/schema consistency, and live-provider scenarios.
-- **Parallel Mutation Certification** proves the bounded conflict-aware Git mutator DAG, deterministic aggregate barrier, rollback/cleanup, fallback, scope invalidation, and performance behavior cross-platform.
-- **Workspace Backend Certification** proves non-Git content-addressed isolation, public workspace lifecycle, architecture claims, and capability evidence cross-platform.
-- **Code Intelligence Certification** installs the production TypeScript language server and validates formatting, linting, correctness/freshness fixtures, production agent tests, benchmark compilation/execution, and architecture ownership on Linux, macOS, and Windows for the final issue-closing PR.
+All validation runs in one workflow, `.github/workflows/ci.yml`. The gates below are its jobs.
+
+- **Workspace quality** validates formatting, Clippy, panic-free production targets, workspace tests, dependency authority, and the unsafe-rust boundary.
+- **Dependency policy** validates unused dependencies, the committed lockfile, release evidence fixtures, SBOM generation, dependency-metric drift, and the parsed tag-only release workflow.
+- **Repository policy and evidence** enforces workflow permissions, immutable release-workflow policy, the release keyring, architecture policy, the engineering-policy engine, the certified tool pipeline, architecture ownership and trust boundaries, real CLI entrypoint conformance, capability evidence, workspace-surface claims, and provider support/delivery contracts.
+- **Documentation and public API** builds docs with warnings denied, reconciles the documentation inventory, validates release evidence and required documents, and compares governed public APIs against the base revision.
+- **Platform suites** validates daemon and TUI lifecycle, directory mutation and workspace lifecycle backends, the recording-provider multimodal contract, data lifecycle, and deterministic resilience primitives on Linux, macOS, and Windows.
+- **Acceptance, adversarial regressions, and security** runs shared-target PR smoke acceptance, containment escape regressions, the reproducible safety and recovery proof, fuzz and chaos campaigns, provider delivery diagnostics, and external repository contracts.
+- **Workspace coverage >= 75%** enforces the workspace line-coverage floor.
+- **Deterministic benchmarks and certification corpus** validates benchmark scoring fixtures, runs the release-blocking reliability, orchestration, and same-model coding-harness benchmarks, and certifies the performance corpus, continuous verification, parallel mutation, compound-tool DAG, and speculative execution contracts.
+- **Desktop adapter** lints and tests the Tauri adapter on Linux, macOS, and Windows.
+- **Desktop frontend and bundles** validates synchronized desktop versions, typechecks, tests, and builds the frontend, prepares verified Tauri bundler tools, and emits SHA-256 bundle evidence.
+- **Package and quickstart smoke** builds the release package, smoke-tests it, and runs the deterministic quickstart on Linux, macOS, and Windows.
+- **Live provider and product gates** runs the credential-gated live provider dogfood and interactive TUI gates. It is reachable only through `workflow_dispatch`, so no pull request can reach repository credentials.
+
+Release publication and signing remain separate by design: `publish-release.yml`, `sign-release-manifest.yml`, `sign-release-manifest-recovery.yml`, `sign-draft-release.yml`, `rolling-main-cli.yml`, `verify-published-release.yml`, `release-recovery.yml`, `verified-prebuilt-update.yml`, and `unsafe-rust-boundary.yml` run on tags, releases, or manual dispatch only.
 
 ## Operational boundaries
 

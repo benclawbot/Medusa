@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +15,12 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 def read_workflow(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
+
+
+def load_workflow_document(name: str) -> dict:
+    # PyYAML resolves the bare `on:` key to the boolean True, so normalise both
+    # spellings before callers index into it.
+    return yaml.safe_load(read_workflow(name))
 
 
 def test_primary_ci_validates_main_pushes() -> None:
@@ -218,10 +227,46 @@ def test_rolling_alias_rotation_deletes_only_the_mutable_alias() -> None:
     assert set(deletes) == {"main-latest"}, deletes
 
 
-def test_secret_live_provider_pr_gate_is_same_repo() -> None:
-    gate = "github.event.pull_request.head.repo.full_name == github.repository"
-    for name in ("live-provider-dogfood.yml", "architecture-policy.yml"):
-        assert gate in read_workflow(name)
+def test_credential_gated_jobs_never_run_on_pull_request() -> None:
+    """Repository secrets must never be reachable from an untrusted pull request.
+
+    The live provider/TUI gates need MINIMAX_API_KEY, which GitHub withholds from
+    fork pull requests but still exposes to same-repo pull requests. Rather than
+    discriminate on the head repository at runtime, every secret-bearing job in
+    ci.yml is gated on workflow_dispatch, which only users with write access can
+    trigger. This asserts that property holds for every job that reads a secret,
+    and that ci.yml still validates main pushes and pull requests itself.
+    """
+    workflow = read_workflow("ci.yml")
+    document = load_workflow_document("ci.yml")
+    triggers = document[True] if True in document else document["on"]
+    assert "pull_request" in triggers
+    assert triggers["push"] == {"branches": ["main"]}
+
+    secret_jobs = []
+    for name, job in document["jobs"].items():
+        rendered = yaml.safe_dump(job)
+        # `secrets.GITHUB_TOKEN` is the automatic per-run token, which GitHub
+        # already scopes for pull requests. Everything else is a repository or
+        # environment secret and must stay behind the dispatch gate.
+        credentials = [
+            reference
+            for reference in re.findall(r"secrets\.([A-Z0-9_]+)", rendered)
+            if reference != "GITHUB_TOKEN"
+        ]
+        if not credentials:
+            continue
+        secret_jobs.append(name)
+        condition = job.get("if", "")
+        assert "github.event_name == 'workflow_dispatch'" in condition, (
+            f"job {name} reads repository secrets {sorted(set(credentials))} "
+            "but is not gated on workflow_dispatch"
+        )
+    assert secret_jobs, "expected at least one credential-gated live gate to remain"
+    assert "live" in secret_jobs
+
+    # The automatic token is the only secret a pull-request-visible job may use.
+    assert "MINIMAX_API_KEY" in workflow
 
 
 def test_tui_model_is_explicitly_parameterized() -> None:
@@ -257,7 +302,7 @@ def main() -> int:
         test_pr_base_ref_is_bound_through_environment,
         test_cargo_machete_install_selects_the_pinned_package,
         test_rolling_alias_rotation_deletes_only_the_mutable_alias,
-        test_secret_live_provider_pr_gate_is_same_repo,
+        test_credential_gated_jobs_never_run_on_pull_request,
         test_tui_model_is_explicitly_parameterized,
         test_openai_oauth_never_uses_latest,
     ]

@@ -8,3 +8,6 @@ architecture-policy-report.md
 /apps/medusa-desktop/dist/
 /apps/medusa-desktop/src-tauri/target/
 /browser/node_modules/
+# Python bytecode produced by the repository's validation scripts.
+__pycache__/
+*.pyc

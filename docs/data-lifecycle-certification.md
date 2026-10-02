@@ -53,6 +53,6 @@ GC/deletion is idempotent and reconciled after interruption. When reachability c
 
 ## CI enforcement
 
-`.github/workflows/data-lifecycle-certification.yml` runs the lifecycle inventory and recovery suites plus the highest-value production storage/recovery suites on Linux, macOS, and Windows. Changes to durable-state owners, caches, frontends, evidence/artifacts, memory, checkpoints, time travel, configuration, or lifecycle policy trigger the gate.
+The `Platform suites` job of `.github/workflows/ci.yml` runs the lifecycle inventory and recovery suites plus the highest-value production storage/recovery suites on Linux, macOS, and Windows. Changes to durable-state owners, caches, frontends, evidence/artifacts, memory, checkpoints, time travel, configuration, or lifecycle policy trigger the gate.
 
 Any new durable/derived class must add a `LifecycleEntry` before merge. The entry is a declaration, not a waiver: production behavior and integration tests must still prove deletion, GC, export, isolation, minimization, and recovery semantics for the paths the class exposes.

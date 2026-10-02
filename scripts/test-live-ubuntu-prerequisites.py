@@ -9,10 +9,11 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HELPER = ROOT / "scripts" / "install-live-ubuntu-prerequisites.sh"
-WORKFLOWS = [
-    ROOT / ".github" / "workflows" / "live-provider-dogfood.yml",
-    ROOT / ".github" / "workflows" / "live-minimax-tui.yml",
-]
+# The live gates now live in the single CI workflow, in the credential-gated
+# `live` job. The helper owns every apt invocation, so the workflow must delegate
+# to it instead of installing packages inline.
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+LIVE_JOB = "live"
 
 
 def executable(path: pathlib.Path, content: str) -> None:
@@ -89,7 +90,9 @@ exit 100
         assert "Temporary failure resolving 'unavailable.invalid'" in result.stdout
 
 
-def test_bounded_policy_is_shared_by_both_live_workflows() -> None:
+def test_bounded_policy_is_shared_by_the_live_gate() -> None:
+    import yaml
+
     helper = HELPER.read_text(encoding="utf-8")
     for required in (
         "command -v bwrap",
@@ -101,14 +104,21 @@ def test_bounded_policy_is_shared_by_both_live_workflows() -> None:
     ):
         assert required in helper, f"missing bounded bootstrap contract: {required}"
 
-    for workflow in WORKFLOWS:
-        text = workflow.read_text(encoding="utf-8")
-        assert "bash scripts/install-live-ubuntu-prerequisites.sh" in text, workflow
-        assert "sudo apt-get update" not in text, workflow
+    with CI_WORKFLOW.open(encoding="utf-8") as handle:
+        document = yaml.safe_load(handle)
+    job = document["jobs"][LIVE_JOB]
+    text = yaml.safe_dump(job)
+
+    # The helper is the only component allowed to invoke apt, so the live gate must
+    # delegate to it rather than bootstrapping packages inline.
+    assert "bash scripts/install-live-ubuntu-prerequisites.sh" in text, CI_WORKFLOW
+    assert "sudo apt-get update" not in text, CI_WORKFLOW
+    # The gate reads a repository credential, so it must not run on pull requests.
+    assert "github.event_name == 'workflow_dispatch'" in job["if"], CI_WORKFLOW
 
 
 if __name__ == "__main__":
     test_existing_bwrap_skips_apt()
     test_unavailable_package_source_fails_promptly_and_explicitly()
-    test_bounded_policy_is_shared_by_both_live_workflows()
+    test_bounded_policy_is_shared_by_the_live_gate()
     print("live Ubuntu prerequisite bootstrap contract: ok")

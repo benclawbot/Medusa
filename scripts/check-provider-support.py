@@ -90,11 +90,11 @@ def validate_references(root: Path, manifest: dict[str, Any]) -> None:
     marker = "docs/provider-support.json"
     for relative in ("README.md", "docs/LIVE-PROVIDER-DOGFOOD.md", "docs/PROVIDER-DELIVERY.md"):
         require(marker in (root / relative).read_text(encoding="utf-8"), f"{relative} must link to {marker}")
-    workflow = (root / ".github/workflows/live-provider-dogfood.yml").read_text(encoding="utf-8")
+    workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     primary = next(provider for provider in manifest["providers"] if provider["dogfood"]["status"] == "primary")
     credential = primary["credential_environment"]
     require(f"{credential}: ${{{{ secrets.{credential} }}}}" in workflow,
-            "live dogfood workflow credential does not match the primary provider")
+            "credential-gated live job does not match the primary provider credential")
 
 
 def main() -> int:
