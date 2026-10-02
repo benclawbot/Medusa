@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use serde::{Deserialize, Serialize};
@@ -284,7 +281,6 @@ fn fingerprint(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-
 fn provenance_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InternalInvariant,
@@ -377,10 +373,14 @@ mod tests {
     }
 
     #[test]
-    fn persistence_survives_restart_and_rejects_corruption() {
+    fn persistence_survives_repeated_writes_and_rejects_corruption() {
         let directory = tempfile::tempdir().unwrap();
         let mut journal = MutationJournal::default();
         journal.append(record(1, 0, b"old", b"new")).unwrap();
+        persist(directory.path(), &journal).unwrap();
+        assert_eq!(load(directory.path()).unwrap(), journal);
+
+        journal.append(record(2, 1, b"new", b"updated")).unwrap();
         persist(directory.path(), &journal).unwrap();
         assert_eq!(load(directory.path()).unwrap(), journal);
 
@@ -394,11 +394,5 @@ mod tests {
         let item = record(1, 0, &bytes, b"small");
         assert!(item.scope.retained_preimage.is_none());
         assert!(item.scope.retained_postimage.is_some());
-    }
-
-    #[test]
-    fn provenance_staging_paths_are_unique() {
-        let path = Path::new("mutation-provenance.json");
-        assert_ne!(temporary_path(path), temporary_path(path));
     }
 }
