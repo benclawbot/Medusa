@@ -1,16 +1,15 @@
 use std::{
     collections::BTreeMap,
     fs,
-    fs::OpenOptions,
-    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use medusa_config::ProviderProfileCatalog;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_process_containment::ExclusiveFileLock;
 use serde::{Deserialize, Serialize};
 
 use crate::{ProviderRouteProfile, RouteLatencyStats, Usage};
@@ -20,7 +19,6 @@ const STORE_FILE_NAME: &str = "provider-route-latency.json";
 const LOCK_FILE_NAME: &str = ".provider-route-latency.lock";
 const LOCK_RETRY_ATTEMPTS: usize = 200;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
-const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ProviderRouteLatencyStore {
@@ -246,25 +244,18 @@ impl ProviderRouteLatencyStore {
 }
 
 struct FileLock {
-    path: PathBuf,
+    _inner: ExclusiveFileLock,
 }
 
 impl FileLock {
     fn acquire(path: &Path) -> MedusaResult<Self> {
-        for _ in 0..LOCK_RETRY_ATTEMPTS {
-            match OpenOptions::new().write(true).create_new(true).open(path) {
-                Ok(mut file) => {
-                    writeln!(file, "pid={}", std::process::id()).map_err(store_io_error)?;
-                    file.sync_all().map_err(store_io_error)?;
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                    });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if lock_is_stale(path) {
-                        let _ = fs::remove_file(path);
+        for attempt in 0..LOCK_RETRY_ATTEMPTS {
+            match ExclusiveFileLock::try_acquire(path) {
+                Ok(inner) => return Ok(Self { _inner: inner }),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if attempt + 1 < LOCK_RETRY_ATTEMPTS {
+                        thread::sleep(LOCK_RETRY_DELAY);
                     }
-                    thread::sleep(LOCK_RETRY_DELAY);
                 }
                 Err(error) => return Err(store_io_error(error)),
             }
@@ -273,13 +264,6 @@ impl FileLock {
             "provider route latency state is busy; could not acquire {}",
             path.display()
         )))
-    }
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-        sync_parent(&self.path);
     }
 }
 
@@ -300,25 +284,6 @@ fn load_state(path: &Path) -> MedusaResult<RouteLatencyState> {
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
     storage::atomic_write(path, bytes).map_err(store_io_error)
-}
-
-fn sync_parent(path: &Path) {
-    #[cfg(unix)]
-    if let Some(parent) = path.parent()
-        && let Ok(directory) = fs::File::open(parent)
-    {
-        let _ = directory.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-}
-
-fn lock_is_stale(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_some_and(|age| age >= STALE_LOCK_AGE)
 }
 
 fn route_key(profile: &ProviderRouteProfile) -> String {
