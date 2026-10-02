@@ -386,8 +386,9 @@ fn run() -> MedusaResult<()> {
                 non_interactive,
                 approve_allowlist.as_deref(),
             )?;
-            let runtime = RuntimeController::start_with_config(repo.clone(), config.clone());
-            forward_saved_api_key(&runtime, &config)?;
+            let saved_api_key = saved_api_key(&config)?;
+            let runtime = RuntimeController::start_with_config(repo.clone(), config);
+            forward_saved_api_key(&runtime, saved_api_key)?;
             runtime
                 .submit(PromptDraft {
                     text: objective,
@@ -399,13 +400,10 @@ fn run() -> MedusaResult<()> {
         CommandKind::Resume { session } => {
             ensure_first_run()?;
             ensure_selected_runtime()?;
-            let runtime = RuntimeController::start_resumed_with_config(
-                repo.clone(),
-                &session,
-                config.clone(),
-            )
-            .map_err(runtime_error)?;
-            forward_saved_api_key(&runtime, &config)?;
+            let saved_api_key = saved_api_key(&config)?;
+            let runtime = RuntimeController::start_resumed_with_config(repo.clone(), &session, config)
+                .map_err(runtime_error)?;
+            forward_saved_api_key(&runtime, saved_api_key)?;
             runtime
                 .submit(PromptDraft {
                     text: "Continue the current task from its durable session state.".to_owned(),
@@ -420,16 +418,23 @@ fn run() -> MedusaResult<()> {
     }
 }
 
-fn forward_saved_api_key(runtime: &RuntimeController, config: &Config) -> MedusaResult<()> {
+fn saved_api_key(config: &Config) -> MedusaResult<Option<String>> {
     if config.model.auth != "api-key" {
-        return Ok(());
+        return Ok(None);
     }
     if medusa_config::credential_environment(&config.model.provider)
         .is_some_and(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
     {
-        return Ok(());
+        return Ok(None);
     }
-    if let Some(api_key) = super::first_run::stored_api_key(&config.model.provider)? {
+    super::first_run::stored_api_key(&config.model.provider)
+}
+
+fn forward_saved_api_key(
+    runtime: &RuntimeController,
+    api_key: Option<String>,
+) -> MedusaResult<()> {
+    if let Some(api_key) = api_key {
         runtime
             .run_command(SlashCommand::Model(ModelCommand::SetApiKey(api_key)))
             .map_err(runtime_error)?;
