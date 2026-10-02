@@ -9,12 +9,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
 use reqwest::{
     StatusCode,
     blocking::{Client, Response},
 };
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::{
     Architecture, AtomicInstaller, OperatingSystem, Platform, Restart, ScheduledUpdate, TrustStore,
@@ -272,9 +273,12 @@ impl MainBranchUpdater {
             )?
         };
 
-        // Record what we just built so the next invocation can short-circuit.
+        // Record the complete cache identity only after a successful build/cache validation.
+        // If any marker write fails, the next invocation safely rebuilds instead of trusting a
+        // partially-described cached executable.
         let _ = write_cached_revision(&target_dir, &revision);
         let _ = write_cached_host_triple(&target_dir);
+        let _ = write_cached_binary_sha256(&target_dir);
 
         let candidate = install_root.join("bin").join(medusa_binary_name());
         let installer = AtomicInstaller::new(executable.to_path_buf());
@@ -720,6 +724,7 @@ fn cargo_target_directory(repo: &Path) -> PathBuf {
 /// non-empty, `medusa update` can reuse the previously compiled binary without invoking cargo.
 const LAST_REVISION_FILE: &str = "last-revision";
 const HOST_TRIPLE_FILE: &str = "host-triple";
+const BINARY_SHA256_FILE: &str = "binary-sha256";
 
 /// Reads the revision SHA that was last successfully built into the shared update-cache.
 ///
@@ -744,10 +749,7 @@ fn read_cached_revision(target_dir: &Path) -> Option<String> {
 /// Records `revision` as the most-recent successful build target.
 fn write_cached_revision(target_dir: &Path, revision: &str) -> MedusaResult<()> {
     fs::create_dir_all(target_dir)?;
-    let path = target_dir.join(LAST_REVISION_FILE);
-    let tmp = target_dir.join(format!("{LAST_REVISION_FILE}.tmp"));
-    fs::write(&tmp, revision.as_bytes())?;
-    fs::rename(&tmp, &path)?;
+    storage::atomic_write(&target_dir.join(LAST_REVISION_FILE), revision.as_bytes())?;
     Ok(())
 }
 
@@ -758,10 +760,7 @@ fn write_cached_host_triple(target_dir: &Path) -> MedusaResult<()> {
         return Ok(());
     };
     fs::create_dir_all(target_dir)?;
-    let path = target_dir.join(HOST_TRIPLE_FILE);
-    let tmp = target_dir.join(format!("{HOST_TRIPLE_FILE}.tmp"));
-    fs::write(&tmp, triple.as_bytes())?;
-    fs::rename(&tmp, &path)?;
+    storage::atomic_write(&target_dir.join(HOST_TRIPLE_FILE), triple.as_bytes())?;
     Ok(())
 }
 
@@ -782,13 +781,13 @@ fn cached_host_triple_matches(target_dir: &Path) -> bool {
 }
 
 /// Returns true when the shared update-cache already holds the requested revision,
-/// toolchain, and a real binary. A fresh cache means the caller can skip the cargo
-/// build entirely.
+/// toolchain, and the exact binary content recorded after the successful build. A fresh
+/// cache means the caller can skip the cargo build entirely.
 fn update_cache_is_fresh(target_dir: &Path, revision: &str) -> bool {
     if !cached_host_triple_matches(target_dir) {
         return false;
     }
-    if !cached_binary_exists(target_dir) {
+    if !cached_binary_sha256_matches(target_dir) {
         return false;
     }
     match read_cached_revision(target_dir) {
@@ -797,20 +796,45 @@ fn update_cache_is_fresh(target_dir: &Path, revision: &str) -> bool {
     }
 }
 
-/// Locates the `medusa` binary in the shared update cache. The path depends on whether
-/// cargo uses the workspace's `target-dir` setting or the `CARGO_TARGET_DIR` env var, so
-/// we check both possible locations.
+/// Locates the `medusa` binary in the shared update cache.
 fn cached_release_binary(target_dir: &Path) -> PathBuf {
     target_dir.join("release").join(medusa_binary_name())
 }
 
-/// Whether the shared update cache contains a non-empty release/medusa binary from a
-/// previous build. Used by the short-circuit path.
-fn cached_binary_exists(target_dir: &Path) -> bool {
-    let path = cached_release_binary(target_dir);
-    fs::metadata(&path)
-        .map(|m| m.is_file() && m.len() > 0)
-        .unwrap_or(false)
+fn read_cached_binary_sha256(target_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(target_dir.join(BINARY_SHA256_FILE)).ok()?;
+    let digest = raw.trim();
+    if digest.len() != SHA256_HEX_LENGTH || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(digest.to_ascii_lowercase())
+}
+
+fn binary_sha256(path: &Path) -> MedusaResult<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn write_cached_binary_sha256(target_dir: &Path) -> MedusaResult<()> {
+    let digest = binary_sha256(&cached_release_binary(target_dir))?;
+    storage::atomic_write(&target_dir.join(BINARY_SHA256_FILE), digest.as_bytes())?;
+    Ok(())
+}
+
+fn cached_binary_sha256_matches(target_dir: &Path) -> bool {
+    let Some(expected) = read_cached_binary_sha256(target_dir) else {
+        return false;
+    };
+    binary_sha256(&cached_release_binary(target_dir)).is_ok_and(|actual| actual == expected)
 }
 
 /// Whether `sccache` (or `cachepot`) is on PATH. When present, cargo will pick it up
@@ -1486,23 +1510,26 @@ mod tests {
     }
 
     #[test]
-    fn cache_is_fresh_only_when_revision_host_and_binary_all_match() {
+    fn cache_is_fresh_only_when_revision_host_and_binary_digest_all_match() {
         let temp = tempfile::tempdir().expect("tempdir");
-        // Empty cache: not fresh.
         assert!(!update_cache_is_fresh(temp.path(), REVISION));
-        // Marker but no binary: not fresh.
-        write_cached_revision(temp.path(), REVISION).expect("write");
+
+        write_cached_revision(temp.path(), REVISION).expect("write revision");
         write_cached_host_triple(temp.path()).expect("write host");
-        assert!(!update_cache_is_fresh(temp.path(), REVISION));
-        // Drop the binary in: now fresh.
         std::fs::create_dir_all(temp.path().join("release")).expect("release dir");
-        std::fs::write(
-            temp.path().join("release").join(medusa_binary_name()),
-            b"placeholder binary",
-        )
-        .expect("write binary");
+        let binary = temp.path().join("release").join(medusa_binary_name());
+        std::fs::write(&binary, b"placeholder binary").expect("write binary");
+
+        // A revision marker and an executable are not sufficient authority to reuse a build.
+        assert!(!update_cache_is_fresh(temp.path(), REVISION));
+        write_cached_binary_sha256(temp.path()).expect("write binary digest");
         assert!(update_cache_is_fresh(temp.path(), REVISION));
-        // Different revision: not fresh.
+
+        // Mutating a previously recorded cache entry invalidates it even though the revision,
+        // host, file path, and non-empty-file checks still match.
+        std::fs::write(&binary, b"tampered binary").expect("tamper binary");
+        assert!(!update_cache_is_fresh(temp.path(), REVISION));
+
         assert!(!update_cache_is_fresh(
             temp.path(),
             "0000000000000000000000000000000000000001"
