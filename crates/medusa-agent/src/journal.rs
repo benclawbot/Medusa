@@ -523,6 +523,10 @@ fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     }
     write_record(&mut file, &snapshot_record(session))?;
     file.sync_all()?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
     fs::rename(temporary, path)?;
     invalidate_journal_cache(path);
     Ok(())
