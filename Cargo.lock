@@ -1860,6 +1860,7 @@ dependencies = [
  "medusa-intelligence",
  "medusa-memory",
  "medusa-multi-agent-scheduler",
+ "medusa-process-containment",
  "medusa-protocol",
  "medusa-recovery-coordinator",
  "medusa-review-model",
