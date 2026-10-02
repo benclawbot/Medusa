@@ -521,10 +521,8 @@ impl TeamRuntime {
             .parent()
             .ok_or_else(|| "team state path has no parent".to_owned())?;
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let bytes =
-            serde_json::to_vec_pretty(&*state).map_err(|error| error.to_string())?;
-        medusa_core::storage::atomic_write(&self.path, &bytes)
-            .map_err(|error| error.to_string())
+        let bytes = serde_json::to_vec_pretty(&*state).map_err(|error| error.to_string())?;
+        medusa_core::storage::atomic_write(&self.path, &bytes).map_err(|error| error.to_string())
     }
 }
 
