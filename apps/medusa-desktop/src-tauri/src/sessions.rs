@@ -1,12 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
-    time::UNIX_EPOCH,
+    thread,
+    time::{Duration, UNIX_EPOCH},
 };
 
+use medusa_process_containment::{ExclusiveFileLock, replace_file};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::State;
@@ -21,6 +23,8 @@ const MAX_PAGE_SIZE: usize = 200;
 const MAX_CACHED_SESSION_FILES: usize = 512;
 const MAX_CACHED_SESSION_ROOTS: usize = 64;
 const SESSION_CURSOR_SEPARATOR: char = '\u{1f}';
+const SESSION_ACTION_LOCK_RETRY_ATTEMPTS: usize = 200;
+const SESSION_ACTION_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +120,46 @@ fn session_actions_path(repo: &Path) -> PathBuf {
     repo.join(".medusa/desktop/session-actions.json")
 }
 
+fn session_actions_lock_path(repo: &Path) -> PathBuf {
+    repo.join(".medusa/desktop/session-actions.lock")
+}
+
+fn acquire_session_actions_lock(repo: &Path) -> Result<ExclusiveFileLock, String> {
+    acquire_session_actions_lock_with_retry(
+        repo,
+        SESSION_ACTION_LOCK_RETRY_ATTEMPTS,
+        SESSION_ACTION_LOCK_RETRY_DELAY,
+    )
+}
+
+fn acquire_session_actions_lock_with_retry(
+    repo: &Path,
+    attempts: usize,
+    delay: Duration,
+) -> Result<ExclusiveFileLock, String> {
+    let path = session_actions_lock_path(repo);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "session actions lock path has no parent".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    for attempt in 0..attempts {
+        match ExclusiveFileLock::try_acquire(&path) {
+            Ok(lock) => return Ok(lock),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if attempt + 1 < attempts {
+                    thread::sleep(delay);
+                }
+            }
+            Err(error) => return Err(format!("cannot lock {}: {error}", path.display())),
+        }
+    }
+    Err(format!(
+        "cannot lock {}: desktop session actions are busy",
+        path.display()
+    ))
+}
+
 fn load_session_actions(repo: &Path) -> Result<DesktopSessionActions, String> {
     let path = session_actions_path(repo);
     let bytes = match fs::read(&path) {
@@ -136,18 +180,24 @@ fn write_session_actions(repo: &Path, actions: &DesktopSessionActions) -> Result
         .ok_or_else(|| "session actions path has no parent".to_owned())?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-    let temporary = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let temporary = path.with_extension(format!("json.tmp.{}", ulid::Ulid::new()));
     let bytes = serde_json::to_vec_pretty(actions)
         .map_err(|error| format!("cannot serialize desktop session actions: {error}"))?;
-    fs::write(&temporary, bytes)
-        .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|error| format!("cannot replace {}: {error}", path.display()))?;
+    let mut file = File::create(&temporary)
+        .map_err(|error| format!("cannot create {}: {error}", temporary.display()))?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("cannot durably write {}: {error}", temporary.display()))?;
+    drop(file);
+    if let Err(error) = replace_file(&temporary, &path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("cannot publish {}: {error}", path.display()));
     }
-    fs::rename(&temporary, &path)
-        .map_err(|error| format!("cannot publish {}: {error}", path.display()))
+    #[cfg(unix)]
+    if let Ok(directory) = File::open(parent) {
+        let _ = directory.sync_all();
+    }
+    Ok(())
 }
 
 fn apply_session_action(
@@ -183,6 +233,7 @@ fn mutate_session_action(
     mutation: impl FnOnce(&mut DesktopSessionAction),
 ) -> Result<(), String> {
     validate_session_id(session_id)?;
+    let _lock = acquire_session_actions_lock(repo)?;
     let _ = find_session_path(repo, session_id)?;
     let mut actions = load_session_actions(repo)?;
     mutation(actions.sessions.entry(session_id.to_owned()).or_default());
@@ -341,6 +392,7 @@ pub async fn runtime_delete_sessions(
     }
 
     run_blocking(move || {
+        let _lock = acquire_session_actions_lock(&repo)?;
         for session_id in &unique {
             let _ = find_session_path(&repo, session_id)?;
             if session_has_attached_frontends(&repo, session_id)? {
@@ -1120,6 +1172,49 @@ mod tests {
         assert_eq!(
             validate_session_title("  useful title  ").expect("title"),
             "useful title"
+        );
+    }
+
+    #[test]
+    fn session_action_lock_rejects_overlapping_mutations() {
+        let repo = crate::tempdir().expect("repo");
+        let first = acquire_session_actions_lock(repo.path()).expect("first lock");
+        let error = acquire_session_actions_lock_with_retry(repo.path(), 2, Duration::ZERO)
+            .expect_err("second lock must fail");
+        assert!(
+            error.contains("cannot lock"),
+            "unexpected lock error: {error}"
+        );
+        drop(first);
+        acquire_session_actions_lock_with_retry(repo.path(), 2, Duration::ZERO)
+            .expect("lock released after drop");
+    }
+
+    #[test]
+    fn session_actions_replace_existing_state() {
+        let repo = crate::tempdir().expect("repo");
+        let mut actions = DesktopSessionActions::default();
+        actions
+            .sessions
+            .entry("session-a".to_owned())
+            .or_default()
+            .pinned = true;
+        write_session_actions(repo.path(), &actions).expect("first actions");
+
+        actions
+            .sessions
+            .entry("session-a".to_owned())
+            .or_default()
+            .pinned = false;
+        write_session_actions(repo.path(), &actions).expect("replace actions");
+
+        let reloaded = load_session_actions(repo.path()).expect("reload actions");
+        assert!(
+            !reloaded
+                .sessions
+                .get("session-a")
+                .expect("session action")
+                .pinned
         );
     }
 
