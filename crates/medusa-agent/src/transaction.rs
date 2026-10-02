@@ -1040,6 +1040,29 @@ mod tests {
     }
 
     #[test]
+    fn overwrites_existing_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        hidden_command("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        let path = directory.path().join("existing.txt");
+        fs::write(&path, "before").expect("seed existing file");
+
+        apply_atomic(
+            directory.path(),
+            &[FileMutation {
+                path: "existing.txt".into(),
+                content: "after".into(),
+            }],
+        )
+        .expect("overwrite transaction");
+
+        assert_eq!(fs::read_to_string(path).expect("read result"), "after");
+    }
+
+    #[test]
     fn records_minimal_scope_and_preserves_non_overlapping_user_edits_on_revert() {
         let directory = tempfile::tempdir().expect("tempdir");
         hidden_command("git")
