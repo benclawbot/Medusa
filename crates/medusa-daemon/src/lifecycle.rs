@@ -1,7 +1,6 @@
 use std::{
     ffi::OsString,
-    fs::{self, File, OpenOptions},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
@@ -17,6 +16,7 @@ use std::os::windows::process::CommandExt;
 #[cfg(not(windows))]
 use medusa_core::hidden_command;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::ExclusiveFileLock;
 
 use crate::{DaemonClient, DaemonPaths, Request, Response};
 
@@ -245,15 +245,7 @@ impl DaemonSupervisor {
                         },
                     });
                 }
-                StartupLockAttempt::Busy { owner_pid } => {
-                    let reclaim = match owner_pid {
-                        Some(pid) => !process_is_alive(pid),
-                        None => startup_lock_is_stale(&self.paths.startup),
-                    };
-                    if reclaim {
-                        let _ = fs::remove_file(&self.paths.startup);
-                        continue;
-                    }
+                StartupLockAttempt::Busy => {
                     if Instant::now() >= deadline {
                         return Err(lifecycle_error(
                             "another frontend owns daemon startup but readiness timed out",
@@ -349,14 +341,6 @@ fn wait_for_ready(paths: &DaemonPaths, deadline: Instant) -> MedusaResult<()> {
     )))
 }
 
-fn startup_lock_is_stale(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age >= STARTUP_TIMEOUT)
-}
-
 fn lifecycle_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
@@ -367,42 +351,30 @@ fn lifecycle_error(message: impl Into<String>) -> MedusaError {
 
 enum StartupLockAttempt {
     Acquired(StartupLock),
-    Busy { owner_pid: Option<u32> },
+    Busy,
 }
 
 struct StartupLock {
-    path: PathBuf,
-    _file: File,
+    _inner: ExclusiveFileLock,
 }
 
 impl StartupLock {
     fn try_acquire(path: &Path) -> MedusaResult<StartupLockAttempt> {
-        match OpenOptions::new().write(true).create_new(true).open(path) {
-            Ok(mut file) => {
-                writeln!(file, "{}", std::process::id())?;
-                file.flush()?;
-                Ok(StartupLockAttempt::Acquired(Self {
-                    path: path.to_path_buf(),
-                    _file: file,
-                }))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let owner_pid = fs::read_to_string(path)
-                    .ok()
-                    .and_then(|raw| raw.trim().parse::<u32>().ok());
-                Ok(StartupLockAttempt::Busy { owner_pid })
+        match ExclusiveFileLock::try_acquire(path) {
+            Ok(inner) => Ok(StartupLockAttempt::Acquired(Self { _inner: inner })),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                Ok(StartupLockAttempt::Busy)
             }
             Err(error) => Err(lifecycle_error(format!(
                 "cannot acquire daemon startup lock {}: {error}",
                 path.display()
             ))),
         }
-    }
-}
-
-impl Drop for StartupLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -421,22 +393,6 @@ fn configure_detached(command: &mut Command) {
     // for output isolation.
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     command.creation_flags(CREATE_NEW_PROCESS_GROUP);
-}
-
-#[cfg(unix)]
-fn process_is_alive(pid: u32) -> bool {
-    let pid = pid.to_string();
-    Command::new("kill")
-        .args(["-0", pid.as_str()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-#[cfg(windows)]
-fn process_is_alive(pid: u32) -> bool {
-    medusa_process_containment::process_is_alive(pid)
 }
 
 #[cfg(test)]
@@ -510,12 +466,23 @@ mod tests {
     }
 
     #[test]
-    fn fresh_empty_startup_lock_is_not_reclaimed() {
+    fn startup_lock_uses_kernel_ownership_and_releases_on_drop() {
         let directory = tempfile::tempdir().expect("tempdir");
         let paths = DaemonPaths::for_repo(directory.path());
         fs::create_dir_all(&paths.directory).expect("daemon directory");
-        fs::write(&paths.startup, []).expect("empty startup lock");
-        assert!(!startup_lock_is_stale(&paths.startup));
+        let first = match StartupLock::try_acquire(&paths.startup).expect("first lock") {
+            StartupLockAttempt::Acquired(lock) => lock,
+            StartupLockAttempt::Busy => panic!("first startup lock unexpectedly busy"),
+        };
+        assert!(matches!(
+            StartupLock::try_acquire(&paths.startup).expect("second attempt"),
+            StartupLockAttempt::Busy
+        ));
+        drop(first);
+        assert!(matches!(
+            StartupLock::try_acquire(&paths.startup).expect("released attempt"),
+            StartupLockAttempt::Acquired(_)
+        ));
     }
 
     #[test]

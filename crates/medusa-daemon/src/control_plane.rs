@@ -351,9 +351,8 @@ impl SupervisionControlPlane {
             .parent()
             .ok_or(ControlPlaneError::MissingParentDirectory)?;
         fs::create_dir_all(parent)?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, serde_json::to_vec_pretty(&self.state)?)?;
-        fs::rename(temporary, &self.path)?;
+        let bytes = serde_json::to_vec_pretty(&self.state)?;
+        medusa_core::storage::atomic_write(&self.path, &bytes)?;
         Ok(())
     }
 }
