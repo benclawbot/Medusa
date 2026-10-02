@@ -12,6 +12,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::replace_file;
 use medusa_protocol::{
     Actor, EventPayload, SessionAction, SessionActionDeliveryPolicy, SessionActionKind,
     SessionActionWakePolicy,
@@ -527,11 +528,7 @@ impl TeamRuntime {
             serde_json::to_vec_pretty(&*state).map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())?;
-        #[cfg(windows)]
-        if self.path.exists() {
-            fs::remove_file(&self.path).map_err(|error| error.to_string())?;
-        }
-        fs::rename(temporary, &self.path).map_err(|error| error.to_string())
+        replace_file(&temporary, &self.path).map_err(|error| error.to_string())
     }
 }
 
