@@ -1769,8 +1769,10 @@ dependencies = [
 name = "medusa-process-registry"
 version = "2.0.0"
 dependencies = [
+ "medusa-process-containment",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "time",
 ]
