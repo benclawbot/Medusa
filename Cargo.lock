@@ -1769,6 +1769,7 @@ dependencies = [
 name = "medusa-process-registry"
 version = "2.0.0"
 dependencies = [
+ "medusa-core",
  "serde",
  "serde_json",
  "tempfile",

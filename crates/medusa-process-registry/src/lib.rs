@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use medusa_core::storage;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -461,22 +462,7 @@ impl ProcessRegistry {
         let parent = path.parent().ok_or(RegistryError::MissingParentDirectory)?;
         fs::create_dir_all(parent)?;
         let bytes = serde_json::to_vec_pretty(self)?;
-        let name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("process-registry.json");
-        let mut temporary = tempfile::Builder::new()
-            .prefix(&format!(".{name}."))
-            .suffix(".tmp")
-            .tempfile_in(parent)?;
-        use std::io::Write as _;
-        temporary.write_all(&bytes)?;
-        temporary.as_file().sync_all()?;
-        temporary.persist(path).map_err(|error| error.error)?;
-        #[cfg(unix)]
-        if let Ok(directory) = fs::File::open(parent) {
-            let _ = directory.sync_all();
-        }
+        storage::atomic_write(path, &bytes)?;
         Ok(())
     }
 }
@@ -803,6 +789,24 @@ mod tests {
             Some(IdentityVerification::IdentityUnavailable)
         );
         assert!(!process.destructive_action_allowed());
+    }
+
+    #[test]
+    fn save_atomic_replaces_existing_registry() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("processes.json");
+        let mut registry = ProcessRegistry::default();
+        registry.save_atomic(&path).expect("first save");
+        registry
+            .register(running("server", 99, "100"))
+            .expect("register");
+        registry.save_atomic(&path).expect("replace save");
+        let loaded = ProcessRegistry::load(&path).expect("load");
+        assert!(
+            loaded
+                .get(&ProcessId::parse("server").expect("id"))
+                .is_some()
+        );
     }
 
     #[test]
