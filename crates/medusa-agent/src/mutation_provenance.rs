@@ -1,17 +1,13 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{fs, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::atomic_write as durable_atomic_write;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const MUTATION_PROVENANCE_SCHEMA_VERSION: u32 = 1;
 const PROVENANCE_PATH: &str = ".medusa/mutation-provenance.json";
 const MAX_RETAINED_BYTES: usize = 256 * 1024;
-static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MutationContext {
@@ -214,15 +210,10 @@ pub fn persist(repo: &Path, journal: &MutationJournal) -> MedusaResult<()> {
         ));
     }
     let path = repo.join(PROVENANCE_PATH);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let temporary = temporary_path(&path);
     let bytes = serde_json::to_vec_pretty(journal).map_err(|error| {
         provenance_error(format!("could not serialize mutation provenance: {error}"))
     })?;
-    fs::write(&temporary, bytes)?;
-    fs::rename(&temporary, &path)?;
+    durable_atomic_write(&path, &bytes)?;
     Ok(())
 }
 
@@ -286,11 +277,6 @@ fn ranges_overlap(left: &MutationScope, right: &MutationScope) -> bool {
 
 fn fingerprint(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let nonce = TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed);
-    path.with_extension(format!("json.medusa-tmp-{}-{nonce}", std::process::id()))
 }
 
 fn provenance_error(message: impl Into<String>) -> MedusaError {
@@ -404,9 +390,4 @@ mod tests {
         assert!(item.scope.retained_postimage.is_some());
     }
 
-    #[test]
-    fn provenance_staging_paths_are_unique() {
-        let path = Path::new("mutation-provenance.json");
-        assert_ne!(temporary_path(path), temporary_path(path));
-    }
 }
