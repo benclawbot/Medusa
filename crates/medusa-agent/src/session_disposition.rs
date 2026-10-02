@@ -5,6 +5,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_process_containment::replace_file;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -318,11 +319,7 @@ fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> MedusaResult<()> {
             .open(&temporary)?;
         file.write_all(&serde_json::to_vec_pretty(value)?)?;
         file.sync_all()?;
-        #[cfg(windows)]
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
-        fs::rename(&temporary, path)?;
+        replace_file(&temporary, path)?;
         Ok(())
     })();
     if result.is_err() {
