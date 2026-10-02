@@ -417,6 +417,35 @@ mod tests {
     }
 
     #[test]
+    fn repeated_draft_save_replaces_existing_state() {
+        let repository = tempdir().expect("temporary repository");
+        let store = DraftStore::for_repo(repository.path());
+        store
+            .save(
+                "session_123",
+                &PromptDraft {
+                    text: "first".to_owned(),
+                    attachments: Vec::new(),
+                    revision: 1,
+                },
+            )
+            .expect("first save");
+        store
+            .save(
+                "session_123",
+                &PromptDraft {
+                    text: "second".to_owned(),
+                    attachments: Vec::new(),
+                    revision: 2,
+                },
+            )
+            .expect("replace save");
+        let loaded = store.load("session_123").expect("load").expect("draft");
+        assert_eq!(loaded.text, "second");
+        assert_eq!(loaded.revision, 2);
+    }
+
+    #[test]
     fn draft_round_trip_preserves_text_and_image() {
         let repository = tempdir().expect("temporary repository");
         let store = DraftStore::for_repo(repository.path());
