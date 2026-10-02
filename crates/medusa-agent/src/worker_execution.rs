@@ -837,6 +837,23 @@ mod tests {
     }
 
     #[test]
+    fn persists_over_existing_worker_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("workers.json");
+        let mut controller = controller(&path);
+        let original = fs::read(&path).expect("initial state");
+
+        controller
+            .push_progress(ProgressKind::Progress, "second write", None)
+            .expect("progress");
+        controller.persist().expect("rewrite worker state");
+
+        let rewritten = fs::read(&path).expect("rewritten state");
+        assert_ne!(rewritten, original);
+        WorkerExecutionController::load(path).expect("reload rewritten state");
+    }
+
+    #[test]
     fn expired_worker_is_reassigned_once_with_a_new_epoch() {
         let directory = tempfile::tempdir().unwrap();
         let mut controller = WorkerExecutionController::create(
