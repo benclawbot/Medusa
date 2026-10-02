@@ -269,7 +269,20 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let paths = DaemonPaths::for_repo(directory.path());
         let mut app = app(directory.path());
-        let mut monitor = DaemonMonitor::new(paths.socket.clone());
+        let client = DaemonClient::new(paths.socket.clone());
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let mut observations = 0;
+        let mut monitor = DaemonMonitor::with_observer(move || {
+            observations += 1;
+            if observations == 2 {
+                // Keep scheduler delays during startup from turning this
+                // recovery test into the persistent-disconnect scenario.
+                ready_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("daemon ready signal");
+            }
+            observe_client(&client)
+        });
 
         // Establish the silent baseline while the socket is still missing.
         let first = wait_for_snapshot(&mut monitor, &mut app, |snapshot| {
@@ -283,6 +296,7 @@ mod tests {
 
         let (handle, server) = spawn(paths.clone()).expect("spawn daemon");
         wait_for_endpoint(&paths.socket);
+        ready_tx.send(()).expect("release recovery observation");
         let snapshot =
             wait_for_snapshot(&mut monitor, &mut app, |snapshot| snapshot.1 == "connected");
 
