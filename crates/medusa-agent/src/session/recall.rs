@@ -1,6 +1,7 @@
 use std::{fs, io::Write};
 
 use medusa_core::{MedusaResult, hidden_command};
+use medusa_process_containment::replace_file;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -91,7 +92,7 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
         let mut file = secure_state::create_new_file(&temporary)?;
         file.write_all(&serde_json::to_vec_pretty(&record)?)?;
         file.sync_all()?;
-        fs::rename(&temporary, &path)?;
+        replace_file(&temporary, &path)?;
         secure_state::repair(&path, false)?;
         Ok(())
     })();
