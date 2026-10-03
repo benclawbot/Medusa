@@ -1,16 +1,15 @@
 use std::{
     collections::BTreeMap,
     fs,
-    fs::OpenOptions,
-    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use medusa_config::ProviderProfileCatalog;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::{ExclusiveFileLock, atomic_write as durable_atomic_write};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -21,7 +20,6 @@ const STORE_FILE_NAME: &str = "provider-runtime.json";
 const LOCK_FILE_NAME: &str = ".provider-runtime.lock";
 const LOCK_RETRY_ATTEMPTS: usize = 200;
 const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
-const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ProviderHealthStore {
@@ -244,33 +242,22 @@ impl ProviderHealthStore {
 }
 
 struct FileLock {
-    path: PathBuf,
+    _inner: ExclusiveFileLock,
 }
 
 impl FileLock {
     fn acquire(path: &Path) -> MedusaResult<Self> {
-        for _ in 0..LOCK_RETRY_ATTEMPTS {
-            match OpenOptions::new().write(true).create_new(true).open(path) {
-                Ok(mut file) => {
-                    writeln!(file, "pid={}", std::process::id()).map_err(store_io_error)?;
-                    file.sync_all().map_err(store_io_error)?;
-                    return Ok(Self {
-                        path: path.to_path_buf(),
-                    });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if lock_is_stale(path) {
-                        match fs::remove_file(path) {
-                            Ok(()) => continue,
-                            Err(remove_error)
-                                if remove_error.kind() == std::io::ErrorKind::NotFound =>
-                            {
-                                continue;
-                            }
-                            Err(_) => {}
-                        }
+        Self::acquire_with_retry(path, LOCK_RETRY_ATTEMPTS, LOCK_RETRY_DELAY)
+    }
+
+    fn acquire_with_retry(path: &Path, attempts: usize, delay: Duration) -> MedusaResult<Self> {
+        for attempt in 0..attempts {
+            match ExclusiveFileLock::try_acquire(path) {
+                Ok(inner) => return Ok(Self { _inner: inner }),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if attempt + 1 < attempts {
+                        thread::sleep(delay);
                     }
-                    thread::sleep(LOCK_RETRY_DELAY);
                 }
                 Err(error) => return Err(store_io_error(error)),
             }
@@ -279,13 +266,6 @@ impl FileLock {
             "provider runtime state is busy; could not acquire {}",
             path.display()
         )))
-    }
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-        sync_parent(&self.path);
     }
 }
 
@@ -306,26 +286,25 @@ fn load_state(path: &Path) -> MedusaResult<ProviderRuntimeState> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    storage::atomic_write(path, bytes).map_err(store_io_error)
+    durable_atomic_write(path, bytes).map_err(store_io_error)
 }
 
-fn sync_parent(path: &Path) {
-    #[cfg(unix)]
-    if let Some(parent) = path.parent()
-        && let Ok(directory) = fs::File::open(parent)
-    {
-        let _ = directory.sync_all();
+#[cfg(test)]
+mod kernel_lock_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_state_lock_cannot_be_stolen_while_owner_is_alive() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("provider-runtime.lock");
+        let first = FileLock::acquire(&path).expect("first lock");
+        assert!(
+            FileLock::acquire_with_retry(&path, 2, Duration::ZERO).is_err(),
+            "a second owner must not steal a live kernel lock"
+        );
+        drop(first);
+        FileLock::acquire_with_retry(&path, 2, Duration::ZERO).expect("released lock");
     }
-    #[cfg(not(unix))]
-    let _ = path;
-}
-
-fn lock_is_stale(path: &Path) -> bool {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
-        .is_some_and(|age| age >= STALE_LOCK_AGE)
 }
 
 fn route_key(profile: &ProviderRouteProfile) -> String {

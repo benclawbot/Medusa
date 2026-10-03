@@ -3,9 +3,11 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use medusa_process_containment::ExclusiveFileLock;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -17,6 +19,8 @@ use crate::verification_dag::VerificationDag;
 const CHECKPOINT_SCHEMA_VERSION: u16 = 1;
 const CHECKPOINT_PREFIX: &str = "verification-checkpoint-";
 const CHECKPOINT_SUFFIX: &str = ".json";
+const CHECKPOINT_LOCK_RETRY_ATTEMPTS: usize = 200;
+const CHECKPOINT_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 #[cfg(windows)]
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 
@@ -81,6 +85,10 @@ impl VerificationCheckpointStore {
     where
         T: Clone + DeserializeOwned + Serialize,
     {
+        if !self.root.exists() {
+            return Ok(None);
+        }
+        let _lock = self.acquire_lock()?;
         let mut generations = self.generations()?;
         generations.sort();
         generations.reverse();
@@ -116,6 +124,7 @@ impl VerificationCheckpointStore {
         T: Clone + Serialize,
     {
         fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
+        let _lock = self.acquire_lock()?;
         let mut sealed = checkpoint.clone();
         sealed.fingerprint = checkpoint_fingerprint(&sealed)?;
         let bytes = serde_json::to_vec_pretty(&sealed).map_err(|error| error.to_string())?;
@@ -157,6 +166,10 @@ impl VerificationCheckpointStore {
     }
 
     pub fn remove(&self) -> Result<(), String> {
+        if !self.root.exists() {
+            return Ok(());
+        }
+        let _lock = self.acquire_lock()?;
         for path in self.generations()? {
             remove_file_if_present(&path)?;
         }
@@ -172,6 +185,23 @@ impl VerificationCheckpointStore {
             sync_directory(&self.root)?;
         }
         Ok(())
+    }
+
+    fn acquire_lock(&self) -> Result<ExclusiveFileLock, String> {
+        fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
+        let path = self.root.join(".verification-checkpoint.lock");
+        for attempt in 0..CHECKPOINT_LOCK_RETRY_ATTEMPTS {
+            match ExclusiveFileLock::try_acquire(&path) {
+                Ok(lock) => return Ok(lock),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if attempt + 1 < CHECKPOINT_LOCK_RETRY_ATTEMPTS {
+                        thread::sleep(CHECKPOINT_LOCK_RETRY_DELAY);
+                    }
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        Err("verification checkpoint store is busy".to_owned())
     }
 
     fn generations(&self) -> Result<Vec<PathBuf>, String> {
@@ -292,6 +322,39 @@ mod tests {
         })
         .expect("node");
         dag
+    }
+
+    #[test]
+    fn concurrent_saves_leave_one_valid_checkpoint() {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path().to_path_buf();
+        let left =
+            VerificationCheckpoint::new("state-a", dag(), vec!["left"]).expect("left checkpoint");
+        let right =
+            VerificationCheckpoint::new("state-a", dag(), vec!["right"]).expect("right checkpoint");
+
+        let left_root = root.clone();
+        let left_thread = std::thread::spawn(move || {
+            VerificationCheckpointStore::new(&left_root)
+                .save(&left)
+                .expect("left save");
+        });
+        let right_root = root.clone();
+        let right_thread = std::thread::spawn(move || {
+            VerificationCheckpointStore::new(&right_root)
+                .save(&right)
+                .expect("right save");
+        });
+        left_thread.join().expect("left join");
+        right_thread.join().expect("right join");
+
+        let store = VerificationCheckpointStore::new(&root);
+        let restored = store
+            .load::<Vec<String>>("state-a")
+            .expect("load")
+            .expect("checkpoint");
+        assert!(restored.payload == vec!["left"] || restored.payload == vec!["right"]);
+        assert_eq!(store.generations().expect("generations").len(), 1);
     }
 
     #[test]

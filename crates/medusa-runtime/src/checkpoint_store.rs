@@ -300,19 +300,31 @@ fn persist(repo: &Path, record: &RuntimeCheckpointRecord) -> Result<(), RuntimeE
         .write(true)
         .open(&temporary)
         .map_err(RuntimeError::agent)?;
-    if let Err(error) = (|| -> std::io::Result<()> {
-        file.write_all(&bytes)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, &destination)?;
-        sync_parent(&directory)?;
-        Ok(())
-    })() {
-        let _ = fs::remove_file(&temporary);
-        return Err(RuntimeError::agent(error));
+    file.write_all(&bytes).map_err(RuntimeError::agent)?;
+    file.write_all(b"\n").map_err(RuntimeError::agent)?;
+    file.sync_all().map_err(RuntimeError::agent)?;
+    drop(file);
+
+    match fs::rename(&temporary, &destination) {
+        Ok(()) => {
+            sync_parent(&directory).map_err(RuntimeError::agent)?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            if destination.is_file() {
+                let existing = load_record(&destination)?;
+                if existing == *record {
+                    return Ok(());
+                }
+                return Err(RuntimeError::agent(format!(
+                    "checkpoint fingerprint {} became bound to conflicting content",
+                    record.checkpoint.fingerprint
+                )));
+            }
+            Err(RuntimeError::agent(error))
+        }
     }
-    Ok(())
 }
 
 fn load_record(path: &Path) -> Result<RuntimeCheckpointRecord, RuntimeError> {
@@ -420,6 +432,30 @@ mod tests {
         AgentEngine::new(UnusedProvider, Config::default())
             .create_session(repo, "Checkpoint runtime state".to_owned())
             .expect("session")
+    }
+
+    #[test]
+    fn concurrent_identical_checkpoint_publication_is_idempotent() {
+        let repository = tempfile::tempdir().expect("repository");
+        let session = session(repository.path());
+        let checkpoint = materialize(repository.path(), session.id.as_str()).expect("checkpoint");
+        let records = list(repository.path(), session.id.as_str()).expect("records");
+        let record = records.last().expect("checkpoint record").clone();
+        let left_repo = repository.path().to_path_buf();
+        let right_repo = repository.path().to_path_buf();
+        let left_record = record.clone();
+        let right_record = record.clone();
+        let left = std::thread::spawn(move || persist(&left_repo, &left_record));
+        let right = std::thread::spawn(move || persist(&right_repo, &right_record));
+        left.join().expect("left join").expect("left persist");
+        right.join().expect("right join").expect("right persist");
+        assert_eq!(
+            list(repository.path(), session.id.as_str())
+                .expect("records")
+                .last()
+                .expect("last"),
+            &checkpoint
+        );
     }
 
     #[test]

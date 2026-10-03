@@ -28,6 +28,9 @@ mod windows_launch_diagnostics;
 // guard that releases the kernel lock when the owning handle is dropped.
 #[allow(unsafe_code)]
 mod file_lock;
+// SAFETY: reviewed Windows file-replacement FFI is isolated in this low-level crate.
+#[allow(unsafe_code)]
+mod file_replace;
 #[cfg(windows)]
 // SAFETY: reviewed Windows Job Object/process FFI; see the checked allowlist.
 #[allow(unsafe_code)]
@@ -44,6 +47,7 @@ pub use base_container::{
 };
 pub use confined_file::{ConfinedDir, ConfinedReadError};
 pub use file_lock::ExclusiveFileLock;
+pub use file_replace::{atomic_write, replace_file};
 #[cfg(windows)]
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
 pub use process_identity::{

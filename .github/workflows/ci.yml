@@ -445,7 +445,13 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 2
+          # `cargo-semver-checks` resolves the baseline against
+          # `github.event.pull_request.base.sha`, which GitHub leaves pinned at the
+          # commit a pull request was based on. A long-lived pull request can
+          # therefore name a base far older than the two commits a depth-2 clone
+          # holds, and the job fails with `couldn't parse revision`. Fetch enough
+          # history for that revision to be present.
+          fetch-depth: 64
       - uses: ./.github/actions/setup-rust
       - name: Install Linux system dependencies
         shell: bash

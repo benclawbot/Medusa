@@ -53,6 +53,12 @@
         "reason": "Uses reviewed OS file-lock APIs to provide an RAII lock whose ownership is released by the kernel when the file handle closes; the lock path itself is never used as stale PID authority."
       },
       {
+        "path": "crates/medusa-process-containment/src/file_replace.rs",
+        "module": "file_replace",
+        "classification": "unsafe-ffi",
+        "reason": "Calls Windows MoveFileExW with owned, NUL-terminated UTF-16 buffers that remain live throughout the synchronous call; the API retains no pointers, creates no owned handles, and reports failure through the native error code. Other platforms use the safe standard-library rename primitive."
+      },
+      {
         "path": "crates/medusa-process-containment/src/windows.rs",
         "module": "windows",
         "classification": "unsafe-ffi",
