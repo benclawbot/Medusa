@@ -96,7 +96,7 @@ fn list_large_output_history_returns_summaries_without_losing_stored_output() {
 }
 
 #[test]
-fn list_history_is_bounded_and_deterministic() {
+fn list_history_preserves_every_discoverable_job_and_exact_count() {
     let mut jobs: BTreeMap<_, _> = (0..160)
         .map(|i| {
             let record = job(format!("job-{i:03}"));
@@ -111,7 +111,7 @@ fn list_history_is_bounded_and_deterministic() {
     else {
         panic!("expected jobs");
     };
-    assert_eq!(summaries.len(), 128);
-    assert_eq!(summaries.first().expect("newest").id, "job-159");
-    assert_eq!(summaries.last().expect("oldest retained").id, "job-032");
+    assert_eq!(summaries.len(), 160);
+    assert_eq!(summaries.first().expect("first job").id, "job-000");
+    assert_eq!(summaries.last().expect("last job").id, "job-159");
 }

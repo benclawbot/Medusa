@@ -747,8 +747,8 @@
     "daemon_job_list": {
       "owner": "medusa-daemon",
       "decision": "docs/architecture/decisions/0012-audit-and-job-projections.md",
-      "maximum_jobs": 128,
-      "order": "active first, then descending creation timestamp and ID",
+      "job_discovery": "all persisted jobs without silent truncation",
+      "order": "ascending job ID, unchanged",
       "summary_output": "empty stdout and stderr",
       "detail_route": "Status { job_id }",
       "durable_history": "preserved without migration",

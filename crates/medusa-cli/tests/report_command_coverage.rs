@@ -75,6 +75,33 @@ fn report_redacts_credentials_across_argument_array_entries() {
 }
 
 #[test]
+fn report_preserves_safe_arguments_after_inline_credentials() {
+    let repository = tempfile::tempdir().expect("repository");
+    let report = report_events(
+        repository.path(),
+        vec![EventPayload::ToolCallRequested {
+            tool: "shell_run".into(),
+            arguments: serde_json::json!({"args":[
+                "--token=fake-inline-token", "--verbose",
+                "--password=fake inline multi word password", "--dry-run",
+                "sk-fake-credential", "safe-last-argument"
+            ]}),
+        }],
+    );
+    assert_eq!(
+        report["commands_requested"][0]["arguments"]["args"],
+        serde_json::json!([
+            "[REDACTED]",
+            "--verbose",
+            "[REDACTED]",
+            "--dry-run",
+            "[REDACTED]",
+            "safe-last-argument"
+        ])
+    );
+}
+
+#[test]
 fn report_does_not_attribute_success_to_a_denied_mutation() {
     let repository = tempfile::tempdir().expect("repository");
     let report = report_events(

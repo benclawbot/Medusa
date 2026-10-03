@@ -343,14 +343,17 @@ fn sanitize(value: &Value) -> Value {
                     .map(|item| {
                         let credential = redact_next > 0;
                         match item {
-                            Value::String(text) => {
-                                let redacted = redact_with_state(text, &mut redact_next);
-                                Value::String(if credential {
-                                    "[REDACTED]".to_owned()
-                                } else {
-                                    redacted
-                                })
-                            }
+                            Value::String(text) => Value::String(if credential {
+                                redact_next -= 1;
+                                "[REDACTED]".to_owned()
+                            } else if (text.contains('=') && secret_like(text))
+                                || text.starts_with("sk-")
+                                || text.starts_with("ghp_")
+                            {
+                                "[REDACTED]".to_owned()
+                            } else {
+                                redact_with_state(text, &mut redact_next)
+                            }),
                             _ if credential => {
                                 redact_next -= 1;
                                 Value::String("[REDACTED]".to_owned())
@@ -400,11 +403,14 @@ fn redact_with_state(text: &str, redact_next: &mut u8) -> String {
             *redact_next = 1;
         } else if secret_like(token) || token.starts_with("sk-") || token.starts_with("ghp_") {
             redacted.push("[REDACTED]");
-            *redact_next = if lower.contains("authorization") {
-                2
-            } else {
-                1
-            };
+            *redact_next =
+                if token.contains('=') || token.starts_with("sk-") || token.starts_with("ghp_") {
+                    0
+                } else if lower.contains("authorization") {
+                    2
+                } else {
+                    1
+                };
         } else {
             redacted.push(token);
         }

@@ -68,13 +68,13 @@ V2 invariants:
 
 CLI, TUI, daemon, and desktop share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics.
 
-### Audit reports and bounded job listings
+### Audit reports and job summaries
 
 [ADR 0012](decisions/0012-audit-and-job-projections.md) records the CLI audit and
 daemon job-list projection boundaries. Audit paths accept canonical session IDs,
 redaction spans argument-array entries, and denied requests cannot inherit later
 execution success. Explicit approval remains distinguishable from denial.
-Daemon `List` returns up to 128 metadata-only records, prioritizing active jobs;
+Daemon `List` returns metadata-only records for every job in existing ID order;
 `Status` retains full-output access. Durable sessions, event schemas, and job
 history remain the authorities and do not require migration.
 

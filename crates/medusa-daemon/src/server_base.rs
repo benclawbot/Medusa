@@ -55,7 +55,6 @@ const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 // Frontend replay responses can contain a bounded transcript/artifact projection, but a peer
 // must never be able to make the client retain an unbounded line while waiting for a newline.
 const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_LIST_JOBS: usize = 128;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const FRONTEND_REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(600);
 const FRONTEND_CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1060,20 +1059,11 @@ fn dispatch(
     }
 }
 
-/// List is a bounded metadata projection. Status retains full per-job output, and
-/// durable history remains untouched. Request-size and record-count bounds keep
-/// normal job metadata comfortably below the response cap even with escaped args.
+/// List preserves every discoverable job and its ordering while excluding captured
+/// output. Status retains full per-job output; durable history remains untouched.
 fn list_job_summaries(jobs: &BTreeMap<String, JobRecord>) -> Vec<JobRecord> {
-    let mut recent = jobs.values().collect::<Vec<_>>();
-    recent.sort_unstable_by(|left, right| {
-        let active = |job: &JobRecord| matches!(job.state, JobState::Queued | JobState::Running);
-        active(right).cmp(&active(left))
-            .then_with(|| right.created_at.cmp(&left.created_at))
-            .then_with(|| right.id.cmp(&left.id))
-    });
-    recent
-        .into_iter()
-        .take(MAX_LIST_JOBS)
+    jobs
+        .values()
         .map(|job| JobRecord {
             id: job.id.clone(),
             program: job.program.clone(),

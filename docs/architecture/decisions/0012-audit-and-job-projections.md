@@ -1,4 +1,4 @@
-# ADR 0012: Audit reports and bounded daemon job projections
+# ADR 0012: Audit reports and daemon job projections
 
 - Status: accepted
 - Owners: `medusa-cli` and `medusa-daemon`
@@ -20,10 +20,10 @@ argument-array entries and consumes an entire credential value even when it has
 spaces. Mutation projection tracks denied requests and durable approval decisions;
 an unrelated successful request cannot make a denied or pending path appear changed.
 
-Daemon `List` is a bounded metadata projection: at most 128 records, active jobs
-first, then newest creation timestamp and descending ID for ties. Captured stdout
-and stderr are empty in summaries. `Status { job_id }` remains the detail route for
-full output and older jobs. The server never deletes or modifies durable history
+Daemon `List` is a metadata projection preserving every job and existing job-ID
+ordering. Captured stdout and stderr are empty in summaries. `Status { job_id }`
+remains the detail route for full output. Counts and discoverable IDs are complete;
+metadata remains subject to the existing transport cap without silent truncation. The server never deletes or modifies durable history
 when serving a list.
 
 ## Compatibility and recovery
@@ -35,7 +35,7 @@ filesystem paths were never valid session identities. Rollback requires only the
 previous binaries; persisted sessions and jobs remain readable.
 
 The conformance evidence is in `report_command_coverage`, `list_summary_coverage`,
-and the daemon server's active-job projection unit test. These exercise checksummed
-events, denial followed by approval or unrelated success, multiword credentials,
-malformed CLI input, cross-workspace traversal, output-heavy histories, deterministic
-selection, and preservation of full per-job output.
+and the daemon server's job projection unit test. These exercise checksummed
+events, denial followed by approval or unrelated success, multiword and inline credentials,
+malformed CLI input, cross-workspace traversal, output-heavy histories, complete
+job discovery, and preservation of full per-job output.

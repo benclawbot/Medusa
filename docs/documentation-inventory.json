@@ -61,7 +61,7 @@
     {
       "path": "crates/medusa-daemon/README.md",
       "disposition": "current",
-      "sha256": "85882b875b95a00dbd5e33a11b5824ed3218b552a6f6a1541c8e74529820c911"
+      "sha256": "7beb19a72e8e4b334bea4321e1c5bb61f353b43b9046ed441722066e6c14fb40"
     },
     {
       "path": "crates/medusa-intelligence/src/STACK_REPAIR.md",
@@ -136,7 +136,7 @@
     {
       "path": "docs/DAEMON-CONCURRENCY.md",
       "disposition": "current",
-      "sha256": "7ab766e4c2a4174de560ec1a9007f2a69eedd389f7e7475d656a3cbae4a35600"
+      "sha256": "27b344734302ce669dc7b2d0e792666045a8900807a9294b5b4723ea88c501bb"
     },
     {
       "path": "docs/DEPENDENCY-HYGIENE.md",
@@ -346,7 +346,7 @@
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "1722dfdb155a7927312d5c6bee1fe697c66fedda806924dc40ffca14f7ef4990"
+      "sha256": "e731844bfeb720308e1ef80e1109fac0133a0353f60a4967e0154085b1f32239"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
@@ -421,7 +421,7 @@
     {
       "path": "docs/architecture/decisions/0012-audit-and-job-projections.md",
       "disposition": "current",
-      "sha256": "1d20c20c46a5a6ae8dd8b30c7980313b918485ed1d7308e19acfa3d13c0a95ce"
+      "sha256": "d328a4bdb356064a0c5ebb4438123255bc4665c6ec47cc9eef6b4ac32971f13a"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",

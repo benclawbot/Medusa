@@ -9,10 +9,10 @@ use crate::FrontendControlResult;
 use super::*;
 
 #[test]
-fn list_summaries_keep_older_active_jobs_before_recent_completed_history() {
+fn list_summaries_preserve_active_and_completed_jobs_without_output() {
     let now = OffsetDateTime::now_utc();
     let mut jobs = BTreeMap::new();
-    for index in 0..MAX_LIST_JOBS + 10 {
+    for index in 0..138 {
         let id = format!("job-{index:03}");
         jobs.insert(
             id.clone(),
@@ -39,9 +39,9 @@ fn list_summaries_keep_older_active_jobs_before_recent_completed_history() {
         job.created_at = OffsetDateTime::UNIX_EPOCH;
     }
     let summaries = list_job_summaries(&jobs);
-    assert_eq!(summaries.len(), MAX_LIST_JOBS);
-    assert_eq!(summaries[0].id, "job-001");
-    assert_eq!(summaries[1].id, "job-000");
+    assert_eq!(summaries.len(), jobs.len());
+    assert_eq!(summaries[0].state, JobState::Queued);
+    assert_eq!(summaries[1].state, JobState::Running);
     assert!(
         summaries
             .iter()
