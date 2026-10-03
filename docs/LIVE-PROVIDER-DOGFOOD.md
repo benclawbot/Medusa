@@ -48,7 +48,7 @@ The report records platform/build identity, assertion results, elapsed time, nor
 
 ## Running
 
-The workflow supports manual dispatch and a weekly schedule. Its live matrix also runs on the dedicated implementation PR when the harness contract changes, while unrelated pull requests run only deterministic product acceptance.
+The workflow supports manual dispatch and a weekly schedule. The credential-bearing live matrix runs only for those trusted triggers; pull requests run deterministic product acceptance without repository credentials.
 
 Locally, with the provider credential set:
 

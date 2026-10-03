@@ -10,7 +10,7 @@ use ulid::Ulid;
 
 use crate::{
     DEFAULT_PAGE_SIZE, EvidenceError, MAX_SEARCH_HITS, Result, SCHEMA_VERSION, fingerprint,
-    hash_bytes, write_atomic, write_json_atomic,
+    hash_bytes, io_at, write_atomic, write_json_atomic,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -61,7 +61,8 @@ impl ArtifactStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         for child in ["objects", "metadata", "reads"] {
-            fs::create_dir_all(root.join(child))?;
+            let target = root.join(child);
+            fs::create_dir_all(&target).map_err(|error| io_at(&target, error))?;
         }
         Ok(Self { root })
     }
@@ -106,7 +107,7 @@ impl ArtifactStore {
         metadata.fingerprint = metadata_fingerprint(&metadata);
         let object_path = self.object_path(&id);
         if object_path.is_file() {
-            let existing = fs::read(&object_path)?;
+            let existing = fs::read(&object_path).map_err(|error| io_at(&object_path, error))?;
             if existing != bytes {
                 if hash_bytes(&existing) == sha256 {
                     return Err(EvidenceError::Validation(
@@ -138,9 +139,11 @@ impl ArtifactStore {
         if !path.is_file() {
             return Err(EvidenceError::NotFound(id.0.clone()));
         }
-        let metadata: ArtifactMetadata = serde_json::from_slice(&fs::read(path)?)?;
+        let metadata: ArtifactMetadata =
+            serde_json::from_slice(&fs::read(&path).map_err(|error| io_at(&path, error))?)?;
         validate_metadata(&metadata)?;
-        let bytes = fs::read(self.object_path(id))?;
+        let object_path = self.object_path(id);
+        let bytes = fs::read(&object_path).map_err(|error| io_at(&object_path, error))?;
         if bytes.len() as u64 != metadata.byte_len || hash_bytes(&bytes) != metadata.sha256 {
             return Err(EvidenceError::Validation(format!(
                 "artifact {} bytes do not match metadata",
@@ -158,7 +161,7 @@ impl ArtifactStore {
         }
         // A corrupt receipt file must fail loudly: the old code returned `Ok`
         // here, silently dropping the entire authoritative read-receipt set.
-        let raw = fs::read(&receipt_path)?;
+        let raw = fs::read(&receipt_path).map_err(|error| io_at(&receipt_path, error))?;
         let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|error| {
             EvidenceError::Validation(format!(
                 "persisted artifact read receipts are corrupt: {error}"
@@ -236,7 +239,8 @@ impl ArtifactStore {
                 metadata.byte_len
             )));
         }
-        let mut file = fs::File::open(self.object_path(id))?;
+        let object_path = self.object_path(id);
+        let mut file = fs::File::open(&object_path).map_err(|error| io_at(&object_path, error))?;
         file.seek(SeekFrom::Start(offset))?;
         let mut bytes = vec![0; length as usize];
         file.read_exact(&mut bytes)?;
@@ -330,7 +334,8 @@ impl ArtifactStore {
         if !path.is_file() {
             return Err(EvidenceError::NotFound(id.to_owned()));
         }
-        let receipt: ArtifactReadReceipt = serde_json::from_slice(&fs::read(path)?)?;
+        let receipt: ArtifactReadReceipt =
+            serde_json::from_slice(&fs::read(&path).map_err(|error| io_at(&path, error))?)?;
         validate_read(&receipt)?;
         Ok(receipt)
     }

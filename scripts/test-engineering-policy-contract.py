@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 import pathlib
 import sys
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "scripts/engineering-policy.py"
@@ -29,6 +32,52 @@ def checks(report: dict[str, object]) -> set[str]:
 
 
 def main() -> int:
+    active_run = [
+        {"name": "Workspace quality", "status": "completed", "conclusion": "success"},
+        {"name": "Repository policy and evidence", "status": "in_progress", "conclusion": None},
+    ]
+    assert MODULE.current_run_jobs_succeeded(active_run, "Repository policy and evidence") is True
+    assert MODULE.current_run_jobs_succeeded(
+        [{"name": "Workspace quality", "status": "in_progress"}, *active_run[1:]],
+        "Repository policy and evidence",
+    ) is None
+    try:
+        MODULE.current_run_jobs_succeeded(active_run[:1], "Repository policy and evidence")
+    except ValueError as exc:
+        assert "exactly one" in str(exc)
+    else:
+        raise AssertionError("current workflow jobs must include the policy job itself")
+    try:
+        MODULE.current_run_jobs_succeeded([], "Repository policy and evidence")
+    except ValueError as exc:
+        assert "exactly one" in str(exc)
+    else:
+        raise AssertionError("an empty current workflow run must fail closed")
+    try:
+        MODULE.current_run_jobs_succeeded(
+            [{"name": "Workspace quality", "status": "completed", "conclusion": "failure"}, *active_run[1:]],
+            "Repository policy and evidence",
+        )
+    except ValueError as exc:
+        assert "Workspace quality=failure" in str(exc)
+    else:
+        raise AssertionError("failed job in the current workflow run must fail policy enforcement")
+
+    pages = [
+        {"total_count": 101, "jobs": [{"name": f"job-{index}"} for index in range(100)]},
+        {"total_count": 101, "jobs": [{"name": "last-job"}]},
+    ]
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request: object, timeout: int) -> io.BytesIO:
+        requested_urls.append(request.full_url)  # type: ignore[attr-defined]
+        return io.BytesIO(json.dumps(pages.pop(0)).encode())
+
+    with mock.patch.object(MODULE.urllib.request, "urlopen", side_effect=fake_urlopen):
+        paged_jobs = MODULE.github_workflow_jobs("owner/repo", "123", "token")
+    assert len(paged_jobs) == 101
+    assert "page=1" in requested_urls[0] and "page=2" in requested_urls[1]
+
     docs = resolved("docs/guide.md")
     assert "generated-documentation-inventory" in rule_ids(docs)
     assert "documentation-inventory" in checks(docs)

@@ -47,4 +47,4 @@ cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 ```
 
-Release-level verification remains defined by `.github/workflows/release-gates.yml`.
+Release-level verification remains defined by the `Acceptance, adversarial regressions, and security` job of `.github/workflows/ci.yml`.

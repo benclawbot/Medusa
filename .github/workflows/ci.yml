@@ -6,12 +6,26 @@ on:
       - main
   pull_request:
   workflow_call:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model for the credential-gated live gates; empty uses the provider default."
+        required: false
+        default: ""
+        type: string
+  # Nightly deep resilience campaign, previously the scheduled half of the
+  # Resilience Certification workflow.
+  schedule:
+    - cron: "23 3 * * *"
+    # Weekly authenticated cross-platform live-provider dogfood.
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.schedule || 'unscheduled' }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,14 +35,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Install Linux system dependencies
-        shell: bash
-        # medusa-agent's Linux containment tests require bubblewrap. medusa-tui
-        # uses keyring with the Secret Service backend, which links against the
-        # system D-Bus client library via libdbus-sys/pkg-config.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap libdbus-1-dev pkg-config
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned workflow-test parser
+        run: python -m pip install PyYAML==6.0.2
       - name: Validate repository artifact hygiene
         shell: bash
         run: |
@@ -36,10 +47,7 @@ jobs:
           python3 scripts/test-repository-artifacts.py
           python3 scripts/check-repository-artifacts.py
           python3 scripts/test-ci-workflow-contract.py
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt,clippy
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: ./.github/actions/setup-rust
         with:
           # Per-PR cache key: a shared medusa-pr-build key lets one PR poison or
           # read another PR's (or main's) build cache. Scope to the PR number so
@@ -48,11 +56,9 @@ jobs:
           shared-key: medusa-quality-${{ github.event.pull_request.number || github.ref_name }}
           add-job-id-key: "false"
       - name: Validate committed dependency authority
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo metadata --locked --format-version 1 >/dev/null
-          git diff --exit-code -- Cargo.lock
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
       - name: Check formatting
         shell: bash
         run: |
@@ -148,7 +154,7 @@ jobs:
   supply-chain:
     name: Dependency policy
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -156,7 +162,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           # Per-PR, per-job cache key (see quality job): the supply-chain job must
@@ -276,3 +282,1157 @@ jobs:
           if-no-files-found: error
       - name: Assert supply-chain validation preserved Cargo.lock
         run: git diff --exit-code -- Cargo.lock
+
+  policy:
+    name: Repository policy and evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # Current-run jobs back CI checks without waiting on the containing
+      # workflow's own completion; separately named workflows stay independent.
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/setup-rust
+      - name: Audit repository workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/test-workflow-hygiene.sh
+          bash scripts/check-workflow-hygiene.sh
+      - name: Enforce immutable release workflow policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/release-workflow-policy.py self-test
+          python3 scripts/stable-release-publication-policy.py self-test
+          python3 -m py_compile scripts/verify-stable-release-authority.py
+          python3 scripts/release-workflow-policy.py check --root .
+          python3 scripts/stable-release-publication-policy.py check --root .
+      - name: Validate release keyring trust references
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-release-keyring.py
+          python3 scripts/check-release-keyring.py
+      - name: Exercise architecture policy fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/architecture-policy.py self-test
+          python3 scripts/test-engineering-policy-contract.py
+      - name: Validate engineering policy schema
+        shell: bash
+        run: python3 scripts/engineering-policy.py validate --policy .github/engineering-policy.json --root .
+      - name: Resolve required engineering checks with frozen authority
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # The live provider gates are credential-gated and reachable only via
+          # workflow_dispatch, so no pull request can satisfy them. The policy
+          # therefore always resolves `provider-live-dogfood` through its
+          # substitute evidence instead of probing for repository secrets here.
+          git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > /tmp/engineering-policy-changed-paths.txt
+          if grep -Eq '^(\.github/engineering-policy\.json|scripts/engineering-policy\.py|\.github/workflows/ci\.yml)$' /tmp/engineering-policy-changed-paths.txt; then
+            git show "${BASE_SHA}:.github/engineering-policy.json" > /tmp/engineering-policy-base.json
+            git show "${BASE_SHA}:scripts/engineering-policy.py" > /tmp/engineering-policy-base.py
+            python3 /tmp/engineering-policy-base.py explain \
+              --policy /tmp/engineering-policy-base.json \
+              --base-policy /tmp/engineering-policy-base.json \
+              --root . \
+              --base "${BASE_SHA}" \
+              --head "${HEAD_SHA}" \
+              --json | tee engineering-policy-report.json
+          else
+            python3 scripts/engineering-policy.py explain \
+              --policy .github/engineering-policy.json \
+              --root . \
+              --base "${BASE_SHA}" \
+              --head "${HEAD_SHA}" \
+              --json | tee engineering-policy-report.json
+          fi
+      - name: Enforce architecture policy
+        shell: bash
+        run: |
+          python3 scripts/architecture-policy.py check \
+            --root . \
+            --policy .github/architecture-policy.json \
+            --report architecture-policy-report.md
+      - name: Enforce certified tool execution pipeline
+        shell: bash
+        run: python3 scripts/check-certified-tool-pipeline.py
+      - name: Enforce resolved engineering checks
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          # Cross-platform checks may queue behind this job; wait long enough to
+          # observe their conclusion.
+          python3 scripts/engineering-policy.py enforce \
+            --policy .github/engineering-policy.json \
+            --report engineering-policy-report.json \
+            --root . \
+            --head "${HEAD_SHA}" \
+            --satisfied architecture-policy \
+            --satisfied certified-tool-pipeline \
+            --satisfied engineering-policy-base \
+            --timeout-seconds 7200 \
+            --current-run-id "$GITHUB_RUN_ID" \
+            --current-job-name 'Repository policy and evidence'
+      - name: Publish architecture report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: architecture-policy-report
+          path: |
+            architecture-policy-report.md
+            engineering-policy-report.json
+          if-no-files-found: warn
+      - name: Validate architecture ownership and trust boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-architecture-index.py
+          python3 scripts/check-architecture-index.py
+          python3 scripts/check-mutation-lifecycle.py
+          python3 scripts/check-evidence-authority.py
+          python3 scripts/check-product-architecture.py
+      - name: Build real production CLI entrypoint
+        shell: bash
+        run: cargo build --locked --bin medusa
+      - name: Run production entrypoint and known-failure conformance
+        shell: bash
+        run: python3 scripts/architecture-conformance.py --all --binary target/debug/medusa --json
+      - name: Validate repository capability evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-capability-evidence.py
+          python3 scripts/check-capability-evidence.py
+      - name: Validate every user surface accepts a filesystem workspace
+        shell: bash
+        run: python3 scripts/check-workspace-surfaces.py
+      - name: Validate provider support and delivery contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-provider-support.py
+          python3 scripts/check-provider-delivery.py
+      - name: Validate governed public API baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s docs/REFACTOR-BASELINE.md
+          test -s docs/PUBLIC-API-BASELINE.md
+          test -s docs/BENCHMARKS.md
+          grep -q '75%' docs/REFACTOR-BASELINE.md
+          grep -q '5%' docs/BENCHMARKS.md
+          grep -q 'medusa-agent' docs/PUBLIC-API-BASELINE.md
+          echo refactor-baseline-ok
+
+  docs:
+    name: Documentation and public API
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+      - uses: ./.github/actions/setup-rust
+      - name: Install Linux system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Build documentation with warnings denied
+        shell: bash
+        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --locked --no-deps
+      - name: Reconcile the documentation inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-documentation.py
+          if python3 scripts/check-documentation.py; then
+            exit 0
+          fi
+          committed="$(mktemp)"
+          cp docs/documentation-inventory.json "$committed"
+          python3 scripts/check-documentation.py --write
+          echo "::group::Exact stale documentation inventory diff"
+          diff -u "$committed" docs/documentation-inventory.json || true
+          echo "::endgroup::"
+          cp "$committed" docs/documentation-inventory.json
+          echo "committed documentation inventory is stale" >&2
+          exit 1
+      - name: Validate release evidence and required documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/release-evidence.py self-test
+          for document in \
+            README.md \
+            CONTRIBUTING.md \
+            docs/RELEASE.md \
+            docs/COMPATIBILITY.md \
+            docs/DESKTOP-DISTRIBUTION.md \
+            docs/OBSERVABILITY.md \
+            docs/SECURITY-HARDENING.md; do
+            test -s "$document"
+          done
+      - name: Compare governed crates with the pull-request base
+        if: github.event_name == 'pull_request'
+        uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
+        with:
+          baseline-rev: ${{ github.event.pull_request.base.sha }}
+          package: medusa-core,medusa-provider,medusa-memory,medusa-intelligence,medusa-agent,medusa-workers,medusa-extensions,medusa-hardening,medusa-daemon,medusa-cli,medusa-tui
+          rust-toolchain: '1.93.0'
+
+  platform:
+    name: Platform suites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: Linux
+          - os: macos-latest
+            platform: macOS
+          - os: windows-2022
+            platform: Windows
+    env:
+      MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: medusa-platform-${{ matrix.os }}
+      - name: Validate committed dependency authority
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
+      - name: Check workspace formatting
+        shell: bash
+        run: cargo fmt --all -- --check
+      - name: Lint daemon and TUI
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy -p medusa-daemon -p medusa-tui --all-targets --locked -- -D warnings 2>&1 | tee daemon-clippy.log
+      - name: Test daemon and TUI integration
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-daemon -p medusa-tui --locked -- --nocapture 2>&1 | tee daemon-tests.log
+      - name: Test directory mutation and workspace lifecycle backends
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-runtime workspace_worker_manager --locked
+          cargo test -p medusa-runtime workspace::tests --locked
+          cargo test -p medusa-daemon --test workspace_paths --locked
+      - name: Certify recording-provider multimodal contract
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-provider --test multimodal_contract --locked
+          cargo test -p medusa-tui clipboard::tests --locked
+      - name: Certify data lifecycle
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-testkit data_lifecycle --locked -- --nocapture
+          cargo test -p medusa-evidence artifact::tests --locked -- --nocapture
+          cargo test -p medusa-memory --locked -- --nocapture
+          cargo test -p medusa-execution-checkpoint -p medusa-time-travel -p medusa-session-continuity --locked -- --nocapture
+          cargo test -p medusa-agent journal::tests --locked -- --nocapture
+          cargo test -p medusa-agent session_disposition --locked -- --nocapture
+          cargo test -p medusa-runtime completed_session_disposition_removes_runtime_projections --locked -- --nocapture
+      - name: Run deterministic resilience primitives
+        shell: bash
+        env:
+          PROPTEST_CASES: '256'
+          PROPTEST_MAX_SHRINK_ITERS: '4096'
+        run: |
+          set -o pipefail
+          cargo test -p medusa-testkit --locked -- --nocapture
+          cargo test -p medusa-protocol --test resilience --locked -- --nocapture
+          cargo test -p medusa-runtime mutation_transaction:: --locked -- --nocapture
+          cargo test -p medusa-execution-checkpoint -p medusa-worker-leases -p medusa-process-registry -p medusa-time-travel -p medusa-session-continuity --locked -- --nocapture
+          cargo test -p medusa-agent journal::tests --locked -- --nocapture
+      - name: Certify lifecycle and testkit lints
+        shell: bash
+        run: |
+          cargo clippy -p medusa-testkit --all-targets --locked -- -D warnings
+      - name: Certify continuous verification reuse
+        # The continuous-verification certification is a wall-clock comparison
+        # between a cold verification and an exact-receipt reuse over the same
+        # fixtures. With the seven samples the scenario collects, nearest-rank p95
+        # resolves to the single largest observation, so the gate compares the
+        # luckiest cold sample against the unluckiest warm sample. Shared macOS
+        # runners stall for whole seconds, which makes that tail a measurement of
+        # runner interference rather than of reuse benefit; the gate failed roughly
+        # one macOS run in twenty before this consolidation and consolidation now
+        # evaluates it on every pull request.
+        #
+        # The gate therefore stays authoritative everywhere it can be measured
+        # reliably: every platform on main pushes, the nightly schedule, manual
+        # dispatch, and the release workflows that call this workflow. Only the
+        # macOS pull-request run is advisory, where it still executes, still logs
+        # its failure, and still leaves the evidence in the run log.
+        continue-on-error: ${{ github.event_name == 'pull_request' && matrix.os == 'macos-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/performance/certify_continuous_verification.py \
+            --platform '${{ matrix.platform }}' --output continuous-verification-certification.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          continuous = json.loads(Path('continuous-verification-certification.json').read_text(encoding='utf-8'))
+          assert continuous['verified_success'] is True
+          assert continuous['verification_coverage'] == 1.0
+          assert continuous['exact_check_rerun_ratio'] == 0.0
+          assert continuous['warm_median_speedup_ratio'] >= 0.10
+          assert continuous['warm_p95_speedup_ratio'] >= 0.10
+          assert continuous['exact_reuse_verified'] is True
+          assert continuous['stale_input_rerun_verified'] is True
+          PY
+      - name: Certify parallel mutation and compound-tool DAG
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/performance/certify_parallel_mutation.py \
+            --platform '${{ matrix.platform }}' --output parallel-mutation-certification.json
+          python3 scripts/performance/certify_tool_dag.py \
+            --platform '${{ matrix.platform }}' --output tool-dag-certification.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          parallel = json.loads(Path('parallel-mutation-certification.json').read_text(encoding='utf-8'))
+          assert parallel['verified_success'] is True
+          assert parallel['verification_coverage'] == 1.0
+          assert parallel['parallel_wall_time_reduction_ratio'] >= 0.25
+          assert parallel['decomposable_fixture_conflict_rate_ratio'] == 0.0
+          assert parallel['deterministic_integration_verified'] is True
+          assert parallel['fallback_and_scope_invalidation_verified'] is True
+          assert parallel['staging_recovery_verified'] is True
+          assert parallel['runtime_metrics_verified'] is True
+          assert parallel['rollback_and_worker_cleanup_verified'] is True
+          dag = json.loads(Path('tool-dag-certification.json').read_text(encoding='utf-8'))
+          assert dag['verified_success'] is True
+          assert dag['verification_coverage'] == 1.0
+          assert dag['tool_call_reduction_ratio'] >= 0.5
+          assert dag['redundant_tool_call_ratio'] <= 0.03
+          assert dag['timing_telemetry_contract_verified'] is True
+          assert dag['cross_platform_resource_and_cancellation_verified'] is True
+          assert dag['dependency_dag_verified'] is True
+          assert dag['compound_tools_verified'] is True
+          PY
+      - name: Assert platform suites preserved Cargo.lock
+        run: git diff --exit-code -- Cargo.lock
+
+  deep-resilience:
+    name: Deep resilience campaign
+    # Nightly only: this is the deep deterministic fault campaign that the former
+    # scheduled Resilience Certification job owned. It is far too slow for a PR.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: medusa-deep-resilience
+      - name: Validate committed dependency authority
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
+      - name: Run deep protocol and deterministic fault campaign
+        shell: bash
+        env:
+          PROPTEST_CASES: '4096'
+          PROPTEST_MAX_SHRINK_ITERS: '32768'
+        run: |
+          set -o pipefail
+          cargo test -p medusa-testkit -p medusa-protocol --locked -- --nocapture 2>&1 | tee deep-campaign.log
+      - name: Run deep parent-review transaction state-machine and recovery suites
+        shell: bash
+        run: >-
+          cargo test -p medusa-runtime mutation_transaction:: --locked -- --nocapture
+      - name: Run deep authority state-machine and recovery suites
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test \
+            -p medusa-execution-checkpoint \
+            -p medusa-worker-leases \
+            -p medusa-process-registry \
+            -p medusa-time-travel \
+            -p medusa-session-continuity \
+            --locked -- --nocapture 2>&1 | tee deep-authority.log
+      - name: Run journal recovery campaign
+        shell: bash
+        run: >-
+          cargo test -p medusa-agent journal::tests --locked -- --nocapture
+      - name: Upload deep campaign diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deep-resilience-diagnostics
+          path: |
+            deep-campaign.log
+            deep-authority.log
+          if-no-files-found: ignore
+
+  acceptance:
+    name: Acceptance, adversarial regressions, and security
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: medusa-acceptance-${{ github.event.pull_request.number || github.ref_name }}
+          add-job-id-key: "false"
+      - name: Install production sandbox backend
+        shell: bash
+        # setup-rust already installs bubblewrap and pkg-config; this prepares the
+        # apt sources and unprivileged-userns switch the sandbox needs.
+        run: |
+          set -euo pipefail
+          sudo bash scripts/disable-google-chrome-apt-source.sh
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Validate committed dependency authority
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
+      - name: Run shared-target PR smoke acceptance
+        shell: bash
+        run: python3 scripts/product-acceptance-smoke.py --output product-acceptance-smoke-artifacts
+      - name: Run authoritative containment regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p medusa-agent parent_path_escape_is_denied --locked -- --nocapture
+          cargo test -p medusa-agent symlink_escape_is_denied --locked -- --nocapture
+          cargo test -p medusa-agent dangerous_shell_commands_are_denied --locked -- --nocapture
+          cargo test -p medusa-agent sandbox_blocks_network_and_external_writes --locked -- --nocapture
+          cargo test -p medusa-agent patch_apply_tool_uses_guarded_transaction --locked -- --nocapture
+          cargo test -p medusa-workers parallel_feature_fixture_merges_and_verifies --locked -- --nocapture
+          cargo test -p medusa-workers conflicting_workers_abort_cleanly --locked -- --nocapture
+          cargo test -p medusa-extensions malicious_mcp_cannot_read_secret_or_redefine_policy --locked -- --exact
+          cargo test -p medusa-hardening operational_events_redact_credentials --locked -- --exact
+          cargo test -p medusa-hardening arbitrary_archive_paths_never_escape --locked -- --nocapture
+      - name: Run reproducible safety and recovery proof
+        shell: bash
+        run: cargo medusa-proof --output medusa-proof-artifacts
+      - name: Run fuzz and chaos smoke campaigns
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/fuzz-smoke.sh
+          bash scripts/chaos-smoke.sh
+          cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact --locked -- --exact
+      - name: Run provider delivery diagnostic
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-cli --bin medusa-provider-diagnostic --locked
+          cargo run -p medusa-cli --bin medusa-provider-diagnostic --locked -- --config examples/provider-diagnostic/local.toml --output provider-diagnostic.json
+          python3 scripts/validate-provider-diagnostic-report.py provider-diagnostic.json
+      - name: Validate external repository contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/external-validation.py validate
+          python3 scripts/external-validation.py self-test
+      - name: Assert acceptance suites preserved Cargo.lock
+        run: git diff --exit-code -- Cargo.lock
+
+  coverage:
+    name: Workspace coverage >= 75%
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Run complete workspace coverage suite
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 75 2>&1 | tee coverage.log
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-report
+          path: coverage.lcov
+          if-no-files-found: error
+
+  benchmarks:
+    name: Deterministic benchmarks and certification corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/setup-rust
+      - name: Install production sandbox backend
+        shell: bash
+        # setup-rust already installs bubblewrap and pkg-config; this prepares the
+        # apt sources and unprivileged-userns switch the sandbox needs.
+        run: |
+          set -euo pipefail
+          sudo bash scripts/disable-google-chrome-apt-source.sh
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Validate committed dependency authority
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1 >/dev/null"
+      - name: Validate benchmark scoring fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-reliability-benchmark.py
+          python3 scripts/test-orchestration-benchmark.py
+          python3 scripts/test-coding-harness-benchmark.py
+          python3 scripts/test-compare-coding-harness-benchmarks.py
+      - name: Build product acceptance runner and warm test targets
+        shell: bash
+        run: |
+          cargo build --locked -p medusa-cli --bin medusa-product-acceptance
+          cargo test --workspace --locked --no-run
+      - name: Run release-blocking deterministic benchmarks
+        shell: bash
+        env:
+          MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
+          MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance
+          MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '600'
+        run: |
+          set -o pipefail
+          python3 scripts/reliability-benchmark.py 2>&1 | tee reliability-benchmark.log
+          python3 scripts/orchestration-benchmark.py 2>&1 | tee orchestration-benchmark.log
+          python3 scripts/coding-harness-benchmark.py 2>&1 | tee coding-harness-benchmark.log
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: benchmark-evidence
+          path: |
+            reliability-benchmark.log
+            orchestration-benchmark.log
+            coding-harness-benchmark.log
+            target/reliability-benchmark
+            target/orchestration-benchmark
+            target/coding-harness-benchmark
+          if-no-files-found: ignore
+      - name: Enforce measured provider hedge p95 improvement
+        shell: bash
+        run: cargo test -p medusa-provider injected_tail_latency_benchmark_enforces_p95_improvement -- --nocapture
+      - name: Validate performance corpus and comparator contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/performance/compare_runs.py \
+            benchmarks/performance/fixtures/baseline.json \
+            benchmarks/performance/fixtures/candidate.json
+          cp benchmarks/performance/fixtures/candidate.json /tmp/regression.json
+          python3 - <<'PY'
+          import json
+          path = '/tmp/regression.json'
+          data = json.load(open(path, encoding='utf-8'))
+          data['verified_success'] = False
+          json.dump(data, open(path, 'w', encoding='utf-8'))
+          PY
+          if python3 scripts/performance/compare_runs.py \
+            benchmarks/performance/fixtures/baseline.json /tmp/regression.json; then
+            echo 'comparator accepted an unverified result' >&2
+            exit 1
+          fi
+          python3 scripts/performance/summarize_runs.py \
+            benchmarks/performance/fixtures/run-v1.json --output performance-summary.json
+          python3 scripts/performance/validate_scenarios.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          summary = Path('performance-summary.json')
+          if not summary.is_file():
+              raise SystemExit('performance summary was not written')
+          report = json.loads(summary.read_text(encoding='utf-8'))
+          if report.get('schema_version') != 1 or not report.get('groups'):
+              raise SystemExit('performance summary is incomplete')
+          telemetry = json.loads(Path('benchmarks/performance/fixtures/run-v1.json').read_text(encoding='utf-8'))
+          del telemetry['artifacts']
+          Path('/tmp/incomplete.json').write_text(json.dumps(telemetry), encoding='utf-8')
+          PY
+          if python3 scripts/performance/summarize_runs.py /tmp/incomplete.json; then
+            echo 'summarizer accepted incomplete telemetry' >&2
+            exit 1
+          fi
+      - name: Validate journal persistence evidence contract
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('benchmarks/performance/692-journal-persistence.json').read_text(encoding='utf-8'))
+          persistence = data['persistence']
+          assert data['schema_version'] == 1
+          assert data['outcome']['verified_success'] is True
+          assert persistence['baseline_append_opens_per_transition'] == 2
+          assert persistence['candidate_append_opens_per_transition'] == 1
+          assert persistence['baseline_file_syncs_per_transition'] == 2
+          assert persistence['candidate_file_syncs_per_transition'] == 1
+          assert persistence['synchronous_persistence_operation_reduction_ratio'] >= 0.5
+          assert persistence['ordering'] == 'event_then_snapshot'
+          assert persistence['publish_after_sync'] is True
+          assert persistence['global_persistence_lock'] is False
+          PY
+      - name: Certify speculative execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > speculation-certification.log
+          echo '=== scheduler speculation tests ===' >> speculation-certification.log
+          cargo test -p medusa-multi-agent-scheduler --lib speculation -- --nocapture >> speculation-certification.log 2>&1
+          echo '=== runtime promotion-authority test ===' >> speculation-certification.log
+          cargo test -p medusa-runtime speculative_transaction_requires_explicit_promotion_before_review -- --nocapture >> speculation-certification.log 2>&1
+          echo '=== overlap performance test ===' >> speculation-certification.log
+          cargo test -p medusa-multi-agent-scheduler --test speculation_performance -- --nocapture >> speculation-certification.log 2>&1
+          cat speculation-certification.log
+      - name: Assert benchmarks preserved Cargo.lock
+        run: git diff --exit-code -- Cargo.lock
+
+  desktop:
+    name: Desktop adapter (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: medusa-desktop-${{ matrix.os }}
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo bash scripts/disable-google-chrome-apt-source.sh
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Check desktop formatting
+        shell: bash
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
+      - name: Lint desktop adapter
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked -- -D warnings 2>&1 | tee desktop-clippy.log
+      - name: Audit desktop production panic paths
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --lib --bins --locked -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic 2>&1 | tee desktop-panic-audit.log
+      - name: Test desktop adapter
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked 2>&1 | tee desktop-tests.log
+
+  desktop-frontend:
+    name: Desktop frontend and bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/setup-rust
+      - name: Install Linux Tauri dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo bash scripts/disable-google-chrome-apt-source.sh
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Validate synchronized desktop versions
+        shell: bash
+        run: python3 scripts/check-desktop-version-sync.py --root . --self-test
+      - name: Exercise desktop package validation failures
+        shell: bash
+        run: python3 scripts/desktop-package-smoke.py --self-test
+      - name: Test Tauri bundler tool preparation
+        shell: bash
+        run: python3 scripts/test-prepare-tauri-linux-tools.py
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: apps/medusa-desktop
+      - name: Typecheck frontend
+        run: npm run typecheck
+        working-directory: apps/medusa-desktop
+      - name: Run frontend tests
+        run: npm test
+        working-directory: apps/medusa-desktop
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/medusa-desktop
+      - name: Prepare verified Tauri Linux bundler tools
+        shell: bash
+        run: python3 scripts/prepare-tauri-linux-tools.py --cache-dir "$HOME/.cache/tauri"
+      - name: Build unsigned desktop bundles
+        # AppImage needs FUSE, which hosted runners lack; extract-and-run avoids it.
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: npm run tauri:build -- --bundles deb,appimage
+        working-directory: apps/medusa-desktop
+      - name: Validate bundles and emit SHA-256 evidence
+        shell: bash
+        run: |
+          python3 scripts/desktop-package-smoke.py \
+            --root apps/medusa-desktop/src-tauri/target/release/bundle \
+            --platform linux \
+            --manifest desktop-package-linux.json
+      - name: Upload unsigned desktop packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-desktop-packages
+          path: apps/medusa-desktop/src-tauri/target/release/bundle
+          if-no-files-found: error
+
+  bundle-smoke:
+    name: Desktop bundle smoke (${{ matrix.platform }})
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos
+            bundles: app,dmg
+          - os: windows-2022
+            platform: windows
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Install desktop dependencies
+        working-directory: apps/medusa-desktop
+        run: npm ci
+      - name: Run responsive and accessibility frontend acceptance
+        working-directory: apps/medusa-desktop
+        run: npm test
+      - name: Build unsigned desktop bundles
+        working-directory: apps/medusa-desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: npm run tauri:build -- --bundles ${{ matrix.bundles }}
+      - name: Validate bundles and emit SHA-256 evidence
+        run: >-
+          python scripts/desktop-package-smoke.py
+          --root apps/medusa-desktop/src-tauri/target/release/bundle
+          --platform ${{ matrix.platform }}
+          --manifest desktop-package-${{ matrix.platform }}.json
+      - name: Upload unsigned desktop packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: medusa-desktop-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            apps/medusa-desktop/src-tauri/target/release/bundle
+            desktop-package-${{ matrix.platform }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  package-smoke:
+    name: Package and quickstart smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-rust
+      - name: Build release package
+        shell: bash
+        run: cargo build --release --locked --bin medusa --bin medusa-recall
+      - name: Smoke test package on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/package-smoke.sh
+      - name: Smoke test package on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = 'target/release/medusa.exe'
+          $recall = 'target/release/medusa-recall.exe'
+          & $binary --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $binary --help | Select-String 'Autonomous coding agent'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $recall --help | Select-String 'medusa-recall'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $recall --help | Select-String 'search'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run deterministic quickstart
+        shell: bash
+        env:
+          # A deliberately fake credential: quickstart must succeed without a real
+          # provider, and the report must never echo the key back.
+          OPENAI_API_KEY: quickstart-smoke-placeholder
+        run: |
+          set -euo pipefail
+          cargo build --locked --package medusa-cli --bins
+          export PATH="$PWD/target/debug:$PATH"
+          medusa quickstart --json > quickstart-report.json
+          python3 - <<'PY'
+          import json
+          with open("quickstart-report.json", encoding="utf-8") as handle:
+              report = json.load(handle)
+          assert report["schema_version"] == 1
+          assert report["success"] is True
+          assert report["task"]["bounded"] is True
+          assert report["task"]["verified"] is True
+          assert "quickstart-smoke-placeholder" not in json.dumps(report)
+          PY
+      - name: Upload package and quickstart evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-smoke-${{ matrix.os }}
+          path: quickstart-report.json
+          if-no-files-found: ignore
+
+  product-acceptance:
+    name: Full product acceptance evidence (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    env:
+      MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: medusa-acceptance-${{ matrix.os }}
+      - name: Validate committed dependency authority
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
+      - name: Install Linux sandbox backend
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo bash scripts/disable-google-chrome-apt-source.sh
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Run authoritative product acceptance suite
+        shell: bash
+        run: cargo product-acceptance --output product-acceptance-artifacts
+      - name: Upload product acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: product-acceptance-${{ matrix.os }}
+          path: product-acceptance-artifacts
+          if-no-files-found: ignore
+
+  intelligence:
+    name: TypeScript intelligence (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - uses: ./.github/actions/setup-rust
+      - name: Install production TypeScript language server
+        run: npm install --global typescript typescript-language-server
+      - name: Verify language-server availability
+        run: typescript-language-server --version
+      - name: Require committed dependency graph
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --format-version 1 --locked --no-deps"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint intelligence and production dispatcher
+        run: cargo clippy -p medusa-intelligence -p medusa-agent --all-targets --all-features --locked -- -D warnings
+      - name: Run intelligence correctness and freshness fixtures
+        run: cargo test -p medusa-intelligence --all-features --locked -- --nocapture
+      - name: Run production agent tool fixtures
+        run: cargo test -p medusa-agent --all-features --locked intelligence -- --nocapture
+      - name: Compile TypeScript workspace benchmark
+        run: cargo bench -p medusa-intelligence --bench typescript_workspace --no-run --locked
+      - name: Execute TypeScript workspace benchmark
+        if: runner.os == 'Linux'
+        run: cargo bench -p medusa-intelligence --bench typescript_workspace --locked
+      - name: Validate architecture ownership and trust boundaries
+        run: python3 scripts/check-architecture-index.py
+
+  live:
+    name: Live provider and product gates
+    # Credential-gated: these gates need MINIMAX_API_KEY and a real provider, so they
+    # run on demand rather than on every pull request or push.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: ./.github/actions/setup-rust
+      - name: Install pinned live-contract parser
+        shell: bash
+        run: python -m pip install PyYAML==6.0.2
+      - name: Compile and test the live evidence contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            scripts/live-coding-e2e.py \
+            scripts/run-live-coding-e2e.py \
+            scripts/live-model-selection.py \
+            scripts/live-dogfood-report.py \
+            scripts/run-live-dogfood-report.py \
+            scripts/test-live-dogfood.py \
+            scripts/test-live-model-selection.py \
+            scripts/test-live-ubuntu-prerequisites.py \
+            scripts/check-provider-support.py
+          python3 scripts/test-live-dogfood.py
+          python3 scripts/test-live-model-selection.py
+          python3 scripts/test-live-ubuntu-prerequisites.py
+      - name: Install live-test prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/install-live-ubuntu-prerequisites.sh
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Require configured live-test secret
+        shell: bash
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+            echo 'MINIMAX_API_KEY repository secret is required for the live gates.' >&2
+            exit 2
+          fi
+          echo "::add-mask::$MINIMAX_API_KEY"
+      - name: Run bounded live product dogfood
+        shell: bash
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MEDUSA_ALLOW_INSECURE_PROVIDER_HTTP: "1"
+          MEDUSA_LIVE_MODEL: ${{ inputs.model }}
+          LIVE_E2E_TIMEOUT_SECONDS: '1500'
+          LIVE_E2E_HEARTBEAT_SECONDS: '60'
+        run: python3 scripts/run-live-coding-e2e.py --output live-e2e-artifacts
+      - name: Run one autonomous coding session with independent validations
+        shell: bash
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+        run: bash scripts/live-coding-e2e.sh
+      - name: Submit and render one answer through the real TUI
+        shell: bash
+        env:
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
+          MEDUSA_LIVE_MODEL: ${{ inputs.model }}
+          LIVE_TUI_TIMEOUT_SECONDS: '600'
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --bin medusa
+          python3 scripts/run-live-tui-minimax-e2e.py \
+            --binary target/release/medusa \
+            --work-root "${RUNNER_TEMP}/live-tui-minimax-work" \
+            --output-dir live-tui-minimax-evidence
+      - name: Validate and publish the live evidence report
+        shell: bash
+        run: |
+          python3 scripts/run-live-dogfood-report.py \
+            --input live-e2e-artifacts \
+            --json live-provider-report/report.json \
+            --markdown live-provider-report/report.md
+      - name: Upload sanitized live evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-gate-evidence
+          path: |
+            live-e2e-artifacts
+            live-tui-minimax-evidence
+            live-provider-report
+          if-no-files-found: ignore
+
+  live-dogfood-contract:
+    name: Live dogfood contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - name: Install pinned live-contract parser
+        run: python -m pip install PyYAML==6.0.2
+      - name: Compile and test live dogfood evidence contract
+        run: |
+          python -m py_compile scripts/live-coding-e2e.py scripts/run-live-coding-e2e.py scripts/live-model-selection.py scripts/live-dogfood-report.py scripts/run-live-dogfood-report.py scripts/test-live-dogfood.py scripts/test-live-model-selection.py scripts/test-live-ubuntu-prerequisites.py scripts/check-provider-support.py
+          python scripts/check-provider-support.py
+          python scripts/test-live-dogfood.py
+          python scripts/test-live-model-selection.py
+          python scripts/test-live-ubuntu-prerequisites.py
+
+  live-dogfood:
+    name: Live installed binary (${{ matrix.platform }})
+    needs: live-dogfood-contract
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '17 3 * * 1') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux
+            os: ubuntu-latest
+          - platform: macOS
+            os: macos-latest
+          - platform: Windows
+            os: windows-2022
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      MEDUSA_LIVE_MODEL: ${{ github.event.inputs.model || '' }}
+      LIVE_E2E_TIMEOUT_SECONDS: "1500"
+      LIVE_E2E_HEARTBEAT_SECONDS: "60"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Validate committed exact-build dependency authority
+        uses: ./.github/actions/cargo-locked
+        with:
+          command: "metadata --locked --format-version 1"
+      - name: Install Linux containment backend
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/install-live-ubuntu-prerequisites.sh
+      - name: Restore Linux system pkg-config search path
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          system_pkg_config_path="$(pkg-config --variable pc_path pkg-config)"
+          echo "PKG_CONFIG_PATH=${system_pkg_config_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" >> "$GITHUB_ENV"
+          PKG_CONFIG_PATH="${system_pkg_config_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}" pkg-config --exists dbus-1
+      - name: Require and mask the live credential
+        shell: bash
+        run: python -c "import os,sys; key=os.environ.get('MINIMAX_API_KEY',''); print('::add-mask::'+key) if key else sys.exit('MINIMAX_API_KEY is required')"
+      - name: Run bounded live product dogfood
+        shell: bash
+        run: python scripts/run-live-coding-e2e.py --output live-e2e-artifacts
+      - name: Upload sanitized platform evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-provider-${{ matrix.platform }}
+          path: live-e2e-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  live-dogfood-report:
+    name: Exact-build dogfood report
+    needs: [live-dogfood-contract, live-dogfood]
+    if: always() && needs.live-dogfood-contract.result == 'success' && needs.live-dogfood.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: live-provider-*
+          path: live-provider-evidence
+      - name: Validate and publish one cross-platform report
+        run: |
+          python scripts/run-live-dogfood-report.py \
+            --input live-provider-evidence \
+            --json live-provider-report/report.json \
+            --markdown live-provider-report/report.md
+      - name: Upload exact-build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-provider-report
+          path: live-provider-report
+          if-no-files-found: error
+          retention-days: 30

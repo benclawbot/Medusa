@@ -30,7 +30,7 @@ def claim(claim_id: str = "sample-claim", maturity: str = "production") -> dict[
         "owner": "sample maintainers",
         "production_paths": ["src/lib.rs"],
         "test_paths": ["tests/sample.rs"],
-        "gates": ["CI"],
+        "gates": ["Workspace quality"],
         "entrypoints": ["sample"] if maturity != "design-only" else [],
         "supported_platforms": ["linux"],
         "external_dependencies": [],
@@ -120,7 +120,7 @@ def main() -> int:
         save(manifest, payload)
         expect_failure(root, manifest, "unknown gates")
 
-        payload["claims"][0]["gates"] = ["CI"]
+        payload["claims"][0]["gates"] = ["Workspace quality"]
         payload["claims"][0]["promotion_checklist"] = []
         save(manifest, payload)
         expect_failure(root, manifest, "incomplete promotion checklist")

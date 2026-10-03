@@ -10,11 +10,47 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tempfile::Builder;
 
+/// Length of Windows `MAX_PATH`, which still bounds Win32 path resolution when long-path
+/// support is not enabled for the process.
+const MAX_PATH: usize = 260;
+/// Naming of the temporary file `atomic_write` publishes through.
+const TEMPORARY_PREFIX: &str = ".medusa-write-";
+const TEMPORARY_SUFFIX: &str = ".tmp";
+/// Characters `tempfile` appends between prefix and suffix. Pinned here so the path-budget
+/// assertion below describes the real name rather than `tempfile`'s default.
+const TEMPORARY_RANDOM_CHARS: usize = 6;
+
+/// Names the failing step and its target path.
+///
+/// A bare `io::Error` cannot distinguish which operation failed. On Windows both a missing
+/// intermediate directory and an over-long path surface as
+/// `The system cannot find the path specified. (os error 3)`.
+fn at(step: &str, path: &Path, error: io::Error) -> io::Error {
+    let rendered = path.display().to_string();
+    let length = rendered.chars().count();
+    let budget = if length > MAX_PATH {
+        " exceeds-max-path"
+    } else {
+        ""
+    };
+    io::Error::new(
+        error.kind(),
+        format!("{step}: {error} [path={rendered} length={length}{budget}]"),
+    )
+}
+
 /// Writes bytes through a unique, durable temporary file and an atomic rename.
 ///
 /// The temporary file is opened with `create_new`, flushed to stable storage before
 /// publication, and removed if publication fails. On Unix the containing directory is
 /// flushed after the rename so the directory entry is durable as well.
+///
+/// The temporary file's name is deliberately short and does not echo the destination file
+/// name. Content-addressed evidence paths are already long
+/// (`<root>/objects/artifact-<64 hex>.bin`), and on Windows the destination sits close to
+/// `MAX_PATH` (260). Repeating the 77-character destination name in the temporary file name
+/// is what pushed the path over that limit, so every evidence write failed with
+/// `The system cannot find the path specified. (os error 3)`.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         io::Error::new(
@@ -22,19 +58,25 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
             "destination path has no parent",
         )
     })?;
-    fs::create_dir_all(parent)?;
+    fs::create_dir_all(parent).map_err(|error| at("atomic-write:create-dir-all", parent, error))?;
 
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("medusa");
     let mut temporary = Builder::new()
-        .prefix(&format!(".{name}."))
-        .suffix(".tmp")
-        .tempfile_in(parent)?;
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
+        .prefix(TEMPORARY_PREFIX)
+        .suffix(TEMPORARY_SUFFIX)
+        .rand_bytes(TEMPORARY_RANDOM_CHARS)
+        .tempfile_in(parent)
+        .map_err(|error| at("atomic-write:tempfile-in", parent, error))?;
+    let temporary_path = temporary.path().to_path_buf();
+    temporary
+        .write_all(bytes)
+        .map_err(|error| at("atomic-write:write-all", &temporary_path, error))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| at("atomic-write:sync-all", &temporary_path, error))?;
+    temporary
+        .persist(path)
+        .map_err(|error| at("atomic-write:persist", path, error.error))?;
     sync_parent(parent);
     Ok(())
 }
@@ -101,6 +143,58 @@ mod tests {
         assert_eq!(
             fs::read_dir(directory.path())
                 .expect("read directory")
+                .count(),
+            1
+        );
+    }
+
+    /// Windows `MAX_PATH` is 260, and the temporary file lives in the destination's own
+    /// parent directory, so its name consumes the budget left over by the destination.
+    ///
+    /// Content-addressed evidence objects are written as `artifact-<64 hex>.bin` under an
+    /// already deep parent (the failing CI run used a 172-character parent, giving a
+    /// 250-character destination). Echoing the 77-character destination name into the
+    /// temporary name produced a 262-character path, and Windows rejected every evidence
+    /// write with `The system cannot find the path specified. (os error 3)`.
+    ///
+    /// The rejection itself only reproduces on Windows, so the budget is asserted directly
+    /// and a deep destination is written to exercise the real code path.
+    #[test]
+    fn atomic_write_keeps_its_temporary_path_within_windows_max_path() {
+        let temporary_name =
+            TEMPORARY_PREFIX.len() + TEMPORARY_RANDOM_CHARS + TEMPORARY_SUFFIX.len();
+        // Parent depth of the evidence object path observed in the failing run.
+        const EVIDENCE_OBJECT_PARENT: usize = 172;
+        const EVIDENCE_OBJECT_NAME: usize = "artifact-".len() + 64 + ".bin".len();
+        let destination = EVIDENCE_OBJECT_PARENT + 1 + EVIDENCE_OBJECT_NAME;
+        assert!(
+            destination <= MAX_PATH,
+            "destination path {destination} exceeds MAX_PATH"
+        );
+        let temporary = EVIDENCE_OBJECT_PARENT + 1 + temporary_name;
+        assert!(
+            temporary <= MAX_PATH,
+            "temporary path {temporary} exceeds MAX_PATH"
+        );
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut parent = directory.path().to_path_buf();
+        while parent.as_os_str().len() < EVIDENCE_OBJECT_PARENT {
+            let remaining = EVIDENCE_OBJECT_PARENT - parent.as_os_str().len() - 1;
+            parent = parent.join("d".repeat(remaining.min(60)));
+        }
+        fs::create_dir_all(&parent).expect("deep parent");
+        let name = format!("artifact-{}.bin", "f".repeat(64));
+        let path = parent.join(name);
+        assert_eq!(
+            path.as_os_str().len(),
+            EVIDENCE_OBJECT_PARENT + 1 + EVIDENCE_OBJECT_NAME
+        );
+        atomic_write(&path, b"evidence").expect("deep write");
+        assert_eq!(fs::read(&path).expect("read object"), b"evidence");
+        assert_eq!(
+            fs::read_dir(&parent)
+                .expect("read object directory")
                 .count(),
             1
         );

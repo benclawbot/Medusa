@@ -4,7 +4,7 @@ Medusa's resilience certification is a cross-platform gate for malformed input, 
 
 ## Pull-request smoke gate
 
-`.github/workflows/resilience-certification.yml` runs on Linux, macOS, and Windows when resilience-sensitive code changes. The bounded PR campaign uses `PROPTEST_CASES=256` and covers:
+The `Platform suites` job of `.github/workflows/ci.yml` runs the bounded resilience campaign on Linux, macOS, and Windows. The bounded PR campaign uses `PROPTEST_CASES=256` and covers:
 
 - deterministic fault/corruption fixtures from `medusa-testkit`;
 - malformed protocol input and protocol/action state-machine properties;

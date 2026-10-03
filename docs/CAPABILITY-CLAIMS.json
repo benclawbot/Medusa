@@ -45,9 +45,9 @@
         "apps/medusa-desktop"
       ],
       "gates": [
-        "CI",
-        "Desktop",
-        "Refactor Guardrails"
+        "Workspace quality",
+        "Desktop adapter",
+        "Repository policy and evidence"
       ],
       "entrypoints": [
         "medusa",
@@ -93,8 +93,8 @@
         "crates/medusa-memory"
       ],
       "gates": [
-        "CI",
-        "Release Gates"
+        "Workspace quality",
+        "Acceptance, adversarial regressions, and security"
       ],
       "entrypoints": [
         "medusa",
@@ -143,8 +143,8 @@
         "crates/medusa-agent/tests"
       ],
       "gates": [
-        "CI",
-        "Release Gates"
+        "Workspace quality",
+        "Acceptance, adversarial regressions, and security"
       ],
       "entrypoints": [
         "medusa",
@@ -199,9 +199,9 @@
         "crates/medusa-runtime"
       ],
       "gates": [
-        "CI",
-        "Release Gates",
-        "Refactor Guardrails"
+        "Workspace quality",
+        "Acceptance, adversarial regressions, and security",
+        "Repository policy and evidence"
       ],
       "entrypoints": [
         "medusa",
@@ -245,9 +245,9 @@
         "crates/medusa-daemon"
       ],
       "gates": [
-        "Daemon",
-        "Desktop",
-        "CI"
+        "Platform suites",
+        "Desktop adapter",
+        "Workspace quality"
       ],
       "entrypoints": [
         "medusa daemon",
@@ -290,10 +290,10 @@
         "scripts/release-evidence.py"
       ],
       "gates": [
-        "CI",
-        "Desktop",
-        "Release Gates",
-        "Refactor Guardrails"
+        "Workspace quality",
+        "Desktop adapter",
+        "Acceptance, adversarial regressions, and security",
+        "Repository policy and evidence"
       ],
       "entrypoints": [
         "publish-release workflow"
@@ -337,9 +337,9 @@
         "crates/medusa-cli"
       ],
       "gates": [
-        "CI",
-        "Desktop",
-        "Release Gates"
+        "Workspace quality",
+        "Desktop adapter",
+        "Acceptance, adversarial regressions, and security"
       ],
       "entrypoints": [
         "medusa update"
@@ -402,10 +402,10 @@
         "scripts/performance/certify_parallel_mutation.py"
       ],
       "gates": [
-        "CI",
-        "Daemon",
-        "Desktop",
-        "Refactor Guardrails"
+        "Workspace quality",
+        "Platform suites",
+        "Desktop adapter",
+        "Repository policy and evidence"
       ],
       "entrypoints": [
         "medusa-runtime::RuntimeController -> run_prompt -> coordination::multi_agent_coordinator::run_preflight -> coordination::mutating_worker_coordinator::run_implementation"
@@ -472,9 +472,9 @@
         "crates/medusa-agent/src/lib.rs"
       ],
       "gates": [
-        "CI",
-        "Refactor Guardrails",
-        "Release Gates"
+        "Workspace quality",
+        "Repository policy and evidence",
+        "Acceptance, adversarial regressions, and security"
       ],
       "entrypoints": [
         "semantic_capabilities",

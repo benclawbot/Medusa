@@ -31,7 +31,20 @@ REQUIRED_CLAIM_FIELDS = {
 ALLOWED_MATURITIES = {"production", "preview", "experimental", "design-only"}
 MATURITY_RANK = {"design-only": 0, "experimental": 1, "preview": 2, "production": 3}
 ALLOWED_PLATFORMS = {"linux", "macos", "windows"}
-CANONICAL_GATES = {"CI", "Daemon", "Desktop", "Refactor Guardrails", "Release Gates"}
+CANONICAL_GATES = {
+    "Workspace quality",
+    "Dependency policy",
+    "Repository policy and evidence",
+    "Documentation and public API",
+    "Platform suites",
+    "Acceptance, adversarial regressions, and security",
+    "Workspace coverage >= 75%",
+    "Deterministic benchmarks and certification corpus",
+    "Desktop adapter",
+    "Desktop frontend and bundles",
+    "Package and quickstart smoke",
+    "Live provider and product gates",
+}
 PRODUCTION_CHECKLIST = {
     "owner assigned",
     "entrypoint identified",

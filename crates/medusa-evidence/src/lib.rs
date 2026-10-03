@@ -63,8 +63,25 @@ pub(crate) fn fingerprint(value: &impl Serialize) -> String {
     }
 }
 
+/// Attach the target path to an I/O failure.
+///
+/// Evidence storage failures are otherwise indistinguishable across platforms: on
+/// Windows a missing intermediate directory and an over-long path both surface as
+/// `The system cannot find the path specified. (os error 3)`, which is not enough to
+/// identify the operation that failed.
+pub(crate) fn io_at(path: &std::path::Path, error: std::io::Error) -> EvidenceError {
+    let rendered = path.display().to_string();
+    EvidenceError::Io(std::io::Error::new(
+        error.kind(),
+        format!(
+            "{error} [path={rendered} length={}]",
+            rendered.chars().count()
+        ),
+    ))
+}
+
 pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    storage::atomic_write(path, bytes).map_err(EvidenceError::Io)
+    storage::atomic_write(path, bytes).map_err(|error| io_at(path, error))
 }
 
 pub(crate) fn write_json_atomic(path: &std::path::Path, value: &impl Serialize) -> Result<()> {

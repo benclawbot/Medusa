@@ -36,24 +36,34 @@ def summary(status: str = "passed") -> dict:
 
 
 def main() -> int:
-    workflow = Path(".github/workflows/reliability-benchmarks.yml").read_text(encoding="utf-8")
-    deterministic_job = re.search(
-        r"(?ms)^  deterministic-runtime:\n.*?^    timeout-minutes: (\d+)$", workflow
+    # The benchmark gates now live in the single CI workflow. Assert the invariants
+    # that protected the benchmarks rather than the workflow's former layout: a
+    # bounded job timeout, the acceptance runner built before use, and the
+    # acceptance timeout/environment the benchmark scripts depend on.
+    workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+    benchmarks_job = re.search(
+        r"(?ms)^  benchmarks:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n)", workflow
     )
-    assert deterministic_job and int(deterministic_job.group(1)) == 60
-    coding_harness_job = re.search(
-        r"(?ms)^  coding-harness-pr:\n(?P<body>.*?)(?=^  deterministic-runtime:)",
-        workflow,
+    assert benchmarks_job, "CI must retain a benchmarks job"
+    body = benchmarks_job.group("body")
+
+    timeout = re.search(r"^    timeout-minutes: (\d+)$", body, re.M)
+    assert timeout, "the benchmarks job must declare a bounded timeout"
+    assert int(timeout.group(1)) >= 60, (
+        "the warm-up plus three two-trial acceptance benchmarks need at least 60 minutes"
     )
-    assert coding_harness_job
-    coding_body = coding_harness_job.group("body")
-    assert "github.event.pull_request.draft == false" in coding_body
-    assert "final-issue-validation" in coding_body
-    assert "timeout-minutes: 45" in coding_body
-    assert "cargo build --locked -p medusa-cli --bin medusa-product-acceptance" in coding_body
-    assert "cargo test --workspace --locked --no-run" in coding_body
-    assert "MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance" in coding_body
-    assert "MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '600'" in coding_body
+
+    assert "cargo build --locked -p medusa-cli --bin medusa-product-acceptance" in body
+    assert "cargo test --workspace --locked --no-run" in body
+    assert "MEDUSA_PRODUCT_ACCEPTANCE_BIN: target/debug/medusa-product-acceptance" in body
+    assert "MEDUSA_ACCEPTANCE_TIMEOUT_SECONDS: '600'" in body
+    assert "MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}" in body
+    for script in (
+        "reliability-benchmark.py",
+        "orchestration-benchmark.py",
+        "coding-harness-benchmark.py",
+    ):
+        assert f"python3 scripts/{script}" in body, script
 
     suite = json.loads(Path("benchmarks/reliability-suite.json").read_text(encoding="utf-8"))
     assert MODULE.DEFAULT_ACCEPTANCE_TIMEOUT_SECONDS == 600

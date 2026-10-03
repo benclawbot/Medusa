@@ -524,7 +524,7 @@ pub fn validate_artifact_semantics(path: &Path) -> Result<ArtifactSemanticResult
             details: vec![format!("missing_artifact={}", path.display())],
         });
     }
-    let bytes = fs::read(path)?;
+    let bytes = fs::read(path).map_err(|error| crate::io_at(path, error))?;
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -653,7 +653,8 @@ fn repository_defined_checks(repo: &Path) -> Result<Vec<VerificationCheck>> {
     if !path.is_file() {
         return Ok(checks);
     }
-    let definition: Definition = serde_json::from_slice(&fs::read(path)?)?;
+    let definition: Definition =
+        serde_json::from_slice(&fs::read(&path).map_err(|error| crate::io_at(&path, error))?)?;
     let configured = definition
         .checks
         .into_iter()
@@ -822,7 +823,10 @@ fn add_manifest_checks(
 }
 
 fn add_package_checks(root: &Path, owner: &str, checks: &mut Vec<VerificationCheck>) -> Result<()> {
-    let package: serde_json::Value = serde_json::from_slice(&fs::read(root.join("package.json"))?)?;
+    let manifest = root.join("package.json");
+    let package: serde_json::Value = serde_json::from_slice(
+        &fs::read(&manifest).map_err(|error| crate::io_at(&manifest, error))?,
+    )?;
     let scripts = package
         .get("scripts")
         .and_then(serde_json::Value::as_object);
