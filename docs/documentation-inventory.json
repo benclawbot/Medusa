@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "f13b21e49560837931fc6f0b1031c4c49472d59540cdb888b78e29a7e2fc83e3"
+      "sha256": "ea3193e610114377939a98b52812f3ab8d511726f4cbbc87aa627ad84e8d04b5"
     },
     {
       "path": "SECURITY.md",
@@ -346,7 +346,7 @@
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "e731844bfeb720308e1ef80e1109fac0133a0353f60a4967e0154085b1f32239"
+      "sha256": "ad8fe095ca5d6d7a5534b7d81a4ded0c5be9396eb8fe609b0a68f6ea0394ba01"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
@@ -422,6 +422,11 @@
       "path": "docs/architecture/decisions/0012-audit-and-job-projections.md",
       "disposition": "current",
       "sha256": "d328a4bdb356064a0c5ebb4438123255bc4665c6ec47cc9eef6b4ac32971f13a"
+    },
+    {
+      "path": "docs/architecture/decisions/0013-exact-headless-approvals.md",
+      "disposition": "current",
+      "sha256": "b838152774a54d4de2094eeeb78840787e3c4846039dfd126df138f55ae90305"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",

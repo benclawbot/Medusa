@@ -78,6 +78,13 @@ Daemon `List` returns metadata-only records for every job in existing ID order;
 `Status` retains full-output access. Durable sessions, event schemas, and job
 history remain the authorities and do not require migration.
 
+### Exact headless approvals
+
+[ADR 0013](decisions/0013-exact-headless-approvals.md) binds unattended allowlist
+admission to the exact executable and argument vector. POSIX quoting preserves
+spaces and empty arguments on every platform. Runtime approval receipts, command
+policy, containment, and execution remain the shared authorities.
+
 ## Capability certification
 
 The versioned runtime authority is `medusa-capabilities::CapabilityRegistry`. Model tools, prompt availability, CLI diagnostics, protocol reports, and generated documentation are projections of one validated snapshot. Historical claim documents are evidence only and do not grant runtime availability.

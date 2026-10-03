@@ -753,6 +753,13 @@
       "detail_route": "Status { job_id }",
       "durable_history": "preserved without migration",
       "wire_version": 2
+    },
+    "headless_approval": {
+      "owner": "medusa-cli",
+      "decision": "docs/architecture/decisions/0013-exact-headless-approvals.md",
+      "admission": "exact executable and argument vector",
+      "allowlist_syntax": "one POSIX-quoted command per line on every platform",
+      "execution_authority": "existing runtime approval grants and contained tool pipeline"
     }
   }
 }

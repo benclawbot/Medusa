@@ -96,7 +96,15 @@ For unattended approval of known shell commands, provide one exact command per l
 # .medusa/approve.txt
 cargo test --workspace
 cargo fmt --all -- --check
+python3 -c 'print("verification")'
 ```
+
+Allowlist entries use POSIX-style quoting on every platform. Quote arguments that
+contain spaces and use `''` for an empty argument; single quotes also preserve
+backslashes in Windows paths. Medusa compares the exact executable and argument
+vector, preserving argument contents and boundaries. Unmatched quotes, dangling
+escapes, empty executable names, and NUL bytes are rejected. Each command occupies
+one line; entries are parsed as literal arguments without shell expansion.
 
 ```bash
 medusa run \
