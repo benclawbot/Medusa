@@ -31,6 +31,15 @@ The current design separates short local requests from background process execut
 
 `serve_with_limits` and `spawn_with_limits` allow deterministic test and embedding configurations. Zero workers or zero queue capacity are rejected as invalid configuration.
 
+Job listings are a metadata projection rather than an output transfer. `List`
+preserves every persisted job and the existing job-ID ordering, while omitting
+captured stdout/stderr. `Status { job_id }` retrieves
+full retained output for any persisted job. Output-heavy histories therefore do not
+consume the 32 MiB client response cap with captured streams;
+the full durable history remains intact across restart. Metadata is still subject
+to the transport cap; listing does not silently truncate job IDs or counts. The request/response
+shapes and daemon protocol version remain unchanged.
+
 ## Cross-platform load and cancellation evidence
 
 The permanent `Daemon` workflow executes the daemon and TUI suite on Ubuntu, macOS, and Windows. The suite requires:

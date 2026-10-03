@@ -3,7 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_protocol::EventEnvelope;
+use clap::{Parser, error::ErrorKind};
+use medusa_protocol::{EventEnvelope, validate_session_id};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -11,6 +12,22 @@ use sha2::{Digest, Sha256};
 const SCHEMA: &str = "medusa.session-audit/v1";
 const MAX_STRING: usize = 4096;
 const MAX_ITEMS: usize = 128;
+
+#[derive(Parser)]
+#[command(name = "medusa report", disable_version_flag = true)]
+struct ReportArgs {
+    session_id: String,
+    #[arg(long, default_value = "markdown", value_parser = ["markdown", "md", "json"])]
+    format: String,
+    #[arg(long)]
+    output: Option<PathBuf>,
+}
+
+struct PendingMutation {
+    tool: String,
+    paths: Vec<String>,
+    denied: bool,
+}
 
 #[derive(Serialize)]
 struct AuditReport {
@@ -48,16 +65,22 @@ struct Provenance {
 }
 
 pub fn run(repo: &Path, args: &[String]) -> Result<(), String> {
-    let session_id = args
-        .iter()
-        .find(|arg| !arg.starts_with('-'))
-        .ok_or_else(|| {
-            "usage: medusa report <session-id> [--format markdown|json] [--output PATH]".to_owned()
-        })?;
-    let format = option_value(args, "--format").unwrap_or_else(|| "markdown".to_owned());
-    if !matches!(format.as_str(), "markdown" | "md" | "json") {
-        return Err("--format must be markdown or json".to_owned());
-    }
+    let options = match ReportArgs::try_parse_from(
+        std::iter::once("medusa report").chain(args.iter().map(String::as_str)),
+    ) {
+        Ok(options) => options,
+        Err(error) if error.kind() == ErrorKind::DisplayHelp => {
+            print!("{error}");
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!(
+                "{error}\nusage: medusa report <session-id> [--format markdown|json] [--output PATH]"
+            ));
+        }
+    };
+    let session_id = &options.session_id;
+    validate_session_id(session_id).map_err(str::to_owned)?;
 
     let path = session_path(repo, session_id);
     let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
@@ -65,14 +88,15 @@ pub fn run(repo: &Path, args: &[String]) -> Result<(), String> {
         .map_err(|error| format!("parse {}: {error}", path.display()))?;
     verify_event_chain(&session)?;
     let report = build_report(&session, session_id)?;
-    let rendered = if format == "json" {
+    let rendered = if options.format == "json" {
         serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
     } else {
         markdown(&report)
     };
 
-    if let Some(output) = option_value(args, "--output") {
-        fs::write(&output, rendered).map_err(|error| format!("write {output}: {error}"))?;
+    if let Some(output) = options.output {
+        fs::write(&output, rendered)
+            .map_err(|error| format!("write {}: {error}", output.display()))?;
     } else {
         println!("{rendered}");
     }
@@ -125,7 +149,7 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
     let mut files_changed = Vec::new();
     let mut requested = Vec::new();
     let mut executed = Vec::new();
-    let mut pending_mutations: Vec<(String, Vec<String>)> = Vec::new();
+    let mut pending_mutations: Vec<PendingMutation> = Vec::new();
     let mut containment = Vec::new();
     let mut checkpoints = Vec::new();
     let mut failures = Vec::new();
@@ -152,10 +176,41 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
                 let tool = data.get("tool").and_then(Value::as_str).unwrap_or_default();
                 let paths = mutation_paths(tool, data.get("arguments").unwrap_or(&Value::Null));
                 if !paths.is_empty() {
-                    pending_mutations.push((tool.to_owned(), paths));
+                    pending_mutations.push(PendingMutation {
+                        tool: tool.to_owned(),
+                        paths,
+                        denied: false,
+                    });
                 }
             }
-            "tool_call_denied" => containment.push(sanitize(&data)),
+            "tool_call_denied" => {
+                containment.push(sanitize(&data));
+                if let Some(pending) = pending_mutations.iter_mut().find(|pending| {
+                    data.get("tool").and_then(Value::as_str) == Some(pending.tool.as_str())
+                        && !pending.denied
+                }) {
+                    pending.denied = true;
+                }
+            }
+            "approval_decision_recorded" => {
+                let decision = data.get("decision").unwrap_or(&Value::Null);
+                let tool = decision.get("tool").and_then(Value::as_str);
+                let outcome = decision
+                    .pointer("/receipt/decision")
+                    .and_then(Value::as_str);
+                if let Some(position) = pending_mutations
+                    .iter()
+                    .position(|pending| pending.denied && Some(pending.tool.as_str()) == tool)
+                {
+                    match outcome {
+                        Some("approved") => pending_mutations[position].denied = false,
+                        Some("denied" | "expired" | "invalidated") => {
+                            pending_mutations.remove(position);
+                        }
+                        _ => {}
+                    }
+                }
+            }
             "tool_execution_completed" => {
                 executed.push(sanitize(&data));
                 let tool = data.get("tool").and_then(Value::as_str).unwrap_or_default();
@@ -165,11 +220,11 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
                     .is_none_or(|code| code == 0);
                 if let Some(position) = pending_mutations
                     .iter()
-                    .position(|(pending_tool, _)| pending_tool == tool)
+                    .position(|pending| pending.tool == tool && (!succeeded || !pending.denied))
                 {
-                    let (_, paths) = pending_mutations.remove(position);
-                    if succeeded {
-                        for path in paths {
+                    let pending = pending_mutations.remove(position);
+                    if succeeded && !pending.denied {
+                        for path in pending.paths {
                             push_unique(&mut files_changed, path);
                         }
                     }
@@ -279,7 +334,36 @@ fn push_unique(items: &mut Vec<String>, value: String) {
 fn sanitize(value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(redact(text)),
-        Value::Array(items) => Value::Array(items.iter().take(MAX_ITEMS).map(sanitize).collect()),
+        Value::Array(items) => {
+            let mut redact_next = 0;
+            Value::Array(
+                items
+                    .iter()
+                    .take(MAX_ITEMS)
+                    .map(|item| {
+                        let credential = redact_next > 0;
+                        match item {
+                            Value::String(text) => Value::String(if credential {
+                                redact_next -= 1;
+                                "[REDACTED]".to_owned()
+                            } else if (text.contains('=') && secret_like(text))
+                                || text.starts_with("sk-")
+                                || text.starts_with("ghp_")
+                            {
+                                "[REDACTED]".to_owned()
+                            } else {
+                                redact_with_state(text, &mut redact_next)
+                            }),
+                            _ if credential => {
+                                redact_next -= 1;
+                                Value::String("[REDACTED]".to_owned())
+                            }
+                            _ => sanitize(item),
+                        }
+                    })
+                    .collect(),
+            )
+        }
         Value::Object(object) => Value::Object(
             object
                 .iter()
@@ -300,27 +384,33 @@ fn sanitize(value: &Value) -> Value {
 }
 
 fn redact(text: &str) -> String {
+    redact_with_state(text, &mut 0)
+}
+
+fn redact_with_state(text: &str, redact_next: &mut u8) -> String {
     let bounded = text.chars().take(MAX_STRING).collect::<String>();
     let tokens = bounded.split_whitespace().collect::<Vec<_>>();
     let mut redacted = Vec::with_capacity(tokens.len());
-    let mut redact_next = 0_u8;
     for token in tokens {
         let lower = token.to_ascii_lowercase();
-        if redact_next > 0 {
+        if *redact_next > 0 {
             redacted.push("[REDACTED]");
-            redact_next -= 1;
+            *redact_next -= 1;
             continue;
         }
         if lower == "bearer" {
             redacted.push("[REDACTED]");
-            redact_next = 1;
+            *redact_next = 1;
         } else if secret_like(token) || token.starts_with("sk-") || token.starts_with("ghp_") {
             redacted.push("[REDACTED]");
-            redact_next = if lower.contains("authorization") {
-                2
-            } else {
-                1
-            };
+            *redact_next =
+                if token.contains('=') || token.starts_with("sk-") || token.starts_with("ghp_") {
+                    0
+                } else if lower.contains("authorization") {
+                    2
+                } else {
+                    1
+                };
         } else {
             redacted.push(token);
         }
@@ -354,13 +444,6 @@ fn markdown(report: &AuditReport) -> String {
         report.objective.as_str().unwrap_or(""),
         serde_json::to_string_pretty(&json).unwrap_or_default(),
     )
-}
-
-fn option_value(args: &[String], name: &str) -> Option<String> {
-    args.iter()
-        .position(|arg| arg == name)
-        .and_then(|index| args.get(index + 1))
-        .cloned()
 }
 
 fn session_path(repo: &Path, id: &str) -> PathBuf {

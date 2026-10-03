@@ -8,6 +8,48 @@ use crate::FrontendControlResult;
 
 use super::*;
 
+#[test]
+fn list_summaries_preserve_active_and_completed_jobs_without_output() {
+    let now = OffsetDateTime::now_utc();
+    let mut jobs = BTreeMap::new();
+    for index in 0..138 {
+        let id = format!("job-{index:03}");
+        jobs.insert(
+            id.clone(),
+            JobRecord {
+                id,
+                program: "fixture".into(),
+                args: Vec::new(),
+                state: JobState::Succeeded,
+                created_at: now,
+                started_at: None,
+                finished_at: Some(now),
+                exit_code: Some(0),
+                stdout: "output".into(),
+                stderr: "error".into(),
+            },
+        );
+    }
+    for (id, state) in [
+        ("job-000", JobState::Queued),
+        ("job-001", JobState::Running),
+    ] {
+        let job = jobs.get_mut(id).expect("job");
+        job.state = state;
+        job.created_at = OffsetDateTime::UNIX_EPOCH;
+    }
+    let summaries = list_job_summaries(&jobs);
+    assert_eq!(summaries.len(), jobs.len());
+    assert_eq!(summaries[0].state, JobState::Queued);
+    assert_eq!(summaries[1].state, JobState::Running);
+    assert!(
+        summaries
+            .iter()
+            .all(|job| job.stdout.is_empty() && job.stderr.is_empty())
+    );
+    assert_eq!(jobs["job-001"].stdout, "output");
+}
+
 fn wait_for_endpoint(path: &Path) {
     for _ in 0..200 {
         if path.exists() {

@@ -124,6 +124,12 @@ medusa resume <session-id>
 
 `medusa health` is a bounded, non-billable operational check. It reports typed component status, resource pressure, and durable-journal evidence without treating configuration presence as live provider readiness. `--support-bundle` writes a local, versioned, redacted JSON export; it never uploads data or includes credentials, prompts, hidden reasoning, or authoritative journal payloads.
 
+Export a session audit with `medusa report <ses-ULID> --format json --output audit.json`.
+Report options may precede the session ID. IDs must use the canonical `ses-ULID`
+format; paths and traversal components are rejected. Reports verify the event
+chain, redact credential values across command argument entries, and keep denied
+or pending mutations separate from successful writes and explicit approvals.
+
 ### Terminal UI
 
 Open the interactive terminal in any bounded working directory:

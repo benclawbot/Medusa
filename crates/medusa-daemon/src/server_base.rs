@@ -977,7 +977,7 @@ fn dispatch(
         Request::List => {
             let locked = lock_jobs(jobs)?;
             Ok(Response::Jobs {
-                jobs: locked.values().cloned().collect(),
+                jobs: list_job_summaries(&locked),
             })
         }
         Request::Frontend { envelope } => {
@@ -1057,6 +1057,26 @@ fn dispatch(
             Ok(Response::Ack)
         }
     }
+}
+
+/// List preserves every discoverable job and its ordering while excluding captured
+/// output. Status retains full per-job output; durable history remains untouched.
+fn list_job_summaries(jobs: &BTreeMap<String, JobRecord>) -> Vec<JobRecord> {
+    jobs
+        .values()
+        .map(|job| JobRecord {
+            id: job.id.clone(),
+            program: job.program.clone(),
+            args: job.args.clone(),
+            state: job.state,
+            created_at: job.created_at,
+            started_at: job.started_at,
+            finished_at: job.finished_at,
+            exit_code: job.exit_code,
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+        .collect()
 }
 
 fn request_shutdown(shutdown: &AtomicU8, mode: u8) {
