@@ -1564,7 +1564,6 @@ name = "medusa-core"
 version = "2.0.0"
 dependencies = [
  "hex",
- "medusa-process-containment",
  "serde",
  "serde_json",
  "sha2",
