@@ -68,6 +68,16 @@ V2 invariants:
 
 CLI, TUI, daemon, and desktop share runtime, journal, capability, evidence, cancellation, recovery, and mutation semantics.
 
+### Audit reports and bounded job listings
+
+[ADR 0012](decisions/0012-audit-and-job-projections.md) records the CLI audit and
+daemon job-list projection boundaries. Audit paths accept canonical session IDs,
+redaction spans argument-array entries, and denied requests cannot inherit later
+execution success. Explicit approval remains distinguishable from denial.
+Daemon `List` returns up to 128 metadata-only records, prioritizing active jobs;
+`Status` retains full-output access. Durable sessions, event schemas, and job
+history remain the authorities and do not require migration.
+
 ## Capability certification
 
 The versioned runtime authority is `medusa-capabilities::CapabilityRegistry`. Model tools, prompt availability, CLI diagnostics, protocol reports, and generated documentation are projections of one validated snapshot. Historical claim documents are evidence only and do not grant runtime availability.

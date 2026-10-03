@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "8f27880e089fc9e28715959676d6d5b55637c9f1f8ca0866954aebfbe821c5c4"
+      "sha256": "f13b21e49560837931fc6f0b1031c4c49472d59540cdb888b78e29a7e2fc83e3"
     },
     {
       "path": "SECURITY.md",
@@ -61,7 +61,7 @@
     {
       "path": "crates/medusa-daemon/README.md",
       "disposition": "current",
-      "sha256": "e74ca72220e0835984ad992a73af4a925ff2004e371b52e8d3895ba2a8e86623"
+      "sha256": "85882b875b95a00dbd5e33a11b5824ed3218b552a6f6a1541c8e74529820c911"
     },
     {
       "path": "crates/medusa-intelligence/src/STACK_REPAIR.md",
@@ -136,7 +136,7 @@
     {
       "path": "docs/DAEMON-CONCURRENCY.md",
       "disposition": "current",
-      "sha256": "b05450af0d7585740ef5b7719c3c752e271bd0048bb839c725640f9d2daa2578"
+      "sha256": "7ab766e4c2a4174de560ec1a9007f2a69eedd389f7e7475d656a3cbae4a35600"
     },
     {
       "path": "docs/DEPENDENCY-HYGIENE.md",
@@ -346,7 +346,7 @@
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "48b5679a08c1bde24dc183c89bbe49aa8c10a29f388f44349bbee89b6aca480d"
+      "sha256": "1722dfdb155a7927312d5c6bee1fe697c66fedda806924dc40ffca14f7ef4990"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
@@ -417,6 +417,11 @@
       "path": "docs/architecture/decisions/0011-transactional-component-runtime.md",
       "disposition": "current",
       "sha256": "0c01a9669b922020704d1dafcacef9dcc40335aaa9d4907bf127cbcc2b0e4c3d"
+    },
+    {
+      "path": "docs/architecture/decisions/0012-audit-and-job-projections.md",
+      "disposition": "current",
+      "sha256": "1d20c20c46a5a6ae8dd8b30c7980313b918485ed1d7308e19acfa3d13c0a95ce"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",

@@ -735,5 +735,24 @@
     "plugin_authority": "crates/medusa-extensions/src/plugins.rs",
     "model_projection": "medusa-capabilities::CapabilityRegistry::model_tools",
     "protocol_projection": "medusa-capabilities::CapabilityRegistry::protocol_report"
+  },
+  "operational_projections": {
+    "session_audit": {
+      "owner": "medusa-cli",
+      "decision": "docs/architecture/decisions/0012-audit-and-job-projections.md",
+      "session_identity": "canonical ses-ULID",
+      "credential_redaction": "argument-array values are redacted across entries",
+      "mutation_evidence": "pending denials remain distinct from successful requests and explicit approvals"
+    },
+    "daemon_job_list": {
+      "owner": "medusa-daemon",
+      "decision": "docs/architecture/decisions/0012-audit-and-job-projections.md",
+      "maximum_jobs": 128,
+      "order": "active first, then descending creation timestamp and ID",
+      "summary_output": "empty stdout and stderr",
+      "detail_route": "Status { job_id }",
+      "durable_history": "preserved without migration",
+      "wire_version": 2
+    }
   }
 }

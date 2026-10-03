@@ -10,6 +10,10 @@ The public `DaemonClient` and wire protocol are the same on every supported plat
 - **Windows:** the same path is an endpoint descriptor containing an ephemeral loopback TCP address and a fresh 256-bit launch capability. The server binds only to loopback, clients reject non-loopback descriptors, and every connection must present the capability before a request is read.
 - The TUI and desktop use the same repository-scoped `DaemonSupervisor`, startup lock, hidden host mode, readiness check, and bounded restart backoff.
 - Every request uses a new connection, so clients may disconnect while daemon-owned jobs continue.
+- `List` returns metadata summaries for at most 128 jobs, with queued/running jobs
+  first, then newest creation times and descending IDs as a deterministic tie-breaker.
+  Summary `stdout` and `stderr` fields are empty. Use `Status { job_id }` for full
+  retained output or older jobs. Listing never trims persisted history.
 - Local reads and writes have a five-second timeout, and requests are capped at 64 KiB.
 
 ## Bounded execution

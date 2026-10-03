@@ -27,9 +27,18 @@ The current design separates short local requests from background process execut
 | Concurrent job workers | 4 |
 | Queued jobs | 32 |
 | Maximum request body | 64 KiB |
+| Job summaries per `List` response | 128 |
 | Local IPC read/write timeout | 5 seconds |
 
 `serve_with_limits` and `spawn_with_limits` allow deterministic test and embedding configurations. Zero workers or zero queue capacity are rejected as invalid configuration.
+
+Job listings are a metadata projection rather than an output transfer. `List`
+prioritizes queued/running jobs, then descending creation time and ID, and omits
+captured stdout/stderr from its 128-record window. `Status { job_id }` retrieves
+full retained output for any persisted job. This keeps status monitoring below
+the 32 MiB client response cap even after output-heavy job histories accumulate;
+the full durable history remains intact across restart. The request/response
+shapes and daemon protocol version remain unchanged.
 
 ## Cross-platform load and cancellation evidence
 

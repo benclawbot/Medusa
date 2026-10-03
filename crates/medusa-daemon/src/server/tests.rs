@@ -8,6 +8,48 @@ use crate::FrontendControlResult;
 
 use super::*;
 
+#[test]
+fn list_summaries_keep_older_active_jobs_before_recent_completed_history() {
+    let now = OffsetDateTime::now_utc();
+    let mut jobs = BTreeMap::new();
+    for index in 0..MAX_LIST_JOBS + 10 {
+        let id = format!("job-{index:03}");
+        jobs.insert(
+            id.clone(),
+            JobRecord {
+                id,
+                program: "fixture".into(),
+                args: Vec::new(),
+                state: JobState::Succeeded,
+                created_at: now,
+                started_at: None,
+                finished_at: Some(now),
+                exit_code: Some(0),
+                stdout: "output".into(),
+                stderr: "error".into(),
+            },
+        );
+    }
+    for (id, state) in [
+        ("job-000", JobState::Queued),
+        ("job-001", JobState::Running),
+    ] {
+        let job = jobs.get_mut(id).expect("job");
+        job.state = state;
+        job.created_at = OffsetDateTime::UNIX_EPOCH;
+    }
+    let summaries = list_job_summaries(&jobs);
+    assert_eq!(summaries.len(), MAX_LIST_JOBS);
+    assert_eq!(summaries[0].id, "job-001");
+    assert_eq!(summaries[1].id, "job-000");
+    assert!(
+        summaries
+            .iter()
+            .all(|job| job.stdout.is_empty() && job.stderr.is_empty())
+    );
+    assert_eq!(jobs["job-001"].stdout, "output");
+}
+
 fn wait_for_endpoint(path: &Path) {
     for _ in 0..200 {
         if path.exists() {

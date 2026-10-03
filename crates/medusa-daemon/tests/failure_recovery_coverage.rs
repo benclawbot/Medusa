@@ -92,7 +92,19 @@ fn daemon_spawn_recovers_orphaned_job_and_rejects_second_owner() {
         panic!("unexpected response");
     };
     assert_eq!(jobs[0].state, JobState::Interrupted);
-    assert!(jobs[0].stderr.contains("daemon restarted"));
+    assert!(jobs[0].stdout.is_empty() && jobs[0].stderr.is_empty());
+    let Response::Status {
+        job: Some(recovered),
+    } = client
+        .request(Request::Status {
+            job_id: jobs[0].id.clone(),
+        })
+        .expect("recovered job detail")
+    else {
+        panic!("expected recovered job detail");
+    };
+    assert_eq!(recovered.state, JobState::Interrupted);
+    assert!(recovered.stderr.contains("daemon restarted"));
 
     let (_second_handle, second_server) = spawn(paths.clone()).expect("spawn second thread");
     let second_error = second_server
