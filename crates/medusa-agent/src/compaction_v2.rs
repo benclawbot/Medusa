@@ -622,11 +622,33 @@ fn persist_manifest(
         manifest.generation, manifest.manifest_hash
     ));
     let bytes = serde_json::to_vec_pretty(manifest).map_err(json_error)?;
-    let temp = root.join(format!(".v2-{:08}.tmp", manifest.generation));
-    let mut file = fs::File::create(&temp)?;
+    if path.is_file() {
+        let existing = fs::read(&path)?;
+        if existing == bytes {
+            return Ok(path);
+        }
+        return Err(compaction_error(
+            "compaction manifest path already exists with different content",
+        ));
+    }
+    let temp = root.join(format!(
+        ".v2-{:08}-{}.tmp",
+        manifest.generation,
+        ulid::Ulid::new()
+    ));
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
-    fs::rename(&temp, &path)?;
+    if let Err(error) = fs::rename(&temp, &path) {
+        let _ = fs::remove_file(&temp);
+        if path.is_file() && fs::read(&path).is_ok_and(|existing| existing == bytes) {
+            return Ok(path);
+        }
+        return Err(error.into());
+    }
     if let Ok(dir) = fs::File::open(&root) {
         let _ = dir.sync_all();
     }

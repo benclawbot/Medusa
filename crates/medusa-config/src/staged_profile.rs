@@ -3,13 +3,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
 use super::{
     ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog, ProviderProfileSnapshot,
     ProviderProfileStore, ProviderProfileValue, configuration_state::ConfigurationStateStore,
+    durable_file,
 };
 
 const HISTORY_SCHEMA_VERSION: u32 = 1;
@@ -424,7 +425,7 @@ fn profile_path(root: &Path, active_profile: &str) -> PathBuf {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    storage::atomic_write(path, bytes)
+    durable_file::atomic_write(path, bytes)
         .map_err(|error| store_error(format!("write {}: {error}", path.display())))
 }
 

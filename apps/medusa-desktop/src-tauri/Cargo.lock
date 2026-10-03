@@ -2514,6 +2514,7 @@ dependencies = [
  "medusa-core",
  "medusa-daemon",
  "medusa-memory",
+ "medusa-process-containment",
  "medusa-protocol",
  "medusa-provider",
  "medusa-review-model",

@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, storage};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -12,6 +12,7 @@ use super::{
         ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
         ConfigurationStateGuard, ConfigurationStateStore,
     },
+    durable_file,
     staged_profile::{
         begin_pending_transaction, finish_pending_transaction, reconcile_pending_transaction,
         record_known_good,
@@ -656,7 +657,7 @@ fn remove_if_exists(path: &Path) -> MedusaResult<()> {
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    storage::atomic_write(path, bytes)
+    durable_file::atomic_write(path, bytes)
         .map_err(|error| store_error(format!("write {}: {error}", path.display())))
 }
 

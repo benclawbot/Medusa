@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 mod config_doctor;
 mod configuration_state;
+mod durable_file;
 mod provider_profile;
 mod provider_profiles;
 mod staged_profile;
