@@ -22,7 +22,7 @@ tar = "0.4"
 tempfile.workspace = true
 thiserror.workspace = true
 time.workspace = true
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 serial_test.workspace = true
