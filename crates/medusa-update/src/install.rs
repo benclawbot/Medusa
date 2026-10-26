@@ -801,10 +801,18 @@ fn extract_zip(archive: &Path, workspace: &Path) -> MedusaResult<PathBuf> {
         let mut entry = zip.by_index(index).map_err(zip_error)?;
         let enclosed = entry
             .enclosed_name()
-            .ok_or_else(|| invalid(format!("unsafe ZIP path {}", entry.name())))?;
+            .ok_or_else(|| invalid(format!("unsafe ZIP path {:?}", entry.name_raw())))?;
         let Some(name) = enclosed.file_name() else {
             continue;
         };
+        if entry.is_symlink() {
+            if is_medusa_binary(name) {
+                return Err(invalid(
+                    "update ZIP Medusa executable must be a regular file",
+                ));
+            }
+            continue;
+        }
         if !is_medusa_binary(name) || entry.is_dir() {
             continue;
         }
@@ -1242,6 +1250,61 @@ mod tests {
         assert_eq!(first.len(), 32);
         assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_ne!(first, second);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_symlink_medusa_executable_is_rejected() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let archive_path = directory.path().join("symlink.zip");
+        let file = fs::File::create(&archive_path).expect("zip");
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file(
+                "medusa",
+                zip::write::SimpleFileOptions::default()
+                    .system(zip::System::Unix)
+                    .external_attributes(0o120777 << 16),
+            )
+            .expect("entry");
+        writer.write_all(b"../../outside").expect("target");
+        writer.finish().expect("finish");
+
+        assert!(
+            AtomicInstaller::new(directory.path().join("target"))
+                .extract_archive(&archive_path, &directory.path().join("extract"))
+                .is_err()
+        );
+        assert!(!directory.path().join("extract/medusa").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_extraction_does_not_apply_hostile_unix_mode_bits() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let archive_path = directory.path().join("hostile-mode.zip");
+        let file = fs::File::create(&archive_path).expect("zip");
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file(
+                "medusa",
+                zip::write::SimpleFileOptions::default().unix_permissions(0o4777),
+            )
+            .expect("entry");
+        writer.write_all(b"new-binary").expect("body");
+        writer.finish().expect("finish");
+
+        let extracted = AtomicInstaller::new(directory.path().join("target"))
+            .extract_archive(&archive_path, &directory.path().join("extract"))
+            .expect("extract regular file");
+        let mode = fs::metadata(extracted)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7000, 0);
+        assert_eq!(mode & 0o111, 0);
     }
 
     #[test]
