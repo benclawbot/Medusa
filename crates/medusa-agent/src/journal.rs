@@ -372,10 +372,10 @@ fn commit_snapshot_locked(session: &AgentSession) -> MedusaResult<AgentSession> 
     let state = read_journal_cached(&path, &session.id)?;
     let mut merged = session.clone();
 
-    if state.events != merged.events {
-        if let Some(committed) = state.committed_snapshot.as_ref() {
-            merge_committed_events(&mut merged, &committed.events)?;
-        }
+    if state.events != merged.events
+        && let Some(committed) = state.committed_snapshot.as_ref()
+    {
+        merge_committed_events(&mut merged, &committed.events)?;
     }
 
     if state.events != merged.events {

@@ -582,10 +582,10 @@ fn redact_text(value: &str) -> String {
                 redact_next = true;
                 return "Bearer".to_owned();
             }
-            if let Some((key, _)) = part.split_once('=') {
-                if secret_like(key) {
-                    return format!("{key}=[redacted]");
-                }
+            if let Some((key, _)) = part.split_once('=')
+                && secret_like(key)
+            {
+                return format!("{key}=[redacted]");
             }
             if part.starts_with("--") && secret_like(part) {
                 redact_next = true;

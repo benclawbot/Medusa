@@ -122,10 +122,9 @@ pub fn run() -> tauri::Result<()> {
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
-                if let Some(registry) = app_handle.try_state::<RuntimeRegistry>() {
-                    registry.shutdown_all();
-                }
+            ) && let Some(registry) = app_handle.try_state::<RuntimeRegistry>()
+            {
+                registry.shutdown_all();
             }
         });
     Ok(())

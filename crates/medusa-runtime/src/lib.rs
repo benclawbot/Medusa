@@ -646,24 +646,24 @@ impl RuntimeController {
         if !submission.busy {
             return false;
         }
-        if let Some(session_id) = submission.active_session_id.as_deref() {
-            if let Err(error) = record_controller_event(
+        if let Some(session_id) = submission.active_session_id.as_deref()
+            && let Err(error) = record_controller_event(
                 &self.repo,
                 session_id,
                 Actor::User,
                 EventPayload::CancellationRequested {
                     source: "frontend".to_owned(),
                 },
-            ) {
-                send_runtime_event(
-                    &self.event_sender,
-                    &self.submission,
-                    RuntimeEvent::Failed(format!(
-                        "cancellation was not requested because its durable record failed: {error}"
-                    )),
-                );
-                return false;
-            }
+            )
+        {
+            send_runtime_event(
+                &self.event_sender,
+                &self.submission,
+                RuntimeEvent::Failed(format!(
+                    "cancellation was not requested because its durable record failed: {error}"
+                )),
+            );
+            return false;
         }
         self.cancel.store(true, Ordering::SeqCst);
         true
@@ -2157,14 +2157,13 @@ fn run_openai_oauth_prompt(
     }
     let mut session = match state.session.take() {
         Some(mut session) => {
-            if !pending_answer {
-                if let Err(error) = engine
+            if !pending_answer
+                && let Err(error) = engine
                     .append_user_message(&mut session, content.clone())
                     .map_err(RuntimeError::agent)
-                {
-                    state.session = Some(session);
-                    return Err(error);
-                }
+            {
+                state.session = Some(session);
+                return Err(error);
             }
             session
         }
@@ -3042,23 +3041,24 @@ fn run_prompt(
         .session
         .take()
         .ok_or_else(|| RuntimeError::agent("runtime session disappeared before execution"))?;
-    if coordinated && implementation_evidence.is_none() {
-        if let Some(ledger) = execution_ledger.as_mut() {
-            crate::coordination::production_orchestrator::begin_kinds(
+    if coordinated
+        && implementation_evidence.is_none()
+        && let Some(ledger) = execution_ledger.as_mut()
+    {
+        crate::coordination::production_orchestrator::begin_kinds(
+            ledger,
+            &execution_plan,
+            &[medusa_multi_agent_scheduler::TaskKind::Review],
+            "parent-review",
+        )
+        .map_err(RuntimeError::agent)?;
+        send_runtime_event(
+            events,
+            submission,
+            RuntimeEvent::Plan(crate::coordination::production_orchestrator::projection(
                 ledger,
-                &execution_plan,
-                &[medusa_multi_agent_scheduler::TaskKind::Review],
-                "parent-review",
-            )
-            .map_err(RuntimeError::agent)?;
-            send_runtime_event(
-                events,
-                submission,
-                RuntimeEvent::Plan(crate::coordination::production_orchestrator::projection(
-                    ledger,
-                )),
-            );
-        }
+            )),
+        );
     }
     let mut updates = UpdateState::new();
     if coordinated {

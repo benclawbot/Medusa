@@ -14,7 +14,7 @@ cargo install --path crates/medusa-cli --locked
 medusa doctor
 ```
 
-Medusa 1.0 source builds require Rust 1.88 or newer. Desktop development and packaging additionally require Node.js 22.
+Source builds from this branch require Rust 1.89 or newer. Desktop development and packaging additionally require Node.js 22.
 
 ## Release artifacts
 

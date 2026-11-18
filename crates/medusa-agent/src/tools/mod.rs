@@ -355,17 +355,17 @@ fn execute_tool_cancellable_with_context_unchecked(
     if cancellation.load(Ordering::Acquire) {
         return Err(cancelled_tool(name));
     }
-    if name == "fs_write" {
-        if let Some(context) = mutation_context {
-            let relative = input_string(input, "path")?;
-            let content = input_string(input, "content")?;
-            let outcome = filesystem::write_with_context(repo, relative, content, context)?;
-            return Ok(format!(
-                "wrote {} bytes to {relative}; mutation_ids={}",
-                content.len(),
-                outcome.mutation_ids.join(",")
-            ));
-        }
+    if name == "fs_write"
+        && let Some(context) = mutation_context
+    {
+        let relative = input_string(input, "path")?;
+        let content = input_string(input, "content")?;
+        let outcome = filesystem::write_with_context(repo, relative, content, context)?;
+        return Ok(format!(
+            "wrote {} bytes to {relative}; mutation_ids={}",
+            content.len(),
+            outcome.mutation_ids.join(",")
+        ));
     }
     if name == "skill_execute" {
         return executable_skills::run(repo, input, cancellation);

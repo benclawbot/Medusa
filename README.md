@@ -174,7 +174,7 @@ The desktop app is a Tauri/React shell over the same Medusa runtime. It provides
 
 ### Prerequisites
 
-- Rust 1.88 or newer for source builds; the repository pins Rust 1.88.0
+- Rust 1.89 or newer for source builds; the repository pins Rust 1.89.0
 - A supported model connection for model-dependent work
 - The platform containment backend required for guarded shell execution
 - Node.js 22 for desktop development or desktop packaging (the Codex app-server OAuth route does not require Node.js)

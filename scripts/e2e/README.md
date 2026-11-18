@@ -7,7 +7,7 @@ The live suite deliberately runs only on a self-hosted Windows runner configured
 ## Runner requirements
 
 - Windows 11
-- Git, Rust 1.88, Node.js 22 and npm
+- Git, Rust 1.89, Node.js 22 and npm
 - Codex CLI on `PATH` (the runner must be able to launch `codex app-server --stdio`)
 - GitHub Actions runner installed for the interactive user, with labels `self-hosted`, `Windows`, `X64`, and `medusa-oauth`
 - A completed `openai-oauth` browser login for that user
@@ -28,7 +28,7 @@ pwsh -File scripts/e2e/bootstrap-windows-oauth-runner.ps1 `
   -Start
 ```
 
-The bootstrap verifies Windows, Git, Node.js 22, Rust 1.88, and the Codex CLI; downloads and configures the GitHub Actions runner; applies the `medusa-oauth` label; and starts it in the current interactive desktop session. It deliberately does not install the runner as a Windows service.
+The bootstrap verifies Windows, Git, Node.js 22, Rust 1.89, and the Codex CLI; downloads and configures the GitHub Actions runner; applies the `medusa-oauth` label; and starts it in the current interactive desktop session. It deliberately does not install the runner as a Windows service.
 
 The registration token is passed only to GitHub's `config.cmd`. Do not put it in source control, shell history, workflow secrets, screenshots, or logs.
 

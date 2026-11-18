@@ -744,10 +744,12 @@ fn decode_session_cursor(cursor: &str) -> Result<(bool, &str, &str), String> {
     let first = parts.next().unwrap_or_default();
     let second = parts.next().unwrap_or_default();
     let third = parts.next();
-    if let Some(id) = third {
-        if matches!(first, "0" | "1") && !second.is_empty() && !id.is_empty() {
-            return Ok((first == "1", second, id));
-        }
+    if let Some(id) = third
+        && matches!(first, "0" | "1")
+        && !second.is_empty()
+        && !id.is_empty()
+    {
+        return Ok((first == "1", second, id));
     }
     cursor
         .split_once(SESSION_CURSOR_SEPARATOR)

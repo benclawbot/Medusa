@@ -95,10 +95,10 @@ impl DesktopCommanderSettings {
             enabled: env_flag("MEDUSA_DESKTOP_COMMANDER_ENABLED"),
             ..Self::default()
         };
-        if let Ok(command) = env::var("MEDUSA_DESKTOP_COMMANDER_COMMAND") {
-            if !command.trim().is_empty() {
-                settings.command = PathBuf::from(command);
-            }
+        if let Ok(command) = env::var("MEDUSA_DESKTOP_COMMANDER_COMMAND")
+            && !command.trim().is_empty()
+        {
+            settings.command = PathBuf::from(command);
         }
         if let Ok(raw) = env::var("MEDUSA_DESKTOP_COMMANDER_ARGS") {
             match serde_json::from_str::<Vec<String>>(&raw) {

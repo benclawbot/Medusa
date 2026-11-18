@@ -689,11 +689,10 @@ pub async fn runtime_poll(
             let mut events = Vec::new();
             let limit = max_events.unwrap_or(200).clamp(1, 500);
             if let Some(event) = entry.daemon_event() {
-                if matches!(entry.daemon.last_state, Some(DaemonLifecycleState::Recovered)) {
-                    if let Some(session_id) = entry.session_id.clone() {
+                if matches!(entry.daemon.last_state, Some(DaemonLifecycleState::Recovered))
+                    && let Some(session_id) = entry.session_id.clone() {
                         entry.resume(session_id)?;
                     }
-                }
                 events.push(event);
             }
             entry.poll_daemon()?;

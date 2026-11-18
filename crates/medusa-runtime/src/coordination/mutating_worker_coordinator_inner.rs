@@ -815,14 +815,14 @@ fn promote_speculative_state(
 
 fn discard_speculative_artifacts(repo: &Path, root: &Path) -> Result<(), String> {
     let state_path = root.join("implementation-state.json");
-    if state_path.is_file() {
-        if let Ok(state) = load_state(&state_path) {
-            let manager = WorkerManager::new(repo, root.join("worktrees"))
-                .map_err(|error| error.to_string())?;
-            manager
-                .cleanup(std::slice::from_ref(&state.worker))
-                .map_err(|error| error.to_string())?;
-        }
+    if state_path.is_file()
+        && let Ok(state) = load_state(&state_path)
+    {
+        let manager =
+            WorkerManager::new(repo, root.join("worktrees")).map_err(|error| error.to_string())?;
+        manager
+            .cleanup(std::slice::from_ref(&state.worker))
+            .map_err(|error| error.to_string())?;
     }
     for path in [
         state_path,
@@ -916,8 +916,7 @@ where
         if speculative.is_none()
             && state.speculative
             && state.status == ImplementationStatus::Prepared
-        {
-            if let Err(error) = promote_speculative_state(
+            && let Err(error) = promote_speculative_state(
                 repo,
                 plan,
                 preflight,
@@ -926,10 +925,10 @@ where
                 &state_path,
                 &mut state,
                 events,
-            ) {
-                discard_speculative_artifacts(repo, root)?;
-                return Err(format!("{SPECULATION_INVALIDATED_PREFIX} {error}"));
-            }
+            )
+        {
+            discard_speculative_artifacts(repo, root)?;
+            return Err(format!("{SPECULATION_INVALIDATED_PREFIX} {error}"));
         }
         validate_state(plan, preflight, &packet, &state)?;
         match state.status {
