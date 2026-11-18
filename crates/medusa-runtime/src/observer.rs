@@ -507,12 +507,12 @@ fn collect_paths(value: &Value, paths: &mut BTreeSet<String>) {
                     if let Some(path) = value.as_str() {
                         paths.insert(bounded_text(path));
                     }
-                } else if key.eq_ignore_ascii_case("paths") {
-                    if let Some(values) = value.as_array() {
-                        for value in values {
-                            if let Some(path) = value.as_str() {
-                                paths.insert(bounded_text(path));
-                            }
+                } else if key.eq_ignore_ascii_case("paths")
+                    && let Some(values) = value.as_array()
+                {
+                    for value in values {
+                        if let Some(path) = value.as_str() {
+                            paths.insert(bounded_text(path));
                         }
                     }
                 }
@@ -547,11 +547,11 @@ fn collect_public_text(value: &Value, parent_key: Option<&str>, output: &mut Vec
                 if sensitive_key(key) {
                     continue;
                 }
-                if matches!(key.as_str(), "text" | "content") {
-                    if let Some(text) = value.as_str() {
-                        output.push(redact_text(text));
-                        continue;
-                    }
+                if matches!(key.as_str(), "text" | "content")
+                    && let Some(text) = value.as_str()
+                {
+                    output.push(redact_text(text));
+                    continue;
                 }
                 collect_public_text(value, Some(key), output);
             }

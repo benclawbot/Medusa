@@ -371,7 +371,7 @@ pub fn bind_session_to_delegation(
         &delegation_operation_id,
         "delegation",
         &attempt.session_id,
-        &[contract.contract_id.clone()],
+        std::slice::from_ref(&contract.contract_id),
     );
     append_event(
         session,

@@ -10,7 +10,7 @@ cd Medusa
 cargo build --workspace --all-features --locked
 ```
 
-Rust 1.88 or newer is required. Browser verification additionally requires Node.js 22 and the pinned Playwright Chromium package.
+Rust 1.89 or newer is required. Browser verification additionally requires Node.js 22 and the pinned Playwright Chromium package.
 
 ## Required checks
 

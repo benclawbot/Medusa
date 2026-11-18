@@ -312,7 +312,7 @@ def generate_manifest(
         "source": {
             "repository": "benclawbot/Medusa",
             "revision": revision,
-            "rust_toolchain": "1.88.0",
+            "rust_toolchain": "1.89.0",
             "cargo_lock_sha256": hashes["cargo"],
             "desktop_lock_sha256": hashes["desktop"],
         },

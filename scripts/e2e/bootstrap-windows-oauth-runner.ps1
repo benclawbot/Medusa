@@ -57,7 +57,7 @@ Require-Command rustup
 Assert-Node22
 Assert-CodexCli
 
-rustup toolchain install 1.88.0 --profile minimal | Out-Host
+rustup toolchain install 1.89.0 --profile minimal | Out-Host
 
 New-Item -ItemType Directory -Path $RunnerDirectory -Force | Out-Null
 $archive = Join-Path $env:TEMP "actions-runner-win-x64-$RunnerVersion.zip"

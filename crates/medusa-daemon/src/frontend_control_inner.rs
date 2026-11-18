@@ -320,15 +320,13 @@ impl FrontendControlPlane {
             .map_err(FrontendControlError::InvalidEnvelope)?;
         let cacheable = command_is_cacheable(&envelope.command);
         let command_fingerprint = cacheable.then(|| fingerprint(&envelope)).transpose()?;
-        if cacheable {
-            if let Some(cached) = self.acknowledgements.get(&envelope.idempotency_key) {
-                if Some(&cached.command_fingerprint) == command_fingerprint.as_ref() {
-                    return Ok(cached.acknowledgement.clone());
-                }
-                return Err(FrontendControlError::IdempotencyConflict(
-                    envelope.idempotency_key,
-                ));
+        if cacheable && let Some(cached) = self.acknowledgements.get(&envelope.idempotency_key) {
+            if Some(&cached.command_fingerprint) == command_fingerprint.as_ref() {
+                return Ok(cached.acknowledgement.clone());
             }
+            return Err(FrontendControlError::IdempotencyConflict(
+                envelope.idempotency_key,
+            ));
         }
 
         let session_id = command_session_id(&envelope);
@@ -768,10 +766,10 @@ impl FrontendControlPlane {
                 self.config.model.provider = provider;
                 self.config.model.name = model.clone();
                 self.config.model.protocol = protocol_for_provider(&self.config.model.provider);
-                if provider_changed {
-                    if let Some(entry) = provider_catalog_entry(&self.config.model.provider) {
-                        self.config.model.auth = entry.default_auth.to_owned();
-                    }
+                if provider_changed
+                    && let Some(entry) = provider_catalog_entry(&self.config.model.provider)
+                {
+                    self.config.model.auth = entry.default_auth.to_owned();
                 }
                 self.config.model.base_url = next_base_url;
                 Ok(FrontendControlResult::CommandAccepted {

@@ -310,23 +310,23 @@ fn validate_edit(
     snapshot: &FileSnapshot,
     errors: &mut Vec<StructuredEditError>,
 ) {
-    if let Some(expected) = &edit.file_hash {
-        if expected != &snapshot.hash {
-            errors.push(StructuredEditError::StaleHash {
-                path: edit.path.clone(),
-                expected: expected.clone(),
-                actual: snapshot.hash.clone(),
-            });
-        }
+    if let Some(expected) = &edit.file_hash
+        && expected != &snapshot.hash
+    {
+        errors.push(StructuredEditError::StaleHash {
+            path: edit.path.clone(),
+            expected: expected.clone(),
+            actual: snapshot.hash.clone(),
+        });
     }
-    if let Some(expected) = edit.file_version {
-        if snapshot.version != Some(expected) {
-            errors.push(StructuredEditError::StaleVersion {
-                path: edit.path.clone(),
-                expected,
-                actual: snapshot.version,
-            });
-        }
+    if let Some(expected) = edit.file_version
+        && snapshot.version != Some(expected)
+    {
+        errors.push(StructuredEditError::StaleVersion {
+            path: edit.path.clone(),
+            expected,
+            actual: snapshot.version,
+        });
     }
     let Some(actual) = snapshot
         .content
@@ -338,31 +338,31 @@ fn validate_edit(
         });
         return;
     };
-    if let Some(expected) = &edit.preconditions.expected_content {
-        if expected != actual {
-            errors.push(StructuredEditError::ExpectedContentMismatch {
-                path: edit.path.clone(),
-                range: edit.range,
-                expected: expected.clone(),
-                actual: actual.to_owned(),
-            });
-        }
+    if let Some(expected) = &edit.preconditions.expected_content
+        && expected != actual
+    {
+        errors.push(StructuredEditError::ExpectedContentMismatch {
+            path: edit.path.clone(),
+            range: edit.range,
+            expected: expected.clone(),
+            actual: actual.to_owned(),
+        });
     }
-    if let Some(symbol) = &edit.preconditions.expected_symbol {
-        if !snapshot.symbols.contains(symbol) {
-            errors.push(StructuredEditError::ExpectedSymbolMissing {
-                path: edit.path.clone(),
-                symbol: symbol.clone(),
-            });
-        }
+    if let Some(symbol) = &edit.preconditions.expected_symbol
+        && !snapshot.symbols.contains(symbol)
+    {
+        errors.push(StructuredEditError::ExpectedSymbolMissing {
+            path: edit.path.clone(),
+            symbol: symbol.clone(),
+        });
     }
-    if let Some(node) = &edit.preconditions.expected_ast_node {
-        if !snapshot.ast_nodes.contains(node) {
-            errors.push(StructuredEditError::ExpectedAstNodeMissing {
-                path: edit.path.clone(),
-                node: node.clone(),
-            });
-        }
+    if let Some(node) = &edit.preconditions.expected_ast_node
+        && !snapshot.ast_nodes.contains(node)
+    {
+        errors.push(StructuredEditError::ExpectedAstNodeMissing {
+            path: edit.path.clone(),
+            node: node.clone(),
+        });
     }
 }
 
@@ -398,10 +398,10 @@ fn validate_file_operations(
                 errors.push(StructuredEditError::UnsafePath { path: path.clone() });
             }
         }
-        if let Some(path) = destination {
-            if !destinations.insert(path.clone()) {
-                errors.push(StructuredEditError::ConflictingFileOperation { path: path.clone() });
-            }
+        if let Some(path) = destination
+            && !destinations.insert(path.clone())
+        {
+            errors.push(StructuredEditError::ConflictingFileOperation { path: path.clone() });
         }
         if let (Some(path), Some(expected)) = (source, expected_hash) {
             match snapshots.get(path) {

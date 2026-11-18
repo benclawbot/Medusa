@@ -292,11 +292,12 @@ fn legacy_http_date_unix(value: &str) -> Option<i64> {
     }
     // asctime: "Sun Nov  6 08:49:37 1994".
     let words: Vec<&str> = value.split_whitespace().collect();
-    if let [weekday, month, day, time, year] = words[..] {
-        if weekday.len() == 3 && year.len() == 4 {
-            let month = month_number(&month.to_ascii_lowercase())? as u8;
-            return compose(year.parse().ok()?, month, day.parse().ok()?, time);
-        }
+    if let [weekday, month, day, time, year] = words[..]
+        && weekday.len() == 3
+        && year.len() == 4
+    {
+        let month = month_number(&month.to_ascii_lowercase())? as u8;
+        return compose(year.parse().ok()?, month, day.parse().ok()?, time);
     }
     None
 }

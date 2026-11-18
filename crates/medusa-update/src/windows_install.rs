@@ -94,12 +94,12 @@ fn schedule_windows_health_checked_replace(
     let outcome = directory.join(UPDATE_OUTCOME_FILE);
     let lock = directory.join(".medusa-update.lock");
     let target_revision = restart.target_revision.as_deref();
-    if let Some(revision) = target_revision {
-        if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(invalid(
-                "update target revision must be a full 40-character Git commit SHA",
-            ));
-        }
+    if let Some(revision) = target_revision
+        && (revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(invalid(
+            "update target revision must be a full 40-character Git commit SHA",
+        ));
     }
     let nonce = new_health_nonce(target, parent_pid)?;
 

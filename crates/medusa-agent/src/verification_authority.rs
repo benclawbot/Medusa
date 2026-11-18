@@ -906,7 +906,7 @@ mod tests {
         let before = complete_repository_state_fingerprint(
             directory.path(),
             &evidence_root,
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("before fingerprint");
         fs::write(directory.path().join("artifact.json"), "{broken}\n").expect("mutate");
@@ -934,7 +934,7 @@ mod tests {
         let before = complete_repository_state_fingerprint(
             directory.path(),
             &evidence_root,
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("initial fingerprint");
         fs::write(
@@ -945,7 +945,7 @@ mod tests {
         let after_runtime = complete_repository_state_fingerprint(
             directory.path(),
             &evidence_root,
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("runtime-only fingerprint");
         assert_eq!(
@@ -1022,7 +1022,7 @@ mod tests {
         let before = complete_repository_state_fingerprint(
             directory.path(),
             &evidence_root,
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("before fingerprint");
         let input = directory.path().join("input.txt");
@@ -1064,7 +1064,7 @@ mod tests {
         let before = complete_repository_state_fingerprint(
             directory.path(),
             &evidence_root,
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("before fingerprint");
         let input = directory.path().join("input.txt");
@@ -1159,7 +1159,7 @@ mod tests {
         let before = complete_repository_state_fingerprint(
             directory.path(),
             evidence.path(),
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("state");
 
@@ -1261,7 +1261,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("first verification");
         assert!(first.receipt.passed);
@@ -1277,7 +1277,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .expect("reuse");
         assert!(

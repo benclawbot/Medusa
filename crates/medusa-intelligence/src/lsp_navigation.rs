@@ -264,15 +264,15 @@ fn collect_locations(
     let range = object
         .get("range")
         .or_else(|| object.get("targetSelectionRange"));
-    if let (Some(uri), Some(range)) = (uri, range) {
-        if let Some(range) = parse_range(range) {
-            out.push(LspLocation {
-                path: repository_path(root, uri),
-                range,
-                name: name.clone(),
-                kind: symbol_kind,
-            });
-        }
+    if let (Some(uri), Some(range)) = (uri, range)
+        && let Some(range) = parse_range(range)
+    {
+        out.push(LspLocation {
+            path: repository_path(root, uri),
+            range,
+            name: name.clone(),
+            kind: symbol_kind,
+        });
     }
     if let Some(children) = object.get("children") {
         collect_locations(root, children, name, symbol_kind, out);

@@ -61,13 +61,11 @@ pub(super) fn configure_model(
         )));
     }
     let provider_changed = state.config.model.provider != configuration.provider;
-    if provider_changed {
-        if let Some(entry) = provider_catalog_entry(&configuration.provider) {
-            // Provider routes own their authentication mode. In particular, ChatGPT OAuth is
-            // credentialless at the Medusa transport layer because Codex owns the app-server
-            // account; retaining the previous API-key mode would make the route look unconfigured.
-            state.config.model.auth = entry.default_auth.to_owned();
-        }
+    if provider_changed && let Some(entry) = provider_catalog_entry(&configuration.provider) {
+        // Provider routes own their authentication mode. In particular, ChatGPT OAuth is
+        // credentialless at the Medusa transport layer because Codex owns the app-server
+        // account; retaining the previous API-key mode would make the route look unconfigured.
+        state.config.model.auth = entry.default_auth.to_owned();
     }
     state.config.model.protocol = protocol_for_provider(&configuration.provider).to_owned();
     state.config.model.context_window_tokens = model_context_window_tokens(

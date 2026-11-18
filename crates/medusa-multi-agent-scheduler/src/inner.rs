@@ -1381,10 +1381,10 @@ impl DynamicSchedule {
             .collect::<BTreeSet<_>>();
         let mut capacity = worker_capacity(&self.workers);
         for state in self.states.values() {
-            if let TaskState::Running { worker_id, .. } = state {
-                if let Some(value) = capacity.get_mut(worker_id) {
-                    *value = value.saturating_sub(1);
-                }
+            if let TaskState::Running { worker_id, .. } = state
+                && let Some(value) = capacity.get_mut(worker_id)
+            {
+                *value = value.saturating_sub(1);
             }
         }
 

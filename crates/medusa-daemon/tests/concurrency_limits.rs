@@ -27,10 +27,9 @@ fn wait_for_state(client: &DaemonClient, job_id: &str, expected: JobState) -> Jo
     for _ in 0..250 {
         if let Ok(Response::Status { job: Some(job) }) = client.request(Request::Status {
             job_id: job_id.to_owned(),
-        }) {
-            if job.state == expected {
-                return job;
-            }
+        }) && job.state == expected
+        {
+            return job;
         }
         thread::sleep(Duration::from_millis(20));
     }

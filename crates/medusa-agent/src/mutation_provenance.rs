@@ -252,12 +252,12 @@ fn validate_record(record: &MutationRecord) -> MedusaResult<()> {
             &record.scope.postimage_fingerprint,
         ),
     ] {
-        if let Some(bytes) = bytes {
-            if bytes.len() != expected_len || fingerprint(bytes) != *expected_fingerprint {
-                return Err(provenance_error(
-                    "mutation provenance retained evidence is invalid",
-                ));
-            }
+        if let Some(bytes) = bytes
+            && (bytes.len() != expected_len || fingerprint(bytes) != *expected_fingerprint)
+        {
+            return Err(provenance_error(
+                "mutation provenance retained evidence is invalid",
+            ));
         }
     }
     Ok(())

@@ -399,10 +399,10 @@ where
 }
 
 fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
-    if name == "desktop_commander" {
-        if let Some(tool) = input.get("tool").and_then(serde_json::Value::as_str) {
-            return format!("desktop_commander:{tool}");
-        }
+    if name == "desktop_commander"
+        && let Some(tool) = input.get("tool").and_then(serde_json::Value::as_str)
+    {
+        return format!("desktop_commander:{tool}");
     }
     name.to_owned()
 }
@@ -1013,8 +1013,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
             return Err(error);
         }
-        if let Some((schema_version, fingerprint, snapshot)) = &self.runtime_config_binding {
-            if let Err(error) = append_event(
+        if let Some((schema_version, fingerprint, snapshot)) = &self.runtime_config_binding
+            && let Err(error) = append_event(
                 &mut session,
                 Actor::Coordinator,
                 EventPayload::RuntimeConfigurationBound {
@@ -1022,10 +1022,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                     fingerprint: fingerprint.clone(),
                     snapshot: snapshot.clone(),
                 },
-            ) {
-                let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
-                return Err(error);
-            }
+            )
+        {
+            let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
+            return Err(error);
         }
         if let Err(error) = persist(&session) {
             let _ = fail_agent_scope_start(repo, id.as_str(), error.to_string());
