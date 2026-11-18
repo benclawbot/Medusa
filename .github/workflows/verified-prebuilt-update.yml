@@ -15,8 +15,11 @@ on:
       - 'Cargo.lock'
       - 'crates/medusa-update/**'
       - 'crates/medusa-cli/**'
+      - 'apps/medusa-desktop/package.json'
+      - 'apps/medusa-desktop/src-tauri/Cargo.toml'
       - 'apps/medusa-desktop/src-tauri/src/desktop_update.rs'
       - 'apps/medusa-desktop/src/DesktopUpdateControl.tsx'
+      - 'apps/medusa-desktop/src/desktop-update.css'
       - 'apps/medusa-desktop/src-tauri/tauri.conf.json'
       - '.github/workflows/verified-prebuilt-update.yml'
       - '.github/workflows/rolling-main-cli.yml'
@@ -26,6 +29,7 @@ on:
       - 'scripts/verify-main-update-bundle.py'
       - 'scripts/test-main-update-bundle.py'
       - 'scripts/release-evidence.py'
+      - 'scripts/check-desktop-version-sync.py'
   release:
     types: [published, prereleased]
   workflow_dispatch:
