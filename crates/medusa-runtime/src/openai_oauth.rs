@@ -390,10 +390,9 @@ impl CodexAppServer {
                             .get("params")
                             .and_then(|params| params.get("delta"))
                             .and_then(Value::as_str)
+                            && !delta.is_empty()
                         {
-                            if !delta.is_empty() {
-                                return Ok(CodexTurnEvent::AssistantDelta(delta.to_owned()));
-                            }
+                            return Ok(CodexTurnEvent::AssistantDelta(delta.to_owned()));
                         }
                     }
                     "thread/tokenUsage/updated" => {

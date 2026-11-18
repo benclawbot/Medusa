@@ -716,10 +716,9 @@ fn collect_event_paths(events: &serde_json::Value) -> Vec<String> {
                             | "destination"
                             | "old_path"
                             | "new_path"
-                    ) {
-                        if let Some(path) = value.as_str() {
-                            paths.insert(path.to_owned());
-                        }
+                    ) && let Some(path) = value.as_str()
+                    {
+                        paths.insert(path.to_owned());
                     }
                     walk(value, paths);
                 }

@@ -366,15 +366,15 @@ fn resolve_base_url(config: &Config, provider: &str) -> (String, EndpointSource)
     if let Ok(base_url) = env::var(format!("{provider}_BASE_URL")) {
         return (base_url, EndpointSource::Environment);
     }
-    if provider == "OPENAI" {
-        if let Ok(base_url) = env::var("OPENAI_BASE_URL") {
-            return (base_url, EndpointSource::Environment);
-        }
+    if provider == "OPENAI"
+        && let Ok(base_url) = env::var("OPENAI_BASE_URL")
+    {
+        return (base_url, EndpointSource::Environment);
     }
-    if provider == "MEDUSA" {
-        if let Ok(base_url) = env::var("MEDUSA_BASE_URL") {
-            return (base_url, EndpointSource::Environment);
-        }
+    if provider == "MEDUSA"
+        && let Ok(base_url) = env::var("MEDUSA_BASE_URL")
+    {
+        return (base_url, EndpointSource::Environment);
     }
     let base_url = if provider == "MINIMAX" {
         "https://api.minimax.io/v1"

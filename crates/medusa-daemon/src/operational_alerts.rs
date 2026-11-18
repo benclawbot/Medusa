@@ -114,7 +114,7 @@ mod tests {
             entries: 1,
             pressure: ResourcePressure::Warning,
         };
-        let first = dispatcher.poll_text(&report(), &[warning.clone()]);
+        let first = dispatcher.poll_text(&report(), std::slice::from_ref(&warning));
         assert_eq!(first.len(), 2);
         assert!(first.iter().all(|message| message.contains("journal")));
         // Re-polling the same state stays silent.

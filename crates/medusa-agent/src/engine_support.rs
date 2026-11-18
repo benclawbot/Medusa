@@ -551,11 +551,10 @@ fn collect_mutation_paths(value: &serde_json::Value, paths: &mut Vec<String>) {
                         | "destination"
                         | "old_path"
                         | "new_path"
-                ) {
-                    if let Some(path) = value.as_str() {
-                        paths.push(path.to_owned());
-                        continue;
-                    }
+                ) && let Some(path) = value.as_str()
+                {
+                    paths.push(path.to_owned());
+                    continue;
                 }
                 collect_mutation_paths(value, paths);
             }

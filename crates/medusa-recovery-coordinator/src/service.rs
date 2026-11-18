@@ -110,10 +110,10 @@ where
         // final outcome returns its receipt without re-executing. A leftover
         // Attempted intent (previous attempt died mid-execution) does not
         // block a fresh attempt.
-        if let Some((audit_path, record)) = store.find_by_idempotency_key(&key)? {
-            if !matches!(record.outcome, RecoveryActionOutcome::Attempted) {
-                return Ok(RecoveryExecutionReceipt { record, audit_path });
-            }
+        if let Some((audit_path, record)) = store.find_by_idempotency_key(&key)?
+            && !matches!(record.outcome, RecoveryActionOutcome::Attempted)
+        {
+            return Ok(RecoveryExecutionReceipt { record, audit_path });
         }
         // Persist execution intent before running the executor so a crash
         // between authorization and completion still leaves evidence.

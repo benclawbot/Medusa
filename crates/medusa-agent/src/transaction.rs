@@ -397,12 +397,12 @@ fn apply_atomic_inner(
             cleanup_staged(&staged);
             return Err(error.into());
         }
-        if let Some(permissions) = permissions {
-            if let Err(error) = fs::set_permissions(&temporary, permissions) {
-                let _ = fs::remove_file(&temporary);
-                cleanup_staged(&staged);
-                return Err(error.into());
-            }
+        if let Some(permissions) = permissions
+            && let Err(error) = fs::set_permissions(&temporary, permissions)
+        {
+            let _ = fs::remove_file(&temporary);
+            cleanup_staged(&staged);
+            return Err(error.into());
         }
         staged.push((target.clone(), temporary));
     }

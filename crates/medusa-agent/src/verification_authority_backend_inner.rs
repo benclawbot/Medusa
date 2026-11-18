@@ -1563,7 +1563,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .unwrap();
         assert!(result.receipt.passed);
@@ -1575,7 +1575,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .unwrap();
         assert!(
@@ -1591,7 +1591,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .unwrap();
         assert!(rerun_after_tree_drift.receipt.passed);
@@ -1615,7 +1615,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .unwrap();
         assert!(rerun_after_artifact_corruption.receipt.passed);
@@ -1716,7 +1716,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component.clone()],
+            std::slice::from_ref(&component),
         )
         .unwrap();
         assert!(first.receipt.passed);

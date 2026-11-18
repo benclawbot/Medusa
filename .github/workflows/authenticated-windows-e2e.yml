@@ -48,10 +48,10 @@ jobs:
           clean: true
           persist-credentials: false
 
-      - name: Select Rust 1.88
+      - name: Select Rust 1.89
         run: |
-          rustup toolchain install 1.88.0 --profile minimal
-          rustup override set 1.88.0
+          rustup toolchain install 1.89.0 --profile minimal
+          rustup override set 1.89.0
           rustc --version
           cargo --version
 

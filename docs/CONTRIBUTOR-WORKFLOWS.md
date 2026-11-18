@@ -7,7 +7,7 @@ CI workflows under `.github/workflows/` should reuse the composite actions under
 
 | Action | Replaces |
 |---|---|
-| `./.github/actions/setup-rust` | `actions/checkout@v4` + `dtolnay/rust-toolchain@1.88.0` (+ `rustfmt, clippy` components) |
+| `./.github/actions/setup-rust` | `actions/checkout@v4` + `dtolnay/rust-toolchain@1.89.0` (+ `rustfmt, clippy` components) |
 | `./.github/actions/cargo-locked` | Any `cargo <subcommand> --locked ...` step |
 | `./.github/actions/cargo-test`   | `cargo test` invocations with optional `-p <crate>` filter |
 

@@ -951,13 +951,11 @@ impl ModelModal {
             let selected = settings.choice_selection.selected();
             if let Some(check) = settings.doctor.checks.get(selected).cloned()
                 && check.repair.is_some()
-            {
-                if let Some(change) = repair_config_check(&settings.catalog, &check)
+                && let Some(change) = repair_config_check(&settings.catalog, &check)
                     .map_err(|error| error.to_string())?
-                {
-                    settings.revision = change.revision;
-                    settings.last_apply_timing = Some(change.apply_timing);
-                }
+            {
+                settings.revision = change.revision;
+                settings.last_apply_timing = Some(change.apply_timing);
             }
             settings.doctor =
                 diagnose_config_catalog(&settings.catalog).map_err(|error| error.to_string())?;
@@ -1208,14 +1206,12 @@ fn normalize_settings_choice(settings: &mut SettingsState) {
         .iter()
         .copied()
         .find(|index| choices[*index].enabled)
+        && (!filtered.contains(&settings.choice_selection.selected())
+            || !choices[settings.choice_selection.selected()].enabled)
     {
-        if !filtered.contains(&settings.choice_selection.selected())
-            || !choices[settings.choice_selection.selected()].enabled
-        {
-            settings
-                .choice_selection
-                .set_selected(selected, choices.len());
-        }
+        settings
+            .choice_selection
+            .set_selected(selected, choices.len());
     }
 }
 

@@ -280,10 +280,10 @@ fn unique_snapshot_temporary(path: &Path) -> PathBuf {
 
 fn sync_parent(path: &Path) {
     #[cfg(unix)]
-    if let Some(parent) = path.parent() {
-        if let Ok(directory) = fs::File::open(parent) {
-            let _ = directory.sync_all();
-        }
+    if let Some(parent) = path.parent()
+        && let Ok(directory) = fs::File::open(parent)
+    {
+        let _ = directory.sync_all();
     }
     #[cfg(not(unix))]
     let _ = path;

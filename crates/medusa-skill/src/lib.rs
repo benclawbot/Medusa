@@ -368,10 +368,10 @@ fn validate_manifest(root: &Path, manifest: &SkillPackageManifest) -> MedusaResu
                 "artifact side effects require declared artifact paths",
             ));
         }
-        if let Some(argument) = &entrypoint.input_file_arg {
-            if argument.trim().is_empty() || argument.contains(['\0', ' ', '\t']) {
-                return Err(invalid("input_file_arg must be one bounded argument"));
-            }
+        if let Some(argument) = &entrypoint.input_file_arg
+            && (argument.trim().is_empty() || argument.contains(['\0', ' ', '\t']))
+        {
+            return Err(invalid("input_file_arg must be one bounded argument"));
         }
     }
     Ok(())
