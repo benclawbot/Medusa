@@ -260,6 +260,9 @@ ChatGPT OAuth is supplied by the installed Codex CLI app-server (`codex app-serv
 
 ## Quick start
 
+For a shorter walkthrough focused on a safe first session, see [First run](docs/FIRST-RUN.md).
+
+
 Open an interactive session:
 
 ```bash
