@@ -500,7 +500,9 @@ mod tests {
         assert_eq!(projection["value"]["kind"], "omitted");
         assert_eq!(projection["projection"]["omitted"], true);
         assert!(!projection.to_string().contains("SENSITIVE_FIXTURE_"));
-        assert_eq!(machine["source_fingerprint"], projection["source_fingerprint"]);
+        assert_eq!(
+            machine["source_fingerprint"],
+            projection["source_fingerprint"]
+        );
     }
-
 }
