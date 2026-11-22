@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: read
+  # The reusable CI workflow requests actions: read; callers cannot elevate it.
+  actions: read
 
 concurrency:
   group: rolling-main
