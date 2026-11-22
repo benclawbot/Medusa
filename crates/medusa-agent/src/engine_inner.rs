@@ -230,11 +230,13 @@ fn journal_certified_tool_execution(
     name: &str,
     input: &serde_json::Value,
     receipt: serde_json::Value,
-    result: &MedusaResult<String>,
+    canonical: &crate::tool_result::CanonicalToolResultV1,
     execution_policy: &AgentExecutionPolicy,
 ) -> MedusaResult<()> {
+    // Journal the *same* typed result finalized by the certified pipeline.
+    // Never re-derive authority from presentation strings after execution.
+    canonical.verify_receipt_binding(&receipt)?;
     let scope = crate::agent_scope::load_published_scope_ref(&session.repo, session.id.as_str())?;
-    let canonical = crate::tool_result::CanonicalToolResultV1::from_receipt(&receipt, result)?;
     append_event(
         session,
         Actor::Coordinator,
@@ -1227,7 +1229,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     &approval.tool,
                     &approval.input,
                     execution.receipt,
-                    &execution.result,
+                    &execution.canonical,
                     &self.execution_policy,
                 )?;
                 let result = execution.result;
@@ -2470,7 +2472,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         &name,
                         &input,
                         receipt,
-                        &result,
+                        &canonical,
                         &self.execution_policy,
                     )?;
                 }
@@ -2649,9 +2651,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                         }
                     }
                     Err(_) => {
-                        // Envelope wrap failed (rare — disk full, perms). Fall back
-                        // to the raw body so the model still sees output.
-                        raw_content.clone()
+                        // A failed artifact write cannot bypass the canonical model budget.
+                        // Fail closed to a bounded typed projection, never raw handler output.
+                        serde_json::to_string(&canonical.model_projection(8 * 1024))
+                            .unwrap_or_else(|_| "{\"error\":\"tool result projection unavailable\"}".to_owned())
                     }
                 };
                 session.messages.push(Message {
