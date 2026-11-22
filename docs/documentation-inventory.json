@@ -24,6 +24,21 @@
       "sha256": "10d54aa9b60e1c728af90d88070a5158623a2e8a4c193d30e3a5fba77857a22d"
     },
     {
+      "path": "CONTRIBUTING.md",
+      "disposition": "current",
+      "sha256": "ede8a72b0fef3dcc4cd4ed62f9c455ac77891f9c864defbcab447a26b7555618"
+    },
+    {
+      "path": "README.md",
+      "disposition": "current",
+      "sha256": "b794cfa648d905e685efc429b8a9033afa71343e6cf8cd0ec5e8cb9027bfda5d"
+    },
+    {
+      "path": "SECURITY.md",
+      "disposition": "current",
+      "sha256": "119fbfc3877b03f4823775ebdff3ea43383e1b5d2122175aafd22e812e92333b"
+    },
+    {
       "path": "apps/medusa-desktop/src/RECOVERY_ACCEPTANCE.md",
       "disposition": "current",
       "sha256": "823fa68c381619a13a5abd6f42338e0a3775b1e29157c090b2045ae432c8591c"
@@ -42,11 +57,6 @@
       "path": "benchmarks/performance/README.md",
       "disposition": "current",
       "sha256": "0141228ff3d30e2fdda4528fa3e24dbbe9513b32958c7deb05e2ba29cc89f0b9"
-    },
-    {
-      "path": "CONTRIBUTING.md",
-      "disposition": "current",
-      "sha256": "ede8a72b0fef3dcc4cd4ed62f9c455ac77891f9c864defbcab447a26b7555618"
     },
     {
       "path": "crates/medusa-daemon/README.md",
@@ -69,14 +79,299 @@
       "sha256": "75c004b21dcd204127338e5c8d5bafeb1cd75fde8807c3ed7c4a797f3afb2259"
     },
     {
+      "path": "docs/ARCHITECTURE.md",
+      "disposition": "current",
+      "sha256": "5031b7ef0021542885abcb145ed82efd28780a9ed2141e8b961ba44a07d6b405"
+    },
+    {
+      "path": "docs/BENCHMARKS.md",
+      "disposition": "current",
+      "sha256": "ab899bccc6c34a2d72fc765548ba17b5f88426f890f61ccdec4f23296d1451a3"
+    },
+    {
+      "path": "docs/CAPABILITY-EVIDENCE.md",
+      "disposition": "current",
+      "sha256": "f330fa62085f2e911e35846cdf0d828f2f736fc32bcbc2794438ae0fa5ddce24"
+    },
+    {
+      "path": "docs/CHATGPT-OAUTH.md",
+      "disposition": "current",
+      "sha256": "eb727aabc503ffbbd6a2257ff9dcaedb86ca0e48b1de4cdb6eafaf13e0abc22a"
+    },
+    {
+      "path": "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
+      "disposition": "current",
+      "sha256": "fd1d00a083de7f872973a6dafa4f1774dc371b0cf5a09a1f587290fc87764706"
+    },
+    {
+      "path": "docs/CODEX-RELIABILITY.md",
+      "disposition": "current",
+      "sha256": "4f0b1e24db62de3ad337e9f37e7a3900013d924d8113ebcb2f17a70fd5fa97e5"
+    },
+    {
+      "path": "docs/CODEX-TASK-TEMPLATE.md",
+      "disposition": "current",
+      "sha256": "6c71a39146838ed6500edf864793f94723b3b174d79e6172863e72c9773f2f40"
+    },
+    {
+      "path": "docs/COMPATIBILITY.md",
+      "disposition": "current",
+      "sha256": "c51044d9783169d89fc1a477564c9c583d2febface0f60893fdebc63ecbd4189"
+    },
+    {
+      "path": "docs/CONFIGURATION.md",
+      "disposition": "current",
+      "sha256": "bf6ead4277e43a0833746354129ac24b5430fa4573b752ab3c0127a1a0dbdb51"
+    },
+    {
+      "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
+      "disposition": "current",
+      "sha256": "bfd930f4fbe412b91187d09219357c93254ae54ca99da0399fee4fbb484f64ac"
+    },
+    {
+      "path": "docs/CONTRIBUTOR-WORKFLOWS.md",
+      "disposition": "current",
+      "sha256": "2144f08c12355e44aaf4244b1bd3e95a1931de9181e34fc37e6b72efde36d9be"
+    },
+    {
+      "path": "docs/DAEMON-CONCURRENCY.md",
+      "disposition": "current",
+      "sha256": "27b344734302ce669dc7b2d0e792666045a8900807a9294b5b4723ea88c501bb"
+    },
+    {
+      "path": "docs/DEPENDENCY-HYGIENE.md",
+      "disposition": "historical",
+      "sha256": "9ac6e12114a9489421dfbea3e0692a678ff92d9fa24af0a416d15b0afe75f454"
+    },
+    {
+      "path": "docs/DESKTOP-DISTRIBUTION.md",
+      "disposition": "current",
+      "sha256": "c3233eb45a8b41ab0ac53841b832c9deea96ceb86b5f246f6cde287a4453c980"
+    },
+    {
+      "path": "docs/DESKTOP-UX.md",
+      "disposition": "current",
+      "sha256": "12ab5c56b87e3e58b06438603c05f76e6449fdc888a0b899b02aada7f41e4f40"
+    },
+    {
+      "path": "docs/DOCUMENTATION-GOVERNANCE.md",
+      "disposition": "current",
+      "sha256": "25cb2ea01bc2d86307880dbfb45d28cfe48688415b38c45b5183584856773a40"
+    },
+    {
+      "path": "docs/DURABLE-PATCH-TRANSACTIONS.md",
+      "disposition": "current",
+      "sha256": "a87933be0f54cfb0edf1cd74c5e2f5b3161142857351b7f4f8fb2fa0e35c4966"
+    },
+    {
+      "path": "docs/EXECUTION-DURABILITY.md",
+      "disposition": "current",
+      "sha256": "52e0350f5111d878942eeed965296a14e5a3752370766d98d28e687d955f45b5"
+    },
+    {
+      "path": "docs/EXTERNAL-REPOSITORY-VALIDATION.md",
+      "disposition": "current",
+      "sha256": "2f86f59017510e658ef235ab42090f2f017644c128396892d85a93c43f2c695f"
+    },
+    {
+      "path": "docs/FIRST-RUN.md",
+      "disposition": "current",
+      "sha256": "c4c0253ecf5f94bfbf76e62976dc052269052f1b34522a42d4440efb3b5cb1c8"
+    },
+    {
+      "path": "docs/HARNESS-EVALUATION.md",
+      "disposition": "current",
+      "sha256": "8f86c57846ae03996bd1b0a4dc9c41c093c59e69c717e65a637f0805de613db1"
+    },
+    {
+      "path": "docs/INDEX-BENCHMARKS.md",
+      "disposition": "current",
+      "sha256": "078366d40dcfbf7a56b8afed19850b6c2646eee19b956b551de5c975a2e8af7f"
+    },
+    {
+      "path": "docs/LIVE-PROVIDER-DOGFOOD.md",
+      "disposition": "current",
+      "sha256": "08a5fd4fe63cdfa72fdc5cade75f84fef8720ef4be85f4218564942d76a94b40"
+    },
+    {
+      "path": "docs/MULTIMODAL-TESTING.md",
+      "disposition": "current",
+      "sha256": "d2ac0529024883dd5c9798f1a6382789bfd8fc7a27887279ab6a2f65de465f5f"
+    },
+    {
+      "path": "docs/MULTI_AGENT_EXECUTION.md",
+      "disposition": "current",
+      "sha256": "189597d4414893fe489c715e7e2c34be39d80decea1ea8531fe83f73ff397584"
+    },
+    {
+      "path": "docs/MUTATING-WORKTREE-INTEGRATION.md",
+      "disposition": "current",
+      "sha256": "9993ba2b893aa342f1dd8dab8e4788e6d7cc3f300354c71bdac2ec369f8391ae"
+    },
+    {
+      "path": "docs/OBSERVABILITY.md",
+      "disposition": "current",
+      "sha256": "61e59fa15e26fc0e442857e0b343b3506fc0ff1953f477a4060ab32b8ec604b8"
+    },
+    {
+      "path": "docs/PRODUCT-ACCEPTANCE.md",
+      "disposition": "current",
+      "sha256": "48b1db63a3bda018f02236b5f8f20a50403706b548a27cf06e436bf5176fce23"
+    },
+    {
+      "path": "docs/PRODUCTION-EXECUTION-TRACE.md",
+      "disposition": "current",
+      "sha256": "28a6cd47ffcd0b980d1a6e8b9b5824fd94987270cb88088ae3624257e2588fe6"
+    },
+    {
+      "path": "docs/PRODUCT_EVIDENCE_ROADMAP.md",
+      "disposition": "historical",
+      "sha256": "c39ce6273f329ba7360684154b3a85f79455ade704d9dd6a1d8f958c3365895d"
+    },
+    {
+      "path": "docs/PROTOCOL-VERSIONING.md",
+      "disposition": "current",
+      "sha256": "8a8018572f8ced94cf5fae13629b6e6e816470494d878a92d07ddb538a4cde46"
+    },
+    {
+      "path": "docs/PROVIDER-DELIVERY.md",
+      "disposition": "current",
+      "sha256": "02dea5e356b9848b7cfdc5570a3af45b20dc966f126dfbc4c76a1143dbb3b4d8"
+    },
+    {
+      "path": "docs/PROVIDER-SUPPORT.md",
+      "disposition": "current",
+      "sha256": "9b98efd5ad9dd2c467fad1c444bc7798290358884380b96d4e668113dc97b72c"
+    },
+    {
+      "path": "docs/PUBLIC-API-BASELINE.md",
+      "disposition": "current",
+      "sha256": "b3bfbab0d33ae59025ee19b57f51ef05f51dbcb8c2b8db337c5b4243672747bf"
+    },
+    {
+      "path": "docs/README.md",
+      "disposition": "current",
+      "sha256": "be3474514d3181d1e87179239b57935abe02d086ea159b2b25266ed9b9d90129"
+    },
+    {
+      "path": "docs/REFACTOR-BASELINE.md",
+      "disposition": "current",
+      "sha256": "b65034898ae8bb921fa919ec9d1e2990385a323691a7ee29355bb06ca4589d88"
+    },
+    {
+      "path": "docs/RELEASE-SIGNING.md",
+      "disposition": "current",
+      "sha256": "162cdbe9b90e4317c73097600f2cf6718d1c1258d8d41d82526651896a1a7d69"
+    },
+    {
+      "path": "docs/RELEASE.md",
+      "disposition": "current",
+      "sha256": "8e8a811ed90a8b6df352454b07a16a9aff7e2b195e047b5e2fe7593456e1f382"
+    },
+    {
+      "path": "docs/SAFETY-RECOVERY-PROOF.md",
+      "disposition": "current",
+      "sha256": "3e5f69882ac81bb5883bf7ac0f21443737a94feaafbbc449d96d324ffe21761f"
+    },
+    {
+      "path": "docs/SCHEMA_HARNESS_FOUNDATION.md",
+      "disposition": "current",
+      "sha256": "623cd49d24d9c848a61cf915c7c336cbaec6f00a1343c9c923faa420249261b2"
+    },
+    {
+      "path": "docs/SECURITY-HARDENING.md",
+      "disposition": "current",
+      "sha256": "cf94d8efc90608c7ed28dd9438f089b0e0449dc4d22f41dfe055337e0feeec7d"
+    },
+    {
+      "path": "docs/SECURITY-MODEL.md",
+      "disposition": "current",
+      "sha256": "fc4889fca4bb2315957bc82eef564b52b27ec70086c17163a0c2205322c8a534"
+    },
+    {
+      "path": "docs/SELF-UPDATE.md",
+      "disposition": "current",
+      "sha256": "84af0b71b286fd5b8cdd467c0f7ce28b627826682e8f21177b97798080fe164f"
+    },
+    {
+      "path": "docs/SESSION-RECALL.md",
+      "disposition": "current",
+      "sha256": "7b95478e0b72394dd79e43e52626d218949b568a19fe1192e49225fe58fe42f5"
+    },
+    {
+      "path": "docs/SESSION-RESUME.md",
+      "disposition": "current",
+      "sha256": "b7caace0f7cca84e3f91fad290ba88851b5e4279356811cd4d2a60a43976473f"
+    },
+    {
+      "path": "docs/SKILL-DEPENDENCY-LOCKS.md",
+      "disposition": "current",
+      "sha256": "753a2df6b80789e4f2c7824025e45092c2de45d9887ee003f0e9e8729c9afeb8"
+    },
+    {
+      "path": "docs/TEAM-OBSERVABILITY-STEERING.md",
+      "disposition": "current",
+      "sha256": "801c9e3bd3e5fb002e1e26801ab78702aa8666d6e1d863134a3ac8092d4d95ad"
+    },
+    {
+      "path": "docs/TOOL-EXECUTION-PIPELINE.md",
+      "disposition": "current",
+      "sha256": "65fa6aa88dff03a670a448a767e3676c6345999a777b3f1e0c21042cd688ecf8"
+    },
+    {
+      "path": "docs/TRANSACTIONAL-PATCH-RECOVERY.md",
+      "disposition": "current",
+      "sha256": "61960cc3824e8e748f11ae04c7d41552f649db84aaa1001fdef60f5da2a9b4dd"
+    },
+    {
+      "path": "docs/UNINSTALL.md",
+      "disposition": "current",
+      "sha256": "80b67dfe098eebdb314b2c3fe71c7c74ef613bae4e90f5caa2aaf87961e2a393"
+    },
+    {
+      "path": "docs/WINDOWS-DESKTOP-NODE.md",
+      "disposition": "current",
+      "sha256": "e8ada547e0564ca45c7dbee909f22f9742b84bb63be4e768d5fa80688adf7dd2"
+    },
+    {
+      "path": "docs/WORKSPACES.md",
+      "disposition": "current",
+      "sha256": "c1df23f6b15eda8d128f0470818e2737081de5b5d4c2b6006553026ed77ae933"
+    },
+    {
       "path": "docs/architecture-policy.md",
       "disposition": "current",
       "sha256": "5e0d173c0a90986567917fb92beffa04adc939df661f08c34aa8c76b587e1c2d"
     },
     {
-      "path": "docs/ARCHITECTURE.md",
+      "path": "docs/architecture/FINAL-CERTIFICATION-AUDIT.md",
+      "disposition": "historical",
+      "sha256": "1883ce39e390037583196f98f5bf5be4e0adead198825233e9c7f90c4459ec23"
+    },
+    {
+      "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "5031b7ef0021542885abcb145ed82efd28780a9ed2141e8b961ba44a07d6b405"
+      "sha256": "ad8fe095ca5d6d7a5534b7d81a4ded0c5be9396eb8fe609b0a68f6ea0394ba01"
+    },
+    {
+      "path": "docs/architecture/LEGACY-DELETION.md",
+      "disposition": "current",
+      "sha256": "f175d4aa06113add3610ab8678bfb214fcc38f048854a67e3b80a5ad29f94a46"
+    },
+    {
+      "path": "docs/architecture/PREBUILT-UPDATES.md",
+      "disposition": "current",
+      "sha256": "95b020a46a285e244ce4b7b43c38ac68f821be4e8575d59886d533a43acd403c"
+    },
+    {
+      "path": "docs/architecture/RELEASE-POLICY.md",
+      "disposition": "current",
+      "sha256": "cd5801530d695c1d04730648dc716ede17682d471e20182fec6a8640d7a4e03b"
+    },
+    {
+      "path": "docs/architecture/UNSAFE-RUST-BOUNDARY.md",
+      "disposition": "current",
+      "sha256": "18a1caee681be5513e9150c12d9099e96ae85c8b98df33033ca80db1b7feff93"
     },
     {
       "path": "docs/architecture/decisions/0001-architecture-v2-reset.md",
@@ -144,26 +439,6 @@
       "sha256": "688b14b7fff95d0d2c5139527562e591475ad76636dd9d533c2a5fadca73eda0"
     },
     {
-      "path": "docs/architecture/FINAL-CERTIFICATION-AUDIT.md",
-      "disposition": "historical",
-      "sha256": "1883ce39e390037583196f98f5bf5be4e0adead198825233e9c7f90c4459ec23"
-    },
-    {
-      "path": "docs/architecture/INDEX.md",
-      "disposition": "current",
-      "sha256": "ad8fe095ca5d6d7a5534b7d81a4ded0c5be9396eb8fe609b0a68f6ea0394ba01"
-    },
-    {
-      "path": "docs/architecture/LEGACY-DELETION.md",
-      "disposition": "current",
-      "sha256": "f175d4aa06113add3610ab8678bfb214fcc38f048854a67e3b80a5ad29f94a46"
-    },
-    {
-      "path": "docs/architecture/PREBUILT-UPDATES.md",
-      "disposition": "current",
-      "sha256": "95b020a46a285e244ce4b7b43c38ac68f821be4e8575d59886d533a43acd403c"
-    },
-    {
       "path": "docs/architecture/production-multi-agent-consolidation.md",
       "disposition": "current",
       "sha256": "2702d860b480c0134dc5f09cb5488621c793badb9dc436b91fd37d31ac35016e"
@@ -172,11 +447,6 @@
       "path": "docs/architecture/provider-profiles.md",
       "disposition": "current",
       "sha256": "c0ac07fce7dd0eaa99d4f65c01b38eb8ef9d969417c5052428f7a14f72222749"
-    },
-    {
-      "path": "docs/architecture/RELEASE-POLICY.md",
-      "disposition": "current",
-      "sha256": "cd5801530d695c1d04730648dc716ede17682d471e20182fec6a8640d7a4e03b"
     },
     {
       "path": "docs/architecture/rust-intelligence-comparison.md",
@@ -204,89 +474,9 @@
       "sha256": "6b853c53d4b522e6eccd09f1d1d427b3970f0c95b59dacf34633fe56e2920084"
     },
     {
-      "path": "docs/architecture/UNSAFE-RUST-BOUNDARY.md",
-      "disposition": "current",
-      "sha256": "18a1caee681be5513e9150c12d9099e96ae85c8b98df33033ca80db1b7feff93"
-    },
-    {
-      "path": "docs/BENCHMARKS.md",
-      "disposition": "current",
-      "sha256": "ab899bccc6c34a2d72fc765548ba17b5f88426f890f61ccdec4f23296d1451a3"
-    },
-    {
-      "path": "docs/CAPABILITY-EVIDENCE.md",
-      "disposition": "current",
-      "sha256": "f330fa62085f2e911e35846cdf0d828f2f736fc32bcbc2794438ae0fa5ddce24"
-    },
-    {
-      "path": "docs/CHATGPT-OAUTH.md",
-      "disposition": "current",
-      "sha256": "eb727aabc503ffbbd6a2257ff9dcaedb86ca0e48b1de4cdb6eafaf13e0abc22a"
-    },
-    {
-      "path": "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
-      "disposition": "current",
-      "sha256": "fd1d00a083de7f872973a6dafa4f1774dc371b0cf5a09a1f587290fc87764706"
-    },
-    {
-      "path": "docs/CODEX-RELIABILITY.md",
-      "disposition": "current",
-      "sha256": "4f0b1e24db62de3ad337e9f37e7a3900013d924d8113ebcb2f17a70fd5fa97e5"
-    },
-    {
-      "path": "docs/CODEX-TASK-TEMPLATE.md",
-      "disposition": "current",
-      "sha256": "6c71a39146838ed6500edf864793f94723b3b174d79e6172863e72c9773f2f40"
-    },
-    {
-      "path": "docs/COMPATIBILITY.md",
-      "disposition": "current",
-      "sha256": "c51044d9783169d89fc1a477564c9c583d2febface0f60893fdebc63ecbd4189"
-    },
-    {
-      "path": "docs/CONFIGURATION.md",
-      "disposition": "current",
-      "sha256": "bf6ead4277e43a0833746354129ac24b5430fa4573b752ab3c0127a1a0dbdb51"
-    },
-    {
-      "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
-      "disposition": "current",
-      "sha256": "bfd930f4fbe412b91187d09219357c93254ae54ca99da0399fee4fbb484f64ac"
-    },
-    {
-      "path": "docs/CONTRIBUTOR-WORKFLOWS.md",
-      "disposition": "current",
-      "sha256": "2144f08c12355e44aaf4244b1bd3e95a1931de9181e34fc37e6b72efde36d9be"
-    },
-    {
-      "path": "docs/DAEMON-CONCURRENCY.md",
-      "disposition": "current",
-      "sha256": "27b344734302ce669dc7b2d0e792666045a8900807a9294b5b4723ea88c501bb"
-    },
-    {
       "path": "docs/data-lifecycle-certification.md",
       "disposition": "current",
       "sha256": "94aae990a31b12f1800b9213ab5dfc973f48789406837c24dc4cef51fa4a3d5e"
-    },
-    {
-      "path": "docs/DEPENDENCY-HYGIENE.md",
-      "disposition": "historical",
-      "sha256": "9ac6e12114a9489421dfbea3e0692a678ff92d9fa24af0a416d15b0afe75f454"
-    },
-    {
-      "path": "docs/DESKTOP-DISTRIBUTION.md",
-      "disposition": "current",
-      "sha256": "c3233eb45a8b41ab0ac53841b832c9deea96ceb86b5f246f6cde287a4453c980"
-    },
-    {
-      "path": "docs/DESKTOP-UX.md",
-      "disposition": "current",
-      "sha256": "12ab5c56b87e3e58b06438603c05f76e6449fdc888a0b899b02aada7f41e4f40"
-    },
-    {
-      "path": "docs/DOCUMENTATION-GOVERNANCE.md",
-      "disposition": "current",
-      "sha256": "25cb2ea01bc2d86307880dbfb45d28cfe48688415b38c45b5183584856773a40"
     },
     {
       "path": "docs/durable-journal-policy.md",
@@ -294,29 +484,9 @@
       "sha256": "ae1b6d7a8d8acc704e0340d4f31c25aba667d491d17852f2255a4fafddfb32c4"
     },
     {
-      "path": "docs/DURABLE-PATCH-TRANSACTIONS.md",
-      "disposition": "current",
-      "sha256": "a87933be0f54cfb0edf1cd74c5e2f5b3161142857351b7f4f8fb2fa0e35c4966"
-    },
-    {
-      "path": "docs/EXECUTION-DURABILITY.md",
-      "disposition": "current",
-      "sha256": "52e0350f5111d878942eeed965296a14e5a3752370766d98d28e687d955f45b5"
-    },
-    {
       "path": "docs/explicit-capabilities.md",
       "disposition": "current",
       "sha256": "32e27539ca04c5e2bb6e054aa26d50f897510c8f878cb95d4cff9f9e67699a9a"
-    },
-    {
-      "path": "docs/EXTERNAL-REPOSITORY-VALIDATION.md",
-      "disposition": "current",
-      "sha256": "2f86f59017510e658ef235ab42090f2f017644c128396892d85a93c43f2c695f"
-    },
-    {
-      "path": "docs/FIRST-RUN.md",
-      "disposition": "current",
-      "sha256": "c4c0253ecf5f94bfbf76e62976dc052269052f1b34522a42d4440efb3b5cb1c8"
     },
     {
       "path": "docs/full-system-remediation.md",
@@ -329,19 +499,9 @@
       "sha256": "b16cfacd698eb3fd930b5f95ed74f577c22f740c9f99664e68fd8fc42d96098d"
     },
     {
-      "path": "docs/HARNESS-EVALUATION.md",
-      "disposition": "current",
-      "sha256": "8f86c57846ae03996bd1b0a4dc9c41c093c59e69c717e65a637f0805de613db1"
-    },
-    {
       "path": "docs/implementation-ledger-core.md",
       "disposition": "current",
       "sha256": "e789c8913112ae0024b2c4edb7a7cab133f699c9d29d123e663a7a4e1f0b4e39"
-    },
-    {
-      "path": "docs/INDEX-BENCHMARKS.md",
-      "disposition": "current",
-      "sha256": "078366d40dcfbf7a56b8afed19850b6c2646eee19b956b551de5c975a2e8af7f"
     },
     {
       "path": "docs/issue-307-direct-engine-modules.md",
@@ -364,11 +524,6 @@
       "sha256": "5a84e3407ca3536f1725e1fb7b883280dfd0119d05002f06ced3a832d915d9e0"
     },
     {
-      "path": "docs/LIVE-PROVIDER-DOGFOOD.md",
-      "disposition": "current",
-      "sha256": "08a5fd4fe63cdfa72fdc5cade75f84fef8720ef4be85f4218564942d76a94b40"
-    },
-    {
       "path": "docs/mcp-cache-panic-fix.md",
       "disposition": "historical",
       "sha256": "4e6cb02b130d79d350fb5fc6ef9f8b9ef16ce03757909e74a4c21e90a6af038a"
@@ -379,54 +534,9 @@
       "sha256": "72b321f29d9e57f5d485596b4a2cc6f62306fe0a4452136bcc00b1da2f84cfeb"
     },
     {
-      "path": "docs/MULTI_AGENT_EXECUTION.md",
-      "disposition": "current",
-      "sha256": "189597d4414893fe489c715e7e2c34be39d80decea1ea8531fe83f73ff397584"
-    },
-    {
       "path": "docs/multimodal-attachments.md",
       "disposition": "current",
       "sha256": "450bcebc16f358067c2830f390429a92de4b5ac9c296098a4048865543c41410"
-    },
-    {
-      "path": "docs/MULTIMODAL-TESTING.md",
-      "disposition": "current",
-      "sha256": "d2ac0529024883dd5c9798f1a6382789bfd8fc7a27887279ab6a2f65de465f5f"
-    },
-    {
-      "path": "docs/MUTATING-WORKTREE-INTEGRATION.md",
-      "disposition": "current",
-      "sha256": "9993ba2b893aa342f1dd8dab8e4788e6d7cc3f300354c71bdac2ec369f8391ae"
-    },
-    {
-      "path": "docs/OBSERVABILITY.md",
-      "disposition": "current",
-      "sha256": "61e59fa15e26fc0e442857e0b343b3506fc0ff1953f477a4060ab32b8ec604b8"
-    },
-    {
-      "path": "docs/PRODUCT_EVIDENCE_ROADMAP.md",
-      "disposition": "historical",
-      "sha256": "c39ce6273f329ba7360684154b3a85f79455ade704d9dd6a1d8f958c3365895d"
-    },
-    {
-      "path": "docs/PRODUCT-ACCEPTANCE.md",
-      "disposition": "current",
-      "sha256": "48b1db63a3bda018f02236b5f8f20a50403706b548a27cf06e436bf5176fce23"
-    },
-    {
-      "path": "docs/PRODUCTION-EXECUTION-TRACE.md",
-      "disposition": "current",
-      "sha256": "28a6cd47ffcd0b980d1a6e8b9b5824fd94987270cb88088ae3624257e2588fe6"
-    },
-    {
-      "path": "docs/PROTOCOL-VERSIONING.md",
-      "disposition": "current",
-      "sha256": "8a8018572f8ced94cf5fae13629b6e6e816470494d878a92d07ddb538a4cde46"
-    },
-    {
-      "path": "docs/PROVIDER-DELIVERY.md",
-      "disposition": "current",
-      "sha256": "02dea5e356b9848b7cfdc5570a3af45b20dc966f126dfbc4c76a1143dbb3b4d8"
     },
     {
       "path": "docs/provider-request-lifecycle.md",
@@ -434,39 +544,9 @@
       "sha256": "ddccd53f7d0117b49b9fef2459c14b709408f0975e81aee51407bf9bae1c8200"
     },
     {
-      "path": "docs/PROVIDER-SUPPORT.md",
-      "disposition": "current",
-      "sha256": "9b98efd5ad9dd2c467fad1c444bc7798290358884380b96d4e668113dc97b72c"
-    },
-    {
-      "path": "docs/PUBLIC-API-BASELINE.md",
-      "disposition": "current",
-      "sha256": "b3bfbab0d33ae59025ee19b57f51ef05f51dbcb8c2b8db337c5b4243672747bf"
-    },
-    {
       "path": "docs/quickstart.md",
       "disposition": "current",
       "sha256": "51afea459dbbad690b0cd0d663a342014c71e588b64b0eb13a309508731ef21e"
-    },
-    {
-      "path": "docs/README.md",
-      "disposition": "current",
-      "sha256": "be3474514d3181d1e87179239b57935abe02d086ea159b2b25266ed9b9d90129"
-    },
-    {
-      "path": "docs/REFACTOR-BASELINE.md",
-      "disposition": "current",
-      "sha256": "b65034898ae8bb921fa919ec9d1e2990385a323691a7ee29355bb06ca4589d88"
-    },
-    {
-      "path": "docs/RELEASE-SIGNING.md",
-      "disposition": "current",
-      "sha256": "162cdbe9b90e4317c73097600f2cf6718d1c1258d8d41d82526651896a1a7d69"
-    },
-    {
-      "path": "docs/RELEASE.md",
-      "disposition": "current",
-      "sha256": "8e8a811ed90a8b6df352454b07a16a9aff7e2b195e047b5e2fe7593456e1f382"
     },
     {
       "path": "docs/repository-indexing.md",
@@ -489,31 +569,6 @@
       "sha256": "008c7c76b869a24d7a6ef7aab36aacf0c68867334ba1fc197aceaab9b625c1f6"
     },
     {
-      "path": "docs/SAFETY-RECOVERY-PROOF.md",
-      "disposition": "current",
-      "sha256": "3e5f69882ac81bb5883bf7ac0f21443737a94feaafbbc449d96d324ffe21761f"
-    },
-    {
-      "path": "docs/SCHEMA_HARNESS_FOUNDATION.md",
-      "disposition": "current",
-      "sha256": "623cd49d24d9c848a61cf915c7c336cbaec6f00a1343c9c923faa420249261b2"
-    },
-    {
-      "path": "docs/SECURITY-HARDENING.md",
-      "disposition": "current",
-      "sha256": "cf94d8efc90608c7ed28dd9438f089b0e0449dc4d22f41dfe055337e0feeec7d"
-    },
-    {
-      "path": "docs/SECURITY-MODEL.md",
-      "disposition": "current",
-      "sha256": "fc4889fca4bb2315957bc82eef564b52b27ec70086c17163a0c2205322c8a534"
-    },
-    {
-      "path": "docs/SELF-UPDATE.md",
-      "disposition": "current",
-      "sha256": "84af0b71b286fd5b8cdd467c0f7ce28b627826682e8f21177b97798080fe164f"
-    },
-    {
       "path": "docs/session-continuity.md",
       "disposition": "current",
       "sha256": "f9c1c5e3982168069ddf0d0c6e37d4ccd21ceec1c1c6b18747858478b8fe4370"
@@ -524,24 +579,9 @@
       "sha256": "573cbfc8b09663dcbc7301417b26eed0c2463a1ac129b3b7c3d5ed7edc6563cb"
     },
     {
-      "path": "docs/SESSION-RECALL.md",
-      "disposition": "current",
-      "sha256": "7b95478e0b72394dd79e43e52626d218949b568a19fe1192e49225fe58fe42f5"
-    },
-    {
-      "path": "docs/SESSION-RESUME.md",
-      "disposition": "current",
-      "sha256": "b7caace0f7cca84e3f91fad290ba88851b5e4279356811cd4d2a60a43976473f"
-    },
-    {
       "path": "docs/session-startup.md",
       "disposition": "current",
       "sha256": "c5fa14c492abd90e7711df7e23266e93c82e9664009266523e5e1ed68bfd1a4f"
-    },
-    {
-      "path": "docs/SKILL-DEPENDENCY-LOCKS.md",
-      "disposition": "current",
-      "sha256": "753a2df6b80789e4f2c7824025e45092c2de45d9887ee003f0e9e8729c9afeb8"
     },
     {
       "path": "docs/superpowers/plans/2026-07-12-complete-installation-guide.md",
@@ -584,16 +624,6 @@
       "sha256": "59fe319d19d6f6d4ae96857cdae883e4ad194d4d759074346656cbc27fdc7176"
     },
     {
-      "path": "docs/TEAM-OBSERVABILITY-STEERING.md",
-      "disposition": "current",
-      "sha256": "801c9e3bd3e5fb002e1e26801ab78702aa8666d6e1d863134a3ac8092d4d95ad"
-    },
-    {
-      "path": "docs/TOOL-EXECUTION-PIPELINE.md",
-      "disposition": "current",
-      "sha256": "65fa6aa88dff03a670a448a767e3676c6345999a777b3f1e0c21042cd688ecf8"
-    },
-    {
       "path": "docs/tool-output-adapters.md",
       "disposition": "current",
       "sha256": "ce9d220f7064ac2542d58e7c8cf7955527f8e8e8bb70f0c378dc3d84e565bfdc"
@@ -612,11 +642,6 @@
       "path": "docs/transaction-safety.md",
       "disposition": "current",
       "sha256": "fcf50ec1eb93f77ae39ee88a3e0e8f18c1e92de88c6593652d16fe8c2f29a40e"
-    },
-    {
-      "path": "docs/TRANSACTIONAL-PATCH-RECOVERY.md",
-      "disposition": "current",
-      "sha256": "61960cc3824e8e748f11ae04c7d41552f649db84aaa1001fdef60f5da2a9b4dd"
     },
     {
       "path": "docs/tui-image-attachments.md",
@@ -639,9 +664,9 @@
       "sha256": "e5d5d3fc317fe683bfd45685bae61daadfd81feeb5758dc76d7af6d147838c79"
     },
     {
-      "path": "docs/UNINSTALL.md",
+      "path": "docs/usability/README.md",
       "disposition": "current",
-      "sha256": "80b67dfe098eebdb314b2c3fe71c7c74ef613bae4e90f5caa2aaf87961e2a393"
+      "sha256": "236616353d837361644f41edde504a543a3682599293afcd7278d6a4def9f480"
     },
     {
       "path": "docs/usability/findings-template-v1.md",
@@ -669,11 +694,6 @@
       "sha256": "32a95e86817c4243c3eecab696d340125760005acbba2961de1a371197892381"
     },
     {
-      "path": "docs/usability/README.md",
-      "disposition": "current",
-      "sha256": "236616353d837361644f41edde504a543a3682599293afcd7278d6a4def9f480"
-    },
-    {
       "path": "docs/usability/recruitment-and-sampling-v1.md",
       "disposition": "current",
       "sha256": "29629adbaa5654862099ab320c00a9943a257b37e58e100b76017101fcb1d03d"
@@ -689,34 +709,14 @@
       "sha256": "a049b0c85fdbdabbfa3ba555dd14998925593f7b6f7cb2fd8f42c8b38dd61e07"
     },
     {
-      "path": "docs/WINDOWS-DESKTOP-NODE.md",
-      "disposition": "current",
-      "sha256": "e8ada547e0564ca45c7dbee909f22f9742b84bb63be4e768d5fa80688adf7dd2"
-    },
-    {
-      "path": "docs/WORKSPACES.md",
-      "disposition": "current",
-      "sha256": "c1df23f6b15eda8d128f0470818e2737081de5b5d4c2b6006553026ed77ae933"
-    },
-    {
       "path": "examples/medusa-proof/README.md",
       "disposition": "current",
       "sha256": "d1f9a8e0b62e0b3b30b860e2b3264a9fab799f650550380cb22f1222e559f1ce"
     },
     {
-      "path": "README.md",
-      "disposition": "current",
-      "sha256": "b794cfa648d905e685efc429b8a9033afa71343e6cf8cd0ec5e8cb9027bfda5d"
-    },
-    {
       "path": "scripts/e2e/README.md",
       "disposition": "current",
       "sha256": "0189747eb9a29acc6cbb78725bc0a637625256b6febc884541de548f4de1afa8"
-    },
-    {
-      "path": "SECURITY.md",
-      "disposition": "current",
-      "sha256": "119fbfc3877b03f4823775ebdff3ea43383e1b5d2122175aafd22e812e92333b"
     },
     {
       "path": "specs/2026-09-06-integration-ledger.md",
