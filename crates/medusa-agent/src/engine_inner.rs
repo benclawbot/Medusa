@@ -2653,8 +2653,9 @@ impl<P: ModelProvider> AgentEngine<P> {
                     Err(_) => {
                         // A failed artifact write cannot bypass the canonical model budget.
                         // Fail closed to a bounded typed projection, never raw handler output.
-                        serde_json::to_string(&canonical.model_projection(8 * 1024))
-                            .unwrap_or_else(|_| "{\"error\":\"tool result projection unavailable\"}".to_owned())
+                        serde_json::to_string(&canonical.model_projection(8 * 1024)).unwrap_or_else(
+                            |_| "{\"error\":\"tool result projection unavailable\"}".to_owned(),
+                        )
                     }
                 };
                 session.messages.push(Message {
