@@ -105,6 +105,7 @@ def main() -> int:
         "EventPayload::WorkerEvidenceRecorded",
         '"kind": "certified_tool_execution"',
         '"canonical_result": canonical.durable_evidence_projection()',
+        "canonical.verify_receipt_binding(&receipt)?",
         '"execution_authority": execution_policy.audit_projection()',
         "persist(session)",
     ]
@@ -112,7 +113,7 @@ def main() -> int:
         if marker not in engine:
             fail(f"durable certified publication contract is missing: {marker}")
     central_journal_match = re.search(
-        r"journal_certified_tool_execution\(\s*session,\s*&id,\s*&name,\s*&input,\s*receipt,\s*&result,\s*&self\.execution_policy,\s*\)\?;",
+        r"journal_certified_tool_execution\(\s*session,\s*&id,\s*&name,\s*&input,\s*receipt,\s*&canonical,\s*&self\.execution_policy,\s*\)\?;",
         engine,
     )
     if central_journal_match is None:

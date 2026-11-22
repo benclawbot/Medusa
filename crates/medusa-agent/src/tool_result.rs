@@ -170,6 +170,27 @@ impl CanonicalToolResultV1 {
         })
     }
 
+    /// Fail closed if a consumer tries to journal a canonical result that is not
+    /// the immutable result finalized by the certified pipeline.
+    pub fn verify_receipt_binding(&self, receipt: &Value) -> medusa_core::MedusaResult<()> {
+        let fingerprint_matches = receipt
+            .get("canonical_result_fingerprint")
+            .and_then(Value::as_str)
+            == Some(self.source_fingerprint.as_str());
+        let version_matches = receipt
+            .get("canonical_result_schema_version")
+            .and_then(Value::as_u64)
+            == Some(u64::from(self.schema_version));
+        if !fingerprint_matches || !version_matches {
+            return Err(medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PolicyDenied,
+                medusa_core::ErrorCategory::Policy,
+                "certified tool receipt and canonical result disagree",
+            ));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn machine_projection(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| json!({"schema_version": 1}))
@@ -202,6 +223,7 @@ impl CanonicalToolResultV1 {
         }
         let original_bytes = serde_json::to_vec(&projection).map_or(0, |bytes| bytes.len());
         let mut omitted = false;
+        let mut omission_reason: Option<&str> = None;
         if let Some(text) = projection
             .get("value")
             .and_then(|value| value.get("text"))
@@ -210,6 +232,9 @@ impl CanonicalToolResultV1 {
         {
             let bounded = truncate_chars(&text, policy.max_chars);
             omitted = text.chars().count() > bounded.chars().count();
+            if omitted {
+                omission_reason = Some("maximum_characters");
+            }
             if let Some(value) = projection.get_mut("value") {
                 value["text"] = Value::String(bounded);
                 if omitted {
@@ -217,12 +242,24 @@ impl CanonicalToolResultV1 {
                 }
             }
         }
+        // Machine consumers retain full structured JSON. Model projections must
+        // not spill an arbitrarily large JSON tree into a prompt.
+        if matches!(&self.value, CanonicalToolValue::Structured { .. })
+            && original_bytes > policy.max_chars.saturating_mul(4).max(512)
+        {
+            projection["value"] = json!({
+                "kind": "omitted",
+                "reason": "structured_value_exceeds_model_budget",
+            });
+            omitted = true;
+            omission_reason = Some("structured_value_exceeds_model_budget");
+        }
         let mut metadata = json!({
             "schema_version": TOOL_PROJECTION_SCHEMA_VERSION,
             "original_bytes": original_bytes,
             "projected_bytes": 0,
             "omitted": omitted,
-            "omission_reason": omitted.then_some("maximum_characters"),
+            "omission_reason": omission_reason,
             "expansion_available": policy.expansion_handle.is_some(),
             "expansion_handle": policy.expansion_handle.clone(),
             "redacted": redacted,
@@ -428,5 +465,44 @@ mod tests {
     fn output_artifact_refs_reject_paths_outside_the_artifact_boundary() {
         let text = "[output-expansion path=../../secret.txt]\n[output-expansion path=.medusa/output-expansions/legacy.txt]";
         assert!(output_artifact_refs(text).is_empty());
+    }
+
+    #[test]
+    fn receipt_binding_rejects_mismatched_fingerprints_and_versions() {
+        let canonical = CanonicalToolResultV1::from_receipt(
+            &json!({"outcome": "success"}),
+            &Ok("result".to_owned()),
+        )
+        .expect("canonical");
+        let mut receipt = json!({
+            "canonical_result_schema_version": canonical.schema_version,
+            "canonical_result_fingerprint": canonical.source_fingerprint,
+        });
+        assert!(canonical.verify_receipt_binding(&receipt).is_ok());
+        receipt["canonical_result_fingerprint"] = json!("tampered");
+        assert!(canonical.verify_receipt_binding(&receipt).is_err());
+        receipt["canonical_result_fingerprint"] = json!(canonical.source_fingerprint);
+        receipt["canonical_result_schema_version"] = json!(999);
+        assert!(canonical.verify_receipt_binding(&receipt).is_err());
+    }
+
+    #[test]
+    fn structured_model_projection_is_bounded_without_changing_machine_data() {
+        let big = "SENSITIVE_FIXTURE_".repeat(5000);
+        let canonical = CanonicalToolResultV1::from_receipt(
+            &json!({"outcome": "success"}),
+            &Ok(json!({"message": big}).to_string()),
+        )
+        .expect("canonical");
+        let machine = canonical.machine_projection();
+        let projection = canonical.model_projection(100);
+        assert_eq!(machine["value"]["kind"], "structured");
+        assert_eq!(projection["value"]["kind"], "omitted");
+        assert_eq!(projection["projection"]["omitted"], true);
+        assert!(!projection.to_string().contains("SENSITIVE_FIXTURE_"));
+        assert_eq!(
+            machine["source_fingerprint"],
+            projection["source_fingerprint"]
+        );
     }
 }
