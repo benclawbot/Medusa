@@ -171,6 +171,24 @@ jobs:
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=4 "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" signed/medusa-desktop-macos-app.zip
+
+          # The original draft DMG contains the *unsigned* app. Rebuild the
+          # distributed DMG from the exact signed/notarized app instead of
+          # shipping a signed ZIP alongside an unsigned installer.
+          hdiutil create -volname "Medusa Desktop" -srcfolder "$RUNNER_TEMP/app" \
+            -format UDZO -ov signed/medusa-desktop-macos.dmg
+          xcrun notarytool submit signed/medusa-desktop-macos.dmg \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple signed/medusa-desktop-macos.dmg
+          xcrun stapler validate signed/medusa-desktop-macos.dmg
+          mkdir -p "$RUNNER_TEMP/verified-dmg"
+          hdiutil attach -readonly -nobrowse -mountpoint "$RUNNER_TEMP/verified-dmg" \
+            signed/medusa-desktop-macos.dmg
+          dmg_app=$(find "$RUNNER_TEMP/verified-dmg" -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -n "$dmg_app"
+          codesign --verify --deep --strict --verbose=2 "$dmg_app"
+          spctl --assess --type execute --verbose=4 "$dmg_app"
+          hdiutil detach "$RUNNER_TEMP/verified-dmg"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-macos-${{ needs.validate.outputs.sha }}
@@ -250,6 +268,7 @@ jobs:
           set -euo pipefail
           test -f signed/medusa-desktop-windows.exe
           test -f signed/medusa-desktop-macos-app.zip
+          test -f signed/medusa-desktop-macos.dmg
           test -f signed/medusa-desktop-linux.deb
           test -f signed/medusa-desktop-linux.deb.sig
           test -f signed/medusa-desktop-linux.deb.pem
