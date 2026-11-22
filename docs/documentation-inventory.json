@@ -31,7 +31,7 @@
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "8db6b48e85e157fc1a8c21024052dede00e16a8a0fab130840568c6948086db9"
+      "sha256": "b794cfa648d905e685efc429b8a9033afa71343e6cf8cd0ec5e8cb9027bfda5d"
     },
     {
       "path": "SECURITY.md",
@@ -172,6 +172,11 @@
       "path": "docs/EXTERNAL-REPOSITORY-VALIDATION.md",
       "disposition": "current",
       "sha256": "2f86f59017510e658ef235ab42090f2f017644c128396892d85a93c43f2c695f"
+    },
+    {
+      "path": "docs/FIRST-RUN.md",
+      "disposition": "current",
+      "sha256": "c4c0253ecf5f94bfbf76e62976dc052269052f1b34522a42d4440efb3b5cb1c8"
     },
     {
       "path": "docs/HARNESS-EVALUATION.md",
